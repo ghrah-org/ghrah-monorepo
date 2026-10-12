@@ -14,7 +14,7 @@ CAPABILITY_REGISTRY/CLUSTER_TRANSPORT_MANAGER）随旧实现剔除。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Protocol, Required, TypedDict, TypeVar
 
 from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.sandbox.executor import SandboxExecutor
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from ghrah.subject.project.models import AgentSpec, ProjectRecord
 
 __all__ = [
+    "ABILITY_BRIDGE",
+    "ABILITY_BRIDGE_UNIT",
     "COMMAND_BRIDGE",
     "COMMAND_RUNNER",
     "CORE_CLUSTER_REGISTRY",
@@ -55,6 +57,8 @@ __all__ = [
     "RoomManagerService",
     "SubjectServiceKey",
     "TaskManagerService",
+    "AbilityBridgeService",
+    "AbilityDescriptor",
     "WorkspaceService",
 ]
 
@@ -232,6 +236,47 @@ PROJECT_MANAGER = SubjectServiceKey[ProjectManagerService]("project_manager")
 PROJECT_STORE = SubjectServiceKey["ProjectStore"]("project_store")
 ROOM_MANAGER = SubjectServiceKey[RoomManagerService]("room_manager")
 ROOM_STORE = SubjectServiceKey["RoomStore"]("room_store")
+
+
+class AbilityDescriptor(TypedDict):
+    """capability → 工具面描述符（进程内过渡形态）。
+
+    字段面与 Core 侧 ``CommandProxyDescriptor``
+    （ghrah-core ``abilities/builtin/command_proxy.py``，``extra="forbid"``）
+    精确对齐：多出的键在 Core 物化时被拒。D2 落地时随 descriptor 升格
+    ghrah-protocol 一并冻结形状。
+    """
+
+    tool_name: Required[str]
+    description: str
+    parameters: dict[str, Any] | None
+    command: Required[str]
+    require_hitl: bool
+    timeout: float | None
+
+
+class AbilityBridgeService(Protocol):
+    """能力包装服务契约（场景 B：包装插件经服务键提供映射）。
+
+    声明与实质分离：插件在 ``PluginSpec.provides.capabilities`` 声明供
+    协商/校验，实质「capability → 工具描述符」映射经本服务提供——
+    服务挂提供方 fiber 生命周期，插件卸载/崩溃即失活。
+    """
+
+    def capabilities(self) -> dict[str, AbilityDescriptor]:
+        """返回当前 capability → descriptor 映射（纯数据快照）。"""
+
+    async def register(self, capability: str, descriptor: AbilityDescriptor) -> None:
+        """登记/覆盖一个 capability 映射。"""
+
+    async def remove(self, capability: str) -> None:
+        """移除一个 capability 映射（缺席幂等）。"""
+
+
+# 能力包装映射（单提供者：ouroboros 同名服务全局唯一，冲突即拒挂）
+ABILITY_BRIDGE = SubjectServiceKey[AbilityBridgeService]("ability_bridge")
+# 桥接 unit 自身门面（plugin_mount 挂载/崩溃路径经它触发 reconcile）
+ABILITY_BRIDGE_UNIT = SubjectServiceKey["AbilityBridgeUnit"]("ability_bridge_unit")
 
 # Reserved for future integrations. The keys are intentionally real so
 # dependency declarations can be written before the concrete services exist.

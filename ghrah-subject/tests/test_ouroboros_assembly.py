@@ -79,6 +79,7 @@ async def test_full_assembly_all_fibers_active(
             "room",
             "recovery",
             "room_filter",
+            "ability_bridge",
         }
 
         # 计划 0.4：逐 fiber ACTIVE 断言（工厂已等 ACTIVE，此处显式兜底）
@@ -92,3 +93,4 @@ async def test_full_assembly_all_fibers_active(
         assert ctx.get("room_manager") is not None
         assert ctx.get("room_store") is not None
         assert ctx.get("reconciliation_service") is not None
+        assert ctx.get("ability_bridge_unit") is not None
