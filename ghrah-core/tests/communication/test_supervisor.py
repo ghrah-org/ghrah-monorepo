@@ -78,6 +78,65 @@ class TestSupervisorActor:
                 sample_config, abilities=[ConversationAbility(), EndTaskAbility()]
             )
 
+    # ----------------------------------------------------------------
+    # register_ability 命令路径守卫
+    # ----------------------------------------------------------------
+
+    @pytest.fixture
+    def registered_agent(self, supervisor: SupervisorActor, sample_config: AgentConfig):
+        """预注册一个 Agent（mock handle），返回 handle。"""
+        mock_handle = MagicMock()
+        mock_handle.register_ability.return_value = "conversation"
+        supervisor._registry.register("guarded-agent", sample_config, mock_handle)
+        return mock_handle
+
+    @pytest.mark.asyncio
+    async def test_register_ability_rejects_hooks_param(
+        self, supervisor: SupervisorActor, registered_agent
+    ) -> None:
+        """params 含 hooks → 拒绝（hook 注入通道收窄）。"""
+        with pytest.raises(ValueError, match="kernel materialization keys"):
+            await supervisor.register_ability_for_agent(
+                "guarded-agent", "conversation", {"hooks": []}
+            )
+        registered_agent.register_ability.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_register_ability_rejects_checker_params(
+        self, supervisor: SupervisorActor, registered_agent
+    ) -> None:
+        """params 含 permission_checker/command_checker/command_runner → 拒绝。"""
+        with pytest.raises(ValueError, match="kernel materialization keys"):
+            await supervisor.register_ability_for_agent(
+                "guarded-agent", "read_file", {"permission_checker": object()}
+            )
+        with pytest.raises(ValueError, match="kernel materialization keys"):
+            await supervisor.register_ability_for_agent(
+                "guarded-agent", "execute_command", {"command_runner": object()}
+            )
+
+    @pytest.mark.asyncio
+    async def test_register_ability_allows_plain_params(
+        self, supervisor: SupervisorActor, registered_agent
+    ) -> None:
+        """普通构造参数照常透传（守卫只拦内核物化保留键）。"""
+        result = await supervisor.register_ability_for_agent("guarded-agent", "conversation", {})
+        assert result == "conversation"
+        registered_agent.register_ability.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_register_ability_instance_channel(
+        self, supervisor: SupervisorActor, registered_agent
+    ) -> None:
+        """实例通道：预构造 Ability 直接注册（command_proxy 物化路径）。"""
+        ability = ConversationAbility()
+        registered_agent.register_ability.return_value = "conversation"
+
+        result = await supervisor.register_ability_instance_for_agent("guarded-agent", ability)
+
+        assert result == "conversation"
+        registered_agent.register_ability.assert_called_once_with(ability)
+
     @pytest.mark.asyncio
     async def test_terminate_agent(self, supervisor: SupervisorActor) -> None:
         """终止已注册的 Agent。"""

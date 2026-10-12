@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 _MAX_CONTEXT_MEMBERS = 20
 _MAX_CONTEXT_DESCRIPTION = 200
 
+# 内核物化保留参数：这些构造参数承载 hook /
+# checker / runner 实质，只允许内核物化路径（materialize / unit 物化器）
+# 构造，命令路径（register_ability params）传入即拒绝——params 直通
+# 构造器曾是 hook 注入通道（fs/command 类 builtin 的构造函数接受
+# ``hooks`` 参数）。
+_KERNEL_MATERIALIZATION_PARAMS: frozenset[str] = frozenset(
+    {
+        "hooks",
+        "permission_checker",
+        "command_checker",
+        "command_runner",
+    }
+)
+
 
 class SupervisorActor:
     """监控和管理所有 Agent 的生命周期。
@@ -541,8 +555,13 @@ class SupervisorActor:
         """为指定 Agent 注册 Ability（通过 AbilityRegistry 动态创建）。
 
         通过类型名从 AbilityRegistry 查找 Ability 类并实例化，
-        然后注册到目标 Agent。然后注册到目标 Agent。这使得外部调用方不再需要直接实例化 Ability，
+        然后注册到目标 Agent。这使得外部调用方不再需要直接实例化 Ability，
         而是通过 Supervisor 在 Core 侧完成。
+
+        构造参数守卫：``params`` 直通构造器是
+        hook 注入通道（fs/command 类 builtin 的构造函数本就接受
+        ``hooks``/``permission_checker`` 等参数），内核物化参数只允许
+        内核物化路径（materialize/unit 物化器）构造——命令路径传入即拒绝。
 
         Args:
             agent_name: Agent 名称
@@ -555,11 +574,20 @@ class SupervisorActor:
         Raises:
             AgentNotFoundError: Agent 未注册
             KeyError: Ability 类型未注册
+            ValueError: params 含内核物化保留键（hooks 等）
         """
         from ghrah.abilities.registry import AbilityRegistry
 
         info = self._registry.get_info(agent_name)
         params = ability_params or {}
+
+        forbidden = _KERNEL_MATERIALIZATION_PARAMS & set(params)
+        if forbidden:
+            raise ValueError(
+                f"Ability params for '{ability_type}' cannot include kernel "
+                f"materialization keys {sorted(forbidden)}; only kernel "
+                f"materialization paths may construct these"
+            )
 
         # 通过 AbilityRegistry 创建实例
         ability = AbilityRegistry.create(ability_type, **params)
@@ -568,6 +596,35 @@ class SupervisorActor:
         result = info.actor_handle.register_ability(ability)
         logger.info(
             f"Supervisor registered ability '{ability_type}' for agent '{agent_name}' via registry"
+        )
+        return result
+
+    async def register_ability_instance_for_agent(
+        self,
+        agent_name: str,
+        ability: Any,
+    ) -> str:
+        """为指定 Agent 注册已实例化的 Ability。
+
+        command_proxy 等经 Core 侧物化器（descriptor 校验 + 强制闸门 +
+        HITL 包装）构造的能力实例走本通道——不经 AbilityRegistry 的
+        params 工厂（物化器对构造面负责，注册面只负责落到 Agent）。
+
+        Args:
+            agent_name: Agent 名称
+            ability: 已构造的 Ability 实例
+
+        Returns:
+            注册的 Ability 名称
+
+        Raises:
+            AgentNotFoundError: Agent 未注册
+        """
+        info = self._registry.get_info(agent_name)
+        result = info.actor_handle.register_ability(ability)
+        logger.info(
+            f"Supervisor registered ability '{getattr(ability, 'name', '<unnamed>')}' "
+            f"for agent '{agent_name}' via instance channel"
         )
         return result
 

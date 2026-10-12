@@ -40,6 +40,10 @@
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
+from ghrah.abilities.builtin.command_proxy import (
+    CommandProxyAbility,
+    CommandProxyDescriptor,
+)
 from ghrah.abilities.builtin.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
@@ -153,6 +157,7 @@ def _register_builtin_abilities() -> None:
     AbilityRegistry.register("delete_file", DeleteFileAbility)
     AbilityRegistry.register("search_files", SearchFilesAbility)
     AbilityRegistry.register("execute_command", ExecuteCommandAbility)
+    AbilityRegistry.register("command_proxy", CommandProxyAbility)
     AbilityRegistry.register("query_agents", QueryAgentsAbility)
     AbilityRegistry.register("send_message", SendMessageAbility)
     AbilityRegistry.register("broadcast_message", BroadcastMessageAbility)
@@ -215,6 +220,9 @@ __all__ = [
     "DeleteFileAbility",
     "ExecuteCommandAbility",
     "ExecuteCommandInput",
+    # 插件能力桥（command_proxy）
+    "CommandProxyAbility",
+    "CommandProxyDescriptor",
     # 集群通信 Ability
     "QueryAgentsAbility",
     "SendMessageAbility",

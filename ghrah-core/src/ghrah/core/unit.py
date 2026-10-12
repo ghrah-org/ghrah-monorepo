@@ -94,6 +94,7 @@ from ghrah.core.events import (
 )
 from ghrah.core.hitl import HITLPromiseRegistry
 from ghrah.core.room_protocol import SerialRoomBridge
+from ghrah.core.subject_bridge import SubjectCommandBridge
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome
 
@@ -532,6 +533,62 @@ def _create_ability_from_def(
     return AbilityRegistry.create(ability_type, **params)
 
 
+def _materialize_command_proxy(
+    params: dict[str, Any],
+    subject_bridge: SubjectCommandBridge | None,
+    *,
+    auto_approve_abilities: tuple[str, ...] = (),
+) -> AbilityProtocol:
+    """command_proxy descriptor → Ability 实例（Core 侧物化）。
+
+    过渡形态（REGISTER_ABILITY params 通道）的物化入口，三段职责：
+
+    1. descriptor 校验：``CommandProxyDescriptor`` pydantic 模型
+       （``extra="forbid"``，未知字段拒绝，hooks 类字段无从混入）；
+    2. 强制闸门：HITL 默认开启，仅 ``auto_approve_abilities`` 白名单
+       可关闭；descriptor 的 ``require_hitl`` 声明不具自批效力
+       （挂载面声明不得削弱部署方信任闸）；
+    3. 非白名单包装：``HITLRequiredAbility``（内核固定实现，复用自
+       materialize 物化器的通用 HITL 接线）。
+
+    Args:
+        params: REGISTER_ABILITY 命令的 ``ability.params``（descriptor dict）
+        subject_bridge: 宿主命令面桥（standalone 时为 None——工具执行
+            时明确报错，注册不拒绝）
+        auto_approve_abilities: 部署方强制放行的能力名白名单
+
+    Returns:
+        已物化的 Ability 实例（非白名单时含 HITL 包装）
+
+    Raises:
+        pydantic.ValidationError: descriptor 不合法（未知字段/缺必填/
+            非法值）
+    """
+    from ghrah.abilities.builtin.command_proxy import CommandProxyDescriptor
+    from ghrah.abilities.hitl import HITLRequiredAbility
+    from ghrah.abilities.registry import AbilityRegistry
+
+    descriptor = CommandProxyDescriptor.model_validate(params)
+    ability = AbilityRegistry.create(
+        "command_proxy",
+        tool_name=descriptor.tool_name,
+        description=descriptor.description,
+        parameters=descriptor.parameters,
+        bridge=subject_bridge,
+        command=descriptor.command,
+        timeout=descriptor.timeout,
+    )
+    if descriptor.tool_name in auto_approve_abilities:
+        return ability
+    return HITLRequiredAbility(
+        ability,
+        ability_name=descriptor.tool_name,
+        reason=(
+            f"command_proxy '{descriptor.command}' requires HITL approval (plugin-provided ability)"
+        ),
+    )
+
+
 # ----------------------------------------------------------------
 # CoreUnit
 # ----------------------------------------------------------------
@@ -633,6 +690,13 @@ class CoreUnit:
         # （duck-typed；standalone 场景无 serial → bridge 为 None，send 工具明确报错）
         serial = getattr(ctx, "serial", None)
         room_bridge = SerialRoomBridge(serial) if callable(serial) else None
+
+        # Subject command bridge（command_proxy 工具回路）：同一 serial 桥接
+        # 协议命令面（standalone 场景无 serial → bridge 为 None，工具执行
+        # 时明确报错，注册不拒绝——对齐 send/ROOM_BRIDGE_UNAVAILABLE 模式）
+        self._subject_bridge: SubjectCommandBridge | None = (
+            SubjectCommandBridge(serial) if callable(serial) else None
+        )
 
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
@@ -1148,11 +1212,21 @@ class CoreUnit:
         supervisor = self._require_supervisor()
         rp = RegisterAbilityPayload.model_validate(payload)
         self._validate_agent(rp.project_id, rp.agent_id, rp.agent_name)
-        result = await supervisor.register_ability_for_agent(
-            agent_name=rp.agent_name,
-            ability_type=rp.ability.ability_type,
-            ability_params=rp.ability.params,
-        )
+        if rp.ability.ability_type == "command_proxy":
+            # 插件能力桥：descriptor 校验 + 强制闸门在物化器内完成，
+            # 实例经专用通道注册（不经 params 工厂）
+            ability = _materialize_command_proxy(
+                rp.ability.params,
+                self._subject_bridge,
+                auto_approve_abilities=self._config.auto_approve_abilities,
+            )
+            result = await supervisor.register_ability_instance_for_agent(rp.agent_name, ability)
+        else:
+            result = await supervisor.register_ability_for_agent(
+                agent_name=rp.agent_name,
+                ability_type=rp.ability.ability_type,
+                ability_params=rp.ability.params,
+            )
         return self._ok({"agent_name": rp.agent_name, "ability": result, "registered": True})
 
     async def _handle_unregister_ability(

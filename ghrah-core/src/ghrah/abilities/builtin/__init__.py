@@ -36,6 +36,10 @@
 """
 
 from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
+from ghrah.abilities.builtin.command_proxy import (
+    CommandProxyAbility,
+    CommandProxyDescriptor,
+)
 from ghrah.abilities.builtin.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
@@ -86,6 +90,9 @@ __all__ = [
     # 命令执行 Ability
     "ExecuteCommandAbility",
     "ExecuteCommandInput",
+    # 插件能力桥（command_proxy）
+    "CommandProxyAbility",
+    "CommandProxyDescriptor",
     # 集群通信 Ability
     "QueryAgentsAbility",
     "SendMessageAbility",

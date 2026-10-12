@@ -28,7 +28,7 @@ PRE_EXECUTE HITL hook——否则该声明会被兜底分支裸实例化**静默
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ghrah.abilities import (
     FS_ABILITY_TYPES,
@@ -39,78 +39,18 @@ from ghrah.abilities import (
     FSPermissionChecker,
     resolve_fs_permission_paths,
 )
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.abilities.hitl import HITLApprovalHook, HITLRequiredAbility
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.manifest.resolver import ResolvedAbility
-
-if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
-    from ghrah.types.results import ActionResult
 
 __all__ = ["instantiate_resolved_abilities"]
 
 logger = logging.getLogger(__name__)
 
-
-class _HITLApprovalHook(Hook):
-    """通用 PRE_EXECUTE HITL 审批 Hook。
-
-    拦截宿主 ability 的每次执行，要求人工审批（复用 executor 的
-    ``handle_hitl_hook_result`` → HITLFutureStore → receive_hitl_response
-    全链路）。审批消息携带 ability 名与 tool 参数摘要，供人审判断。
-    """
-
-    hook_point = HookPoint.PRE_EXECUTE
-
-    def __init__(self, ability_name: str, reason: str) -> None:
-        self._ability_name = ability_name
-        self._reason = reason
-
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._ability_name
-
-    async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
-    ) -> HookResult:
-        tool_args = context.tool_args or {}
-        summary = str(tool_args)[:200]
-        return HookResult.hitl(
-            message=f"{self._reason} — ability='{self._ability_name}' args={summary}"
-        )
-
-
-class _HITLRequiredAbility(AbilityProtocol):
-    """require_hitl 包装：委托宿主 ability，追加 PRE_EXECUTE HITL hook。
-
-    组合而非继承——不破坏宿主 ability 的属性访问（checker/runner 等
-    测试断言直接穿透）。
-    """
-
-    def __init__(self, inner: AbilityProtocol, ability_name: str, reason: str) -> None:
-        self._inner = inner
-        self._hitl_hook = _HITLApprovalHook(ability_name, reason)
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        return await self._inner.execute(context)
-
-    def get_hooks(self) -> list[Hook]:
-        return [*self._inner.get_hooks(), self._hitl_hook]
-
-    def bind_tool(self) -> dict[str, Any] | None:
-        return self._inner.bind_tool()
-
-    def get_default_state(self) -> dict[str, Any]:
-        return self._inner.get_default_state()
-
-    def to_prompt_description(self) -> str:
-        return self._inner.to_prompt_description()
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._inner, item)
+# 向后兼容别名：原私有实现已提取为内核共享件（ghrah.abilities.hitl），
+# 行为不变：HITL 闸门写成独立可复用件）。
+_HITLApprovalHook = HITLApprovalHook
+_HITLRequiredAbility = HITLRequiredAbility
 
 
 def instantiate_resolved_abilities(
