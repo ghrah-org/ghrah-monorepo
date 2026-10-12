@@ -48,6 +48,7 @@ class MockAbility(Ability):
         action_result: ActionResult | None = None,
         tool_schema: dict[str, Any] | None = None,
         hooks: list[Hook] | None = None,
+        default_state: dict[str, Any] | None = None,
     ) -> None:
         self._name = name
         self._action_result = action_result or ActionResult(
@@ -56,6 +57,7 @@ class MockAbility(Ability):
         )
         self._tool_schema = tool_schema
         self._hooks = hooks or []
+        self._default_state = default_state
         self.execute_count = 0
 
     @property
@@ -71,6 +73,9 @@ class MockAbility(Ability):
 
     def bind_tool(self) -> dict[str, Any] | None:
         return self._tool_schema
+
+    def get_default_state(self) -> dict[str, Any]:
+        return dict(self._default_state) if self._default_state else {}
 
 
 class MockHook(Hook):
@@ -264,6 +269,102 @@ class TestAbilityRegistration:
 
         result = agent.get_abilities()
         assert set(result) == {"conv", "read"}
+
+
+# ----------------------------------------------------------------
+# 测试：运行期注册/注销生效（D0 工具面刷新 + D1 状态清理）
+# ----------------------------------------------------------------
+
+
+class TestRuntimeAbilityRefresh:
+    """运行期 REGISTER/UNREGISTER_ABILITY 的真实生效测试。
+
+    D0：LLM 已初始化时，register/unregister 后 configure_tools
+    收到最新工具列表；LLM 未初始化时跳过刷新（_ensure_llm 首建
+    时本就携带全量 tools）。
+
+    D1：unregister 清理 ContextManager 中的状态作用域。
+    """
+
+    @staticmethod
+    def _make_llm() -> AsyncMock:
+        """创建带 configure_tools spy 的 mock LLM（模拟已初始化）。"""
+        llm = AsyncMock()
+        llm.configure_tools = MagicMock()
+        return llm
+
+    def test_register_after_llm_init_refreshes_tools(self) -> None:
+        """LLM 初始化后注册：configure_tools 收到含新工具的完整列表。"""
+        agent = _create_agent()
+        conv_schema = {"type": "function", "function": {"name": "conv"}}
+        agent.register_ability(MockAbility(name="conv", tool_schema=conv_schema))
+        agent._llm = self._make_llm()
+        agent._llm.configure_tools.reset_mock()
+        read_schema = {"type": "function", "function": {"name": "read"}}
+
+        agent.register_ability(MockAbility(name="read", tool_schema=read_schema))
+
+        agent._llm.configure_tools.assert_called_once_with([conv_schema, read_schema])
+
+    def test_register_before_llm_init_skips_refresh(self) -> None:
+        """LLM 未初始化时注册：不刷新、不报错（首建时携带全量 tools）。"""
+        agent = _create_agent()
+
+        agent.register_ability(
+            MockAbility(name="read", tool_schema={"type": "function", "function": {"name": "read"}})
+        )
+
+        assert agent._llm is None
+        assert len(agent._bound_tools) == 1
+
+    def test_unregister_after_llm_init_refreshes_tools(self) -> None:
+        """LLM 初始化后注销：configure_tools 收到移除后的列表。"""
+        agent = _create_agent()
+        conv_schema = {"type": "function", "function": {"name": "conv"}}
+        read_schema = {"type": "function", "function": {"name": "read"}}
+        agent.register_ability(MockAbility(name="conv", tool_schema=conv_schema))
+        agent.register_ability(MockAbility(name="read", tool_schema=read_schema))
+        agent._llm = self._make_llm()
+        agent._llm.configure_tools.reset_mock()
+
+        agent.unregister_ability("read")
+
+        agent._llm.configure_tools.assert_called_once_with([conv_schema])
+
+    def test_unregister_removes_state_scope(self) -> None:
+        """注销后 ContextManager 状态作用域中该 ability 键缺席（D1）。"""
+        agent = _create_agent()
+        agent.register_ability(MockAbility(name="counter", default_state={"count": 0}))
+        assert agent._context_manager.get_current_state()["counter"] == {"count": 0}
+
+        agent.unregister_ability("counter")
+
+        assert "counter" not in agent._context_manager.get_current_state()
+
+    def test_unregister_without_default_state_is_safe(self) -> None:
+        """注销无默认状态的 ability：状态清理幂等，不报错。"""
+        agent = _create_agent()
+        agent.register_ability(MockAbility(name="conv", tool_schema=None))
+
+        agent.unregister_ability("conv")
+
+        assert "conv" not in agent._context_manager.get_current_state()
+
+    def test_unregister_during_iteration_keeps_registration(self) -> None:
+        """迭代中注销被 remove_state guard 拒绝，注册面保持原状。"""
+        agent = _create_agent()
+        agent.register_ability(
+            MockAbility(name="read", tool_schema={"type": "function", "function": {"name": "read"}})
+        )
+        cm = agent._context_manager
+        cm.begin_iteration()
+
+        with pytest.raises(RuntimeError, match="Cannot call remove_state"):
+            agent.unregister_ability("read")
+
+        cm.rollback_iteration(RuntimeError("test teardown"))
+        assert "read" in agent.get_abilities()
+        assert len(agent._bound_tools) == 1
 
 
 # ----------------------------------------------------------------

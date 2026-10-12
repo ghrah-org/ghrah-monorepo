@@ -310,6 +310,32 @@ class TestContextManagerState:
 
         assert cm.get_current_state() == {"x": 1, "y": 2}
 
+    def test_remove_state_deletes_key(self) -> None:
+        """remove_state 删除指定键，其余键不受影响。"""
+        cm = _make_cm(initial_state={"a": 1, "b": 2})
+        cm.set_state("a", {"counter": 3})
+        cm.remove_state("a")
+
+        assert cm.get_current_state() == {"b": 2}
+
+    def test_remove_state_missing_key_is_idempotent(self) -> None:
+        """remove_state 对缺席键幂等静默。"""
+        cm = _make_cm(initial_state={"a": 1})
+        cm.remove_state("nonexistent")
+
+        assert cm.get_current_state() == {"a": 1}
+
+    def test_remove_state_during_iteration_raises(self) -> None:
+        """迭代中调用 remove_state 抛 RuntimeError。"""
+        cm = _make_cm(initial_state={"a": 1})
+        cm.begin_iteration()
+
+        with pytest.raises(RuntimeError, match="Cannot call remove_state"):
+            cm.remove_state("a")
+
+        cm.rollback_iteration(RuntimeError("fail"))
+        assert cm.get_current_state() == {"a": 1}
+
 
 # ----------------------------------------------------------------
 # TestContextManagerQuery — 查询 API

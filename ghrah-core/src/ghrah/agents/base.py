@@ -235,6 +235,9 @@ class ActorAgent:
         if default_state:
             self._context_manager.set_state(ability.name, copy.deepcopy(default_state))
 
+        # 运行期注册立即对已初始化的 LLM 生效（工具面刷新）
+        self._refresh_bound_tools()
+
         logger.info(
             f"ActorAgent[{self.config.name}] registered ability: "
             f"{ability.name} (tool_bound={tool_schema is not None}, "
@@ -255,6 +258,11 @@ class ActorAgent:
         if name not in self._abilities:
             raise AbilityNotFoundError(name)
 
+        # 清理 ContextManager 中的状态作用域（迭代内 raise 由
+        # remove_state 的 guard 承担；命令来自外部迭代边界，天然满足。
+        # 置于本地变更之前：guard 抛出时注册面保持原状，不留半撤销）
+        self._context_manager.remove_state(name)
+
         ability = self._abilities.pop(name)
 
         # 移除对应的 tool schema
@@ -266,6 +274,9 @@ class ActorAgent:
 
         # 移除对应的 hooks
         self._hook_store.remove_owner(ability.name)
+
+        # 运行期注销立即对已初始化的 LLM 生效（工具面刷新）
+        self._refresh_bound_tools()
 
         logger.info(f"ActorAgent[{self.config.name}] unregistered ability: {name}")
 
@@ -353,6 +364,18 @@ class ActorAgent:
     # ----------------------------------------------------------------
     # LLM 初始化
     # ----------------------------------------------------------------
+
+    def _refresh_bound_tools(self) -> None:
+        """运行期刷新 LLM 工具面。
+
+        register/unregister_ability 后调用：LLM 已初始化则以当前
+        _bound_tools 重新 configure_tools，使运行期注册/注销立即
+        生效；LLM 未初始化则跳过——_ensure_llm 首建时本就携带
+        当时的全量 tools。
+        """
+        if self._llm is None:
+            return
+        self._llm.configure_tools(self._bound_tools)
 
     async def _ensure_llm(self) -> LLMProtocol:
         """惰性初始化 LLM 客户端。

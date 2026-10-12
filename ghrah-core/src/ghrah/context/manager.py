@@ -1332,6 +1332,27 @@ class ContextManager:
         current[key] = value
         self._state_manager.reset(new_state=current)
 
+    def remove_state(self, key: str) -> None:
+        """删除单个状态键（迭代外 API）。
+
+        直接操作 StateManager，不经过事务。与 set_state 对称，
+        键缺席时幂等静默。仅限迭代外调用；迭代中应使用
+        apply_state_changes() 写入事务 pending 区。
+
+        Args:
+            key: 状态键
+
+        Raises:
+            RuntimeError: 在迭代中调用（应改用 apply_state_changes()）
+        """
+        if self._in_iteration:
+            raise RuntimeError(
+                "Cannot call remove_state() during iteration. Use apply_state_changes() instead."
+            )
+        current = self._state_manager.current
+        current.pop(key, None)
+        self._state_manager.reset(new_state=current)
+
     def update_state(self, partial: dict[str, Any]) -> None:
         """合并更新多个状态键（迭代外 API）。
 
