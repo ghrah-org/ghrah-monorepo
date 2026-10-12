@@ -502,6 +502,94 @@ class TestLocalAbilityExecutor:
         assert ability_names == {"ability_a", "ability_b"}
 
     @pytest.mark.asyncio
+    async def test_execute_tool_calls_child_cancelled_propagates(self):
+        """并行子任务在途等待被外部取消 → CancelledError 原样传播。
+
+        场景：teardown/超时取消 ability 在途 await 的 future（子任务自身
+        未被 cancel），gather(return_exceptions=True) 会把 CancelledError
+        收集为结果——不得折算成伪结果（r["tool_call_id"] 抛 TypeError）
+        或伪 FAILURE，取消必须以 CancelledError 形状逃逸。
+        """
+
+        class CancelledAwaitAbility(Ability):
+            """等待一个被外部任务取消的 future（模拟在途 receive 被取消）。"""
+
+            def __init__(self) -> None:
+                self._canceller: asyncio.Task | None = None
+
+            @property
+            def name(self) -> str:
+                return "cancelled_await"
+
+            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+                fut = asyncio.get_running_loop().create_future()
+
+                async def cancel_after_suspend() -> None:
+                    await asyncio.sleep(0)
+                    fut.cancel()
+
+                # 取消来自独立任务：子任务自身未被 cancel，
+                # CancelledError 经 gather 结果面收集上来
+                self._canceller = asyncio.create_task(cancel_after_suspend())
+                await fut
+                return ActionResult(outcome=ActionOutcome.SUCCESS, data={})
+
+            def get_hooks(self) -> list[Hook]:
+                return []
+
+        executor = LocalAbilityExecutor(agent_name="test-agent")
+
+        mock_cm = MagicMock()
+        mock_cm.get_current_state.return_value = {}
+
+        with pytest.raises(asyncio.CancelledError):
+            await executor.execute_tool_calls(
+                tool_calls=[
+                    ToolCallBlock(name="cancelled_await", arguments={}, id="call_cancel"),
+                    ToolCallBlock(name="mock_ability", arguments={}, id="call_ok"),
+                ],
+                abilities={
+                    "cancelled_await": CancelledAwaitAbility(),
+                    "mock_ability": MockAbility(),
+                },
+                accumulated_data={},
+                context_manager=mock_cm,
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_calls_child_exception_becomes_failure(self):
+        """普通 Exception 子任务仍折算为 FAILURE 结果（取消传播改动的回归护栏）。"""
+
+        class RaisingAbility(Ability):
+            @property
+            def name(self) -> str:
+                return "raising_ability"
+
+            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+                raise RuntimeError("boom in ability")
+
+            def get_hooks(self) -> list[Hook]:
+                return []
+
+        executor = LocalAbilityExecutor(agent_name="test-agent")
+
+        mock_cm = MagicMock()
+        mock_cm.get_current_state.return_value = {}
+
+        results = await executor.execute_tool_calls(
+            tool_calls=[ToolCallBlock(name="raising_ability", arguments={}, id="call_raise")],
+            abilities={"raising_ability": RaisingAbility()},
+            accumulated_data={},
+            context_manager=mock_cm,
+        )
+
+        assert len(results) == 1
+        assert results[0]["ability_name"] == "raising_ability"
+        assert results[0]["action_result"].outcome == ActionOutcome.FAILURE
+        assert "boom in ability" in results[0]["action_result"].data["error"]
+        assert results[0]["tool_call_id"] == "call_raise"
+
+    @pytest.mark.asyncio
     async def test_hook_runner_no_hooks(self):
         """测试没有 Hook 时的 HookRunner。"""
         executor = LocalAbilityExecutor(agent_name="test-agent")

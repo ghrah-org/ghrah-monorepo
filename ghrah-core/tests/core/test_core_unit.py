@@ -528,25 +528,28 @@ class TestHITL:
         assert resolved[0][1]["promise_id"] == promise_id
         assert resolved[0][1]["status"] == "approved"
 
-        # promise 消费后移除：再次响应同 promise 显式失败
+        # promise 消费后移除：再次响应同 promise 时本 unit 未持有 →
+        # 返回 None 穿透给下一个 CoreUnit（多 cluster 契约；宿主 serial
+        # 全部 miss 时兜底 Unknown command）
         resp2 = await unit.handle_command(
             "hitl_response",
             {"promise_id": promise_id, "approved": True},
             None,
         )
-        assert resp2["success"] is False
-        assert "not found or expired" in resp2["error"]
+        assert resp2 is None
 
     async def test_hitl_response_unknown_promise_without_triplet(self, unit: CoreUnit) -> None:
-        """未知 promise 且无三元组：显式失败回执（不再空名炸 AgentNotFoundError）。"""
+        """未知 promise 且无三元组：返回 None 穿透（多 cluster 契约，不空名炸）。"""
         assert unit.supervisor is not None
         resp = await unit.handle_command(
             "hitl_response",
             {"promise_id": "ghost-promise", "approved": True},
             None,
         )
-        assert resp["success"] is False
-        assert "not found or expired" in resp["error"]
+        # promise 注册表是 unit 级单例：本 unit 未持有 → None 穿透给
+        # 下一个 CoreUnit；不再以错误回执短路命令链（先挂载的 cluster
+        # 会拦截其它 cluster 的审批响应），也不空名炸 AgentNotFoundError。
+        assert resp is None
 
     async def test_hitl_response_degenerate_payload_rejected(self, unit: CoreUnit) -> None:
         """定位键全缺：协议层 fail-closed 校验拒绝。"""

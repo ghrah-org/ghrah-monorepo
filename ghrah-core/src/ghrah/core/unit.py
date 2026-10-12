@@ -758,7 +758,7 @@ class CoreUnit:
 
     async def handle_command(
         self, command: str, payload: dict[str, Any], cmd_ctx: Any
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """分发命令到对应 handler。
 
         Args:
@@ -767,7 +767,10 @@ class CoreUnit:
             cmd_ctx: 命令上下文（subject 侧占位对象，视为 Any）
 
         Returns:
-            回执字典 ``{"success": bool, "data": ..., "error": ...}``
+            回执字典 ``{"success": bool, "data": ..., "error": ...}``；
+            handler 显式返回 ``None`` 时原样穿透（宿主 serial「返回
+            None = 不是我的」约定，当前仅 hitl_response 的多 cluster
+            穿透使用）。
         """
         handler = self._handlers.get(command)
         if handler is None:
@@ -1413,7 +1416,9 @@ class CoreUnit:
     # HITL 命令
     # ----------------------------------------------------------------
 
-    async def _handle_hitl_response(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+    async def _handle_hitl_response(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any] | None:
         """hitl_response — 审批响应解析（promise 优先，三元组回退）。
 
         promise 路径：凭 promise_id 从 unit 级注册表翻译回
@@ -1423,6 +1428,12 @@ class CoreUnit:
         future，不伪装成功）；拒绝时把 UI 收集的 reason 并入
         HITLResult.result 透传给 LLM。resolve 成功后发布
         hitl_resolved 事件（Observer 据此清除审批卡片）。
+
+        多 cluster 穿透：promise 注册表是 unit 级单例，promise 归属唯一
+        持有它的 CoreUnit；本 unit 未持有且无三元组回退时返回 ``None``
+        穿透给下一个 CoreUnit（宿主 serial「返回 None = 不是我的」约定），
+        而非以错误回执短路命令链——否则先挂载的 cluster 会拦截其它
+        cluster 的审批响应。全部 miss 时由宿主兜底 Unknown command。
         """
         supervisor = self._require_supervisor()
         hp = HITLResponsePayload.model_validate(payload)
@@ -1435,7 +1446,13 @@ class CoreUnit:
         if promise_id:
             triplet = self._hitl_promises.resolve(promise_id)
             if triplet is None and not (agent_name and ability_name and tool_call_id):
-                return self._err("HITL promise not found or expired")
+                logger.debug(
+                    "hitl_response: promise '%s' not held by cluster '%s'; "
+                    "passing through to next CoreUnit",
+                    promise_id,
+                    self._config.cluster_id,
+                )
+                return None
             if triplet is not None:
                 agent_name, ability_name, tool_call_id = triplet
 

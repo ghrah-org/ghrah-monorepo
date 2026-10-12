@@ -415,6 +415,8 @@ class LocalAbilityExecutor(AbilityExecutor):
         """执行一组 tool_calls，返回结果列表。
 
         多个 tool_calls 使用 asyncio.gather 并行执行。
+        子任务的取消信号（CancelledError 等 BaseException）原样传播，
+        不折算为结果或普通错误。
 
         Args:
             tool_calls: LLM 返回的 ToolCallBlock 列表
@@ -469,6 +471,11 @@ class LocalAbilityExecutor(AbilityExecutor):
                 return_exceptions=True,
             )
             for i, r in enumerate(raw_results):
+                if isinstance(r, BaseException) and not isinstance(r, Exception):
+                    # 取消等控制流信号不是动作结果：原样重抛，交上层取消
+                    # 路径处理——否则下方 r["tool_call_id"] 将抛 TypeError，
+                    # 取消以错误形状崩溃
+                    raise r
                 if isinstance(r, Exception):
                     results.append(
                         {
