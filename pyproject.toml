@@ -46,10 +46,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
-markers = [
-    "integration: integration tests requiring real services (Core, Subject, Observer)",
-]
 
 [tool.mypy]
 python_version = "3.11"
