@@ -15,17 +15,21 @@ SupervisorActor 是整个多 Agent 系统的中心编排者：
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication.errors import (
     AgentNotFoundError,
     RegistryError,
 )
+from ghrah.communication.message_manager import MessageKind, MessageManager
 from ghrah.communication.registry import AgentRegistry
 from ghrah.communication.router import MessageRouter
+from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.ability_protocol import AbilityProtocol
+from ghrah.core.exceptions import CommunicationTimeoutError
 from ghrah.core.message import AgentMessage, MessageType
 from ghrah.types.config_types import AgentConfig
 
@@ -96,6 +100,7 @@ class SupervisorActor:
         max_cluster_members: int = 20,
         manifest_store: Any | None = None,
         llm_factory: Callable[[AgentConfig], Any] | None = None,
+        message_manager: MessageManager | None = None,
     ) -> None:
         """初始化 Supervisor。
 
@@ -113,12 +118,17 @@ class SupervisorActor:
                 spawn/query_manifests 等 manifest 类工具经
                 AbilityExecutionContext.services 显式接线；
                 None = 未接线（对应工具显式 FAILURE 指路）。
+            message_manager: 显式注入已打开的项目消息服务，须启用固定会话路由；
+                生命周期由装配方管理，未配置时 agent 间发送拒绝。
             llm_factory: 集群级 LLM 工厂默认（``(AgentConfig) ->
                 LLMProtocol``；None = AgentBuilder 内建 agentconf 默认）。
                 spawn_agent 的 per-spawn kwarg 可覆盖；集群类工具
                 （spawn_agent ability）继承此默认——否则经工具创建的
                 agent 将回落 agentconf，破坏部署方注入的 LLM 出口。
         """
+        if message_manager is not None and not message_manager.session_routing:
+            raise ValueError("Supervisor messaging requires session_routing=True")
+        self.message_manager = message_manager
         self._event_publisher = event_publisher
         self._cluster_id = cluster_id
         # RoomBridgeProtocol | None（send 工具用；duck-typed，避免反向依赖）
@@ -129,6 +139,25 @@ class SupervisorActor:
         self._llm_factory = llm_factory
         self._registry = AgentRegistry()
         self._router = MessageRouter(self._registry, default_timeout=default_timeout)
+        if message_manager is not None and room_bridge is not None:
+
+            async def project_room(message: Any) -> None:
+                rooms = message.metadata.get("room_ids") or [message.metadata.get("room_id")]
+                for room_id in rooms:
+                    if not room_id:
+                        continue
+                    result = await room_bridge.append_room_log(
+                        room_id,
+                        author=message.sender_id.removeprefix("human:")
+                        if message.external_sender
+                        else message.sender_id,
+                        data={"mm_message_id": message.message_id},
+                        author_type="human" if message.external_sender else "agent",
+                    )
+                    if not result.get("success"):
+                        raise RuntimeError(result.get("error") or "Room projection failed")
+
+            message_manager.configure_room_projector(project_room)
         self._default_ability_names = (
             list(default_abilities) if default_abilities is not None else None
         )
@@ -181,6 +210,17 @@ class SupervisorActor:
             RegistryError: 同名 Agent 已注册、能力语义非法
                 （空列表/未配置默认集/unknown 能力名）、或集群成员超限
         """
+        if self.message_manager is not None:
+            if (
+                not self.message_manager.allow_persisted_agents
+                and config.effective_agent_id not in self.message_manager.agent_ids
+            ):
+                raise RegistryError("Agent ID is not declared in MessageManager")
+            if persistence_factory is None:
+
+                def persistence_factory(config: AgentConfig) -> SqliteBackend:
+                    return SqliteBackend(self.message_manager.db_path)
+
         if self._registry.exists(config.name):
             raise RegistryError(f"Agent already registered: {config.name}")
 
@@ -251,6 +291,13 @@ class SupervisorActor:
         # 会把同名 agent 的历史链删除并以新根节点覆盖。现在先 connect，
         # 有快照则 restore；仅无快照时初始化。任一步失败均 fail closed。
         try:
+            if self.message_manager is not None:
+                backend = actor_handle._context_manager.persistence
+                if (
+                    not isinstance(backend, SqliteBackend)
+                    or backend.db_path.resolve() != self.message_manager.db_path
+                ):
+                    raise ValueError("Persistent messaging requires same-file SqliteBackend")
             recovery_mode = await self._prepare_agent_persistence(
                 actor_handle, config.effective_agent_id
             )
@@ -260,6 +307,7 @@ class SupervisorActor:
                 f"Agent persistence recovery failed for '{config.name}': {exc}"
             ) from exc
 
+        registered = False
         try:
             self._registry.register(
                 name=config.name,
@@ -267,7 +315,13 @@ class SupervisorActor:
                 actor_handle=actor_handle,
                 tags=tags,
             )
+            registered = True
+            if self.message_manager is not None:
+                await self.message_manager.refresh_agent_ids()
+                await self.message_manager.bind_atomic(actor_handle)
         except Exception:
+            if registered:
+                self._registry.unregister(config.name)
             await self._close_agent_persistence(actor_handle, config.name)
             raise
 
@@ -356,6 +410,9 @@ class SupervisorActor:
             AgentNotFoundError: 如果 Agent 未注册
         """
         info = self._registry.get_info(name)
+        if self.message_manager is not None:
+            await self.message_manager.unbind(info.config.effective_agent_id)
+        await info.actor_handle.stop_receiving()
         await self._release_agent_persistence(info.actor_handle, name)
 
         self._registry.unregister(name)
@@ -395,6 +452,64 @@ class SupervisorActor:
             "members": members,
         }
 
+    async def prepare_message(
+        self,
+        *,
+        targets: Collection[str],
+        content: str,
+        sender: str,
+        idempotency_key: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """在 agent 当前持久迭代中准备请求，提交成功后才允许投递。"""
+        manager = self.message_manager
+        if manager is None:
+            raise RuntimeError("MessageManager is required for agent communication")
+        source = self._registry.get_info(sender).config.effective_agent_id
+        if isinstance(targets, str):
+            raise ValueError("targets must be a collection")
+        recipients = []
+        for target in targets:
+            recipients.append(
+                self._registry.get_info(target).config.effective_agent_id
+                if self._registry.exists(target)
+                else target
+            )
+        draft = await manager.prepare_send(
+            recipient_ids=recipients,
+            content=content,
+            kind=MessageKind.REQUEST,
+            idempotency_key=idempotency_key,
+            expected_sender_id=source,
+            metadata=metadata,
+        )
+        return {
+            "message_id": draft.message_id,
+            "recipients": list(draft.recipient_ids),
+            "status": "prepared",
+            "mode": "persistent",
+            "recipient_names": {
+                self._registry.get_info(target).config.effective_agent_id: target
+                for target in targets
+                if self._registry.exists(target)
+            },
+        }
+
+    def validate_router_sender(self, sender: str) -> None:
+        """拒绝 agent 使用 Router 第二发送路径；外部用户输入仍为独立入口。"""
+        known = (
+            self._registry.exists(sender)
+            or any(
+                info.config.effective_agent_id == sender for info in self._registry.list_agents()
+            )
+            or (self.message_manager is not None and sender in self.message_manager.agent_ids)
+        )
+        if known:
+            raise RuntimeError(
+                "Agent Router communication was removed; use prepare_message inside "
+                "an atomic delivery or MessageManager.send from an external caller"
+            )
+
     async def route_message(
         self, message: AgentMessage, timeout: float | None = None
     ) -> AgentMessage:
@@ -412,8 +527,80 @@ class SupervisorActor:
         Returns:
             目标 Agent 的回复
         """
+        if self.message_manager is None:
+            self.validate_router_sender(message.sender)
+            effective_timeout = self._resolve_timeout(message.recipient, timeout)
+            return await self._router.route(message, timeout=effective_timeout)
+        if message.recipient == "*":
+            responses = await self.broadcast(
+                message.content,
+                sender=message.sender,
+                msg_type=message.type,
+                metadata=message.metadata,
+            )
+            if not responses:
+                return message
+            return AgentMessage(
+                sender=responses[0]["responder"],
+                recipient=message.sender,
+                content=responses[0]["content"],
+                type=MessageType.RESULT,
+                reply_to=message.id,
+            )
+        request = await self._accept_input(message)
         effective_timeout = self._resolve_timeout(message.recipient, timeout)
-        return await self._router.route(message, timeout=effective_timeout)
+        try:
+            replies = await self.message_manager.wait_replies(
+                request.message_id, timeout=effective_timeout
+            )
+        except TimeoutError as exc:
+            raise CommunicationTimeoutError(
+                message.sender, message.recipient, effective_timeout
+            ) from exc
+        result = replies[0]
+        return AgentMessage.create_reply(
+            message, result.content, content_blocks=result.metadata.get("content_blocks")
+        )
+
+    async def _accept_input(self, message: AgentMessage) -> Any:
+        manager = self.message_manager
+        target = message.recipient
+        target_id = (
+            self._registry.get_info(target).config.effective_agent_id
+            if self._registry.exists(target)
+            else target
+        )
+        source = next(
+            (
+                info
+                for info in self._registry.list_agents()
+                if message.sender in (info.name, info.config.effective_agent_id)
+            ),
+            None,
+        )
+        meta = {
+            **message.metadata,
+            "message_type": message.type.value,
+            "content_blocks": message.content_blocks,
+            "return_reply": True,
+        }
+        key = str(meta.pop("request_id", "")) or message.id
+        if source or message.sender in manager.agent_ids:
+            return await manager.send(
+                sender_id=source.config.effective_agent_id if source else message.sender,
+                recipient_ids=(target_id,),
+                content=message.content,
+                kind=MessageKind.REQUEST,
+                idempotency_key=f"ingress:{key}",
+                metadata=meta,
+            )
+        return await manager.send_external(
+            sender=message.sender,
+            recipient_ids=(target_id,),
+            content=message.content,
+            idempotency_key=f"ingress:{key}",
+            metadata=meta,
+        )
 
     def _resolve_timeout(self, target: str, timeout: float | None) -> float:
         """解析有效的通信超时时间。
@@ -447,7 +634,7 @@ class SupervisorActor:
         timeout: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        """发送消息到指定 Agent，返回回复内容。
+        """发送普通输入或外部 agent 请求，持久受理后返回对应回复。
 
         超时优先级：
         1. 显式传入的 timeout 参数
@@ -466,24 +653,35 @@ class SupervisorActor:
         Returns:
             回复文本内容
         """
-        effective_timeout = self._resolve_timeout(target, timeout)
-        response = await self._router.send_and_wait(
-            target=target,
-            content=content,
+        manager = self.message_manager
+        if manager is None:
+            self.validate_router_sender(sender)
+            response = await self._router.send_and_wait(
+                target=target,
+                content=content,
+                sender=sender,
+                msg_type=msg_type,
+                timeout=self._resolve_timeout(target, timeout),
+                metadata=metadata,
+            )
+            return response.content
+        message = AgentMessage(
             sender=sender,
-            msg_type=msg_type,
-            timeout=effective_timeout,
-            metadata=metadata,
+            recipient=target,
+            content=content,
+            type=msg_type,
+            metadata=dict(metadata or {}),
         )
-        return response.content
+        return (await self.route_message(message, timeout=timeout)).content
 
     async def broadcast(
         self,
         content: str,
         sender: str = "user",
         msg_type: MessageType = MessageType.BROADCAST,
+        metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
-        """广播消息到所有 Agent。
+        """将普通外部输入广播到所有 Agent；agent 内部广播使用持久准备入口。
 
         Args:
             content: 消息内容
@@ -496,14 +694,54 @@ class SupervisorActor:
             ``responder`` 即广播实际到达者（router.broadcast 返回的
             AgentMessage 经 create_reply 令 sender=原 recipient）。
         """
-        message = AgentMessage(
-            sender=sender,
-            recipient="*",
-            content=content,
-            type=msg_type,
+        if self.message_manager is None:
+            self.validate_router_sender(sender)
+            message = AgentMessage(sender=sender, recipient="*", content=content, type=msg_type)
+            responses = await self._router.broadcast(message)
+            return [{"responder": r.sender, "content": r.content} for r in responses]
+        infos = [
+            info
+            for info in self._registry.list_agents()
+            if sender not in (info.name, info.config.effective_agent_id)
+        ]
+        if not infos:
+            return []
+        manager = self.message_manager
+        recipients = tuple(info.config.effective_agent_id for info in infos)
+        source = next(
+            (
+                info
+                for info in self._registry.list_agents()
+                if sender in (info.name, info.config.effective_agent_id)
+            ),
+            None,
         )
-        responses = await self._router.broadcast(message)
-        return [{"responder": r.sender, "content": r.content} for r in responses]
+        meta = {**(metadata or {}), "message_type": msg_type.value, "return_reply": True}
+        key = f"broadcast:{uuid4().hex}"
+        if source or sender in manager.agent_ids:
+            request = await manager.send(
+                sender_id=source.config.effective_agent_id if source else sender,
+                recipient_ids=recipients,
+                content=content,
+                kind=MessageKind.REQUEST,
+                idempotency_key=key,
+                metadata=meta,
+            )
+        else:
+            request = await manager.send_external(
+                sender=sender,
+                recipient_ids=recipients,
+                content=content,
+                idempotency_key=key,
+                metadata=meta,
+            )
+        replies = await manager.wait_replies(request.message_id, tolerate_errors=True)
+        by_sender = {reply.sender_id: reply for reply in replies}
+        return [
+            {"responder": info.name, "content": by_sender[info.config.effective_agent_id].content}
+            for info in infos
+            if info.config.effective_agent_id in by_sender
+        ]
 
     async def delegate(
         self,
@@ -512,7 +750,7 @@ class SupervisorActor:
         content: str,
         timeout: float | None = None,
     ) -> str:
-        """Agent 间委托：从一个 Agent 委托任务到另一个 Agent。
+        """通过持久消息委托并返回回复，保留原同步调用接口。
 
         超时优先级：
         1. 显式传入的 timeout 参数
@@ -536,15 +774,9 @@ class SupervisorActor:
         if not self._registry.exists(to_agent):
             raise AgentNotFoundError(to_agent)
 
-        message = AgentMessage(
-            sender=from_agent,
-            recipient=to_agent,
-            content=content,
-            type=MessageType.COMMAND,
+        return await self.send(
+            to_agent, content, sender=from_agent, msg_type=MessageType.COMMAND, timeout=timeout
         )
-        effective_timeout = self._resolve_timeout(to_agent, timeout)
-        response = await self._router.route(message, timeout=effective_timeout)
-        return response.content
 
     async def register_ability_for_agent(
         self,

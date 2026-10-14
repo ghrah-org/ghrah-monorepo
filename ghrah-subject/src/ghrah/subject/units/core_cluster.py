@@ -163,8 +163,30 @@ class CoreClusterRegistryUnit(SubjectUnit):
         if self._unit_factory is None:
             # 生产默认工厂：注入 manifest_store（从 ctx 取），
             # 供 CoreUnit 内部解析 manifest_ref spawn。
+            async def project_room(message: Any) -> None:
+                rooms = message.metadata.get("room_ids") or [message.metadata.get("room_id")]
+                for room_id in rooms:
+                    if not room_id:
+                        continue
+                    result = await ctx.serial(
+                        "command/room_send",
+                        {
+                            "room_id": room_id,
+                            "author": message.sender_id.removeprefix("human:")
+                            if message.external_sender
+                            else message.sender_id,
+                            "author_type": "human" if message.external_sender else "agent",
+                            "data": {"mm_message_id": message.message_id},
+                        },
+                    )
+                    if not isinstance(result, dict) or not result.get("success"):
+                        raise RuntimeError(str(result))
+
             self._unit_factory = default_core_unit_factory(
-                self._config, manifest_store=store, llm_factory=self._llm_factory
+                self._config,
+                manifest_store=store,
+                llm_factory=self._llm_factory,
+                room_projector=project_room,
             )
         registry = CoreClusterRegistry(
             unit_factory=self._unit_factory,
@@ -187,6 +209,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
         payload: dict[str, Any],
         cmd_ctx: CommandContext,
     ) -> dict[str, Any]:
+        if command == "send_message" and getattr(cmd_ctx, "request_id", None):
+            payload = {
+                **payload,
+                "metadata": {**(payload.get("metadata") or {}), "request_id": cmd_ctx.request_id},
+            }
         if command not in _PROJECT_AGENT_COMMANDS:
             return {
                 "success": False,

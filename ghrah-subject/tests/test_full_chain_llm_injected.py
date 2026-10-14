@@ -211,7 +211,7 @@ async def test_full_chain_manifest_spawn_scripted_reply_persisted(tmp_path: Path
         agent_entries = [e for e in log["entries"] if e["author_type"] == "agent"]
         assert len(agent_entries) == 1
         assert agent_entries[0]["data"]["message"] == PRESET_REPLY
-        assert agent_entries[0]["data"].get("via") == "chain_filter"
+        assert agent_entries[0]["data"].get("via") == "message_manager"
 
     # 跨重启：同 db 重装后 RoomLog 仍可读（human + agent 回复双条）
     async with _stack(tmp_path, ScriptedLLM(replies=[])) as ctx2:

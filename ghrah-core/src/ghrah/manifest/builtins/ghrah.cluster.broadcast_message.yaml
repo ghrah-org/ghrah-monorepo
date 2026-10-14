@@ -4,12 +4,12 @@ metadata:
   namespace: ghrah.cluster
   name: broadcast_message
   title: Broadcast Message
-  description: Broadcast a message to all agents in the cluster (excluding the sender) and collect their responses. Use this for cluster-wide announcements or queries.
+  description: Broadcast a message to all agents in the cluster (excluding the sender) after a durable wait checkpoint and collect their replies. Use this for cluster-wide announcements or queries.
   tags: [cluster, communication]
   permissions: {}
 tool:
   name: broadcast_message
-  description: Broadcast a message to all agents in the cluster (excluding the sender) and collect their responses. Use this for cluster-wide announcements or queries.
+  description: Broadcast a message to all agents in the cluster (excluding the sender) after a durable wait checkpoint and collect their replies. Use this for cluster-wide announcements or queries.
   parameters:
     content:
       type: string

@@ -31,8 +31,7 @@ class BroadcastMessageInput(BaseModel):
 class BroadcastMessageAbility(Ability):
     """向集群中所有 Agent 广播消息。
 
-    通过 SupervisorActor.broadcast() 向所有已注册 Agent
-    发送消息（排除自身），收集所有回复。
+    向当前集群已注册 Agent 准备一对多持久请求（排除自身），提交后投递。
     """
 
     @property
@@ -46,7 +45,7 @@ class BroadcastMessageAbility(Ability):
                 "name": "broadcast_message",
                 "description": (
                     "Broadcast a message to all agents in the cluster "
-                    "(excluding the sender) and collect their responses. "
+                    "Exclude the sender; commit a durable wait checkpoint, then collect replies. "
                     "Use this for cluster-wide announcements or queries."
                 ),
                 "parameters": BroadcastMessageInput.model_json_schema(),
@@ -56,7 +55,7 @@ class BroadcastMessageAbility(Ability):
     def to_prompt_description(self) -> str:
         return (
             "broadcast_message(content: str) -> dict: "
-            "Broadcast a message to all agents and collect their responses"
+            "Send one persistent request to all peers and collect replies"
         )
 
     def get_hooks(self) -> list[Hook]:
@@ -82,17 +81,33 @@ class BroadcastMessageAbility(Ability):
         sender = context.agent_name or "unknown"
 
         try:
-            responses = await context.supervisor.broadcast(
-                content=content,
+            args = BroadcastMessageInput.model_validate(tool_args)
+            cm = context.context_manager
+            call_id = context.invocation.tool_call_id
+            if cm is None or not call_id:
+                raise RuntimeError("Persistent sending requires an action context and tool_call_id")
+            agents = await context.supervisor.list_agents()
+            targets = tuple(agent["name"] for agent in agents if agent["name"] != sender)
+            if not targets:
+                return ActionResult(
+                    outcome=ActionOutcome.SUCCESS,
+                    data={"responses": [], "recipients": [], "agent_count": 0},
+                )
+            data = await context.supervisor.prepare_message(
+                targets=targets,
+                content=args.content,
                 sender=sender,
+                idempotency_key=f"tool:{cm.active_head.id}:{call_id}",
+                metadata={"inline_reply": True, "message_type": "broadcast"},
             )
+            data["await_reply"] = {
+                "message_id": data["message_id"],
+                "mode": "broadcast",
+                "timeout": -1,
+                "targets": list(targets),
+            }
             return ActionResult(
-                outcome=ActionOutcome.SUCCESS,
-                data={
-                    "responses": responses,
-                    "recipients": [r["responder"] for r in responses],
-                    "agent_count": len(responses),
-                },
+                outcome=ActionOutcome.SUCCESS, data={**data, "agent_count": len(data["recipients"])}
             )
         except Exception as e:
             return ActionResult(

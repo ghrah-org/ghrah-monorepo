@@ -55,8 +55,9 @@ class RoomBridgeProtocol(Protocol):
         room_id: str,
         author: str,
         data: dict[str, Any] | None = None,
+        author_type: str = "agent",
     ) -> dict[str, Any]:
-        """向 room 追加一条 RoomLog（author_type 固定 "agent"）。"""
+        """向 room 追加一条 RoomLog，默认作者类型为 agent。"""
         ...
 
 
@@ -106,13 +107,14 @@ class SerialRoomBridge:
         room_id: str,
         author: str,
         data: dict[str, Any] | None = None,
+        author_type: str = "agent",
     ) -> dict[str, Any]:
         return await self._command(
             "room_send",
             {
                 "room_id": room_id,
                 "author": author,
-                "author_type": "agent",
+                "author_type": author_type,
                 "data": data or {},
             },
         )

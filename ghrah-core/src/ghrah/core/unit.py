@@ -28,6 +28,7 @@ provide**——Ouroboros 同名服务全局唯一（无 isolate 时），每实�
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -148,6 +149,8 @@ class CoreUnitConfig:
         persistence_factory: per-agent 持久化后端工厂
             （``(AgentConfig) -> PersistenceBackend | None``；None = Core
             内建 sqlite）。新 spawn 生效，存量 agent 不受影响。
+        message_manager: 显式注入已打开的项目 MessageManager；开启固定会话路由，
+            由装配方管理生命周期。未接入时 agent 间持久发送明确失败。
         llm_factory: per-cluster LLM 工厂注入
             （``(AgentConfig) -> LLMProtocol``；None = Core 内建默认，即
             agentconf 解析 + model_overrides 应用）。部署方显式声明 LLM
@@ -185,6 +188,7 @@ class CoreUnitConfig:
     # 默认，即 agentconf 解析）。与 persistence_factory 同范式：部署方显式
     # 声明 LLM 出口（网关/凭据/计量包装），注入即全责（不再套用
     # _default_llm_factory 的 model_overrides 逻辑，由注入方自理）。
+    message_manager: Any = None  # 已打开的项目 MessageManager，由装配方管理生命周期
     llm_factory: Callable[[Any], Any] | None = None
     # duck-typed ManifestStoreProtocol；None = standalone（manifest_ref spawn 报错）
     manifest_store: Any = None
@@ -698,6 +702,11 @@ class CoreUnit:
             SubjectCommandBridge(serial) if callable(serial) else None
         )
 
+        if (
+            self._config.message_manager is not None
+            and self._config.message_manager.project_id != self._config.project_id
+        ):
+            raise ValueError("MessageManager project does not match CoreUnit")
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
             cluster_id=self._config.cluster_id,
@@ -711,6 +720,7 @@ class CoreUnit:
             max_cluster_members=self._config.max_cluster_members,
             manifest_store=self._config.manifest_store,
             llm_factory=self._config.llm_factory,
+            message_manager=self._config.message_manager,
         )
         self._supervisor = supervisor
 
@@ -1373,15 +1383,40 @@ class CoreUnit:
             executor.update_hitl_promise_registry(self._hitl_promises)
 
         try:
-            context = AbilityExecutionContext(
-                current_ability_name=ep.ability_name,
-                tool_args=ep.tool_args,
-                context_manager=getattr(agent_handle, "_context_manager", None),
-                supervisor=cast(Any, supervisor),
-                agent_name=ep.agent_name,
-                manifest_store=getattr(supervisor, "manifest_store", None),
-            )
-            action_result = await executor.execute_ability(ability, context)
+            if supervisor.message_manager is not None:
+                from ghrah.context.persistence.serialization import deserialize_action_result
+
+                manager = supervisor.message_manager
+                request = await manager.send_external(
+                    sender="command",
+                    recipient_ids=(agent_handle.config.effective_agent_id,),
+                    content=f"Execute {ep.ability_name}",
+                    idempotency_key=f"ability:{request_id}",
+                    metadata={
+                        "execute_ability": {
+                            "name": ep.ability_name,
+                            "args": ep.tool_args,
+                            "call_id": request_id,
+                        }
+                    },
+                )
+                replies = await manager.wait_replies(
+                    request.message_id, timeout=supervisor._resolve_timeout(ep.agent_name, None)
+                )
+                action_result = deserialize_action_result(json.loads(replies[0].content))
+                await manager.recover_room_projections()
+                if ep.ability_name == "send" and action_result.outcome == ActionOutcome.SUCCESS:
+                    action_result.data["status"] = "sent"
+            else:
+                context = AbilityExecutionContext(
+                    current_ability_name=ep.ability_name,
+                    tool_args=ep.tool_args,
+                    context_manager=getattr(agent_handle, "_context_manager", None),
+                    supervisor=cast(Any, supervisor),
+                    agent_name=ep.agent_name,
+                    manifest_store=getattr(supervisor, "manifest_store", None),
+                )
+                action_result = await executor.execute_ability(ability, context)
             success = action_result.outcome == ActionOutcome.SUCCESS
             error = None if success else str(action_result.data.get("error", "unknown error"))
             result_payload = AbilityResultPayload(

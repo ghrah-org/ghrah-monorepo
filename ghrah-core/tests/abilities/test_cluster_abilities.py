@@ -20,6 +20,7 @@ from ghrah.abilities.builtin.send_message import SendMessageAbility
 from ghrah.abilities.builtin.spawn_agent import SpawnAgentAbility
 from ghrah.abilities.builtin.terminate_agent import TerminateAgentAbility
 from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.core.config import AgentConfig
 
 
@@ -33,6 +34,8 @@ def _make_context(
         "supervisor": supervisor,
         "agent_name": agent_name,
         "tool_args": tool_args or {},
+        "context_manager": MagicMock(),
+        "invocation": AbilityInvocation(tool_call_id="call-1"),
     }
     defaults.update(overrides)
     return AbilityExecutionContext(**defaults)
@@ -49,6 +52,14 @@ def _make_supervisor(
     supervisor.send = AsyncMock(return_value=send_return)
     supervisor.broadcast = AsyncMock(
         return_value=broadcast_return or [{"responder": "mock-agent", "content": "ok"}]
+    )
+    supervisor.prepare_message = AsyncMock(
+        return_value={
+            "message_id": "message-1",
+            "recipients": ["agent-b"],
+            "status": "prepared",
+            "mode": "persistent",
+        }
     )
     supervisor.spawn_agent = AsyncMock(return_value=spawn_agent_return)
     return supervisor
@@ -150,22 +161,21 @@ class TestSendMessageAbility:
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
-    async def test_execute_success_sync(self) -> None:
+    async def test_execute_prepares_persistent_message(self) -> None:
         supervisor = _make_supervisor(send_return="done!")
         ctx = _make_context(
             supervisor=supervisor,
             agent_name="agent-a",
-            tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": False},
+            tool_args={"target": "agent-b", "content": "hello"},
         )
         ability = SendMessageAbility()
         result = await ability.execute(ctx)
         assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["response"] == "done!"
+        assert result.data["message_id"] == "message-1"
         assert result.data["target"] == "agent-b"
-        assert result.data["mode"] == "sync"
-        supervisor.send.assert_awaited_once_with(
-            target="agent-b", content="hello", sender="agent-a"
-        )
+        assert result.data["status"] == "prepared"
+        supervisor.prepare_message.assert_awaited_once()
+        supervisor.send.assert_not_awaited()
 
     async def test_execute_missing_target(self) -> None:
         supervisor = _make_supervisor()
@@ -183,17 +193,17 @@ class TestSendMessageAbility:
         assert result.outcome == ActionOutcome.FAILURE
         assert "content is required" in result.data["error"]
 
-    async def test_execute_send_exception_sync(self) -> None:
+    async def test_execute_prepare_failure(self) -> None:
         supervisor = _make_supervisor()
-        supervisor.send = AsyncMock(side_effect=RuntimeError("timeout"))
+        supervisor.prepare_message = AsyncMock(side_effect=RuntimeError("write failed"))
         ctx = _make_context(
             supervisor=supervisor,
-            tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": False},
+            tool_args={"target": "agent-b", "content": "hello"},
         )
         ability = SendMessageAbility()
         result = await ability.execute(ctx)
         assert result.outcome == ActionOutcome.FAILURE
-        assert "timeout" in result.data["error"]
+        assert "write failed" in result.data["error"]
 
 
 # ── BroadcastMessageAbility 测试 ──
@@ -221,11 +231,10 @@ class TestBroadcastMessageAbility:
         assert "No supervisor" in result.data["error"]
 
     async def test_execute_success(self) -> None:
-        responses = [
-            {"responder": "b", "content": "ack from b"},
-            {"responder": "c", "content": "ack from c"},
-        ]
-        supervisor = _make_supervisor(broadcast_return=responses)
+        supervisor = _make_supervisor(
+            list_agents_return=[{"name": "agent-a"}, {"name": "b"}, {"name": "c"}]
+        )
+        supervisor.prepare_message.return_value["recipients"] = ["b", "c"]
         ctx = _make_context(
             supervisor=supervisor,
             agent_name="agent-a",
@@ -234,10 +243,11 @@ class TestBroadcastMessageAbility:
         ability = BroadcastMessageAbility()
         result = await ability.execute(ctx)
         assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["responses"] == responses
+        assert result.data["status"] == "prepared"
         assert result.data["recipients"] == ["b", "c"]
         assert result.data["agent_count"] == 2
-        supervisor.broadcast.assert_awaited_once_with(content="hello all", sender="agent-a")
+        assert supervisor.prepare_message.call_args.kwargs["targets"] == ("b", "c")
+        supervisor.broadcast.assert_not_awaited()
 
     async def test_execute_missing_content(self) -> None:
         supervisor = _make_supervisor()
@@ -248,8 +258,8 @@ class TestBroadcastMessageAbility:
         assert "content is required" in result.data["error"]
 
     async def test_execute_broadcast_exception(self) -> None:
-        supervisor = _make_supervisor()
-        supervisor.broadcast = AsyncMock(side_effect=RuntimeError("network error"))
+        supervisor = _make_supervisor(list_agents_return=[{"name": "b"}])
+        supervisor.prepare_message = AsyncMock(side_effect=RuntimeError("network error"))
         ctx = _make_context(
             supervisor=supervisor,
             tool_args={"content": "hello all"},
@@ -578,37 +588,29 @@ class TestTerminateAgentAbility:
         assert "not found" in result.data["error"]
 
 
-# ── SendMessageAbility 异步模式测试 ──
+# ── 旧发送模式显式拒绝 ──
 
 
-class TestSendMessageAbilityAsync:
-    async def test_execute_fire_and_forget_default(self) -> None:
-        supervisor = _make_supervisor(send_return="async reply")
-        ctx = _make_context(
-            supervisor=supervisor,
-            agent_name="agent-a",
-            tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": True},
+class TestPersistentSendModes:
+    @pytest.mark.parametrize("value", [False, True])
+    async def test_modes_prepare_persistent_message(self, value: bool) -> None:
+        supervisor = _make_supervisor()
+        supervisor._resolve_timeout.return_value = 300
+        result = await SendMessageAbility().execute(
+            _make_context(
+                supervisor=supervisor,
+                tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": value},
+            )
         )
-        ability = SendMessageAbility()
-        result = await ability.execute(ctx)
         assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["mode"] == "async"
-        assert result.data["target"] == "agent-b"
+        assert ("await_reply" in result.data) is (not value)
+        supervisor.send.assert_not_awaited()
+        supervisor.prepare_message.assert_awaited_once()
 
-    async def test_execute_sync_mode(self) -> None:
-        supervisor = _make_supervisor(send_return="sync reply")
-        ctx = _make_context(
-            supervisor=supervisor,
-            agent_name="agent-a",
-            tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": False},
-        )
-        ability = SendMessageAbility()
-        result = await ability.execute(ctx)
-        assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["mode"] == "sync"
-        assert result.data["response"] == "sync reply"
-        supervisor.send.assert_awaited_once_with(
-            target="agent-b", content="hello", sender="agent-a"
+    def test_schema_supports_sync_and_async(self) -> None:
+        assert (
+            "fire_and_forget"
+            in SendMessageAbility().bind_tool()["function"]["parameters"]["properties"]
         )
 
 

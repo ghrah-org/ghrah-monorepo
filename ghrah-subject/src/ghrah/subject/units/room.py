@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ghrah.protocol.types import SendMessagePayload
@@ -137,11 +138,85 @@ class RoomUnit(SubjectUnit):
                 )
             )
 
+        async def publish(room: Any, payload: Any) -> dict[str, Any]:
+            """先持久受理 Room 人类消息，再由 MM 唯一投影入口写引用日志。"""
+            from uuid import uuid4
+
+            project = await project_get(room.project_id)
+            if not project:
+                return {"success": False, "error": "Room project unavailable", "data": None}
+            try:
+                manager = cluster_registry.get_message_manager(room.project_id)
+            except KeyError:
+                clusters = project.get("cluster_ids") or []
+                if not clusters:
+                    return {"success": False, "error": "No cluster for Room project", "data": None}
+                first = clusters[0]
+                cluster_id = first["cluster_id"] if isinstance(first, dict) else str(first)
+                await cluster_registry.ensure_cluster(
+                    cluster_id,
+                    project_id=room.project_id,
+                    project_root_locator=project["project_root_locator"],
+                )
+                manager = cluster_registry.get_message_manager(room.project_id)
+            from ghrah.communication import MessageKind
+
+            meta = {"room_ids": [room.room_id], "room_id": room.room_id, "room_projection": True}
+            key = f"room:{room.room_id}:{payload.data.get('request_id') or uuid4().hex}"
+            content = str(payload.data.get("message") or "")
+            has_message = bool(content.strip())
+            meta["room_data"] = {
+                k: v for k, v in payload.data.items() if k != "message" or not has_message
+            }
+            meta["room_has_message"] = has_message
+            if not has_message:
+                content = json.dumps(payload.data, ensure_ascii=False)
+            if str(payload.author_type.value) == "human":
+                targets = (
+                    RoomManager._resolve_delivery_targets(room, payload) if has_message else []
+                )
+                message = await manager.send_external(
+                    sender=payload.author,
+                    recipient_ids=targets,
+                    content=content,
+                    idempotency_key=key,
+                    metadata=meta,
+                )
+            else:
+                # 外部 agent 日志发布保留原语义；工具的实际投递在 action 中准备。
+                message = await manager.send(
+                    sender_id=payload.author,
+                    recipient_ids=(),
+                    content=content,
+                    kind=MessageKind.NOTIFICATION,
+                    idempotency_key=key,
+                    metadata=meta,
+                )
+            await manager.recover_room_projections()
+            entry = await self._store.get_log_by_id(
+                room.room_id, f"mm:{message.message_id}:{room.room_id}"
+            )
+            if entry is None:
+                return {
+                    "success": False,
+                    "data": {"message_id": message.message_id},
+                    "error": "Message accepted; Room projection pending",
+                }
+            assert self._manager is not None
+            return {
+                "success": True,
+                "error": None,
+                "data": {"entry": (await self._manager._hydrate_reference(entry)).to_wire()},
+            }
+
         self._manager = RoomManager(
             self._store,
             on_event=self._emit_event,
             project_get=project_get,
             deliver=deliver,
+            publish=publish
+            if callable(getattr(cluster_registry, "get_message_manager", None))
+            else None,
         )
         ctx.provide(ROOM_MANAGER.name, self._manager)
         ctx.provide(ROOM_STORE.name, self._store)
@@ -172,6 +247,15 @@ class RoomUnit(SubjectUnit):
         payload: dict[str, Any],
         cmd_ctx: CommandContext,
     ) -> dict[str, Any]:
+        if (
+            command == "room_send"
+            and getattr(cmd_ctx, "request_id", None)
+            and not (payload.get("data") or {}).get("mm_message_id")
+        ):
+            payload = {
+                **payload,
+                "data": {**(payload.get("data") or {}), "request_id": cmd_ctx.request_id},
+            }
         normalized = await self._normalize_agent_identity(command, payload)
         if isinstance(normalized, dict) and normalized.get("success") is False:
             return normalized

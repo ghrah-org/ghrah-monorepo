@@ -7,15 +7,12 @@
 send 回路（agent 自觉调用路径）：
 - 入参 ``{room_ids, targets?, message}``；
 - recipients = Σ room 的 agent 成员 ∪ targets 去重（RoomBridge 解析）；
-- Supervisor 投递（后台 fire-and-forget，排除发送者自身）；
-- 投递完成后逐 room 经 RoomBridge（``ctx.serial("command/room_send")``）
-  落账，RoomUnit ``append_log`` 收敛双路径。
+- Supervisor 准备持久出站草稿（排除发送者自身）；
+- 草稿与 action 节点同事务提交后，由 MM 投递并重放 Room 引用日志。
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -31,8 +28,6 @@ from ghrah.types.results import ActionOutcome, ActionResult
 if TYPE_CHECKING:
     from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
-
-logger = logging.getLogger(__name__)
 
 
 class SendInput(BaseModel):
@@ -120,47 +115,39 @@ class SendAbility(Ability):
             )
         resolved_data = resolved.get("data") or {}
         recipients: list[str] = list(resolved_data.get("recipients", []))
-        # 投递排除发送者自身（broadcast 同语义）
-        to_deliver = [r for r in recipients if r != sender]
+        # Room 成员可能使用稳定 ID；排除自身同时比较展示名和 Core 身份。
+        sender_ids = {sender}
+        stable_id = getattr(context.context_manager, "agent_name", None)
+        if isinstance(stable_id, str):
+            sender_ids.add(stable_id)
+        to_deliver = [r for r in recipients if r not in sender_ids]
 
-        # Supervisor 投递：fire-and-forget（回复由目标 agent 自行处理后记入链路）
-        for target in to_deliver:
-            asyncio.create_task(self._deliver(supervisor, target, args.message, sender))
-
-        # 逐 room 落账（author_type="agent"，RoomLog data = {message, targets?}）
-        data: dict[str, Any] = {"message": args.message}
-        if targets:
-            data["targets"] = targets
-        appended: list[str] = []
-        for room_id in args.room_ids:
-            log_result = await bridge.append_room_log(room_id, author=sender, data=data)
-            if not log_result.get("success"):
-                return ActionResult(
-                    outcome=ActionOutcome.FAILURE,
-                    data={
-                        "error": (
-                            f"delivered but failed to append room log for "
-                            f"'{room_id}': {log_result.get('error')}"
-                        ),
-                        "recipients": recipients,
-                        "appended_rooms": appended,
-                    },
-                )
-            appended.append(room_id)
-
-        return ActionResult(
-            outcome=ActionOutcome.SUCCESS,
-            data={
-                "recipients": recipients,
-                "delivered_to": to_deliver,
-                "rooms": appended,
-                "status": "sent",
-            },
-        )
-
-    @staticmethod
-    async def _deliver(supervisor: Any, target: str, content: str, sender: str) -> None:
+        cm = context.context_manager
+        call_id = context.invocation.tool_call_id
+        if cm is None or not call_id:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={"error": "Room sending requires a persistent action and tool_call_id"},
+            )
         try:
-            await supervisor.send(target=target, content=content, sender=sender)
-        except Exception as e:
-            logger.error("SendAbility: delivery to '%s' failed: %s", target, e)
+            data = await supervisor.prepare_message(
+                targets=to_deliver,
+                content=args.message,
+                sender=sender,
+                idempotency_key=f"tool:{cm.active_head.id}:{call_id}",
+                metadata={"room_ids": args.room_ids, "room_projection": True, "targets": targets},
+            )
+            return ActionResult(
+                outcome=ActionOutcome.SUCCESS,
+                data={
+                    **data,
+                    "recipients": recipients,
+                    "delivered_to": to_deliver,
+                    "rooms": args.room_ids,
+                },
+            )
+        except Exception as exc:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={"error": f"Failed to prepare Room message: {exc}"},
+            )
