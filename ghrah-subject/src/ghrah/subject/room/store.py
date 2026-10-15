@@ -259,6 +259,16 @@ class RoomStore:
 
     # ─── RoomLog append-only 链 ───
 
+    async def get_log_by_id(self, room_id: str, entry_id: str) -> RoomLogRecord | None:
+        """按持久引用查询投影，供恢复时幂等追加。"""
+        async with self._lock:
+            row = await (
+                await self._require_db().execute(
+                    "SELECT * FROM subject_room_logs WHERE room_id=? AND id=?", (room_id, entry_id)
+                )
+            ).fetchone()
+            return _row_to_log(row) if row else None
+
     async def append_log(
         self,
         room_id: str,
@@ -281,6 +291,15 @@ class RoomStore:
                 raise RoomArchivedError(room_id)
             seq = room.seq_watermark + 1
             record = record_factory(seq)
+            if record.data.get("mm_message_id"):
+                previous = await (
+                    await db.execute(
+                        "SELECT * FROM subject_room_logs WHERE room_id=? AND id=?",
+                        (room_id, record.id),
+                    )
+                ).fetchone()
+                if previous:
+                    return _row_to_log(previous), room
             await db.execute(
                 "INSERT INTO subject_room_logs "
                 "(id, room_id, seq, author, author_type, timestamp, data) "

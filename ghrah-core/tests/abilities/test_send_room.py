@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.send import SendAbility
 from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.core.room_protocol import ROOM_BRIDGE_UNAVAILABLE_ERROR, SerialRoomBridge
 
 
@@ -23,7 +24,11 @@ def _make_context(
     agent_name: str = "architect",
 ) -> AbilityExecutionContext:
     return AbilityExecutionContext(
-        supervisor=supervisor, agent_name=agent_name, tool_args=tool_args
+        supervisor=supervisor,
+        agent_name=agent_name,
+        tool_args=tool_args,
+        context_manager=MagicMock(),
+        invocation=AbilityInvocation(tool_call_id="room-send-1"),
     )
 
 
@@ -31,6 +36,15 @@ def _make_supervisor(room_bridge: Any) -> MagicMock:
     supervisor = MagicMock()
     supervisor.send = AsyncMock(return_value="ok")
     supervisor.room_bridge = room_bridge
+
+    async def prepare(**kwargs):
+        return {
+            "message_id": "room-message-1",
+            "recipients": list(kwargs["targets"]),
+            "status": "prepared",
+        }
+
+    supervisor.prepare_message = AsyncMock(side_effect=prepare)
     return supervisor
 
 
@@ -131,15 +145,12 @@ class TestSendAbility:
         ]
         # 投递排除发送者自身
         assert result.data["delivered_to"] == ["frontend-dev", "tester", "extern"]
-        # 逐 room 落账，data = {message, targets}
-        assert [(c[0], c[1]) for c in bridge.append_calls] == [
-            ("r1", "architect"),
-            ("r2", "architect"),
-        ]
-        assert bridge.append_calls[0][2] == {
-            "message": "hello",
-            "targets": ["extern"],
-        }
+        assert bridge.append_calls == []
+        supervisor.send.assert_not_awaited()
+        kwargs = supervisor.prepare_message.call_args.kwargs
+        assert kwargs["targets"] == ["frontend-dev", "tester", "extern"]
+        assert kwargs["metadata"]["room_ids"] == ["r1", "r2"]
+        assert kwargs["metadata"]["targets"] == ["extern"]
 
     async def test_empty_targets_broadcast_semantics(self) -> None:
         bridge = _FakeBridge(rooms={"r1": [{"subject": "a", "subject_type": "agent"}]})
@@ -150,8 +161,8 @@ class TestSendAbility:
         result = await SendAbility().execute(ctx)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["delivered_to"] == ["a"]
-        # 无 targets 时 data 不含 targets 键
-        assert bridge.append_calls[0][2] == {"message": "broadcast"}
+        assert supervisor.prepare_message.call_args.kwargs["metadata"]["targets"] == []
+        assert bridge.append_calls == []
 
     async def test_unknown_room_fails(self) -> None:
         bridge = _FakeBridge(fail_room="missing")
@@ -162,26 +173,17 @@ class TestSendAbility:
         assert "room not found: missing" in result.data["error"]
         assert bridge.append_calls == []
 
-    async def test_append_failure_reports_partial(self) -> None:
-        class _PartialBridge(_FakeBridge):
-            async def append_room_log(self, room_id, author, data=None):
-                self.append_calls.append((room_id, author, data))
-                if room_id == "r2":
-                    return {"success": False, "error": "boom"}
-                return {"success": True}
-
-        bridge = _PartialBridge(
-            rooms={
-                "r1": [{"subject": "a", "subject_type": "agent"}],
-                "r2": [{"subject": "b", "subject_type": "agent"}],
-            }
-        )
+    async def test_prepare_failure_does_not_append_log(self) -> None:
+        bridge = _FakeBridge(rooms={"r1": [{"subject": "a", "subject_type": "agent"}]})
         supervisor = _make_supervisor(bridge)
-        ctx = _make_context(supervisor, {"room_ids": ["r1", "r2"], "message": "hi"})
-        result = await SendAbility().execute(ctx)
+        supervisor.prepare_message.side_effect = RuntimeError("write failed")
+        result = await SendAbility().execute(
+            _make_context(supervisor, {"room_ids": ["r1"], "message": "hi"})
+        )
         assert result.outcome == ActionOutcome.FAILURE
-        assert "failed to append room log" in result.data["error"]
-        assert result.data["appended_rooms"] == ["r1"]
+        assert "write failed" in result.data["error"]
+        assert bridge.append_calls == []
+        supervisor.send.assert_not_awaited()
 
     async def test_invalid_args(self) -> None:
         bridge = _FakeBridge()

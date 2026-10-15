@@ -37,8 +37,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 from ghrah.abilities.context import AbilityExecutionContext
@@ -47,10 +49,19 @@ from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hook_runner import HookRunner
 from ghrah.abilities.hook_store import HookListView, HookStore
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.agents.runner import AgentRunner
 from ghrah.chat.content import ContentBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
+from ghrah.context.iteration_commit import (
+    DeliveryFinisher,
+    IterationCommitter,
+    durable_iteration_scope,
+    get_delivery_finisher,
+    get_iteration_committer,
+)
 from ghrah.context.iteration_state import IterationState
 from ghrah.context.manager import ContextManager
 from ghrah.context.window import parse_vendor_window_tokens
@@ -125,7 +136,7 @@ class ActorAgent:
         1. __init__ 接收注入的依赖（ContextManager, AbilityExecutor 等）
         2. 首次调用 _ensure_llm() 时，通过 llm_factory 回调创建 LLM
         3. 通过 register_ability() 注册能力（含 bind_tool 收集）
-        4. receive() 触发驱动循环：ability 选择 → hook 时序 → 执行 → 条件转移
+        4. receive() 经 Runner 排队：ability 选择 → hook 时序 → 执行 → 条件转移
 
         - 所有消息和状态通过 ContextManager 管理
         - 驱动循环控制状态（iteration, max_iterations 等）由 ContextManager 管理
@@ -171,6 +182,7 @@ class ActorAgent:
         if hasattr(self._ability_executor, "update_hook_runner"):
             self._ability_executor.update_hook_runner(self._hook_runner)
         self._message_queue: asyncio.Queue[ChatMessage] = asyncio.Queue()
+        self._runner = AgentRunner(config.name)
         self._iteration_state = IterationState()
         # 驱动循环活跃指示：receive() 期间置位，供 request_compact() 区分
         # "驱动中置标志"与"空闲直接执行"双态
@@ -432,7 +444,107 @@ class ActorAgent:
     # ----------------------------------------------------------------
 
     async def receive(self, message: AgentMessage) -> AgentMessage:
-        """接收并处理消息 — 驱动执行循环。
+        """经唯一 Runner 排队处理消息，返回本次请求的回复。"""
+        if getattr(self._supervisor, "message_manager", None) is not None:
+            message.recipient = self.config.name
+            return await self._supervisor.route_message(message)
+        return await self._runner.run(lambda: self._receive_once(message))
+
+    async def stop_receiving(self) -> None:
+        """停止当前接收执行并取消排队请求，供终止 agent 时使用。"""
+        await self._runner.close()
+
+    async def receive_atomic(
+        self,
+        message: AgentMessage,
+        committer: IterationCommitter,
+        rollback: Callable[[], None] | None = None,
+        finish: DeliveryFinisher | None = None,
+        target_session_id: str | None = None,
+    ) -> AgentMessage:
+        """经 Runner 执行显式原子接收，每轮节点由调用方提交器保存。"""
+
+        async def operation() -> AgentMessage:
+            cm = self._context_manager
+            if target_session_id and not self._message_queue.empty():
+                raise RuntimeError("Session-routed receive cannot consume unscoped queued messages")
+            selection = cm.use_session(target_session_id) if target_session_id else nullcontext()
+            with selection, durable_iteration_scope(cm, committer, rollback, finish):
+                try:
+                    return await self._receive_once(message)
+                finally:
+                    # 压缩失败可能发生在排空队列之前；持久 mailbox 是该输入的恢复来源。
+                    for queued in self._drain_message_queue():
+                        if (
+                            message.metadata.get("delivery_id") is None
+                            or queued.metadata.get("delivery_id") != message.metadata["delivery_id"]
+                        ):
+                            self._message_queue.put_nowait(queued)
+
+        return await self._runner.run(operation)
+
+    async def resume_atomic(
+        self,
+        message: AgentMessage,
+        committer: IterationCommitter,
+        rollback: Callable[[], None],
+        finish: DeliveryFinisher,
+        *,
+        session_id: str,
+        branch_id: str,
+        last_node_id: str,
+    ) -> AgentMessage:
+        """从指定持久 Head 的下一轮继续，不重注入输入，不重放已提交工具。"""
+
+        async def operation() -> AgentMessage:
+            cm = self._context_manager
+            if not self._message_queue.empty():
+                raise RuntimeError("Cannot resume with unscoped queued messages")
+            with (
+                cm.use_session(session_id),
+                durable_iteration_scope(cm, committer, rollback, finish),
+            ):
+                if (
+                    cm.active_head.id != last_node_id
+                    or cm.get_active_session_branch().branch_id != branch_id
+                ):
+                    raise RuntimeError("In-memory session head changed before resume")
+                if message.metadata.get("execute_ability"):
+                    await self._restore_pending_tools()
+                    return await self._finish_command_result(
+                        message, cm.active_head.action_results[-1]["action_result"]
+                    )
+                if self.config.max_iterations == 0:
+                    raise RuntimeError("Resume requires a non-zero iteration budget")
+                await self._ensure_llm()
+                await self._restore_pending_tools()
+                self._iteration_state.max_iterations = self.config.max_iterations
+                self._iteration_state.reset()
+                if cm.active_head.action_results:
+                    self._iteration_state.last_action_result = cm.active_head.action_results[
+                        -1
+                    ].get("action_result")
+                self._drive_active = True
+                try:
+                    await self._drive_loop(
+                        delivery_context={
+                            **{
+                                key: message.metadata[key]
+                                for key in ("room_id", "message_manager")
+                                if message.metadata.get(key)
+                            },
+                            "project_id": message.metadata["project_id"],
+                            "agent_id": self.config.effective_agent_id,
+                        }
+                    )
+                finally:
+                    self._drive_active = False
+                return await self._finish_response(message)
+
+        return await self._runner.run(operation)
+
+    async def _receive_once(self, message: AgentMessage) -> AgentMessage:
+        """处理 Runner 领取的消息并驱动一次执行循环。
 
         LLM 调用移入 _action 层，receive 不再直接传递 llm。
         用户消息通过 ContextManager 管理。
@@ -447,6 +559,8 @@ class ActorAgent:
             f"ActorAgent[{self.config.name}] received: {message.type.value} from {message.sender}"
         )
         self._message_history.append(message)
+        if message.metadata.get("execute_ability"):
+            return await self._receive_command_once(message)
 
         if not self._abilities:
             raise AgentError(
@@ -471,7 +585,11 @@ class ActorAgent:
             await self._message_queue.put(
                 ChatMessage.user(
                     text_or_blocks=text_or_blocks,
-                    source=classify_source(message.sender),
+                    source=(
+                        message.sender
+                        if message.metadata.get("external_sender")
+                        else classify_source(message.sender)
+                    ),
                     metadata=dict(message.metadata) if message.metadata else {},
                 )
             )
@@ -485,7 +603,7 @@ class ActorAgent:
             # 再次落入 RoomLog。历史同步由 get_chain_history 显式承担。
             delivery_context = {
                 key: message.metadata[key]
-                for key in ("room_id", "project_id", "agent_id")
+                for key in ("room_id", "project_id", "agent_id", "message_manager")
                 if message.metadata and message.metadata.get(key)
             }
             self._drive_active = True
@@ -494,23 +612,7 @@ class ActorAgent:
             finally:
                 self._drive_active = False
 
-            # 构建最终回复
-            response = self._build_response(message)
-
-            # ────── 发布 AgentResponse 事件 ──────
-            await self._event_publisher.publish(
-                AgentResponseEvent(
-                    agent_name=self.config.name,
-                    content=response.content,
-                    content_blocks=response.content_blocks,
-                    message_type="result",
-                    metadata={
-                        "iteration": self._iteration_state.iteration,
-                    },
-                )
-            )
-            # ────── 结束 ──────
-            return response
+            return await self._finish_response(message)
 
         except AgentError:
             raise
@@ -524,6 +626,94 @@ class ActorAgent:
                 reply_to=message.id,
             )
             return error_reply
+
+    async def _finish_command_result(
+        self, message: AgentMessage, result: ActionResult
+    ) -> AgentMessage:
+        from ghrah.context.persistence.serialization import serialize_action_result
+
+        response = AgentMessage.create_reply(
+            message, json.dumps(serialize_action_result(result), ensure_ascii=False)
+        )
+        finisher = get_delivery_finisher(self._context_manager)
+        if finisher:
+            await finisher(response)
+        return response
+
+    async def _receive_command_once(self, message: AgentMessage) -> AgentMessage:
+        """显式能力命令经同一 Runner 和持久提交作用域执行，无需模型推理。"""
+        cm = self._context_manager
+        invocation = message.metadata["execute_ability"]
+        name, call_id = invocation["name"], invocation["call_id"]
+        cm.begin_iteration()
+        try:
+            cm.add_messages(
+                [
+                    ChatMessage.user(
+                        message.content, source=message.sender, metadata=dict(message.metadata)
+                    )
+                ]
+            )
+            from ghrah.chat.content import ToolCallBlock
+
+            cm.add_messages(
+                [
+                    ChatMessage.ai(
+                        [ToolCallBlock(id=call_id, name=name, arguments=invocation["args"])]
+                    )
+                ]
+            )
+            context = self._build_ability_context(name, invocation["args"], {})
+            context.invocation = AbilityInvocation(name, invocation["args"], call_id)
+            result = await self._ability_executor.execute_ability(self._abilities[name], context)
+            results = [{"ability_name": name, "tool_call_id": call_id, "action_result": result}]
+            if result.data.get("await_reply"):
+                await cm.commit_iteration_async(
+                    ability_names=[name],
+                    action_results=results,
+                    llm_metadata={"pending_tool_replies": True, "pending_tool_call_ids": [call_id]},
+                )
+                cm.begin_iteration()
+                await self._await_tool_results(results)
+            self._add_tool_results(results)
+            node = await cm.commit_iteration_async(ability_names=[name], action_results=results)
+            from ghrah.context.persistence.serialization import serialize_branch, serialize_node
+
+            await self._event_publisher.publish(
+                ActionChainUpdatedEvent(
+                    agent_name=self.config.name,
+                    node=serialize_node(node),
+                    branch=serialize_branch(cm.get_active_session_branch()),
+                )
+            )
+            return await self._finish_command_result(message, results[0]["action_result"])
+        finally:
+            cm.ensure_iteration_closed()
+
+    async def _finish_response(self, message: AgentMessage) -> AgentMessage:
+        """正常接收和中断续跑共用最终结果持久收尾与事件发布。"""
+        # 构建最终回复
+        response = self._build_response(message)
+
+        finisher = get_delivery_finisher(self._context_manager)
+        if finisher is not None:
+            # 先保存最终结果并可靠收尾，再通知观察端；事件失败不丢回复。
+            await finisher(response)
+
+        # ────── 发布 AgentResponse 事件 ──────
+        await self._event_publisher.publish(
+            AgentResponseEvent(
+                agent_name=self.config.name,
+                content=response.content,
+                content_blocks=response.content_blocks,
+                message_type="result",
+                metadata={
+                    "iteration": self._iteration_state.iteration,
+                },
+            )
+        )
+        # ────── 结束 ──────
+        return response
 
     async def request_compact(self) -> dict[str, Any]:
         """手动触发链上 compact 回合（命令入口，双态）。
@@ -540,11 +730,11 @@ class ActorAgent:
             回执 dict（见上）
         """
         cm = self._context_manager
-        if self._drive_active:
+        if self._runner.busy or self._drive_active:
             merged = cm.compact_requested
             cm.request_compact()
             return {"scheduled": True, "merged": merged}
-        return await self._run_compact_round("manual")
+        return await self._runner.run(lambda: self._run_compact_round("manual"))
 
     async def _drive_loop(
         self,
@@ -632,7 +822,7 @@ class ActorAgent:
                 compaction_decision = cm.evaluate_compaction_decision()
                 if compaction_decision is not None:
                     node_metadata["compaction_decision"] = compaction_decision
-                node = cm.commit_iteration(
+                node = await cm.commit_iteration_async(
                     ability_names=ability_names,
                     action_results=action_results,
                     llm_metadata=node_metadata or None,
@@ -687,11 +877,14 @@ class ActorAgent:
                 )
                 # ────── 结束 ──────
 
-                cm.rollback_iteration(e)
-
-                # 将本迭代排空的消息重新注入队列，确保回滚后消息不丢失
-                for msg in iteration_drained_messages:
-                    await self._message_queue.put(msg)
+                if cm.in_iteration:
+                    cm.rollback_iteration(e)
+                    # 未提交输入重新排队；已持久提交后事件失败不能重新注入。
+                    for msg in iteration_drained_messages:
+                        if get_iteration_committer(cm) is None or not msg.metadata.get(
+                            "delivery_id"
+                        ):
+                            await self._message_queue.put(msg)
 
                 # 紧急压缩阶梯：厂商上下文超限（保守类别识别）且仍有减半
                 # 余量时，不重抛——进紧急 compact 回合（trigger_source=
@@ -729,6 +922,11 @@ class ActorAgent:
                             emergency_halvings,
                             budget_override,
                         )
+                    if get_iteration_committer(cm) is not None:
+                        # 内部压缩重试仍属于同一次投递；回滚后的持久输入需重新入队。
+                        for msg in iteration_drained_messages:
+                            if msg.metadata.get("delivery_id"):
+                                await self._message_queue.put(msg)
                     await self._run_compact_round("emergency", budget_override=budget_override)
                     continue
 
@@ -826,10 +1024,11 @@ class ActorAgent:
 
         # 手动标志在此消费（含连续请求合并语义）；窗外为空时同样视为
         # 已消费——否则标志残留会导致每轮进回合再退出，振荡
-        manual_requested = cm.consume_compact_request()
+        manual_requested = cm.compact_requested
 
         windows = split_compact_windows(cm.get_history(), keep_recent)
         if windows is None:
+            cm.consume_compact_request()
             logger.info(
                 "ActorAgent[%s]: compact round skipped — nothing outside keep window",
                 self.config.name,
@@ -943,7 +1142,8 @@ class ActorAgent:
         if summary_usage is not None:
             metadata["usage"] = summary_usage
 
-        node = cm.commit_compact_node(snapshot, metadata)
+        node = await cm.commit_compact_node_async(snapshot, metadata)
+        cm.consume_compact_request()
         active_branch = cm.get_active_session_branch()
         await self._event_publisher.publish(
             ActionChainUpdatedEvent(
@@ -1148,35 +1348,157 @@ class ActorAgent:
                 last_action_result=self._iteration_state.last_action_result,
             )
 
-            # 将 ChatMessage.tool() 添加到 ContextManager
-            tool_messages: list[ChatMessage] = []
-            for result_dict in results:
-                tc_id = result_dict.get("tool_call_id", "")
-                action_result = result_dict["action_result"]
-                if tc_id:
-                    if action_result.outcome == ActionOutcome.SUCCESS:
-                        tool_messages.append(
-                            ChatMessage.tool(
-                                tool_call_id=tc_id,
-                                content=str(action_result.data),
-                                source=f"agent:{self.config.name}",
-                            )
-                        )
-                    else:
-                        error_msg = action_result.data.get("error", "Unknown error")
-                        tool_messages.append(
-                            ChatMessage.tool(
-                                tool_call_id=tc_id,
-                                content=f"Error: {error_msg}",
-                                success=False,
-                                error=error_msg,
-                                source=f"agent:{self.config.name}",
-                            )
-                        )
-            if tool_messages:
-                cm.add_messages(tool_messages)
+            if any(entry["action_result"].data.get("await_reply") for entry in results):
+                # 同步等待必须在准备消息与执行状态同事务提交后发生。
+                from ghrah.context.persistence.serialization import serialize_branch, serialize_node
+
+                delivery_context = {
+                    k: accumulated_data[k]
+                    for k in ("room_id", "project_id", "agent_id")
+                    if k in accumulated_data
+                }
+                if get_iteration_committer(cm) is not None:
+                    delivery_context["message_manager"] = True
+                node = await cm.commit_iteration_async(
+                    ability_names=[entry["ability_name"] for entry in results],
+                    action_results=results,
+                    llm_metadata={
+                        **llm_meta,
+                        "pending_tool_replies": True,
+                        "pending_tool_call_ids": [
+                            entry.get("tool_call_id", "") for entry in results
+                        ],
+                        "delivery_context": delivery_context,
+                    },
+                )
+                await self._event_publisher.publish(
+                    ActionChainUpdatedEvent(
+                        agent_name=self.config.name,
+                        node=serialize_node(node),
+                        branch=serialize_branch(cm.get_active_session_branch()),
+                    )
+                )
+                usage = llm_meta.get("token_usage", {})
+                if usage:
+                    cumulative = dict(accumulated_data.get("cumulative_token_usage", {}))
+                    for key, value in usage.items():
+                        cumulative[key] = cumulative.get(key, 0) + value
+                    accumulated_data["cumulative_token_usage"] = cumulative
+                # 模型费用已由等待节点持久记录；结果节点不得再次记账。
+                llm_meta = {}
+                cm.begin_iteration()
+                await self._await_tool_results(results)
+            self._add_tool_results(results)
 
         return {"results": results, "llm_metadata": llm_meta}
+
+    async def _await_tool_results(self, results: list[dict[str, Any]]) -> None:
+        """从持久回复补齐同步工具结果，不重新执行此前已提交的工具。"""
+        manager = self._supervisor.message_manager
+        for entry in results:
+            result = entry["action_result"]
+            pending = result.data.get("await_reply")
+            if pending is None:
+                continue
+            try:
+                replies = await manager.wait_inline(
+                    pending["message_id"],
+                    timeout=pending["timeout"],
+                    tolerate_errors=pending["mode"] == "broadcast",
+                )
+                data = {k: v for k, v in result.data.items() if k != "await_reply"}
+                if pending["mode"] == "broadcast":
+                    data["responses"] = [
+                        {
+                            "responder": data.get("recipient_names", {}).get(
+                                reply.sender_id, reply.sender_id
+                            ),
+                            "content": reply.content,
+                        }
+                        for reply in replies
+                    ]
+                    data["recipient_ids"] = data.get("recipients", [])
+                    data["recipients"] = [item["responder"] for item in data["responses"]]
+                    data["agent_count"] = len(data["responses"])
+                    data["errors"] = [
+                        {"recipient_id": d.recipient_id, "error": d.error or d.blocked_reason}
+                        for d in await manager.get_deliveries(pending["message_id"])
+                        if d.state.value != "completed"
+                    ]
+                else:
+                    data["response"] = replies[0].content
+                data.update(status="completed", mode=pending["mode"])
+                entry["action_result"] = ActionResult(outcome=ActionOutcome.SUCCESS, data=data)
+            except Exception as exc:
+                entry["action_result"] = ActionResult(
+                    outcome=ActionOutcome.FAILURE,
+                    data={
+                        "error": str(exc) or type(exc).__name__,
+                        "message_id": pending["message_id"],
+                    },
+                )
+            finish = getattr(self._ability_executor, "finish_deferred", None)
+            if callable(finish):
+                context = self._build_ability_context(
+                    entry["ability_name"], pending.get("tool_args", {}), {}
+                )
+                context.invocation = AbilityInvocation(
+                    entry["ability_name"], context.tool_args, entry.get("tool_call_id", "")
+                )
+                await finish(pending["message_id"], context, entry["action_result"])
+
+    def _add_tool_results(self, results: list[dict[str, Any]]) -> None:
+        """将已完成工具结果加入本轮上下文。"""
+        messages = []
+        for entry in results:
+            call_id = entry.get("tool_call_id")
+            if not call_id:
+                continue
+            result = entry["action_result"]
+            success = result.outcome == ActionOutcome.SUCCESS
+            error = None if success else str(result.data.get("error", "Unknown error"))
+            messages.append(
+                ChatMessage.tool(
+                    tool_call_id=call_id,
+                    content=str(result.data) if success else f"Error: {error}",
+                    success=success,
+                    error=error,
+                    source=f"agent:{self.config.name}",
+                )
+            )
+        if messages:
+            self._context_manager.add_messages(messages)
+
+    async def _restore_pending_tools(self) -> None:
+        """恢复等待回复的检查点，补工具结果节点后再开始下一次模型调用。"""
+        cm = self._context_manager
+        head = cm.active_head
+        if not head.metadata.get("pending_tool_replies"):
+            return
+        results = copy.deepcopy(head.action_results)
+        call_ids = head.metadata.get("pending_tool_call_ids", [])
+        for entry, call_id in zip(results, call_ids, strict=True):
+            entry["tool_call_id"] = call_id
+        cm.begin_iteration()
+        try:
+            await self._await_tool_results(results)
+            self._add_tool_results(results)
+            node = await cm.commit_iteration_async(
+                ability_names=[entry["ability_name"] for entry in results],
+                action_results=results,
+                llm_metadata={"delivery_context": head.metadata.get("delivery_context", {})},
+            )
+            from ghrah.context.persistence.serialization import serialize_branch, serialize_node
+
+            await self._event_publisher.publish(
+                ActionChainUpdatedEvent(
+                    agent_name=self.config.name,
+                    node=serialize_node(node),
+                    branch=serialize_branch(cm.get_active_session_branch()),
+                )
+            )
+        finally:
+            cm.ensure_iteration_closed()
 
     async def _execute_routed_ability(
         self,
@@ -1197,7 +1519,7 @@ class ActorAgent:
             ctx = self._build_ability_context(ability_name, {}, accumulated_data)
             action_result = await ability.execute(ctx)
             self._iteration_state.last_action_result = action_result
-            cm.commit_iteration(
+            await cm.commit_iteration_async(
                 ability_names=[ability_name],
                 action_results=[{"ability_name": ability_name, "action_result": action_result}],
                 llm_metadata=(
@@ -1205,7 +1527,8 @@ class ActorAgent:
                 ),
             )
         except Exception as e:
-            cm.rollback_iteration(e)
+            if cm.in_iteration:
+                cm.rollback_iteration(e)
             raise
         finally:
             # 兜底：BaseException 逃逸时强制收尾迭代事务（同 _drive_loop）
@@ -1375,6 +1698,8 @@ class ActorAgent:
 
     async def activate_session(self, session_id: str) -> dict[str, Any]:
         """激活独立 Root Session 并完整恢复运行上下文。"""
+        if self._runner.busy:
+            raise RuntimeError("Cannot activate session while agent runner is busy")
         self._context_manager.activate_session(session_id)
         session = self._context_manager.get_active_session()
         info = self._session_info(session)
@@ -1649,7 +1974,7 @@ class ActorAgent:
         Raises:
             RuntimeError: 驱动循环进行中（迭代事务未提交前禁止切换运行 Head）。
         """
-        if self._drive_active:
+        if self._runner.busy or self._drive_active:
             raise RuntimeError(
                 f"Cannot reset agent '{self.config.name}' while its drive loop is active"
             )

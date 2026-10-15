@@ -10,7 +10,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -142,6 +142,7 @@ class TestSupervisorActor:
         """终止已注册的 Agent。"""
         config = AgentConfig(name="to-terminate")
         mock_handle = MagicMock()
+        mock_handle.stop_receiving = AsyncMock()
         supervisor._registry.register("to-terminate", config, mock_handle)
 
         assert supervisor._registry.exists("to-terminate")
@@ -149,6 +150,7 @@ class TestSupervisorActor:
         await supervisor.terminate_agent("to-terminate")
 
         assert not supervisor._registry.exists("to-terminate")
+        mock_handle.stop_receiving.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_terminate_not_found(self, supervisor: SupervisorActor) -> None:
@@ -350,7 +352,7 @@ class TestSupervisorPersistenceRecovery:
                 auto_persist=backend is not None,
                 message_factory=ChatMessageFactory(),
             )
-            return SimpleNamespace(_context_manager=cm)
+            return SimpleNamespace(_context_manager=cm, stop_receiving=AsyncMock())
 
         monkeypatch.setattr(
             "ghrah.communication.supervisor.AgentBuilder.from_config",

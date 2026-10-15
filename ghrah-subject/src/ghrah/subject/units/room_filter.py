@@ -97,6 +97,9 @@ class RoomFilterUnit(SubjectUnit):
             return
         agent_identity = self._resolve_agent_identity(node) or agent_name
 
+        if (node.get("metadata") or {}).get("delivery_context", {}).get("message_manager"):
+            # 持久输入的 Room 回复由 MM outbox 投影，禁止事件驱动第二写路径。
+            return
         node_id = str(node["id"])
         if node_id in self._seen_nodes:
             return

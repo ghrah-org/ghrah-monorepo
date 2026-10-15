@@ -11,6 +11,15 @@
 """
 
 from ghrah.communication.errors import AgentNotFoundError, RegistryError
+from ghrah.communication.message_manager import (
+    DeliveryProgress,
+    DeliveryRecord,
+    DeliveryState,
+    MessageKind,
+    MessageManager,
+    MessageRecord,
+    PreparedMessage,
+)
 from ghrah.communication.registry import AgentInfo, AgentRegistry
 from ghrah.communication.router import MessageRouter
 from ghrah.communication.supervisor import SupervisorActor
@@ -19,6 +28,13 @@ __all__ = [
     "AgentNotFoundError",
     "AgentInfo",
     "AgentRegistry",
+    "DeliveryProgress",
+    "DeliveryRecord",
+    "DeliveryState",
+    "MessageKind",
+    "MessageManager",
+    "MessageRecord",
+    "PreparedMessage",
     "MessageRouter",
     "RegistryError",
     "SupervisorActor",

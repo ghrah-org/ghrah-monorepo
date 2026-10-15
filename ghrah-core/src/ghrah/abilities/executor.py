@@ -29,6 +29,7 @@ from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hook_runner import HookRunner
 from ghrah.abilities.hook_store import HookStore
 from ghrah.abilities.hooks import HookPoint, HookResult
+from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.abilities.paths import ABILITY_PATH_SPECS
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.ability_protocol import AbilityProtocol
@@ -239,6 +240,7 @@ class LocalAbilityExecutor(AbilityExecutor):
             hitl_degraded_timeout: 熔断降级后的 HITL 等待秒数
         """
         self._agent_name = agent_name
+        self._deferred_contexts: dict[str, AbilityExecutionContext] = {}
         self._hook_store = HookStore()
         if hooks:
             self._hook_store.add_hooks(HookStore.AGENT_OWNER, hooks)
@@ -397,12 +399,32 @@ class LocalAbilityExecutor(AbilityExecutor):
         # 执行 Ability
         action_result = await ability.execute(context)
 
+        pending = action_result.data.get("await_reply")
+        if pending:
+            pending["tool_args"] = dict(context.tool_args)
+            self._deferred_contexts[pending["message_id"]] = context
+            return action_result
+
         # POST_EXECUTE hook（ability 级）
         await self._hook_runner.run(
             HookContext.from_ability_context(HookPoint.POST_EXECUTE, context, action_result)
         )
 
         return action_result
+
+    async def finish_deferred(
+        self, message_id: str, context: AbilityExecutionContext, result: ActionResult
+    ) -> None:
+        """持久同步回复确定后执行原 POST_EXECUTE，恢复时不重跑 PRE/工具。"""
+        original = self._deferred_contexts.pop(message_id, context)
+        original.agent_state = context.agent_state
+        await self._hook_runner.run(
+            HookContext.from_ability_context(HookPoint.POST_EXECUTE, original, result)
+        )
+
+    def clear_deferred(self) -> None:
+        """接收作用域结束时释放未完成 Hook 上下文，持久检查点仍可恢复。"""
+        self._deferred_contexts.clear()
 
     async def execute_tool_calls(
         self,
@@ -465,6 +487,7 @@ class LocalAbilityExecutor(AbilityExecutor):
                         accumulated_data,
                         context_manager,
                         last_action_result,
+                        tool_call_id=_tc_id,
                     )
                     for ability, args, _tc_id in tool_call_tasks
                 ],
@@ -500,6 +523,8 @@ class LocalAbilityExecutor(AbilityExecutor):
         accumulated_data: dict[str, Any],
         context_manager: ContextManager,
         last_action_result: ActionResult | None = None,
+        *,
+        tool_call_id: str = "",
     ) -> dict:
         """执行单个 ability（用于并行执行），创建独立的 AbilityExecutionContext。
 
@@ -522,6 +547,7 @@ class LocalAbilityExecutor(AbilityExecutor):
         manifest_store = getattr(supervisor, "manifest_store", None)
 
         per_ability_context = AbilityExecutionContext(
+            invocation=AbilityInvocation(tool_call_id=tool_call_id),
             current_ability_name=ability.name,
             tool_args=resolved_args,
             agent_state=context_manager.get_current_state(),

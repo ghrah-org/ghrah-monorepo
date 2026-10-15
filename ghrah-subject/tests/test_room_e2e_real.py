@@ -413,7 +413,7 @@ class TestRoomRealEndToEnd:
             assert entry["author"] == spawned["data"]["agent_id"]
             assert entry["author_type"] == "agent"
             assert entry["data"]["message"] == "收到，开始规划"
-            assert entry["data"]["via"] == "chain_filter"
+            assert entry["data"]["via"] == "message_manager"
             # WS 投影：room_log_appended(agent) 已广播（断言面）
             assert events[0][1]["entry"]["id"] == entry["id"]
 

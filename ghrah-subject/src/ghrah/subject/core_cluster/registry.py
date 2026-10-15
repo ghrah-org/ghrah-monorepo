@@ -23,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ghrah.protocol.types import (
@@ -252,13 +253,21 @@ class CoreClusterRegistry:
             fiber: Fiber | None = None
             try:
                 unit = self._unit_factory(cluster_id, project_id, project_root_locator)
+                prepare = getattr(self._unit_factory, "prepare", None)
+                if callable(prepare):
+                    await prepare(unit, cluster_id, project_id, project_root_locator)
                 fiber = self._ctx.plugin(mount_unit(unit))
                 await wait_active(fiber, timeout=10.0)
-            except Exception as exc:  # noqa: BLE001
+            except BaseException as exc:
                 if fiber is not None:
                     # 半挂载回收：不留无主 fiber（泄漏 + 双写同一 project sqlite）。
                     with contextlib.suppress(Exception):
                         await fiber.dispose()
+                release = getattr(self._unit_factory, "release", None)
+                if callable(release):
+                    await release(cluster_id)
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 raise ValueError(f"cluster_mount_failed: {cluster_id}: {exc}") from exc
             handle = CoreUnitHandle(self, cluster_id, project_id, project_root_locator, unit)
             self._clusters[cluster_id] = _ClusterEntry(
@@ -277,6 +286,15 @@ class CoreClusterRegistry:
     def has_cluster(self, cluster_id: str) -> bool:
         return cluster_id in self._clusters
 
+    def get_message_manager(self, project_id: str) -> Any:
+        """取得项目共享的 Core 消息权威，禁止另开第二个管理器。"""
+        for entry in self._clusters.values():
+            if entry.project_id == project_id:
+                manager = getattr(getattr(entry.unit, "_config", None), "message_manager", None)
+                if manager is not None:
+                    return manager
+        raise KeyError(project_id)
+
     async def shutdown_cluster(self, cluster_id: str) -> None:
         """dispose 某 cluster 的 fiber（handle 失效，幂等；与 ensure 互斥）。"""
         async with self._lock_for(cluster_id):
@@ -284,7 +302,12 @@ class CoreClusterRegistry:
             if entry is None:
                 return
             entry.handle._alive = False
-            await entry.fiber.dispose()
+            try:
+                await entry.fiber.dispose()
+            finally:
+                release = getattr(self._unit_factory, "release", None)
+                if callable(release):
+                    await release(cluster_id)
         logger.info("CoreClusterRegistry: disposed cluster '%s'", cluster_id)
 
     async def stop(self) -> None:
@@ -297,6 +320,7 @@ def default_core_unit_factory(
     config: SubjectConfig,
     manifest_store: Any = None,
     llm_factory: Callable[[Any], Any] | None = None,
+    room_projector: Callable[[Any], Awaitable[None]] | None = None,
 ) -> Callable[[str, str, str], Any]:
     """生产工厂：(cluster_id, project_id, root_locator) → CoreUnit。
 
@@ -315,6 +339,7 @@ def default_core_unit_factory(
     字段（零隐式；测试/嵌入方经 CoreClusterRegistryUnit(unit_factory=...)
     或本参数注入）。
     """
+    from ghrah.communication import MessageManager
     from ghrah.context.persistence.sqlite_backend import (  # type: ignore[import-untyped]
         SqliteBackend,
     )
@@ -322,6 +347,46 @@ def default_core_unit_factory(
         CoreUnitConfig,
         create_core_unit,
     )
+
+    managers: dict[str, tuple[str, MessageManager, set[str]]] = {}
+    memberships: dict[str, str] = {}
+    manager_lock = asyncio.Lock()
+
+    async def prepare(unit: Any, cluster_id: str, project_id: str, locator: str) -> None:
+        async with manager_lock:
+            existing = managers.get(project_id)
+            if existing and existing[0] != locator:
+                raise ValueError("Project message database owner conflict")
+            if existing is None:
+                path = ProjectPaths.from_locator(locator).action_chain_db_path
+                async with SqliteBackend(path) as backend:
+                    await backend.load_checkpoint("bootstrap")
+                manager = MessageManager(
+                    path,
+                    project_id=project_id,
+                    agent_ids=(),
+                    session_routing=True,
+                    allow_persisted_agents=True,
+                )
+                await manager.open()
+                if room_projector is not None:
+                    manager.configure_room_projector(room_projector)
+                existing = (locator, manager, set())
+                managers[project_id] = existing
+            existing[2].add(cluster_id)
+            memberships[cluster_id] = project_id
+            unit._config = replace(unit._config, message_manager=existing[1])
+
+    async def release(cluster_id: str) -> None:
+        async with manager_lock:
+            project_id = memberships.pop(cluster_id, None)
+            if project_id is None:
+                return
+            entry = managers[project_id]
+            entry[2].discard(cluster_id)
+            if not entry[2]:
+                await entry[1].close()
+                managers.pop(project_id)
 
     def factory(cluster_id: str, project_id: str, project_root_locator: str) -> Any:
         if not project_root_locator:
@@ -355,4 +420,6 @@ def default_core_unit_factory(
         )
         return create_core_unit(core_config)
 
+    factory.prepare = prepare
+    factory.release = release
     return factory

@@ -328,6 +328,11 @@ class ProjectScopedRoomStore:
         store = await self._locate(room_id)
         return 0 if store is None else await store.count_logs(room_id)
 
+    async def get_log_by_id(self, room_id: str, entry_id: str) -> RoomLogRecord | None:
+        """从项目 Room store 查询已有消息投影。"""
+        store = await self._locate(room_id)
+        return None if store is None else await store.get_log_by_id(room_id, entry_id)
+
     async def append_log(self, room_id: str, record_factory: Any) -> Any:
         store = await self._locate(room_id)
         return None if store is None else await store.append_log(room_id, record_factory)

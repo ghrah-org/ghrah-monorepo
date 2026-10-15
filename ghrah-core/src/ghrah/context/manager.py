@@ -23,12 +23,18 @@ import asyncio
 import copy
 import dataclasses
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.chain import ActionChain
+from ghrah.context.iteration_commit import (
+    IterationCommitter,
+    discard_iteration_effects,
+    get_iteration_committer,
+)
 from ghrah.context.message_store import MessageStore
 from ghrah.context.node import ContextNode
 from ghrah.context.persistence import ContextChanges, PersistenceBackend
@@ -46,6 +52,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ["ContextManager"]
+
+
+class DeliverySessionUnavailableError(ValueError):
+    """目标执行会话缺失或已关闭，禁止改投当前会话。"""
 
 
 class ContextManager:
@@ -411,6 +421,29 @@ class ContextManager:
                 ),
                 label=f"activate session {session_id}",
             )
+
+    @contextmanager
+    def use_session(self, session_id: str) -> Iterator[None]:
+        """临时在指定开放 Session 执行，结束恢复原选择，不修改持久活跃指针。"""
+        self._ensure_not_in_iteration("select a delivery session")
+        try:
+            runtime = self._get_runtime(session_id)
+        except ValueError as exc:
+            raise DeliverySessionUnavailableError("Delivery session is missing") from exc
+        if runtime.session.lifecycle != "open":
+            raise DeliverySessionUnavailableError("Delivery session is not open")
+        previous = self._active_session_id
+        if previous == session_id:
+            yield
+            return
+        self._active_session_id = session_id
+        self._restore_active_context()
+        try:
+            yield
+        finally:
+            self.ensure_iteration_closed()
+            self._active_session_id = previous
+            self._restore_active_context()
 
     async def reset(self) -> ActionSession:
         """重置运行上下文：新起默认 Session/main Branch 并激活（就地，不换后端）。
@@ -830,6 +863,79 @@ class ContextManager:
 
         return node
 
+    async def commit_iteration_async(
+        self,
+        *,
+        ability_names: list[str] | None = None,
+        action_results: list[dict[str, Any]] | None = None,
+        state_changes: dict[str, Any] | None = None,
+        llm_metadata: dict[str, Any] | None = None,
+    ) -> ContextNode:
+        """原子作用域内先持久提交再推进内存；旧调用保留原提交方式。"""
+        committer = get_iteration_committer(self)
+        options = {
+            "ability_names": ability_names,
+            "action_results": action_results,
+            "state_changes": state_changes,
+            "llm_metadata": llm_metadata,
+        }
+        if committer is None:
+            return self.commit_iteration(**options)
+        if not self._in_iteration:
+            raise RuntimeError("No iteration in progress")
+        # 旧后台变更必须先完成，防止较早的 branch head 在持久提交后覆盖新 head。
+        await self.wait_for_persist()
+        candidate = self._commit_candidate()
+        node = candidate.commit_iteration(**options)
+        return await self._commit_durable_candidate(candidate, node, committer)
+
+    def _commit_candidate(self) -> ContextManager:
+        """复制本次提交会修改的内存聚合，暂不推进权威 Head。"""
+        candidate = copy.copy(self)
+        candidate._session_runtimes = dict(self._session_runtimes)
+        candidate._session_runtimes[self._active_session_id] = copy.deepcopy(self._active_runtime)
+        candidate._state_manager = copy.deepcopy(self._state_manager)
+        candidate._message_store = copy.deepcopy(self._message_store)
+        candidate._pending_messages = list(self._pending_messages)
+        candidate._pending_compaction = copy.deepcopy(self._pending_compaction)
+        candidate._auto_persist = False
+        return candidate
+
+    async def _commit_durable_candidate(
+        self, candidate: ContextManager, node: ContextNode, committer: IterationCommitter
+    ) -> ContextNode:
+        """等待同事务持久化完成，再安装候选内存视图。"""
+        changes = ContextChanges(
+            agent_name=self._agent_name,
+            sessions=(candidate.get_active_session(),),
+            nodes=(node,),
+            branches=(candidate.get_active_session_branch(),),
+        )
+        # COMMIT 期间取消也要等待明确结果；成功后必须推进内存，不能假装回滚。
+        task = asyncio.create_task(committer(changes))
+        cancelled = False
+        while True:
+            try:
+                await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if task.cancelled():
+                    raise
+        self._session_runtimes = candidate._session_runtimes
+        self._state_manager = candidate._state_manager
+        self._message_store = candidate._message_store
+        self._pending_messages = candidate._pending_messages
+        self._pending_compaction = candidate._pending_compaction
+        self._in_iteration = candidate._in_iteration
+        self._window_occupied = candidate._window_occupied
+        self._system_prompt = candidate._system_prompt
+        if node.metadata.get("node_kind") == "compact":
+            self._compact_requested = False
+        if cancelled:
+            raise asyncio.CancelledError
+        return node
+
     # ----------------------------------------------------------------
     # 回滚即分支
     # ----------------------------------------------------------------
@@ -853,6 +959,7 @@ class ContextManager:
         """
         if not self._in_iteration:
             return
+        discard_iteration_effects(self)
         logger.warning(
             "ContextManager[%s]: iteration left open (likely cancelled mid-flight) "
             "— force-closing pending buffers and state transaction",
@@ -882,6 +989,7 @@ class ContextManager:
         """
         if not self._in_iteration:
             raise RuntimeError("No iteration in progress")
+        discard_iteration_effects(self)
 
         # 1. 回滚状态事务
         self._state_manager.rollback()
@@ -1171,6 +1279,20 @@ class ContextManager:
             self._schedule_persist_node(node)
 
         return node
+
+    async def commit_compact_node_async(
+        self, snapshot_messages: list[Any], metadata: dict[str, Any] | None = None
+    ) -> ContextNode:
+        """原子接收内持久提交压缩节点，压缩本身不消费新的输入消息。"""
+        committer = get_iteration_committer(self)
+        if committer is None:
+            return self.commit_compact_node(snapshot_messages, metadata)
+        if self._in_iteration:
+            raise RuntimeError("Cannot commit compact node during an iteration")
+        await self.wait_for_persist()
+        candidate = self._commit_candidate()
+        node = candidate.commit_compact_node(snapshot_messages, metadata)
+        return await self._commit_durable_candidate(candidate, node, committer)
 
     def consume_compact_request(self) -> bool:
         """消费手动 compact 请求标志。

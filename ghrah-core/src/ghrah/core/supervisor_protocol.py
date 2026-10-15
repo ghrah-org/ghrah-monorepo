@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = ["SupervisorProtocol"]
@@ -33,6 +34,18 @@ class SupervisorProtocol(Protocol):
     async def terminate_agent(self, name: str) -> None: ...
 
     async def spawn_agent(self, config: Any, abilities: list[Any] | None = None) -> str: ...
+
+    async def prepare_message(
+        self,
+        *,
+        targets: Collection[str],
+        content: str,
+        sender: str,
+        idempotency_key: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """在当前原子 action 内准备持久出站请求。"""
+        ...
 
     async def send(
         self,

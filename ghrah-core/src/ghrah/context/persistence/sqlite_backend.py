@@ -338,95 +338,108 @@ class SqliteBackend(PersistenceBackend):
     async def _apply_changes(self, changes: ContextChanges) -> None:
         """持有后端写锁时应用增量变更。"""
         db = await self._ensure_db()
-        await db.execute("BEGIN IMMEDIATE")
         try:
-            await self._ensure_agent(db, changes.agent_name)
-            for branch_id in changes.delete_branch_ids:
-                await db.execute("DELETE FROM branches WHERE branch_id = ?", (branch_id,))
-            for session_id in changes.delete_session_ids:
-                await db.execute("DELETE FROM nodes WHERE session_id = ?", (session_id,))
-                await db.execute("DELETE FROM branches WHERE session_id = ?", (session_id,))
-                await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            for session in changes.sessions:
-                data = serialize_action_session(session)
-                await db.execute(
-                    """
-                    INSERT INTO sessions (
-                        session_id, agent_name, name, root_node_id, active_branch_id,
-                        lifecycle, origin_agent_name, origin_session_id, origin_node_id,
-                        system_prompt, created_at, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(session_id) DO UPDATE SET
-                        name=excluded.name,
-                        root_node_id=excluded.root_node_id,
-                        active_branch_id=excluded.active_branch_id,
-                        lifecycle=excluded.lifecycle,
-                        origin_agent_name=excluded.origin_agent_name,
-                        system_prompt=excluded.system_prompt,
-                        metadata=excluded.metadata
-                    """,
-                    (
-                        data["session_id"],
-                        data["agent_name"],
-                        data["name"],
-                        data["root_node_id"],
-                        data["active_branch_id"],
-                        data["lifecycle"],
-                        data["origin_agent_name"],
-                        data["origin_session_id"],
-                        data["origin_node_id"],
-                        data["system_prompt"],
-                        data["created_at"],
-                        json.dumps(data["metadata"], ensure_ascii=False),
-                    ),
-                )
-            for branch in changes.branches:
-                data = serialize_branch(branch)
-                await db.execute(
-                    """
-                    INSERT INTO branches (
-                        branch_id, session_id, name, head_node_id, lifecycle,
-                        parent_branch_id, fork_point_node_id, created_at, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(branch_id) DO UPDATE SET
-                        name=excluded.name,
-                        head_node_id=excluded.head_node_id,
-                        lifecycle=excluded.lifecycle,
-                        metadata=excluded.metadata
-                    """,
-                    (
-                        data["branch_id"],
-                        data["session_id"],
-                        data["name"],
-                        data["head_node_id"],
-                        data["lifecycle"],
-                        data["parent_branch_id"],
-                        data["fork_point_node_id"],
-                        data["created_at"],
-                        json.dumps(data["metadata"], ensure_ascii=False),
-                    ),
-                )
-            for node in sorted(changes.nodes, key=lambda item: item.iteration):
-                await db.execute(
-                    f"INSERT INTO nodes ({_NODE_COLUMNS}) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(id) DO NOTHING",
-                    self._serialize_node_params(serialize_node(node)),
-                )
-            if changes.active_session_id is not None:
-                await db.execute(
-                    """
-                    INSERT INTO chain_meta (agent_name, active_session_id) VALUES (?, ?)
-                    ON CONFLICT(agent_name) DO UPDATE SET
-                        active_session_id=excluded.active_session_id,
-                        updated_at=CURRENT_TIMESTAMP
-                    """,
-                    (changes.agent_name, changes.active_session_id),
-                )
+            await db.execute("BEGIN IMMEDIATE")
+            await self.apply_changes_in_transaction(db, changes)
             await db.commit()
-        except Exception:
+        except BaseException:
             await db.rollback()
             raise
+
+    async def apply_changes_in_transaction(
+        self, db: aiosqlite.Connection, changes: ContextChanges
+    ) -> None:
+        """在同文件的既有事务中写上下文变更，由事务宿主负责提交或回滚。"""
+        if not db.in_transaction:
+            raise RuntimeError("An active transaction is required")
+        databases = await (await db.execute("PRAGMA database_list")).fetchall()
+        main = next(row for row in databases if row[1] == "main")
+        if Path(main[2]).resolve() != self._db_path.resolve():
+            raise ValueError("Transaction database does not match context backend")
+
+        await self._ensure_agent(db, changes.agent_name)
+        for branch_id in changes.delete_branch_ids:
+            await db.execute("DELETE FROM branches WHERE branch_id = ?", (branch_id,))
+        for session_id in changes.delete_session_ids:
+            await db.execute("DELETE FROM nodes WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM branches WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        for session in changes.sessions:
+            data = serialize_action_session(session)
+            await db.execute(
+                """
+                INSERT INTO sessions (
+                    session_id, agent_name, name, root_node_id, active_branch_id,
+                    lifecycle, origin_agent_name, origin_session_id, origin_node_id,
+                    system_prompt, created_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    name=excluded.name,
+                    root_node_id=excluded.root_node_id,
+                    active_branch_id=excluded.active_branch_id,
+                    lifecycle=excluded.lifecycle,
+                    origin_agent_name=excluded.origin_agent_name,
+                    system_prompt=excluded.system_prompt,
+                    metadata=excluded.metadata
+                """,
+                (
+                    data["session_id"],
+                    data["agent_name"],
+                    data["name"],
+                    data["root_node_id"],
+                    data["active_branch_id"],
+                    data["lifecycle"],
+                    data["origin_agent_name"],
+                    data["origin_session_id"],
+                    data["origin_node_id"],
+                    data["system_prompt"],
+                    data["created_at"],
+                    json.dumps(data["metadata"], ensure_ascii=False),
+                ),
+            )
+        for branch in changes.branches:
+            data = serialize_branch(branch)
+            await db.execute(
+                """
+                INSERT INTO branches (
+                    branch_id, session_id, name, head_node_id, lifecycle,
+                    parent_branch_id, fork_point_node_id, created_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(branch_id) DO UPDATE SET
+                    name=excluded.name,
+                    head_node_id=excluded.head_node_id,
+                    lifecycle=excluded.lifecycle,
+                    metadata=excluded.metadata
+                """,
+                (
+                    data["branch_id"],
+                    data["session_id"],
+                    data["name"],
+                    data["head_node_id"],
+                    data["lifecycle"],
+                    data["parent_branch_id"],
+                    data["fork_point_node_id"],
+                    data["created_at"],
+                    json.dumps(data["metadata"], ensure_ascii=False),
+                ),
+            )
+        for node in sorted(changes.nodes, key=lambda item: item.iteration):
+            await db.execute(
+                f"INSERT INTO nodes ({_NODE_COLUMNS}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO NOTHING",
+                self._serialize_node_params(serialize_node(node)),
+            )
+        if changes.active_session_id is not None:
+            await db.execute(
+                """
+                INSERT INTO chain_meta (agent_name, active_session_id) VALUES (?, ?)
+                ON CONFLICT(agent_name) DO UPDATE SET
+                    active_session_id=excluded.active_session_id,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (changes.agent_name, changes.active_session_id),
+            )
 
     async def load_checkpoint(self, agent_name: str) -> ContextCheckpoint | None:
         """从 SQLite 加载 Agent 的 v3 checkpoint。"""

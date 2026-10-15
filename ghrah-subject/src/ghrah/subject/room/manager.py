@@ -7,24 +7,21 @@
 范式对齐 task/manager.TaskManager：``_HANDLERS`` 表 + ``_ok/_err`` +
 ValidationError 收窄；纯 store + 回调，不依赖 SubjectContext，便于独立单测。
 
-send 双路径收敛：协议面（human/Mock ``room_send`` 命令）与
-实现面（agent 经 Core send ability → ``ctx.serial("command/room_send")``）
-都汇入 ``append_log``——分配 seq、落库、广播 ROOM_LOG_APPENDED。
-
-human 消息投递（投递回路补全）：``room_send``（author_type=human）落账后，
-经注入的 ``deliver`` 回调（RoomUnit 接线 ``ctx.serial("command/send_message")``
-→ CoreUnit → Supervisor.send）把消息送达 room 内 agent 成员。投递为
-fire-and-forget：不阻塞回执、失败不重试、落账仍为权威；author_type=agent
-不投递（作者即发送者，agent 回复由其对端 send ability 走 Supervisor 投递）。
+生产装配通过 publish 回调先由 MM 持久受理，再经 append_log 写入引用日志。
+日志读取与事件展示从 Core 读通正文，消息正文的权威属于 MM。
+未装配 publish 的独立集成仍保留 append_log 和 human deliver 回调；
+持久引用日志不再触发该投递回调，避免重复发送。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import aiosqlite
 from ghrah.protocol.types import (
     RoomCreatePayload,
     RoomDeletePayload,
@@ -41,6 +38,7 @@ from ghrah.protocol.types import (
 from pydantic import ValidationError
 
 from ghrah.subject.project.errors import ProjectArchivedError
+from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.models import (
     RoomLogRecord,
     RoomRecord,
@@ -99,12 +97,14 @@ class RoomManager:
         project_exists: ProjectExists | None = None,
         project_get: ProjectLookup | None = None,
         deliver: Deliver | None = None,
+        publish: Callable[[RoomRecord, RoomSendPayload], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self._store = store
         self._on_event = on_event
         self._project_exists = project_exists
         self._project_get = project_get
         self._deliver = deliver
+        self._publish = publish
 
     @property
     def store(self) -> RoomStore:
@@ -399,7 +399,7 @@ class RoomManager:
         if error is not None:
             return error
         records = await self._store.get_log(p.room_id, since_seq=p.since_seq, limit=p.limit)
-        entries = [r.to_wire() for r in records]
+        entries = [(await self._hydrate_reference(r)).to_wire() for r in records]
         return _ok({"room_id": p.room_id, "entries": entries, "count": len(entries)})
 
     async def _handle_send(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -417,10 +417,16 @@ class RoomManager:
         error = self._validate_targets(room, p.data.get("targets"))
         if error is not None:
             return _err(error)
+        if not p.data.get("mm_message_id") and self._publish is not None:
+            return await self._publish(room, p)
         result = await self.append_log(
             p.room_id, author=p.author, author_type=p.author_type, data=p.data
         )
-        if result.get("success") and p.author_type == RoomSubjectType.HUMAN:
+        if (
+            result.get("success")
+            and p.author_type == RoomSubjectType.HUMAN
+            and not p.data.get("mm_message_id")
+        ):
             self._schedule_delivery(room, p)
         return result
 
@@ -492,6 +498,35 @@ class RoomManager:
 
     # ─── send 收敛点（双路径共用：room_send 命令 + Core send ability serial） ───
 
+    async def _hydrate_reference(self, record: RoomLogRecord) -> RoomLogRecord:
+        """从 Core MM 权威读通正文，Room 日志仅持消息引用。"""
+        message_id = record.data.get("mm_message_id")
+        if not message_id:
+            return record
+        room, project, error = await self._require_room_access(record.room_id)
+        if error or project is None or room is None:
+            raise ValueError(error or "Room project unavailable")
+        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
+        async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
+            row = await (
+                await db.execute(
+                    "SELECT content, sender_id, metadata FROM mm_messages WHERE message_id=?",
+                    (message_id,),
+                )
+            ).fetchone()
+        if row is None or row[1] not in (record.author, f"human:{record.author}"):
+            raise ValueError("Room message reference is missing or has a different author")
+        metadata = json.loads(row[2])
+        rooms = metadata.get("room_ids") or [metadata.get("room_id")]
+        if record.room_id not in rooms:
+            raise ValueError("Message does not belong to this Room")
+        data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
+        if metadata.get("room_has_message", True):
+            data["message"] = row[0]
+        if metadata.get("targets"):
+            data["targets"] = metadata["targets"]
+        return record.model_copy(update={"data": data})
+
     async def append_log(
         self,
         room_id: str,
@@ -504,22 +539,38 @@ class RoomManager:
         _room, _project, error = await self._require_room_access(room_id)
         if error is not None:
             return error
-        try:
-            result = await self._store.append_log(
-                room_id,
-                lambda seq: make_room_log_record(
-                    room_id=room_id,
-                    seq=seq,
-                    author=author,
-                    author_type=author_type,
-                    data=data,
-                ),
+        data = dict(data or {})
+        message_id = data.get("mm_message_id")
+        reference_id = f"mm:{message_id}:{room_id}" if message_id else None
+        if reference_id:
+            data.pop("message", None)
+            candidate = make_room_log_record(
+                room_id=room_id, seq=0, author=author, author_type=author_type, data=data
             )
+            candidate.id = reference_id
+            try:
+                await self._hydrate_reference(candidate)
+            except (ValueError, aiosqlite.Error) as exc:
+                return _err(str(exc))
+            existing = await self._store.get_log_by_id(room_id, reference_id)
+            if existing:
+                return _ok({"entry": (await self._hydrate_reference(existing)).to_wire()})
+
+        def make_record(seq: int) -> RoomLogRecord:
+            record = make_room_log_record(
+                room_id=room_id, seq=seq, author=author, author_type=author_type, data=data
+            )
+            if reference_id:
+                record.id = reference_id
+            return record
+
+        try:
+            result = await self._store.append_log(room_id, make_record)
         except RoomArchivedError:
             return _err("resource_archived")
         if result is None:
             return _err(f"room not found: {room_id}")
-        record: RoomLogRecord = result[0]
+        record: RoomLogRecord = await self._hydrate_reference(result[0])
         await self._emit("room_log_appended", {"entry": record.to_wire()})
         return _ok({"entry": record.to_wire()})
 
