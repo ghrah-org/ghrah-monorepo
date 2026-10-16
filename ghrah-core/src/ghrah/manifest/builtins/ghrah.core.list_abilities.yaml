@@ -1,0 +1,26 @@
+manifest: ability
+version: "1"
+metadata:
+  namespace: ghrah.core
+  name: list_abilities
+  title: List Abilities
+  description: Read-only discovery of all abilities in this deployment. Lists statically declared definitions (builtin package + wired ManifestStore), marks whether each has a registered handler, and reports source mismatches explicitly. Pass full_name for a single ability's detail.
+  tags: [core, discovery]
+  permissions: {}
+tool:
+  name: list_abilities
+  description: Read-only discovery of all abilities in this deployment. Lists statically declared definitions (builtin package + wired ManifestStore), marks whether each has a registered handler, and reports source mismatches explicitly. Pass full_name for a single ability's detail.
+  parameters:
+    full_name:
+      type: string
+      description: Optional full name of a single ability to inspect in detail (e.g. 'ghrah.fs.read_file'). Omit to list all abilities.
+      required: false
+    source:
+      type: string
+      description: Which source to query — 'manifests' (statically declared definitions), 'registry' (instantiable handlers), or 'all' (both, with an explicit diff).
+      required: false
+      default: all
+      enum: [all, manifests, registry]
+implementation:
+  type: builtin
+  handler: list_abilities
