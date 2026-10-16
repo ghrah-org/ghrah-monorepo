@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 __all__ = ["WriteFileAbility", "WriteFileInput"]
 
 
-
 class WriteFileInput(BaseModel):
     """WriteFile 工具的输入参数。"""
 
