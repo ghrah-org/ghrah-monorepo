@@ -11,6 +11,7 @@ dependencies = [
     "ghrah-subject",
     "ghrah-taskstore",
     "aiohttp>=3.13.5",
+    "agentconf>=0.1.0",
 ]
 
 [tool.uv.workspace]

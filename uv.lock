@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -506,6 +506,7 @@ name = "ghrah-monorepo"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "agentconf" },
     { name = "aiohttp" },
     { name = "ghrah-core" },
     { name = "ghrah-plugin" },
@@ -524,6 +525,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentconf", specifier = ">=0.1.0" },
     { name = "aiohttp", specifier = ">=3.13.5" },
     { name = "ghrah-core", editable = "ghrah-core" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
@@ -680,8 +682,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.15' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.12' or python_full_version >= '3.15' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [

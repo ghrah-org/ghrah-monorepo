@@ -29,6 +29,7 @@
 - SpawnAgentAbility: 以 manifest 实例化方式动态创建平级 Agent
 - TerminateAgentAbility: 终止集群中的 Agent
 - QueryManifestsAbility: 只读查询 agent manifest 定义（含能力清单）
+- ListAbilitiesAbility: 只读发现当前部署的全部 ability（registry 面 + manifest 面 + 差异）
 
 权限模块：
 - FSPermissionChecker: 文件系统路径权限检查器
@@ -62,6 +63,7 @@ from ghrah.abilities.builtin.fs_permissions import (
     FSPermissionChecker,
     WriteApprovalHook,
 )
+from ghrah.abilities.builtin.list_abilities import ListAbilitiesAbility
 from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
 from ghrah.abilities.builtin.move_file import MoveFileAbility
 from ghrah.abilities.builtin.query_agents import QueryAgentsAbility
@@ -164,6 +166,7 @@ def _register_builtin_abilities() -> None:
     AbilityRegistry.register("spawn_agent", SpawnAgentAbility)
     AbilityRegistry.register("terminate_agent", TerminateAgentAbility)
     AbilityRegistry.register("query_manifests", QueryManifestsAbility)
+    AbilityRegistry.register("list_abilities", ListAbilitiesAbility)
     AbilityRegistry.register("recall_context", RecallContextAbility)
     AbilityRegistry.register("send", SendAbility)
     AbilityRegistry.register("session_info", SessionInfoAbility)
@@ -230,6 +233,7 @@ __all__ = [
     "SpawnAgentAbility",
     "TerminateAgentAbility",
     "QueryManifestsAbility",
+    "ListAbilitiesAbility",
     "RecallContextAbility",
     "SendAbility",
     "SessionInfoAbility",
