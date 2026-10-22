@@ -18,6 +18,7 @@ __all__ = [
     "AGENT_NAME",
     "CONTEXT_MANAGER",
     "MANIFEST_STORE",
+    "SKILL_PROVIDER",
     "SUPERVISOR",
     "ExecutionServices",
     "ServiceKey",
@@ -76,3 +77,6 @@ AGENT_NAME = ServiceKey[str]("agent_name", str)
 # duck-typed ManifestStoreProtocol（load_agent/list_agents）；
 # None = 未接线（manifest 类工具须显式 FAILURE 指路，绝不猜测）。
 MANIFEST_STORE = ServiceKey[Any]("manifest_store")
+# duck-typed SkillAbilityProvider（scan/get_skill/query_fingerprints）；
+# None = 未接线（skill 类工具须显式说明缺席，绝不猜测目录）。
+SKILL_PROVIDER = ServiceKey[Any]("skill_provider")

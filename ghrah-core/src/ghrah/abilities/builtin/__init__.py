@@ -26,6 +26,7 @@
 - SendAbility: 向 room 发消息（send 工具：成员展开 + Supervisor 投递 + RoomLog 落账）
 - RecallContextAbility: 按动作链历史精确回忆消息（compact 配套召回面）
 - SessionInfoAbility: 环境/会话自省（静态部署快照 + 动态运行信息）
+- LoadSkillAbility: 按 full_name 加载某个 skill（skill-ability）的 SKILL.md 原文
 
 权限模块：
 - FSPermissionChecker: 文件系统路径权限检查器
@@ -61,7 +62,9 @@ from ghrah.abilities.builtin.fs_permissions import (
     FSPermissionChecker,
     WriteApprovalHook,
 )
+from ghrah.abilities.builtin.list_abilities import ListAbilitiesAbility
 from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
+from ghrah.abilities.builtin.load_skill import LoadSkillAbility
 from ghrah.abilities.builtin.move_file import MoveFileAbility
 from ghrah.abilities.builtin.query_agents import QueryAgentsAbility
 from ghrah.abilities.builtin.query_manifests import QueryManifestsAbility
@@ -87,6 +90,8 @@ __all__ = [
     "MoveFileAbility",
     "DeleteFileAbility",
     "SearchFilesAbility",
+    "ListAbilitiesAbility",
+    "LoadSkillAbility",
     # 命令执行 Ability
     "ExecuteCommandAbility",
     "ExecuteCommandInput",

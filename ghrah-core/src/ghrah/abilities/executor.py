@@ -461,6 +461,11 @@ class LocalAbilityExecutor(AbilityExecutor):
 
             ability = abilities.get(ability_name)
             if ability is None:
+                logger.debug(
+                    "AbilityExecutor: unknown ability '%s' for tool_call %s → recorded as failure",
+                    ability_name,
+                    tool_call_id,
+                )
                 # 未知 ability，直接记录失败结果
                 results.append(
                     {
@@ -478,6 +483,11 @@ class LocalAbilityExecutor(AbilityExecutor):
             task_ability_names.append(ability_name)
 
         if tool_call_tasks:
+            logger.debug(
+                "AbilityExecutor: executing %d tool_call(s) in parallel: %s",
+                len(tool_call_tasks),
+                ", ".join(f"{a.name}({str(args)[:80]})" for a, args, _ in tool_call_tasks),
+            )
             # 为每个 ability 创建独立的 AbilityExecutionContext
             raw_results = await asyncio.gather(
                 *[
@@ -514,6 +524,13 @@ class LocalAbilityExecutor(AbilityExecutor):
                     r["tool_call_id"] = tool_call_tasks[i][2]
                     results.append(r)
 
+        for entry in results:
+            result = entry.get("action_result")
+            logger.debug(
+                "AbilityExecutor: '%s' -> %s",
+                entry.get("ability_name", "?"),
+                getattr(getattr(result, "outcome", None), "value", "?"),
+            )
         return results
 
     async def _execute_single_with_context(
@@ -545,6 +562,7 @@ class LocalAbilityExecutor(AbilityExecutor):
         # （query_agents 等）拿到的 supervisor 恒为 None，误报 standalone。
         supervisor = getattr(self, "_supervisor", None)
         manifest_store = getattr(supervisor, "manifest_store", None)
+        skill_provider = getattr(supervisor, "skill_provider", None)
 
         per_ability_context = AbilityExecutionContext(
             invocation=AbilityInvocation(tool_call_id=tool_call_id),
@@ -554,6 +572,7 @@ class LocalAbilityExecutor(AbilityExecutor):
             context_manager=context_manager,
             supervisor=supervisor,
             manifest_store=manifest_store,
+            skill_provider=skill_provider,
             accumulated_data={
                 **copy.deepcopy(accumulated_data),
                 "tool_args": resolved_args,

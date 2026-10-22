@@ -273,6 +273,9 @@ def _build_context_manager(
         ),
         message_factory=message_factory,
         estimator=estimator,
+        # skill-ability：provider 由 supervisor 装配期注入（None = 不接线，
+        # 上下文不注入技能目录摘要）
+        skill_provider=getattr(supervisor, "skill_provider", None),
         **compact_kwargs,
     )
 
