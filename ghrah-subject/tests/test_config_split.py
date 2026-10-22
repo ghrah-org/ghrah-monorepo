@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -403,3 +404,17 @@ class TestFromEnv:
         monkeypatch.delenv("GHRAH_SUBJECT_TASKSTORE_DB", raising=False)
         config = SubjectConfig.from_env()
         assert config.taskstore.enabled is True
+
+    def test_skill_defaults(self) -> None:
+        """skill slice：默认根目录是 skill-ability（测试期由 conftest 隔离为临时目录）。"""
+        config = SubjectConfig()
+        assert config.skill.root.endswith("skill-ability")
+
+    def test_from_env_skill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_SKILL_ROOT", "/srv/ghrah/skill-ability")
+        assert SubjectConfig.from_env().skill.root == "/srv/ghrah/skill-ability"
+
+    def test_from_env_skill_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """delenv 后断言生产默认值（from_env 显式传字面量，不受 conftest 覆写影响）。"""
+        monkeypatch.delenv("GHRAH_SUBJECT_SKILL_ROOT", raising=False)
+        assert SubjectConfig.from_env().skill.root == os.path.expanduser("~/.ghrah/skill-ability")

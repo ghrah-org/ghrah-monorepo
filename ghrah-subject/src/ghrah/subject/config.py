@@ -157,6 +157,20 @@ class ManifestConfig:
     manifest_root: str = os.path.expanduser("~/.ghrah/manifests")
 
 
+@dataclass
+class SkillConfig:
+    """skill Unit 配置切片。
+
+    装配期由 ``SkillUnit`` 据此根目录做一次初始化：目录自举 + 扫描 + 缺失
+    ``ability.lock.yaml`` 补齐。扫描结果的消费方在 Core 侧，按需自行扫盘。
+
+    Attributes:
+        root: skill 存储根路径（每个 skill 一个子目录，内含 SKILL.md）
+    """
+
+    root: str = os.path.expanduser("~/.ghrah/skill-ability")
+
+
 # transport kind 配置（当前仅实现 websocket，预留 ipc/grpc）
 @dataclass
 class TransportKindConfig:
@@ -214,13 +228,16 @@ class RoomFilterConfig:
     白名单配置驱动（零隐式行为——非白名单/无 room 上下文的
     能力结果一律不落 Room；manifest ``chat_visible`` 元数据扩展留待后续）。
 
+    默认白名单 = ``conversation`` + ``end_task``：两者都是"对用户可见的
+    回合结果"（会话回复 / 任务终止时的最终答复），Room 页需要全部渲染。
+
     Attributes:
         enabled: 是否挂载 Filter Unit（False = 完全无过滤行为）
         abilities: 白名单能力名（命中且 success 且带 room 上下文才落账）
     """
 
     enabled: bool = True
-    abilities: tuple[str, ...] = ("conversation",)
+    abilities: tuple[str, ...] = ("conversation", "end_task")
 
 
 @dataclass
@@ -280,7 +297,10 @@ class SubjectConfig:
         manifest_root: manifest 存储根路径
         hitl_policy: HITL 权限策略配置
         core: Core 传输层配置
-        log_level: 日志级别
+        log_level: 日志级别（根 logger）
+        log_levels: 定向日志级别（形如 ``ghrah=DEBUG,aiosqlite=WARNING``；只改指定
+            logger，根级别不受影响——用于在端侧观察执行轨迹而不被第三方库洪泛）
+        log_file: 日志文件路径（空 = 只写终端；非空 = 终端与文件双写）
         transport: transport kind 配置（websocket/ipc/grpc）
         enabled_third_party_units: 第三方 Unit allowlist
     """
@@ -292,6 +312,8 @@ class SubjectConfig:
     hitl_policy: HITLPolicyConfig = field(default_factory=HITLPolicyConfig)
     core: CoreTransportConfig = field(default_factory=CoreTransportConfig)
     log_level: str = "INFO"
+    log_levels: str = ""
+    log_file: str = ""
 
     # slice 显式传入入口（InitVar：不成为实例字段，仅参与 __post_init__）。
     persistence_slice: InitVar[PersistenceConfig | None] = None
@@ -303,6 +325,7 @@ class SubjectConfig:
     room_filter_slice: InitVar[RoomFilterConfig | None] = None
     plugin_trust_slice: InitVar[PluginTrustConfig | None] = None
     taskstore_slice: InitVar[TaskStoreConfig | None] = None
+    skill_slice: InitVar[SkillConfig | None] = None
 
     # 非 slice 的新字段（有默认值，可直接构造）。
     transport: TransportKindConfig = field(default_factory=TransportKindConfig)
@@ -322,6 +345,7 @@ class SubjectConfig:
     _room_filter: RoomFilterConfig = field(init=False)
     _plugin_trust: PluginTrustConfig = field(init=False)
     _taskstore: TaskStoreConfig = field(init=False)
+    _skill: SkillConfig = field(init=False)
 
     def __post_init__(
         self,
@@ -334,6 +358,7 @@ class SubjectConfig:
         room_filter_slice: RoomFilterConfig | None,
         plugin_trust_slice: PluginTrustConfig | None,
         taskstore_slice: TaskStoreConfig | None,
+        skill_slice: SkillConfig | None,
     ) -> None:
         self._persistence = persistence_slice or PersistenceConfig(db_path=self.db_path)
         self._sandbox = sandbox_slice or SandboxUnitConfig(
@@ -355,6 +380,7 @@ class SubjectConfig:
         self._room_filter = room_filter_slice or RoomFilterConfig()
         self._plugin_trust = plugin_trust_slice or PluginTrustConfig()
         self._taskstore = taskstore_slice or TaskStoreConfig()
+        self._skill = skill_slice or SkillConfig()
 
     # ── 只读 slice property（非 Optional，mypy strict 友好）──
 
@@ -404,6 +430,10 @@ class SubjectConfig:
     def taskstore(self) -> TaskStoreConfig:
         return self._taskstore
 
+    @property
+    def skill(self) -> SkillConfig:
+        return self._skill
+
     @classmethod
     def from_env(cls) -> SubjectConfig:
         """从环境变量创建配置。
@@ -429,6 +459,7 @@ class SubjectConfig:
         - GHRAH_SUBJECT_PLUGIN_TRUST（逗号分隔，插件信任清单 plugin_id）
         - GHRAH_SUBJECT_TASKSTORE_ENABLED（任务归因内核 unit 挂载开关）
         - GHRAH_SUBJECT_TASKSTORE_DB（任务归因内核 sqlite 路径）
+        - GHRAH_SUBJECT_SKILL_ROOT（skill 存储根路径，装配期自举 + 补 lock）
         - GHRAH_SUBJECT_ROOM_FILTER_ENABLED
         - GHRAH_SUBJECT_ROOM_FILTER_ABILITIES（逗号分隔白名单能力名）
         - GHRAH_SUBJECT_SAFE_EXTRA_COMMANDS（逗号/分号/空白分隔，追加基础命令 safe 白名单）
@@ -574,7 +605,7 @@ class SubjectConfig:
             abilities=tuple(
                 a.strip()
                 for a in os.environ.get(
-                    "GHRAH_SUBJECT_ROOM_FILTER_ABILITIES", "conversation"
+                    "GHRAH_SUBJECT_ROOM_FILTER_ABILITIES", "conversation,end_task"
                 ).split(",")
                 if a.strip()
             ),
@@ -598,6 +629,13 @@ class SubjectConfig:
             ),
         )
 
+        # skill slice（skill 根目录；装配期由 SkillUnit 做一次初始化检查）
+        skill_slice = SkillConfig(
+            root=os.environ.get(
+                "GHRAH_SUBJECT_SKILL_ROOT", os.path.expanduser("~/.ghrah/skill-ability")
+            ),
+        )
+
         return cls(
             workspace_root=workspace_root,
             db_path=os.environ.get(
@@ -609,6 +647,8 @@ class SubjectConfig:
             hitl_policy=hitl_policy,
             core=core,
             log_level=os.environ.get("GHRAH_SUBJECT_LOG_LEVEL", "INFO"),
+            log_levels=os.environ.get("GHRAH_SUBJECT_LOG_LEVELS", ""),
+            log_file=os.environ.get("GHRAH_SUBJECT_LOG_FILE", ""),
             # slice 显式传入（保证 env 优先级；persistence/manifest/hitl 由 flat 派生）
             sandbox_slice=SandboxUnitConfig(
                 workspace_root=workspace_root,
@@ -621,6 +661,7 @@ class SubjectConfig:
             room_filter_slice=room_filter_slice,
             plugin_trust_slice=plugin_trust_slice,
             taskstore_slice=taskstore_slice,
+            skill_slice=skill_slice,
         )
 
 
