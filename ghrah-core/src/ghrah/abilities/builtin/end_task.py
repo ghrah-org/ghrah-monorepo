@@ -10,8 +10,8 @@
 - 收集累积数据，生成摘要
 
 执行逻辑：
-1. 从 AbilityExecutionContext.accumulated_data 中收集数据
-2. 如果有 last_action_result，直接使用其内容作为最终回复
+1. 从 AbilityExecutionContext 取本轮模型可见文本作为最终回复
+2. 缺省时回退到 toolcall 参数里的 ``summary``
 3. 返回 ActionResult(outcome=SUCCESS)，Agent 的 _build_response 会提取回复
 
 - mode 参数支持三种模式：auto / toolcall / verified
@@ -139,8 +139,8 @@ class EndTaskAbility(Ability):
     async def execute(self, context: AbilityExecutionContext) -> ActionResult:
         """执行任务终止。
 
-        优先使用 last_action_result 的内容作为最终回复；
-        如果没有，则从 accumulated_data 中生成摘要。
+        优先使用本轮模型可见文本作为最终回复；没有则回退到 toolcall 参数
+        里的 ``summary``。
 
         Args:
             context: 执行上下文
@@ -159,12 +159,17 @@ class EndTaskAbility(Ability):
         )
 
     def _collect_response(self, context: AbilityExecutionContext) -> str:
-        """从上下文中收集最终回复内容。
+        """收集最终回复内容。
 
         优先级：
-        1. last_action_result 中的 response/content
-        2. accumulated_data 中的 response
-        3. 默认的 "Task completed" 消息
+        1. ``accumulated_data["llm_response"]``：本轮模型可见文本（终答主体）
+        2. ``tool_args["summary"]``：toolcall 模式下模型显式给出的总结
+        3. ``accumulated_data["response"]``：历史约定的累积响应
+        4. 默认的 "Task completed" 消息
+
+        **不读取 ``last_action_result``**：toolcall 模式下它是上一个工具的结果
+        （read_file / load_skill 等查询类能力的结果带 content/response 字段），
+        把它当最终回复会把"上一轮查询结果"错渲染成模型的最终输出。
 
         Args:
             context: 执行上下文
@@ -172,17 +177,17 @@ class EndTaskAbility(Ability):
         Returns:
             最终回复文本
         """
-        # 优先级 1：从 last_action_result 提取
-        if context.last_action_result is not None:
-            ar = context.last_action_result
-            response = ar.data.get("response", ar.data.get("content", ""))
-            if response:
-                return response
+        text = context.accumulated_data.get("llm_response", "")
+        if isinstance(text, str) and text.strip():
+            return text
 
-        # 优先级 2：从 accumulated_data 提取
+        summary = (context.tool_args or {}).get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary
+
         response = context.accumulated_data.get("response", "")
-        if response:
+        if isinstance(response, str) and response.strip():
             return response
 
-        # 优先级 3：默认回复
+        # 默认回复
         return "Task completed"

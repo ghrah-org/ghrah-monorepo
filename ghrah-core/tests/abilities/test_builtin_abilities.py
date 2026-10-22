@@ -185,34 +185,64 @@ class TestEndTaskAbility:
         result = await hook.execute(_make_context(current_ability_name="end_task"), None)
         assert result.should_continue is False
 
-    async def test_execute_with_last_action_result_response(self) -> None:
-        """优先使用 last_action_result 中的 response。"""
+    async def test_execute_uses_current_turn_model_text(self) -> None:
+        """优先使用本轮模型可见文本（accumulated_data["llm_response"]）。"""
         ctx = _make_context(
+            accumulated_data={
+                "llm_response": "最终答复正文",
+                # 上一轮查询结果：不得作为最终回复
+                "content": "skill markdown body",
+            },
             last_action_result=ActionResult(
                 outcome=ActionOutcome.SUCCESS,
-                data={"response": "Here is the answer"},
+                data={"content": "skill markdown body"},
             ),
         )
         ability = EndTaskAbility()
         result = await ability.execute(ctx)
 
         assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["response"] == "Here is the answer"
+        assert result.data["response"] == "最终答复正文"
         assert result.next_action_hint is None
 
-    async def test_execute_with_last_action_result_content(self) -> None:
-        """使用 last_action_result 中的 content。"""
+    async def test_execute_ignores_previous_tool_result(self) -> None:
+        """不把上一个工具结果（查询类能力带 content/response）当最终回复。"""
         ctx = _make_context(
             last_action_result=ActionResult(
                 outcome=ActionOutcome.SUCCESS,
-                data={"content": "file content here"},
+                data={"content": "loaded skill body", "response": "query payload"},
             ),
         )
         ability = EndTaskAbility()
         result = await ability.execute(ctx)
 
         assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["response"] == "file content here"
+        assert result.data["response"] == "Task completed"
+
+    async def test_execute_falls_back_to_toolcall_summary(self) -> None:
+        """本轮无正文时回退到 toolcall 参数里的 summary。"""
+        ctx = _make_context(
+            tool_args={"summary": "任务完成：已梳理 34 项能力"},
+            last_action_result=ActionResult(
+                outcome=ActionOutcome.SUCCESS,
+                data={"content": "loaded skill body"},
+            ),
+        )
+        ability = EndTaskAbility()
+        result = await ability.execute(ctx)
+
+        assert result.data["response"] == "任务完成：已梳理 34 项能力"
+
+    async def test_execute_priority_text_over_summary(self) -> None:
+        """本轮正文优先于 toolcall summary。"""
+        ctx = _make_context(
+            accumulated_data={"llm_response": "完整终答"},
+            tool_args={"summary": "摘要"},
+        )
+        ability = EndTaskAbility()
+        result = await ability.execute(ctx)
+
+        assert result.data["response"] == "完整终答"
 
     async def test_execute_with_accumulated_data(self) -> None:
         """从 accumulated_data 中提取 response。"""
@@ -234,35 +264,16 @@ class TestEndTaskAbility:
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "Task completed"
 
-    async def test_execute_priority_response_over_content(self) -> None:
-        """response 优先于 content。"""
+    async def test_execute_ignores_blank_text_and_summary(self) -> None:
+        """空白正文/summary 不当作有效回复（避免渲染空内容）。"""
         ctx = _make_context(
-            last_action_result=ActionResult(
-                outcome=ActionOutcome.SUCCESS,
-                data={
-                    "response": "priority response",
-                    "content": "secondary content",
-                },
-            ),
+            accumulated_data={"llm_response": "   "},
+            tool_args={"summary": ""},
         )
         ability = EndTaskAbility()
         result = await ability.execute(ctx)
 
-        assert result.data["response"] == "priority response"
-
-    async def test_execute_priority_last_action_over_accumulated(self) -> None:
-        """last_action_result 优先于 accumulated_data。"""
-        ctx = _make_context(
-            last_action_result=ActionResult(
-                outcome=ActionOutcome.SUCCESS,
-                data={"response": "from last action"},
-            ),
-            accumulated_data={"response": "from accumulated"},
-        )
-        ability = EndTaskAbility()
-        result = await ability.execute(ctx)
-
-        assert result.data["response"] == "from last action"
+        assert result.data["response"] == "Task completed"
 
 
 # ── ReadFileAbility 测试 ──
