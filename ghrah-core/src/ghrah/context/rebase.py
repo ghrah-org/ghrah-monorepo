@@ -109,6 +109,7 @@ def create_rebased_context(
         compact_threshold=source_cm.compact_threshold,
         compact_keep_recent=source_cm.compact_keep_recent,
         compact_method=source_cm.compact_method,
+        skill_provider=source_cm.skill_provider,
     )
 
     return child_cm
