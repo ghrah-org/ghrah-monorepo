@@ -70,10 +70,23 @@ function _blockArg(block: ContentBlock, key: string): string {
 }
 
 /**
+ * RoomLog data.ability → ChatEntryKind。仅作者为 agent 的条目需要区分：
+ * ``end_task``（任务终止的最终答复）单独成类以便渲染成结束态；其余 agent
+ * 条目（含链上 conversation 回复 / send 消息）沿用 conversation。
+ */
+function _roomEntryKind(entry: RoomLogEntryPayload, ability: string): ChatEntryKind {
+  if (entry.author_type === "human") return "human_input";
+  if (ability === "end_task") return "end_task";
+  return "conversation";
+}
+
+/**
  * RoomLog entry → ChatEntry。chat 的按 Room 投影（数据源 = rooms store 的 logs）。
- * data 约定（map 信封，协议层不约束）：`{message: string, targets?: string[]}`——
- * message 为 content（缺时回退 JSON.stringify(data)）；targets 非空 = 定向这些
- * agent，缺省/空 = 整室广播。
+ * data 约定（map 信封，协议层不约束）：`{message: string, targets?: string[],
+ * ability?: string}`——message 为 content（缺时回退 JSON.stringify(data)）；
+ * targets 非空 = 定向这些 agent，缺省/空 = 整室广播；ability 为产生该条目的
+ * 能力名（RoomFilter 链过滤落账时携带），用于把 ``end_task`` 结果投影成
+ * 结束态条目而不是普通会话回复。
  */
 export function roomLogToChatEntries(
   entry: RoomLogEntryPayload,
@@ -87,13 +100,14 @@ export function roomLogToChatEntries(
     Array.isArray(rawTargets) && rawTargets.every((t) => typeof t === "string")
       ? (rawTargets as string[])
       : undefined;
+  const ability = typeof data.ability === "string" ? data.ability : "";
   return {
     projectId: scope.projectId,
     agentId: entry.author_type === "agent" ? scope.agentId : undefined,
     from: entry.author,
     to: entry.room_id,
     content,
-    kind: entry.author_type === "human" ? "human_input" : "conversation",
+    kind: _roomEntryKind(entry, ability),
     timestamp: new Date(entry.timestamp * 1000).toISOString(),
     nodeId: entry.id,
     agentName: entry.author_type === "agent" ? entry.author : "",
