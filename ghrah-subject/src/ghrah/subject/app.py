@@ -12,6 +12,7 @@ import logging
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import SubjectConfig
+from ghrah.subject.logging_setup import configure_logging
 from ghrah.subject.runtime.assembly import assemble_subject
 
 
@@ -32,15 +33,16 @@ def main() -> None:
     """Subject 服务入口函数。"""
     config = SubjectConfig.from_env()
 
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    log_path = configure_logging(
+        level=config.log_level, levels=config.log_levels, log_file=config.log_file
     )
 
     logger = logging.getLogger(__name__)
     logger.info("ghrah-subject starting (ouroboros, profile=full)...")
     logger.info("  workspace_root: %s", config.workspace_root)
     logger.info("  db_path: %s", config.db_path)
+    if log_path is not None:
+        logger.info("  log_file: %s", log_path)
 
     try:
         asyncio.run(run_forever())
