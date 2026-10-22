@@ -1,0 +1,20 @@
+manifest: ability
+version: "1"
+metadata:
+  namespace: ghrah.core
+  name: load_skill
+  title: Load Skill
+  description: Load the full SKILL.md document of one skill (skill-ability) by its exact full name, returning the document text and its path. Skills are instruction documents, not invocable abilities.
+  tags: [core, skill]
+  permissions: {}
+tool:
+  name: load_skill
+  description: Load the full SKILL.md document of one skill from the available-skills catalog, by its exact full name. Returns the document text and its path. Skills are instruction documents, not invocable abilities — read one when a task matches its description.
+  parameters:
+    full_name:
+      type: string
+      description: The skill's full name exactly as shown in the available-skills catalog (e.g. 'research'). Use list_abilities to see the names.
+      required: true
+implementation:
+  type: builtin
+  handler: load_skill
