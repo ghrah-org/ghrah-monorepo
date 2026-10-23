@@ -5,6 +5,10 @@ html {
 
 :root {
   --font-scale: 1;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --radius-md: 0.375rem;
   --font-ui-eyebrow: 0.75rem;
   --font-ui-note: 0.8125rem;
   --font-ui-code: 0.8125rem;

@@ -87,11 +87,11 @@ describe("AgentActionMenu menu chrome", () => {
     agents.selectAgent({ projectId: "p1", agentId: "a1", agentName: "coder" });
   });
 
-  it("only offers compact and terminate actions", async () => {
+  it("offers ability management alongside lifecycle actions", async () => {
     const wrapper = mountMenu();
     await openMenu(wrapper);
     const labels = wrapper.findAll(".agent-menu-item").map((b) => b.text());
-    expect(labels).toEqual(["Compact Context", "Terminate Agent"]);
+    expect(labels).toEqual(["Compact Context", "Abilities", "Terminate Agent"]);
     expect(wrapper.find(".agent-menu-header").text()).toBe("coder");
   });
 
@@ -110,4 +110,18 @@ describe("AgentActionMenu menu chrome", () => {
     await wrapper.find(".fixed.inset-0").trigger("click");
     expect(wrapper.find(".agent-menu").exists()).toBe(false);
   });
+});
+
+it("opens ability management for the selected stable agent identity", async () => {
+  setActivePinia(createPinia());
+  const target = { projectId: "p1", agentId: "a1", agentName: "coder" };
+  useAgentsStore().selectAgent(target);
+  const wrapper = mount(AgentActionMenu, { global: { stubs: { AgentAbilitiesDialog: true } } });
+  await openMenu(wrapper);
+  await wrapper
+    .findAll(".agent-menu-item")
+    .find((button) => button.text() === "Abilities")!
+    .trigger("click");
+  expect(wrapper.findComponent({ name: "AgentAbilitiesDialog" }).props("target")).toEqual(target);
+  expect(wrapper.find(".agent-menu").exists()).toBe(false);
 });

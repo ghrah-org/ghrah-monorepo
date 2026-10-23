@@ -172,6 +172,35 @@ describe("ServerClient", () => {
       expect(result.success).toBe(true);
     });
 
+    it("surfaces correlated system errors immediately and still dispatches the event", async () => {
+      client = createClientWithMockWs();
+      await connectClient(client);
+      const handler = vi.fn();
+      client.on(SystemType.ERROR, handler);
+      const pending = client.request(
+        {
+          type: CommandType.LIST_AGENTS,
+          payload: {},
+          request_id: "failed-command",
+        },
+        5000,
+      );
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "error",
+          request_id: "failed-command",
+          payload: { code: "COMMAND_ERROR", message: "source ability missing" },
+        }),
+      });
+      await expect(pending).resolves.toMatchObject({
+        success: false,
+        request_id: "failed-command",
+        error: "source ability missing",
+        error_detail: "COMMAND_ERROR",
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
     it("rejects with TimeoutError after timeout", async () => {
       client = createClientWithMockWs();
       await connectClient(client);

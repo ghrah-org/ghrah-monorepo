@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  type AgentTarget,
   type ChainTarget,
   useAgentsStore,
   useBranchesStore,
@@ -8,11 +9,21 @@ import {
   useRoomsStore,
   useSessionsStore,
 } from "@ghrah/observer-core";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 
+import AgentCommunicationPanel from "./agent-communication-panel.vue";
+import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
+
 const props = defineProps<{ projectId: string }>();
+const abilitiesTarget = ref<AgentTarget | null>(null);
+watch(
+  () => props.projectId,
+  () => {
+    abilitiesTarget.value = null;
+  },
+);
 const emit = defineEmits<{ openAgent: [target: ChainTarget] }>();
 const projects = useProjectsStore();
 const agents = useAgentsStore();
@@ -92,6 +103,7 @@ function openAgent(row: (typeof rows.value)[number]) {
       </div>
       <span class="project-panel-count">{{ rows.length }}</span>
     </header>
+    <AgentCommunicationPanel :key="projectId" :project-id="projectId" />
     <div v-if="rows.length === 0" class="project-panel-empty">{{ t("agentsOverview.empty") }}</div>
     <ul v-else class="agents-overview-list">
       <li v-for="row in rows" :key="row.agentId || row.name">
@@ -160,11 +172,26 @@ function openAgent(row: (typeof rows.value)[number]) {
             ><span>{{ row.clusterId }}</span></span
           >
         </button>
+        <div class="px-3 pb-3">
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="!row.agentId"
+            @click="abilitiesTarget = { projectId, agentId: row.agentId, agentName: row.name }"
+          >
+            {{ t("agentAbilities.manage") }}
+          </button>
+        </div>
         <p v-if="!row.chainTarget" class="agents-overview-chain-hint">
           {{ t("agentsOverview.noActiveChain") }}
         </p>
         <p v-if="row.runtimeError" class="agents-overview-error">{{ row.runtimeError }}</p>
       </li>
     </ul>
+    <AgentAbilitiesDialog
+      v-if="abilitiesTarget"
+      :target="abilitiesTarget"
+      @close="abilitiesTarget = null"
+    />
   </div>
 </template>

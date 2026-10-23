@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { useAgentsStore } from "@ghrah/observer-core";
+import { type AgentTarget, useAgentsStore } from "@ghrah/observer-core";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
 
 const agents = useAgentsStore();
 const { t } = useI18n();
@@ -11,6 +12,14 @@ const { terminateAgent, agentCompactContext, error: observerError } = useObserve
 const showMenu = ref(false);
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
+const abilitiesTarget = ref<AgentTarget | null>(null);
+
+function openAbilities() {
+  const target = agents.selectedAgentTarget;
+  if (!target) return;
+  abilitiesTarget.value = { ...target };
+  close();
+}
 
 function close() {
   showMenu.value = false;
@@ -83,6 +92,9 @@ async function handleTerminate() {
       <button type="button" class="agent-menu-item" :disabled="loading" @click="handleCompact">
         {{ t("agents.compactContext") }}
       </button>
+      <button type="button" class="agent-menu-item" @click="openAbilities">
+        {{ t("agentAbilities.manage") }}
+      </button>
       <div class="agent-menu-separator" />
       <button
         type="button"
@@ -95,5 +107,10 @@ async function handleTerminate() {
     </div>
 
     <div v-if="showMenu" class="fixed inset-0 z-30" @click="close" />
+    <AgentAbilitiesDialog
+      v-if="abilitiesTarget"
+      :target="abilitiesTarget"
+      @close="abilitiesTarget = null"
+    />
   </div>
 </template>

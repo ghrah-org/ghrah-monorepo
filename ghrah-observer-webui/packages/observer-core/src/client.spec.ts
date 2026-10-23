@@ -198,6 +198,60 @@ describe("ObserverClient", () => {
     });
   });
 
+  describe("sendAgentMessage", () => {
+    const target = { projectId: "p1", agentId: "a2", agentName: "worker" };
+
+    it.each([true, false])("executes a real source ability (async=%s)", async (asyncMode) => {
+      await connectClient(client, mockWs);
+      const pending = client.sendAgentMessage(AGENT_TARGET, target, "verify", asyncMode);
+      const sent = JSON.parse(mockWs.sent.at(-1)!);
+      expect(sent.payload.agent_id).toBe("a1");
+      expect(sent.payload.sender).toBe("user");
+      expect(sent.payload.metadata.execute_ability).toMatchObject({
+        name: "send_message",
+        args: { target: "a2", content: "verify", fire_and_forget: asyncMode },
+      });
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          request_id: sent.request_id,
+          payload: {
+            request_id: sent.request_id,
+            success: true,
+            data: {
+              content: JSON.stringify({ outcome: "success", data: { message_id: "m1" } }),
+            },
+          },
+        }),
+      });
+      await expect(pending).resolves.toMatchObject({ success: true, data: { message_id: "m1" } });
+    });
+
+    it("does not report ability failure as successful delivery", async () => {
+      vi.spyOn(client, "sendMessage").mockResolvedValue({
+        success: true,
+        request_id: "r1",
+        data: {
+          content: JSON.stringify({ outcome: "failure", data: { error: "recipient offline" } }),
+        },
+      });
+      await expect(
+        client.sendAgentMessage(AGENT_TARGET, target, "verify", false),
+      ).resolves.toMatchObject({ success: false, error: "recipient offline" });
+    });
+
+    it("rejects cross-project and self links before sending", async () => {
+      const send = vi.spyOn(client, "sendMessage");
+      await expect(
+        client.sendAgentMessage(AGENT_TARGET, { ...target, projectId: "p2" }, "verify", false),
+      ).rejects.toThrow("Projects");
+      await expect(
+        client.sendAgentMessage(AGENT_TARGET, AGENT_TARGET, "verify", false),
+      ).rejects.toThrow("distinct");
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+
   describe("getChainHistory", () => {
     it("builds correct get_chain_history payload", async () => {
       await connectClient(client, mockWs);

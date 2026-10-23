@@ -188,3 +188,136 @@ async def test_room_tool_delivers_and_reference_projection_recovers_without_dupl
             ).fetchone()
         assert bodies[0] == "work"
         assert json.loads(bodies[1])["room_ids"] == [room_id]
+
+
+async def test_observer_explicit_send_ability_cross_cluster(tmp_path):
+    """观察端显式能力信封真实经过源 agent 原子提交和跨 cluster MM。"""
+    import json
+
+    from ghrah.abilities.builtin.send_message import SendMessageAbility
+
+    config = SubjectConfig(
+        workspace_root=str(tmp_path / "ws"), db_path=str(tmp_path / "subject.sqlite")
+    )
+    registry = CoreClusterRegistry(
+        unit_factory=default_core_unit_factory(config, llm_factory=lambda config: EchoLLM())
+    )
+    async with Context() as ctx:
+        registry.bind(ctx)
+        try:
+            first = await registry.ensure_cluster(
+                "c1", project_id="p", project_root_locator=str(tmp_path / "project")
+            )
+            second = await registry.ensure_cluster(
+                "c2", project_id="p", project_root_locator=str(tmp_path / "project")
+            )
+            await first._unit.supervisor.spawn_agent(
+                AgentConfig(name="source", agent_id="source-id"),
+                abilities=[ConversationAbility(), SendMessageAbility()],
+            )
+            await second._unit.supervisor.spawn_agent(
+                AgentConfig(name="target", agent_id="target-id"), abilities=[ConversationAbility()]
+            )
+            for async_mode in (False, True):
+                response = await first.dispatch(
+                    "send_message",
+                    {
+                        "project_id": "p",
+                        "agent_id": "source-id",
+                        "target": "source",
+                        "sender": "user",
+                        "content": "verify",
+                        "metadata": {
+                            "execute_ability": {
+                                "name": "send_message",
+                                "args": {
+                                    "target": "target-id",
+                                    "content": "verify",
+                                    "fire_and_forget": async_mode,
+                                },
+                                "call_id": f"verify-{async_mode}",
+                            }
+                        },
+                    },
+                )
+                assert response["success"], response
+                action = json.loads(response["data"]["content"])
+                assert action["outcome"] == "success", action
+                manager = registry.get_message_manager("p")
+                message = await manager.get_message(action["data"]["message_id"])
+                assert message.sender_id == "source-id"
+                assert message.origin_node_id
+                deliveries = await manager.get_deliveries(message.message_id)
+                assert [delivery.recipient_id for delivery in deliveries] == ["target-id"]
+                if async_mode:
+                    assert action["data"]["status"] == "prepared"
+                else:
+                    assert "ready" in json.dumps(action["data"])
+        finally:
+            await registry.stop()
+
+
+async def test_missing_observer_ability_is_rejected_before_enqueue(tmp_path):
+    """显式能力缺失立即返回可诊断错误，不制造阻塞同会话的失败消息。"""
+    import aiosqlite
+
+    config = SubjectConfig(
+        workspace_root=str(tmp_path / "ws"), db_path=str(tmp_path / "subject.sqlite")
+    )
+    registry = CoreClusterRegistry(
+        unit_factory=default_core_unit_factory(config, llm_factory=lambda config: EchoLLM())
+    )
+    async with Context() as ctx:
+        registry.bind(ctx)
+        try:
+            handle = await registry.ensure_cluster(
+                "c1", project_id="p", project_root_locator=str(tmp_path / "project")
+            )
+            await handle._unit.supervisor.spawn_agent(
+                AgentConfig(name="source", agent_id="source-id"), abilities=[ConversationAbility()]
+            )
+            for _ in range(2):
+                response = await handle.dispatch(
+                    "send_message",
+                    {
+                        "project_id": "p",
+                        "agent_id": "source-id",
+                        "target": "source",
+                        "content": "verify",
+                        "metadata": {
+                            "execute_ability": {
+                                "name": "send_message",
+                                "args": {"target": "target-id", "content": "verify"},
+                                "call_id": "check-missing",
+                            }
+                        },
+                    },
+                )
+                assert response["success"] is False
+                assert response["error"] == "source_ability_missing"
+                assert "source" in response["error_detail"]
+            manager = registry.get_message_manager("p")
+            async with aiosqlite.connect(manager.db_path) as db:
+                cursor = await db.execute("SELECT COUNT(*) FROM mm_messages")
+                assert (await cursor.fetchone())[0] == 0
+            registered = await handle.dispatch(
+                "register_ability",
+                {
+                    "project_id": "p",
+                    "agent_id": "source-id",
+                    "agent_name": "source",
+                    "ability": {"ability_type": "send_message", "params": {}},
+                },
+            )
+            assert registered["success"], registered
+            info = await handle.dispatch(
+                "get_agent_info",
+                {"project_id": "p", "agent_id": "source-id", "name": "source"},
+            )
+            assert info["success"], info
+            assert "send_message" in info["data"]["abilities"]
+            from ghrah.abilities.registry import AbilityRegistry
+
+            assert info["data"]["available_ability_types"] == sorted(AbilityRegistry.list_types())
+        finally:
+            await registry.stop()
