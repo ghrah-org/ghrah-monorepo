@@ -717,6 +717,22 @@ class MessageManager:
                         f"Delivery {bad.delivery_id}: {bad.state}: "
                         f"{bad.error or bad.blocked_reason}"
                     )
+                if not tolerate_errors:
+                    for delivery in deliveries:
+                        if delivery.state != DeliveryState.PENDING:
+                            continue
+                        blocker = await self.get_queue_blocker(delivery.delivery_id)
+                        if blocker is not None:
+                            raise RuntimeError(
+                                "message_queue_blocked: "
+                                f"recipient={delivery.recipient_id}, "
+                                f"session={delivery.target_session_id}, "
+                                f"blocking_delivery={blocker.delivery_id}, "
+                                f"state={blocker.state}, "
+                                f"reason={blocker.error or blocker.blocked_reason}. "
+                                "Recover the preceding delivery explicitly or use a new session. "
+                                "The pending request is retained."
+                            )
                 await asyncio.sleep(min(self._poll_interval, 0.05))
 
         if timeout < 0:
@@ -789,6 +805,26 @@ class MessageManager:
                 )
             ).fetchall()
         return tuple(self._delivery_record(row) for row in rows)
+
+    async def get_queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
+        """从权威投递表查询同会话中阻塞待收消息的前序失败，不修改队列。"""
+        async with self._lock:
+            row = await (
+                await self._require_db().execute(
+                    "SELECT prior.*, r.delivery_id AS result_id, r.result_node_id "
+                    "FROM mm_deliveries current JOIN mm_deliveries prior "
+                    "ON prior.recipient_id=current.recipient_id "
+                    "AND prior.target_session_id IS current.target_session_id "
+                    "AND prior.seq<current.seq "
+                    "LEFT JOIN mm_delivery_results r ON r.delivery_id=prior.delivery_id "
+                    "WHERE current.delivery_id=? AND current.state='pending' "
+                    "AND (prior.state IN ('failed', 'interrupted') "
+                    "OR (prior.state!='completed' AND prior.blocked_reason IS NOT NULL)) "
+                    "ORDER BY prior.seq LIMIT 1",
+                    (delivery_id,),
+                )
+            ).fetchone()
+        return self._delivery_record(row) if row is not None else None
 
     @staticmethod
     def _delivery_record(row: aiosqlite.Row) -> DeliveryRecord:

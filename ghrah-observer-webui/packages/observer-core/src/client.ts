@@ -195,6 +195,49 @@ export class ObserverClient extends ServerClient {
     return this.request(msg, 60_000);
   }
 
+  /** 在源 agent 的原子执行上下文中调用 send_message，正文和投递由 MM 持久化。 */
+  async sendAgentMessage(
+    source: AgentTarget,
+    target: AgentTarget,
+    content: string,
+    fireAndForget: boolean,
+  ): Promise<CommandResultPayload> {
+    if (source.projectId !== target.projectId) throw new Error("Cannot send across Projects");
+    if (!source.agentId || !target.agentId || source.agentId === target.agentId) {
+      throw new Error("Choose two distinct agents with stable IDs");
+    }
+    if (!content.trim()) throw new Error("Message content is required");
+    const result = await this.sendMessage(source, content, "user", {
+      metadata: {
+        execute_ability: {
+          name: "send_message",
+          args: { target: target.agentId, content, fire_and_forget: fireAndForget },
+          call_id: generateRequestId(),
+        },
+      },
+    });
+    if (!result.success) return result;
+    // 外层回执成功仅代表命令完成，仍需检查能力的真实结果。
+    const action = JSON.parse(String((result.data as { content?: unknown } | null)?.content)) as {
+      outcome: string;
+      data: Record<string, unknown>;
+    };
+    if (
+      !action ||
+      typeof action.data !== "object" ||
+      action.data === null ||
+      !["success", "failure"].includes(action.outcome)
+    ) {
+      throw new Error("Invalid send_message ability result");
+    }
+    return {
+      ...result,
+      success: action.outcome === "success",
+      data: action.data,
+      error: action.outcome === "success" ? null : String(action.data.error ?? "Send failed"),
+    };
+  }
+
   async broadcastMessage(
     projectId: string,
     content: string,

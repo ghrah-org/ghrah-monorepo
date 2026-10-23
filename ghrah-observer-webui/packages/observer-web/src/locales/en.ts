@@ -1,4 +1,80 @@
 export default {
+  agentAbilities: {
+    manage: "Abilities",
+    title: "Abilities · {agent}",
+    runtimeHint:
+      "This list is read from the selected agent when opened. Refresh to check changes made elsewhere.",
+    loadFailed: "Unable to load the agent’s abilities. Reconnect and refresh.",
+    registerFailed: "Ability registration failed.",
+    registered: "Registered {ability} on the current instance.",
+    refresh: "Refresh abilities",
+    definitions: "Configured ability definitions",
+    registeredList: "Registered on this instance",
+    stoppedHint:
+      "This agent is stopped. These are its configured definitions, not registered runtime abilities. Start the agent before registering an ability.",
+    empty: "No abilities are registered on this instance.",
+    registerTitle: "Register an ability",
+    type: "Ability type",
+    chooseType: "Choose an ability type",
+    typesHint:
+      "Options come from the server’s current ability registry, including dynamically registered types. Some abilities require constructor parameters.",
+    typesLoadFailed:
+      "Unable to load available ability types. Check that the backend is updated and refresh.",
+    params: "Constructor parameters (JSON object)",
+    invalidParams: "Parameters must be a valid JSON object.",
+    scopeHint:
+      "Registration updates the current running instance only; it does not save the agent configuration for restart. It does not retry blocked messages. Configure persistent abilities in the agent manifest. Existing ability names may be replaced.",
+    register: "Register on this instance",
+    registering: "Registering…",
+  },
+  communication: {
+    queueBlockedHint:
+      "The session queue is blocked by an earlier failed or interrupted delivery. Recover that delivery explicitly or create and activate a new session for the blocked agent. Registering an ability alone does not unblock the queue; this request is retained.",
+    waitingHint:
+      "Waiting for a receipt. You can stop waiting to edit the form; this does not cancel server execution.",
+    disconnected: "Connect to the server before running verification.",
+    inactive: "Activate the project before running verification.",
+    enterContent: "Enter a message to enable verification.",
+    chooseLinks: "Choose distinct source and target agents for every link.",
+    stopWaiting: "Stop waiting",
+    stoppedHint:
+      "Stopped waiting locally. Submitted messages may still execute; inspect history before sending again.",
+    missingAbility:
+      "Source agent {agent} has no send_message ability. Register it on the source agent before retrying. Previously blocked messages require explicit recovery.",
+    title: "Agent communication verification",
+    hint: "Runs the source agent’s registered send_message ability through MessageManager. Start target clusters before synchronous verification. Inspect execution history in each agent’s ActionChain.",
+    source: "Link {index}: source",
+    target: "Target",
+    choose: "Choose an agent",
+    remove: "Remove",
+    add: "Add link",
+    content: "Message sent on each link",
+    mode: "Reply mode",
+    sync: "Synchronous: wait for reply",
+    async: "Asynchronous: prepare delivery",
+    schedule: "Execution order",
+    parallel: "Parallel links",
+    sequence: "Ordered links",
+    run: "Run verification",
+    running: "Running…",
+    sequenceHint:
+      "Runs links in order, stopping on failure or unknown receipt. For A → B → C, add A → B and B → C with synchronous replies. Each link sends the text above; replies are not forwarded automatically.",
+    parallelHint:
+      "Runs independent requests concurrently. Add A → B and A → C for one-to-many verification (separate persistent messages).",
+    asyncHint:
+      "Committed means the source committed its outgoing message, not recipient completion. Inspect ActionChain for later processing. Re-running creates new requests.",
+    unknownHint:
+      "Receipt unknown. The server may still be processing; inspect ActionChain before re-running.",
+    status: {
+      waiting: "Waiting",
+      running: "Running",
+      prepared: "Committed for delivery",
+      replied: "Reply received",
+      failed: "Failed",
+      unknown: "Receipt unknown",
+      skipped: "Skipped",
+    },
+  },
   common: {
     cancel: "Cancel",
     close: "Close",
@@ -272,8 +348,8 @@ export default {
       vendor: "vendor",
     },
     status: {
-      active: "Running",
-      running: "Running",
+      active: "Started",
+      running: "Started",
       stopped: "Stopped",
       pending: "Pending",
       error: "Error",

@@ -22,7 +22,7 @@ import {
   useProjectsStore,
   useRoomsStore,
 } from "@ghrah/observer-core";
-import type { AgentConfigPayload } from "@ghrah/protocol";
+import type { AbilityDefinitionPayload, AgentConfigPayload } from "@ghrah/protocol";
 import { ref, shallowRef, watch } from "vue";
 import { i18n } from "@/i18n";
 import { usePlugins } from "@/composables/usePlugins";
@@ -142,6 +142,23 @@ export function useObserver() {
 
   async function sendMessage(target: AgentTarget, content: string) {
     return withClient((c) => c.sendMessage(target, content));
+  }
+
+  async function sendAgentMessage(
+    source: AgentTarget,
+    target: AgentTarget,
+    content: string,
+    fireAndForget: boolean,
+  ) {
+    return withClient((c) => c.sendAgentMessage(source, target, content, fireAndForget));
+  }
+
+  async function getAgentInfo(target: AgentTarget) {
+    return withClient((c) => c.getAgentInfo(target));
+  }
+
+  async function registerAbility(target: AgentTarget, ability: AbilityDefinitionPayload) {
+    return withClient((c) => c.registerAbility(target, ability));
   }
 
   async function sendHitlResponse(promiseId: string, approved: boolean, reason?: string) {
@@ -445,6 +462,9 @@ export function useObserver() {
     disconnect,
     autoConnect,
     sendMessage,
+    sendAgentMessage,
+    getAgentInfo,
+    registerAbility,
     sendHitlResponse,
     spawnAgent,
     terminateAgent,

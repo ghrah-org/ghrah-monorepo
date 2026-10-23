@@ -366,3 +366,37 @@ async def test_v1_schema_upgrade_preserves_messages_and_pending_deliveries(tmp_p
         manager.bind("b", b.receive)
         await manager.dispatch_pending()
         assert len(await manager.get_replies(request.message_id)) == 1
+
+
+async def test_wait_reports_failed_predecessor_without_mutating_pending_request(tmp_path):
+    """同队列前序失败立即可诊断；后续请求仍保留以便显式恢复。"""
+
+    async def fail(message):
+        return AgentMessage.create_reply(message, "missing ability", MessageType.ERROR)
+
+    async with make_manager(tmp_path / "messages.sqlite") as manager:
+        manager.bind("b", fail)
+        first = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="first",
+            idempotency_key="first",
+            kind=MessageKind.REQUEST,
+        )
+        await manager.dispatch_pending()
+        prior = (await manager.get_deliveries(first.message_id))[0]
+        later = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="later",
+            idempotency_key="later",
+            kind=MessageKind.REQUEST,
+        )
+        await manager.dispatch_pending()
+        with pytest.raises(RuntimeError, match="message_queue_blocked") as caught:
+            await manager.wait_replies(later.message_id, timeout=1)
+        assert prior.delivery_id in str(caught.value)
+        assert "missing ability" in str(caught.value)
+        pending = (await manager.get_deliveries(later.message_id))[0]
+        assert (pending.state, pending.attempts) == (DeliveryState.PENDING, 0)
+        assert await manager.get_queue_blocker(pending.delivery_id) == prior

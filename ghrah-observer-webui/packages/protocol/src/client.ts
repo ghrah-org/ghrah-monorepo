@@ -315,6 +315,21 @@ export class ServerClient {
       return;
     }
 
+    if (msgType === SystemType.ERROR && message.request_id) {
+      const deferred = this._pendingRequests.get(message.request_id);
+      if (deferred) {
+        const payload = message.payload as { code: string; message: string };
+        this._pendingRequests.delete(message.request_id);
+        this._requestCommandTypes.delete(message.request_id);
+        deferred.resolve({
+          request_id: message.request_id,
+          success: false,
+          error: payload.message,
+          error_detail: payload.code,
+        });
+      }
+    }
+
     this._applyStateFold(message);
     this._dispatch(msgType, message);
   }

@@ -1199,6 +1199,18 @@ class CoreUnit:
         supervisor = self._require_supervisor()
         sp = SendMessagePayload.model_validate(payload)
         self._validate_agent(sp.project_id, sp.agent_id, sp.target)
+        invocation = (sp.metadata or {}).get("execute_ability")
+        if invocation is not None:
+            agent = await supervisor.get_agent_handle(sp.target)
+            name = invocation.get("name") if isinstance(invocation, dict) else None
+            if not isinstance(name, str) or name not in agent.get_abilities():
+                # 在入 MM 队列前拒绝配置错误，避免失败输入阻塞后续同会话消息。
+                return {
+                    "success": False,
+                    "error": "source_ability_missing",
+                    "error_detail": f"Agent '{sp.target}' has no registered ability '{name}'",
+                    "data": {"agent_name": sp.target, "ability_name": name},
+                }
         result = await supervisor.send(
             target=sp.target,
             content=sp.content,
@@ -1305,11 +1317,14 @@ class CoreUnit:
         agent_handle = await supervisor.get_agent_handle(gp.name)
         state = agent_handle.get_state()
         abilities = agent_handle.get_abilities()
+        from ghrah.abilities.registry import AbilityRegistry
+
         return self._ok(
             {
                 "name": gp.name,
                 "state": state,
                 "abilities": abilities,
+                "available_ability_types": sorted(AbilityRegistry.list_types()),
                 "context_usage": agent_handle.get_context_usage_snapshot(),
             }
         )
