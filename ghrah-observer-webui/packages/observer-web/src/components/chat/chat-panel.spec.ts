@@ -114,6 +114,22 @@ describe("ChatPanel", () => {
     expect(entries[1].text()).toContain("hello from human");
   });
 
+  it("end_task 结果投影为结束态条目并渲染（不再被当成普通会话）", async () => {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "architect", "agent", "开始梳理", { ability: "conversation" }),
+      logEntry("r1", 2, "architect", "agent", "梳理完成", { ability: "end_task" }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    const entries = wrapper.findAll(".chat-entry");
+    expect(entries).toHaveLength(2);
+    expect(entries[0].classes()).toContain("entry-conversation");
+    expect(entries[1].classes()).toContain("entry-endtask");
+    expect(entries[1].text()).toContain("梳理完成");
+    expect(entries[1].find(".entry-header").text()).toContain("✓");
+  });
+
   it("merges pending entries of the target room only", async () => {
     const { rooms, chat } = setup();
     rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);

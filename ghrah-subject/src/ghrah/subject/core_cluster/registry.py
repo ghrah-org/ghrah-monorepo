@@ -333,6 +333,10 @@ def default_core_unit_factory(
     ``CoreClusterRegistryUnit.init`` 从 ctx 取 ``MANIFEST_STORE`` 后传入
     （挂载顺序保证 store 先于 CoreUnit，见 mount_builtin_units）。
 
+     ``config.skill.root`` 注入 CoreUnitConfig.skill_root：Core 侧据此构造
+     SkillAbilityProvider（skill 清单 + 上下文目录摘要）。建目录与补齐 lock
+     仍由 SkillUnit 在装配期完成——Core 只读，不重复初始化。
+
     ``llm_factory`` 为可选的 per-cluster LLM 工厂注入（透传
     CoreUnitConfig.llm_factory；None = Core 内建默认 agentconf 解析）。
     部署方显式声明 LLM 出口的程序化接缝——SubjectConfig 暂不暴露用户级
@@ -413,6 +417,10 @@ def default_core_unit_factory(
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
             manifest_store=manifest_store,
+            # skill-ability：根目录由 SubjectConfig 单一决定（skill slice），
+            # Core 侧只按此根构造 provider 读 skill（建目录/lock 由 SkillUnit
+            # 在装配期完成，Core 不重复初始化）。
+            skill_root=config.skill.root,
             llm_factory=llm_factory,
             # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
             # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。

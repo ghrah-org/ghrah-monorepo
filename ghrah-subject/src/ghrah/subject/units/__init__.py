@@ -29,11 +29,12 @@ async def mount_builtin_units(
     """Mount built-in units as Ouroboros plugins.
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
-    均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace +
-    taskstore + task/desired_state）；full = 13（coexistence 7 +
+    均启用）下 coexistence = 8（sandbox/manifest_store/skill/ledger/workspace
+    + taskstore + task/desired_state）；full = 15（coexistence 8 +
     websocket_observer_endpoint/core_cluster_registry/project/room/recovery +
-    room_filter）。关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled``
-    时对应 unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
+    room_filter + ability_bridge）。关闭 ``config.taskstore.enabled`` /
+    ``config.room_filter.enabled`` 时对应 unit 不挂载。**逐个挂载并等 ACTIVE**
+    （对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
 
     RoomUnit 在 ProjectUnit 之后（requires PROJECT_MANAGER）、CoreUnit 经
@@ -57,6 +58,7 @@ async def mount_builtin_units(
     from ghrah.subject.units.manifest_store import ManifestStoreUnit
     from ghrah.subject.units.recovery import DesiredStateUnit
     from ghrah.subject.units.sandbox import SandboxUnit
+    from ghrah.subject.units.skill import SkillUnit
     from ghrah.subject.units.task import TaskUnit
     from ghrah.subject.units.taskstore import TaskStoreUnit
     from ghrah.subject.units.workspace import WorkspaceUnit
@@ -64,6 +66,7 @@ async def mount_builtin_units(
     units: list[SubjectUnit] = [
         SandboxUnit(config),
         ManifestStoreUnit(config),
+        SkillUnit(config),
         LedgerUnit(config),
         WorkspaceUnit(config),
     ]

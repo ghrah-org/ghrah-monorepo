@@ -94,13 +94,15 @@ def main() -> None:
     import asyncio
 
     from ghrah.subject.config import SubjectConfig
+    from ghrah.subject.logging_setup import configure_logging
 
     config = SubjectConfig.from_env()
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    log_path = configure_logging(
+        level=config.log_level, levels=config.log_levels, log_file=config.log_file
     )
     logger.info("ghrah-subject observer server starting (ouroboros, profile=full)...")
+    if log_path is not None:
+        logger.info("  log_file: %s", log_path)
     asyncio.run(serve())
 
 

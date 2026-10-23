@@ -586,6 +586,37 @@ class TestDriveLoop:
         assert agent._iteration_state.last_action_result.data["response"] == "Task completed"
 
     @pytest.mark.asyncio
+    async def test_toolcall_end_task_replies_with_model_text(self) -> None:
+        """同一响应里既有正文又调用 end_task 时，最终回复是模型正文。
+
+        回归：toolcall 模式下 end_task 曾把上一个工具结果（read_file /
+        load_skill 等查询类能力带 content/response）当最终回复，导致前端
+        渲染出"上一轮查询结果"而不是模型输出。
+        """
+        from ghrah.abilities.builtin.end_task import EndTaskAbility
+
+        agent = _create_agent()
+        agent.register_ability(EndTaskAbility(mode="toolcall"))
+
+        mock_llm = AsyncMock()
+        mock_llm.generate.return_value = LLMResponse(
+            content_blocks=[
+                TextBlock(text="最终答复正文"),
+                ToolCallBlock(id="call_end", name="end_task", arguments={}),
+            ]
+        )
+        mock_llm.configure_tools = MagicMock()
+        agent._llm = mock_llm
+
+        agent._iteration_state.max_iterations = 5
+        agent._iteration_state.reset()
+
+        await agent._drive_loop()
+
+        assert agent._iteration_state.last_action_result is not None
+        assert agent._iteration_state.last_action_result.data["response"] == "最终答复正文"
+
+    @pytest.mark.asyncio
     async def test_before_action_hook_stops_loop(self) -> None:
         """BEFORE_ACTION hook 返回 should_continue=False 应停止循环。"""
 

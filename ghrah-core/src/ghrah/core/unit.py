@@ -161,6 +161,9 @@ class CoreUnitConfig:
             供 manifest_ref spawn 解析 agent manifest。None = standalone
             模式（manifest_ref spawn 明确报错，对齐 ROOM_BRIDGE_UNAVAILABLE
             模式）。Subject 挂载模式下注入其 ManifestStore。
+        skill_root: skill-ability 根目录（绝对路径字符串）。None = 不接线：
+            skill 目录不被扫描、上下文不注入技能目录摘要；对应消费方显式
+            说明缺席（零隐式）。Subject 挂载模式下注入 ``SkillConfig.root``。
         default_abilities: spawn 未显式传 abilities 时注入的能力名列表
             （透传 SupervisorActor.default_abilities——部署方显式声明，
             非隐式兜底；None = 未配置，spawn(None) raise）。
@@ -192,6 +195,9 @@ class CoreUnitConfig:
     llm_factory: Callable[[Any], Any] | None = None
     # duck-typed ManifestStoreProtocol；None = standalone（manifest_ref spawn 报错）
     manifest_store: Any = None
+    # skill-ability 根目录（装配期显式注入的字符串路径）。None = 不接线：
+    # skill 目录不被扫描、上下文不注入技能目录摘要（消费方显式说明缺席）。
+    skill_root: str | None = None
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
 
@@ -707,6 +713,14 @@ class CoreUnit:
             and self._config.message_manager.project_id != self._config.project_id
         ):
             raise ValueError("MessageManager project does not match CoreUnit")
+        # skill-ability 接线：显式注入根目录才构造 provider；未注入即不接线
+        # （skill 面缺席由消费方显式说明，零隐式）。
+        skill_provider: Any = None
+        if self._config.skill_root:
+            from ghrah.skills import SkillAbilityProvider
+
+            skill_provider = SkillAbilityProvider.from_root(self._config.skill_root)
+
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
             cluster_id=self._config.cluster_id,
@@ -719,6 +733,7 @@ class CoreUnit:
             ),
             max_cluster_members=self._config.max_cluster_members,
             manifest_store=self._config.manifest_store,
+            skill_provider=skill_provider,
             llm_factory=self._config.llm_factory,
             message_manager=self._config.message_manager,
         )

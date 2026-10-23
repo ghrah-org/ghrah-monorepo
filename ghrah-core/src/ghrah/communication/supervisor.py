@@ -99,6 +99,7 @@ class SupervisorActor:
         default_abilities: list[str] | None = None,
         max_cluster_members: int = 20,
         manifest_store: Any | None = None,
+        skill_provider: Any | None = None,
         llm_factory: Callable[[AgentConfig], Any] | None = None,
         message_manager: MessageManager | None = None,
     ) -> None:
@@ -118,6 +119,9 @@ class SupervisorActor:
                 spawn/query_manifests 等 manifest 类工具经
                 AbilityExecutionContext.services 显式接线；
                 None = 未接线（对应工具显式 FAILURE 指路）。
+            skill_provider: SkillAbilityProvider（duck-typed），供 skill 面消费
+                （list_abilities 的 skill 清单、上下文技能目录摘要注入）；
+                None = 未接线（skill 面显式说明缺席）。
             message_manager: 显式注入已打开的项目消息服务，须启用固定会话路由；
                 生命周期由装配方管理，未配置时 agent 间发送拒绝。
             llm_factory: 集群级 LLM 工厂默认（``(AgentConfig) ->
@@ -135,6 +139,9 @@ class SupervisorActor:
         self.room_bridge = room_bridge
         # duck-typed ManifestStoreProtocol | None（装配期显式注入）
         self.manifest_store = manifest_store
+        # duck-typed SkillAbilityProvider | None（装配期显式注入）；消费方：
+        # list_abilities 的 skill 面 + ContextManager 的技能目录摘要注入
+        self.skill_provider = skill_provider
         # 集群级 LLM 工厂默认（spawn per-spawn kwarg 覆盖；工具路径继承）
         self._llm_factory = llm_factory
         self._registry = AgentRegistry()

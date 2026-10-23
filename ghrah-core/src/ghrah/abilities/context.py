@@ -19,6 +19,7 @@ from ghrah.abilities.execution_services import (
     AGENT_NAME,
     CONTEXT_MANAGER,
     MANIFEST_STORE,
+    SKILL_PROVIDER,
     SUPERVISOR,
     ExecutionServices,
 )
@@ -62,6 +63,7 @@ class AbilityExecutionContext:
         accumulated_data: dict[str, Any] | None = None,
         last_action_result: ActionResult | None = None,
         manifest_store: Any = None,
+        skill_provider: Any = None,
     ) -> None:
         base_invocation = invocation or AbilityInvocation()
         ability_name = current_ability_name or base_invocation.ability_name
@@ -85,6 +87,8 @@ class AbilityExecutionContext:
             self.services.set(AGENT_NAME, agent_name)
         if manifest_store is not None:
             self.services.set(MANIFEST_STORE, manifest_store)
+        if skill_provider is not None:
+            self.services.set(SKILL_PROVIDER, skill_provider)
 
         self.agent_state = agent_state if agent_state is not None else {}
         self.last_action_result = last_action_result
@@ -153,6 +157,11 @@ class AbilityExecutionContext:
     @manifest_store.setter
     def manifest_store(self, value: Any) -> None:
         self.services.set(MANIFEST_STORE, value)
+
+    @property
+    def skill_provider(self) -> Any:
+        """SkillAbilityProvider 服务（装配期显式接线；None = 未接线）。"""
+        return self.services.get(SKILL_PROVIDER)
 
     def get_ability_state(self) -> dict[str, Any]:
         """获取当前 ability 作用域的状态（只读快照）。"""

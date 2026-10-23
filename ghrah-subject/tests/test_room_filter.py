@@ -92,6 +92,28 @@ async def test_whitelist_hit_with_room_context_appends() -> None:
     assert send["data"]["via"] == "chain_filter"
 
 
+async def test_default_whitelist_covers_conversation_and_end_task() -> None:
+    """默认白名单 = conversation + end_task：任务终止答复同样落 Room。"""
+    manager = _FakeRoomManager()
+    unit = RoomFilterUnit(SubjectConfig(workspace_root="/tmp/ws", db_path="/tmp/subject.db"))
+    await unit.init(_FakeCtx(manager))
+    assert RoomFilterConfig().abilities == ("conversation", "end_task")
+
+    node = _node(
+        action_results=[
+            {
+                "ability_name": "end_task",
+                "action_result": {"outcome": "success", "data": {"response": "全部完成"}},
+            }
+        ]
+    )
+    await unit._on_chain_updated({"agent_name": "planner", "node": node})
+
+    assert len(manager.sends) == 1
+    assert manager.sends[0]["data"]["ability"] == "end_task"
+    assert manager.sends[0]["data"]["message"] == "全部完成"
+
+
 async def test_no_room_context_not_appended() -> None:
     """无 room 上下文（metadata.room_id 缺失）→ 不落。"""
     unit, manager = await _unit()

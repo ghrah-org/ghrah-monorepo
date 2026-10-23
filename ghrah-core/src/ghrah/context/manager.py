@@ -43,6 +43,7 @@ from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
 from ghrah.context.window import WindowManager
 from ghrah.core.window_protocol import MessageFactory
+from ghrah.skills.catalog import digest_catalog, render_catalog_message
 
 if TYPE_CHECKING:
     from ghrah.abilities.context import AbilityExecutionContext
@@ -92,6 +93,8 @@ class ContextManager:
         compact_method: compact 综合方法名（当前唯一合法值 "ghrah.builtin"）
         estimator: token 估算器（WindowManager 侧无实例时的 CM 级口径）；
             None 时用模块级默认实例 DEFAULT_TOKEN_ESTIMATOR
+        skill_provider: SkillAbilityProvider（duck-typed，装配期显式注入）；
+            None = 不接线——不向上下文注入技能目录摘要（零隐式）
     """
 
     def __init__(
@@ -114,6 +117,7 @@ class ContextManager:
         compact_keep_recent: int = 2,
         compact_method: str = "ghrah.builtin",
         estimator: TokenEstimator | None = None,
+        skill_provider: Any | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._state_manager = StateManager(initial_state)
@@ -124,6 +128,9 @@ class ContextManager:
         self._auto_persist = auto_persist
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
+        # 技能目录摘要：provider 装配期显式注入；digest 仅用于文案口径与变化日志
+        self._skill_provider = skill_provider
+        self._skill_catalog_digest: str | None = None
         self._pending_messages: list[Any] = []
         self._in_iteration: bool = False
         self._pending_compaction: list[dict[str, Any]] = []
@@ -717,6 +724,8 @@ class ContextManager:
         self._system_prompt = runtime.session.system_prompt
         self._pending_messages = []
         self._window_occupied = None
+        # Head 变更后历史视图已重建：目录摘要按"首次"文案重新注入
+        self._skill_catalog_digest = None
 
     # ----------------------------------------------------------------
     # 迭代生命周期
@@ -1102,7 +1111,59 @@ class ContextManager:
             if records:
                 self._pending_compaction.extend(records)
 
+        # 技能目录摘要：窗口管理之后追加——不被压缩裁掉，且始终位于队列末尾
+        catalog = self._skill_catalog_message()
+        if catalog is not None:
+            messages = [*messages, catalog]
+
         return messages
+
+    def _skill_catalog_message(self) -> Any | None:
+        """构造技能目录摘要消息；未接线或构造失败 → None（不阻断本轮问答）。
+
+        注入物**不写入消息链**（读侧派生），所以不能像 DSH 那样"注入过就跳过"
+        ——每轮都拼在队列末尾；``digest`` 只决定文案口径（首次 / 已变化）与
+        变化日志。
+        """
+        provider = self._skill_provider
+        if provider is None:
+            return None
+        if self._message_factory is None:
+            logger.warning(
+                "skill_provider is wired but message_factory is missing "
+                "— skill catalog injection skipped"
+            )
+            return None
+        try:
+            scan = provider.scan()
+        except Exception:
+            logger.warning("skill catalog scan failed — injection skipped", exc_info=True)
+            return None
+        if not scan.skills and self._skill_catalog_digest is None:
+            # 从未发布过且清单为空：无事可报（对齐 DSH），也不占位
+            return None
+
+        digest = digest_catalog(scan.skills)
+        first = self._skill_catalog_digest is None
+        changed = not first and digest != self._skill_catalog_digest
+        if scan.issues and (first or changed):
+            logger.warning(
+                "skill catalog: %d skill(s) failed to scan and are omitted",
+                len(scan.issues),
+            )
+        if changed:
+            logger.info("skill catalog changed — injecting the replacement catalog")
+        self._skill_catalog_digest = digest
+        return self._message_factory.create_message(
+            role="user",
+            text=render_catalog_message(scan.skills, changed=changed),
+            source="skill:catalog",
+        )
+
+    @property
+    def skill_provider(self) -> Any | None:
+        """SkillAbilityProvider（装配期显式接线；None = 未接线）。"""
+        return self._skill_provider
 
     def get_cumulative_token_usage(self) -> dict[str, int]:
         """从链历史中累计计算总 token 用量。

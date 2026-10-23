@@ -1327,9 +1327,14 @@ class ActorAgent:
 
         results: list[dict] = []
 
+        # 本轮 LLM 可见文本 → accumulated_data["llm_response"]（含 tool_call 轮）。
+        # 语义恒为"当前迭代的正文"，供 conversation / end_task 这类回合收尾能力
+        # 取用：toolcall 模式下 end_task 必须拿到模型本轮写的终答，而不是上一个
+        # 工具结果（查询类能力的结果带 content/response，会被误当最终输出）。
+        accumulated_data["llm_response"] = response_content
+
         if not tool_calls:
             # 纯文本响应 → conversation ability
-            accumulated_data["llm_response"] = response_content
             conversation_ability = self._abilities.get("conversation")
             if conversation_ability:
                 ability_ctx = self._build_ability_context("conversation", {}, accumulated_data)
@@ -1338,8 +1343,23 @@ class ActorAgent:
                     conversation_ability, ability_ctx
                 )
                 results.append({"ability_name": "conversation", "action_result": action_result})
+            else:
+                # 缺 conversation 时纯文本轮不产生任何 action 结果：节点记 no_action，
+                # 且 ConversationDoneHook 不存在 → 驱动循环不会因纯文本而收尾。
+                logger.debug(
+                    "ActorAgent[%s] text-only response (%d chars) but no 'conversation' ability "
+                    "registered: this iteration records no_action and the loop keeps going",
+                    self.config.name,
+                    len(response_content),
+                )
         else:
             # 有 tool_calls → 委托给 AbilityExecutor 执行
+            logger.debug(
+                "ActorAgent[%s] %d tool_call(s): %s",
+                self.config.name,
+                len(tool_calls),
+                ", ".join(getattr(tc, "name", "?") for tc in tool_calls),
+            )
             results = await self._ability_executor.execute_tool_calls(
                 tool_calls=tool_calls,
                 abilities=self._abilities,
@@ -1390,6 +1410,16 @@ class ActorAgent:
                 await self._await_tool_results(results)
             self._add_tool_results(results)
 
+        outcomes: list[str] = []
+        for entry in results:
+            outcome = getattr(entry.get("action_result"), "outcome", None)
+            outcomes.append(f"{entry.get('ability_name', '?')}={getattr(outcome, 'value', '?')}")
+        logger.debug(
+            "ActorAgent[%s] action produced %d result(s): %s",
+            self.config.name,
+            len(results),
+            ", ".join(outcomes) or "none",
+        )
         return {"results": results, "llm_metadata": llm_meta}
 
     async def _await_tool_results(self, results: list[dict[str, Any]]) -> None:
@@ -1516,8 +1546,19 @@ class ActorAgent:
 
         cm.begin_iteration()
         try:
+            logger.debug(
+                "ActorAgent[%s] executing routed ability '%s'",
+                self.config.name,
+                ability_name,
+            )
             ctx = self._build_ability_context(ability_name, {}, accumulated_data)
             action_result = await ability.execute(ctx)
+            logger.debug(
+                "ActorAgent[%s] routed ability '%s' finished with %s",
+                self.config.name,
+                ability_name,
+                getattr(action_result.outcome, "value", action_result.outcome),
+            )
             self._iteration_state.last_action_result = action_result
             await cm.commit_iteration_async(
                 ability_names=[ability_name],
@@ -1588,6 +1629,7 @@ class ActorAgent:
             supervisor=self._supervisor,
             agent_name=self.config.name,
             manifest_store=getattr(self._supervisor, "manifest_store", None),
+            skill_provider=getattr(self._supervisor, "skill_provider", None),
         )
 
     def _build_ability_context(
@@ -1620,6 +1662,7 @@ class ActorAgent:
             supervisor=self._supervisor,
             agent_name=self.config.name,
             manifest_store=getattr(self._supervisor, "manifest_store", None),
+            skill_provider=getattr(self._supervisor, "skill_provider", None),
         )
 
     def _build_response(self, original: AgentMessage) -> AgentMessage:

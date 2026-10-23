@@ -242,6 +242,42 @@ describe("roomLogToChatEntries", () => {
     expect(e.timestamp).toBe(new Date(1750000000 * 1000).toISOString());
   });
 
+  it("data.ability=end_task → end_task 条目（不再并入 conversation）", () => {
+    const e = roomLogToChatEntries(
+      makeRoomEntry({
+        data: { message: "全部完成", via: "message_manager", ability: "end_task" },
+      }),
+      { projectId: "p1", agentId: "a1" },
+    );
+    expect(e).toMatchObject({
+      kind: "end_task",
+      content: "全部完成",
+      from: "agent-1",
+      agentId: "a1",
+    });
+  });
+
+  it("data.ability 缺省或其他能力 → conversation", () => {
+    expect(roomLogToChatEntries(makeRoomEntry()).kind).toBe("conversation");
+    expect(
+      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", ability: "conversation" } })).kind,
+    ).toBe("conversation");
+    expect(
+      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", ability: "send" } })).kind,
+    ).toBe("conversation");
+  });
+
+  it("human entry 即使带 ability 也仍是 human_input", () => {
+    const e = roomLogToChatEntries(
+      makeRoomEntry({
+        author: "user",
+        author_type: "human",
+        data: { message: "m", ability: "end_task" },
+      }),
+    );
+    expect(e.kind).toBe("human_input");
+  });
+
   it("human entry → human_input", () => {
     const e = roomLogToChatEntries(
       makeRoomEntry({ author: "user", author_type: "human", data: { message: "hello" } }),
