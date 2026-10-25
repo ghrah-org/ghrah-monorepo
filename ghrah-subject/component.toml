@@ -1,0 +1,17 @@
+# 组件静态交付描述；依赖版本继续由原生包清单与锁管理。
+schema = 1
+id = "ghrah-subject"
+version = "0.2.0a0"
+
+[build]
+backend = "uv"
+member = "ghrah-subject"
+depends_on = ["ghrah-core", "ghrah-protocol", "ghrah-plugin", "ghrah-taskstore"]
+outputs = ["dist/*.whl"]
+
+[entries.server]
+kind = "process"
+argv = ["ghrah-subject-server"]
+transport = "http"
+ready = { type = "http", path = "/health" }
+health = { type = "http", path = "/health" }

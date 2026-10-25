@@ -1,0 +1,65 @@
+# 这是一份验证性质的草案，用于九夏/ghrah 本身的源码组合
+# 现阶段为静态校验，未囊括 Agent 部分
+
+schema = 1
+
+[workspace]
+name = "ghrah"
+version = "0.2.0"
+default_distro = "generic"
+native_locks = ["uv.lock", "pnpm-lock.yaml"]
+
+[components.ghrah-plugin]
+path = "ghrah-plugin"
+
+[components.ghrah-protocol]
+path = "ghrah-protocol"
+
+[components.ghrah-core]
+path = "ghrah-core"
+
+[components.ghrah-taskstore]
+path = "ghrah-taskstore"
+
+[components.ghrah-subject]
+path = "ghrah-subject"
+
+[components.web-protocol]
+path = "ghrah-observer-webui/packages/protocol"
+
+[components.web-plugin-registry]
+path = "ghrah-observer-webui/packages/plugin-registry"
+
+[components.web-observer-core]
+path = "ghrah-observer-webui/packages/observer-core"
+
+[components.web-observer-web]
+path = "ghrah-observer-webui/packages/observer-web"
+
+[distro.generic]
+components = ["ghrah-plugin", "ghrah-protocol", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
+roots = ["subject/server"]
+gate = "basic"
+
+[distro.generic.runtime]
+python = ">=3.11"
+node = ">=22.12"
+
+[distro.generic.instances.subject]
+component = "ghrah-subject"
+host = "process"
+
+# 当前没有声明已落地的 Ability scheme 服务，避免虚构运行时契约。
+[distro.generic.services]
+
+[distro.generic.namespaces]
+
+[profile.dev]
+mode = "dev"
+
+[profile.test]
+mode = "test"
+
+[profile.release]
+mode = "release"
+locked = true

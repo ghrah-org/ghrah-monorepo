@@ -1,0 +1,10 @@
+# 组件静态交付描述；依赖版本继续由原生包清单与锁管理。
+schema = 1
+id = "ghrah-plugin"
+version = "0.1.0a0"
+
+[build]
+backend = "uv"
+member = "ghrah-plugin"
+depends_on = []
+outputs = ["dist/*.whl"]

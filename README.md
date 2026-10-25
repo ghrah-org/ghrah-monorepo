@@ -47,6 +47,10 @@ cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo
 
 ## 仓库结构
 
+源码组合的草案入口为根目录 `ghrah.toml`，各包的 `component.toml` 描述交付身份与入口。
+安装独立工具链后，可在本仓执行 `ghrah check` 或 `ghrah metadata --json` 做离线校验。
+当前仅校验静态组合；不会启动组件或授予 Agent 权限，现有开发启动方式仍按上文执行。
+
 | 目录 | 语言 | 说明 | 发布 |
 | --- | --- | --- | --- |
 | `ghrah-core/` | Python | agent 认知核心（loop/上下文/能力/装配） | PyPI `ghrah-core` |

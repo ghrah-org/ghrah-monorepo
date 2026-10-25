@@ -1,0 +1,10 @@
+# 组件静态交付描述；依赖版本继续由原生包清单与锁管理。
+schema = 1
+id = "web-observer-core"
+version = "0.2.0-alpha.0"
+
+[build]
+backend = "pnpm"
+member = "@ghrah/observer-core"
+depends_on = ["web-protocol", "web-plugin-registry"]
+outputs = ["dist/**"]
