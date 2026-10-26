@@ -13,7 +13,7 @@ from ghrah.abilities.executor import LocalAbilityExecutor
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.types.results import ActionResult
-from ghrah_scheme_support import Policy
+from ghrah_scheme_support import ALICE, BOB, Policy
 from pydantic import Field
 
 from ghrah.scheme import (
@@ -21,7 +21,6 @@ from ghrah.scheme import (
     CancellationState,
     EffectState,
     InvocationState,
-    Principal,
     ProviderCall,
     SchemeModel,
     SchemeRuntime,
@@ -43,9 +42,10 @@ class AbilityOutput(SchemeModel):
 
 
 NOTES = SchemeSpec(
-    "ability",
-    "1",
-    (
+    kind="ability",
+    contract="ghrah.file-notes",
+    version="1",
+    actions=(
         ActionSpec("read", ReadInput, AbilityOutput),
         ActionSpec("write", WriteInput, AbilityOutput, mutating=True),
     ),
@@ -97,9 +97,9 @@ class Notes:
             invocation=AbilityInvocation(
                 ability_name=ability.name, tool_args=arguments, tool_call_id=call.invocation_id
             ),
-            agent_name=call.principal.name,
+            agent_name=call.principal.agent_id,
         )
-        executor = LocalAbilityExecutor(agent_name=call.principal.name, hooks=self.hooks)
+        executor = LocalAbilityExecutor(agent_name=call.principal.agent_id, hooks=self.hooks)
         result = await executor.execute_ability(ability, context)
         return AbilityOutput(outcome=result.outcome.value, data=result.data)
 
@@ -107,11 +107,19 @@ class Notes:
 async def test_real_abilities_local_bindings_and_dedup(tmp_path: Path) -> None:
     runtime = SchemeRuntime(Policy())
     try:
-        for name, namespace, provider in [("Alice", "a", "alice"), ("Bob", "b", "bob")]:
+        for principal, provider in [(ALICE, "alice"), (BOB, "bob")]:
+            name = principal.display_name
             root = tmp_path / provider
             runtime.manager.publish(provider, NOTES, Notes(root))
-            runtime.manager.bind(namespace, "notes", provider, contract_version="1")
-            session = runtime.manager.create_session(Principal(name, namespace))
+            runtime.manager.bind(
+                principal.scope,
+                "ability",
+                "notes",
+                provider,
+                contract="ghrah.file-notes",
+                contract_version="1",
+            )
+            session = runtime.manager.create_session(principal)
             ref = await session.acquire(
                 "/scheme/ability/notes", actions=frozenset({"read", "write"})
             )
@@ -149,8 +157,15 @@ async def test_real_checker_rejects_symlink_escape(tmp_path: Path) -> None:
         outside.write_text("untouched")
         (notes.root / "link.txt").symlink_to(outside)
         runtime.manager.publish("alice", NOTES, notes)
-        runtime.manager.bind("a", "notes", "alice", contract_version="1")
-        session = runtime.manager.create_session(Principal("Alice", "a"))
+        runtime.manager.bind(
+            ALICE.scope,
+            "ability",
+            "notes",
+            "alice",
+            contract="ghrah.file-notes",
+            contract_version="1",
+        )
+        session = runtime.manager.create_session(ALICE)
         ref = await session.acquire("/scheme/ability/notes", actions=frozenset({"write"}))
         call = await session.submit(
             ref,
@@ -172,8 +187,15 @@ async def test_cancel_after_real_write_preserves_effect_and_identity(tmp_path: P
     try:
         notes = Notes(tmp_path / "alice", gate)
         runtime.manager.publish("alice", NOTES, notes)
-        runtime.manager.bind("a", "notes", "alice", contract_version="1")
-        session = runtime.manager.create_session(Principal("Alice", "a"))
+        runtime.manager.bind(
+            ALICE.scope,
+            "ability",
+            "notes",
+            "alice",
+            contract="ghrah.file-notes",
+            contract_version="1",
+        )
+        session = runtime.manager.create_session(ALICE)
         ref = await session.acquire("/scheme/ability/notes", actions=frozenset({"write"}))
         call = await session.submit(
             ref,
@@ -187,7 +209,7 @@ async def test_cancel_after_real_write_preserves_effect_and_identity(tmp_path: P
         result = await session.observe(call, wait=1)
         assert result.cancellation is CancellationState.CONFIRMED
         assert result.effect is EffectState.UNKNOWN
-        assert gate.identities == [("Alice", result.invocation_id)]
+        assert gate.identities == [("agent-alice", result.invocation_id)]
         assert (notes.root / "memo.txt").read_text() == "committed"
     finally:
         gate.release.set()

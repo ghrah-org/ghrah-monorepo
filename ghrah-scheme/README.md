@@ -12,7 +12,7 @@ ghrah 的进程内 Scheme 模型与控制平面原型，导入名为 `ghrah.sche
 
 ## 提供什么
 
-- `SchemeSpec`／`ActionSpec` 声明域、版本和严格的输入／输出模型。
+- `SchemeSpec`／`ActionSpec` 分别声明资源 kind、契约身份／版本及严格的动作输入／输出模型；同 kind 可以有不同契约。
 - 受信 `RuntimeManager` 发布、撤回、绑定、取消绑定并建立访问会话。
 - 消费者 `Session` 提供 acquire、submit、observe、cancel、release 与自身关闭。
 - 引用固定 boot、持有者、绑定与提供者代次，排队、接纳、派发、结果与取消分别记录。
@@ -38,11 +38,61 @@ uv build --package ghrah-scheme
 
 装配者保留 `runtime.manager`，调用 publish／bind／create_session；向普通消费者只注入 Session。管理端口接收的是宿主已经核定的 `Principal`，不是认证服务；进程内私有属性和不透明 token 都不能抵御任意恶意 Python 代码。
 
+`Principal` 必须显式提供 `project_id`、稳定 `agent_id` 和本次 `run_id`，其 `scope` 为对应的 `AgentScope`。`display_name` 和组织／定义归属 `namespace` 只作元数据，不用于查绑定、授权主体键或去重。共享项目、namespace 或显示名的两个 Agent 仍拥有各自的局部名字表。Agent 的新 run 需要重新安装绑定，不自动继承旧 run；是否停止旧 run，由生命周期 owner 关闭其会话或撤去其绑定，不由创建新会话暗中决定。
+
+受信装配者可以按以下方式安装一个内部契约；示例假设宿主已提供 `authority` 与符合该动作契约的 `provider`：
+
+```python
+from ghrah.scheme import ActionSpec, Principal, SchemeModel, SchemeRuntime, SchemeSpec
+
+
+class WriteInput(SchemeModel):
+    value: str
+
+
+class WriteOutput(SchemeModel):
+    value: str
+
+
+spec = SchemeSpec(
+    kind="ability",
+    contract="acme.notes",
+    version="1",
+    actions=(ActionSpec("write", WriteInput, WriteOutput, mutating=True),),
+)
+principal = Principal(
+    project_id="project-1",
+    agent_id="agent-uuid",
+    run_id="run-uuid",
+    display_name="Alice",
+    namespace="acme",
+)
+runtime = SchemeRuntime(authority)
+runtime.manager.publish("notes-1", spec, provider)
+runtime.manager.bind(
+    principal.scope,
+    "ability",
+    "notes",
+    "notes-1",
+    contract=spec.contract,
+    contract_version=spec.version,
+    contract_digest=spec.digest,
+)
+session = runtime.manager.create_session(principal)
+```
+
+契约按 `(contract, version)` 登记，同一版本不能改写，也不能改挂到不同 kind。`spec.digest` 从本地模型生成的内容计算：包括 kind、契约身份／版本、动作名、输入／输出 schema、mutating、cancellable 和 description；动作按名称排序、JSON 对象键排序并使用紧凑 UTF-8 编码，再加 `sha256:` 前缀。schema 内数组保持原序。它是当前进程内原型的精确内容指纹，不承诺跨 Pydantic 版本的摘要稳定性或任意 schema 的语义兼容，也不替代未来由 ghrah-protocol 维护的公共描述符规范。
+
+绑定与解析后的 `Target` 固定契约身份、版本和摘要。bind 会核对期望 kind／contract／version，摘要可额外校验；提供者以相同 ID 重启为不同契约时，旧绑定不能自动改指，必须明确重新接线。
+
 消费者可以按下列方式调用已经装配好的会话；动作、输入与目标取决于宿主契约：
 
 ```python
 resource = await session.acquire(
-    "/scheme/ability/notes", actions=frozenset({"write"}), contract_version="1"
+    "/scheme/ability/notes",
+    actions=frozenset({"write"}),
+    contract="acme.notes",
+    contract_version="1",
 )
 try:
     invocation = await session.submit(
@@ -69,7 +119,7 @@ cancel 是协作式请求。确认取消表示执行协程响应了取消，不�
 
 `cancellation` 和 `cancel_reason` 保留停止意图；`error` 记录执行终态错误。提供者在请求取消后仍返回有效结果时，状态可为 `COMPLETED`、取消仍为 `REQUESTED`，不能由取消意图覆盖实际结果。父调用取消会传递给已登记子调用，取消后不能继续发起嵌套工作。
 
-去重只限当前 boot：同主体、namespace、run 和 request_key 的重复调用关联同一目标与输入；内容或绑定变化拒绝。完成记录有保留上限，去重键保留为有界索引，记录过期返回 `REQUEST_EXPIRED`，不静默重做；索引满时拒绝新增键。跨 boot 的持久去重和业务对账归领域 owner。变更动作要求显式 request_key。
+去重只限当前 boot：同 project_id、agent_id、run_id 和 request_key 的重复调用关联同一目标与输入；显示名或归属 namespace 变化不改变该范围，内容或绑定变化拒绝。完成记录有保留上限，去重键保留为有界索引，记录过期返回 `REQUEST_EXPIRED`，不静默重做；索引满时拒绝新增键。跨 boot 的持久去重和业务对账归领域 owner。变更动作要求显式 request_key。
 
 同提供者重入明确拒绝；跨提供者嵌套只在目标没有排队风险的容量内允许，繁忙时返回 `NESTED_BUSY`，不形成互相等待的执行槽环。没有公平排队或硬实时保证；阻塞同步代码仍可阻塞 asyncio loop。
 

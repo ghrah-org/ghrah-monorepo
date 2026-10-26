@@ -25,7 +25,9 @@ from ghrah.scheme.models import (
 @dataclass(frozen=True)
 class Binding:
     provider_id: str
+    contract: str
     version: str
+    digest: str
     revision: int
 
 

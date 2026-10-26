@@ -30,10 +30,14 @@ class Output(SchemeModel):
     principal: str
 
 
+ALICE = Principal("project", "agent-alice", "run-alice", display_name="Alice", namespace="shared")
+BOB = Principal("project", "agent-bob", "run-bob", display_name="Bob", namespace="shared")
+
 SPEC = SchemeSpec(
-    "ability",
-    "1",
-    (
+    kind="ability",
+    contract="ghrah.notes",
+    version="1",
+    actions=(
         ActionSpec("read", Arguments, Output),
         ActionSpec("write", Arguments, Output, mutating=True),
     ),
@@ -44,7 +48,7 @@ class Policy:
     """实验许可表只留在测试，实际产品通过领域 Authority 接入。"""
 
     def __init__(self) -> None:
-        self.grants = {("Alice", "alice"), ("Bob", "bob")}
+        self.grants = {("project", "agent-alice", "alice"), ("project", "agent-bob", "bob")}
         self.revision = 1
         self.allow_results = True
         self.admissions: list[AccessRequest] = []
@@ -57,7 +61,7 @@ class Policy:
         self.cancel_seen = asyncio.Event()
 
     def revoke(self, principal: str, provider: str) -> None:
-        self.grants.discard((principal, provider))
+        self.grants.discard(("project", principal, provider))
         self.revision += 1
 
     async def authorize(self, request: AccessRequest) -> Authorization:
@@ -71,7 +75,11 @@ class Policy:
                 if not self.stubborn:
                     raise
                 await self.authorize_gate.wait()
-        allowed = (request.principal.name, request.target.provider_id) in self.grants
+        allowed = (
+            request.principal.project_id,
+            request.principal.agent_id,
+            request.target.provider_id,
+        ) in self.grants
         if request.stage is AccessStage.RESULT:
             allowed = allowed and self.allow_results
         return Authorization(allowed, f"revision:{self.revision}" if allowed else "")
@@ -81,7 +89,11 @@ class Policy:
         self.admit_entered.set()
         if self.admit_gate is not None:
             await self.admit_gate.wait()
-        allowed = (request.principal.name, request.target.provider_id) in self.grants
+        allowed = (
+            request.principal.project_id,
+            request.principal.agent_id,
+            request.target.provider_id,
+        ) in self.grants
         return Admission(
             allowed,
             f"revision:{self.revision}" if allowed else "",
@@ -119,7 +131,7 @@ class MemoryProvider:
                 if not self.stubborn:
                     raise
                 await self.after.wait()
-        return Output(value=call.arguments.value, principal=call.principal.name)
+        return Output(value=call.arguments.value, principal=call.principal.agent_id)
 
 
 @dataclass
@@ -139,13 +151,17 @@ def make_harness(runtime: SchemeRuntime | None = None, policy: Policy | None = N
     a, b = MemoryProvider(), MemoryProvider()
     runtime.manager.publish("alice", SPEC, a)
     runtime.manager.publish("bob", SPEC, b)
-    runtime.manager.bind("a", "notes", "alice", contract_version="1")
-    runtime.manager.bind("b", "notes", "bob", contract_version="1")
+    runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+    )
+    runtime.manager.bind(
+        BOB.scope, "ability", "notes", "bob", contract="ghrah.notes", contract_version="1"
+    )
     return Harness(
         runtime,
         policy,
-        runtime.manager.create_session(Principal("Alice", "a")),
-        runtime.manager.create_session(Principal("Bob", "b")),
+        runtime.manager.create_session(ALICE),
+        runtime.manager.create_session(BOB),
         a,
         b,
     )

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TypeAlias
 
@@ -16,28 +16,53 @@ JsonObject: TypeAlias = dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
-class Principal:
-    """装配者核定的主体与命名空间；不从业务载荷自动建立。"""
+class AgentScope:
+    """一个项目内 Agent 的确定运行作用域，由受信装配者核定。"""
 
-    name: str
-    namespace: str
-    run_id: str = ""
+    project_id: str
+    agent_id: str
+    run_id: str
 
     def __post_init__(self) -> None:
-        if not self.name.strip() or not self.namespace.strip():
-            raise ValueError("主体和命名空间不能为空")
+        for value in (self.project_id, self.agent_id, self.run_id):
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                raise ValueError("项目、Agent 与运行 ID 必须为非空且无首尾空白的字符串")
+
+
+@dataclass(frozen=True)
+class Principal:
+    """稳定身份与运行身份参与核定；显示名和归属 namespace 仅作元数据。"""
+
+    project_id: str
+    agent_id: str
+    run_id: str
+    display_name: str = field(default="", compare=False)
+    namespace: str = field(default="", compare=False)
+
+    def __post_init__(self) -> None:
+        AgentScope(self.project_id, self.agent_id, self.run_id)
+        if not isinstance(self.display_name, str) or not isinstance(self.namespace, str):
+            raise ValueError("显示名和归属 namespace 必须为字符串")
+
+    @property
+    def scope(self) -> AgentScope:
+        """供局部绑定及本 boot 去重使用的稳定运行作用域。"""
+        return AgentScope(self.project_id, self.agent_id, self.run_id)
 
 
 @dataclass(frozen=True)
 class Target:
-    """解析后固定的资源、绑定和提供者实例。"""
+    """固定 Agent 运行作用域、契约、绑定和提供者实例的解析结果。"""
 
-    scheme: str
+    scope: AgentScope
+    kind: str
     alias: str
     resource: tuple[str, ...]
     provider_id: str
     incarnation: str
+    contract: str
     contract_version: str
+    contract_digest: str
     binding_revision: int
 
 

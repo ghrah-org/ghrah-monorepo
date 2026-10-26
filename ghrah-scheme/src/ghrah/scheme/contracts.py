@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
@@ -41,21 +43,49 @@ class ActionSpec:
                 raise ValueError("动作模型不得放松严格输入约束")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class SchemeSpec:
-    """一种服务资源域及其动作；不要求独立包或独立进程。"""
+    """一种资源种类下的确定契约；本地模型是动作 schema 的唯一来源。"""
 
-    name: str
+    kind: str
+    contract: str
     version: str
     actions: tuple[ActionSpec, ...]
+    digest: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"[a-z][a-z0-9_-]*", self.name) or not self.version.strip():
-            raise ValueError("Scheme 名称或版本错误")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", self.kind):
+            raise ValueError("资源种类格式错误")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*", self.contract):
+            raise ValueError("契约身份必须为规范的小写点分名称")
+        if not self.version.strip() or self.version != self.version.strip():
+            raise ValueError("契约版本不能为空或包含首尾空白")
         if not isinstance(self.actions, tuple) or not self.actions:
             raise ValueError("必须显式声明非空动作元组")
         if len({action.name for action in self.actions}) != len(self.actions):
             raise ValueError("动作名不能重复")
+        # 只定义本地精确内容指纹；动作顺序不改变契约，schema 数组仍保留原序。
+        content = {
+            "format": "ghrah.scheme.local-contract.v1",
+            "kind": self.kind,
+            "contract": self.contract,
+            "version": self.version,
+            "actions": [
+                {
+                    "name": action.name,
+                    "input": action.input_model.model_json_schema(),
+                    "output": action.output_model.model_json_schema(),
+                    "mutating": action.mutating,
+                    "cancellable": action.cancellable,
+                    "description": action.description,
+                }
+                for action in sorted(self.actions, key=lambda item: item.name)
+            ],
+        }
+        encoded = json.dumps(
+            content, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        object.__setattr__(self, "digest", "sha256:" + hashlib.sha256(encoded).hexdigest())
 
     def action(self, name: str) -> ActionSpec:
         """只解析已登记动作，不进行任意属性查找。"""

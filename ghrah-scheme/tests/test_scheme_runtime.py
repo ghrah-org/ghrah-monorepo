@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from ghrah_scheme_support import SPEC, Harness, MemoryProvider, Policy
+from ghrah_scheme_support import ALICE, BOB, SPEC, Harness, MemoryProvider, Policy
 
 from ghrah.scheme import (
     AdmissionState,
@@ -26,7 +26,7 @@ PATH = "/scheme/ability/notes"
 
 async def test_local_bindings_and_typed_input(scheme_harness: Harness) -> None:
     h = scheme_harness
-    for session, name, provider in [(h.alice, "Alice", h.a), (h.bob, "Bob", h.b)]:
+    for session, name, provider in [(h.alice, "agent-alice", h.a), (h.bob, "agent-bob", h.b)]:
         ref = await session.acquire(PATH, actions=frozenset({"write"}))
         call = await session.submit(
             ref, action="write", arguments={"value": name}, request_key="one"
@@ -37,18 +37,27 @@ async def test_local_bindings_and_typed_input(scheme_harness: Harness) -> None:
         assert result.effect is EffectState.REPORTED
         assert result.result == {"value": name, "principal": name}
         assert provider.effects == [name]
-        assert provider.calls[0].principal.name == name
+        assert provider.calls[0].principal.agent_id == name
 
 
 async def test_bind_does_not_authorize_and_default_is_deny(scheme_harness: Harness) -> None:
     h = scheme_harness
-    h.runtime.manager.bind("b", "notes", "alice", contract_version="1")
+    h.runtime.manager.bind(
+        BOB.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+    )
     with pytest.raises(SchemeError, match=ErrorCode.ACCESS_DENIED):
         await h.bob.acquire(PATH, actions=frozenset({"read"}))
     runtime = SchemeRuntime()
     runtime.manager.publish("p", SPEC, MemoryProvider())
-    runtime.manager.bind("n", "notes", "p", contract_version="1")
-    session = runtime.manager.create_session(Principal("a", "n"))
+    runtime.manager.bind(
+        Principal("project", "denied", "run").scope,
+        "ability",
+        "notes",
+        "p",
+        contract="ghrah.notes",
+        contract_version="1",
+    )
+    session = runtime.manager.create_session(Principal("project", "denied", "run"))
     with pytest.raises(SchemeError, match=ErrorCode.ACCESS_DENIED):
         await session.acquire(PATH, actions=frozenset({"read"}))
     assert (await runtime.manager.close()).complete
@@ -101,7 +110,7 @@ async def test_slot_reuse_and_late_release_cannot_release_new_ref(scheme_harness
 async def test_revoke_after_acquire_blocks_admission(scheme_harness: Harness) -> None:
     h = scheme_harness
     ref = await h.alice.acquire(PATH, actions=frozenset({"write"}))
-    h.policy.revoke("Alice", "alice")
+    h.policy.revoke("agent-alice", "alice")
     call = await h.alice.submit(ref, action="write", arguments={"value": "no"}, request_key="r")
     state = await h.alice.observe(call, wait=1)
     assert state.state is InvocationState.REJECTED
@@ -120,7 +129,7 @@ async def test_queued_revoke_preserves_already_admitted_call(scheme_harness: Har
     second = await h.alice.submit(
         ref, action="write", arguments={"value": "second"}, request_key="2"
     )
-    h.policy.revoke("Alice", "alice")
+    h.policy.revoke("agent-alice", "alice")
     h.a.before.set()
     first_state = await h.alice.observe(first, wait=1)
     second_state = await h.alice.observe(second, wait=1)
@@ -134,11 +143,13 @@ async def test_queued_revoke_preserves_already_admitted_call(scheme_harness: Har
 async def test_rebind_and_unbind_invalidate_old_reference(scheme_harness: Harness) -> None:
     h = scheme_harness
     ref = await h.alice.acquire(PATH, actions=frozenset({"read"}))
-    h.runtime.manager.bind("a", "notes", "bob", contract_version="1")
+    h.runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "bob", contract="ghrah.notes", contract_version="1"
+    )
     with pytest.raises(SchemeError, match=ErrorCode.STALE_BINDING):
         await h.alice.submit(ref, action="read", arguments={"value": "x"})
     await h.alice.release(ref)
-    h.runtime.manager.unbind("a", "ability", "notes")
+    h.runtime.manager.unbind(ALICE.scope, "ability", "notes")
     with pytest.raises(SchemeError, match=ErrorCode.NOT_FOUND):
         await h.alice.acquire(PATH, actions=frozenset({"read"}))
 
@@ -276,8 +287,10 @@ async def test_noncooperative_task_retains_owner_and_blocks_replacement(
 
 async def test_shared_provider_survives_one_session_close(scheme_harness: Harness) -> None:
     h = scheme_harness
-    h.policy.grants.add(("Bob", "alice"))
-    h.runtime.manager.bind("b", "notes", "alice", contract_version="1")
+    h.policy.grants.add(("project", "agent-bob", "alice"))
+    h.runtime.manager.bind(
+        BOB.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+    )
     ref = await h.bob.acquire(PATH, actions=frozenset({"read"}))
     assert (await h.alice.close()).complete
     call = await h.bob.submit(ref, action="read", arguments={"value": "Bob"})
@@ -290,7 +303,7 @@ async def test_completed_results_require_current_permission(scheme_harness: Harn
     ref = await h.alice.acquire(PATH, actions=frozenset({"read"}))
     call = await h.alice.submit(ref, action="read", arguments={"value": "secret"})
     assert (await h.alice.observe(call, wait=1)).result is not None
-    h.policy.revoke("Alice", "alice")
+    h.policy.revoke("agent-alice", "alice")
     state = await h.alice.observe(call)
     assert state.result is None and state.result_redacted and not state.pending
     assert await h.alice.cancel(call) is CancelDisposition.ALREADY_FINISHED
@@ -323,8 +336,10 @@ async def test_dedup_does_not_retarget_after_rebind(scheme_harness: Harness) -> 
         ref, action="write", arguments={"value": "once"}, request_key="same"
     )
     await h.alice.observe(call, wait=1)
-    h.runtime.manager.bind("a", "notes", "bob", contract_version="1")
-    h.policy.grants.add(("Alice", "bob"))
+    h.runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "bob", contract="ghrah.notes", contract_version="1"
+    )
+    h.policy.grants.add(("project", "agent-alice", "bob"))
     new = await h.alice.acquire(PATH, actions=frozenset({"write"}))
     with pytest.raises(SchemeError, match=ErrorCode.REQUEST_CONFLICT):
         await h.alice.submit(new, action="write", arguments={"value": "once"}, request_key="same")
@@ -344,8 +359,10 @@ async def test_overload_and_deadline_keep_control_responsive() -> None:
     provider = MemoryProvider()
     provider.before = asyncio.Event()
     runtime.manager.publish("alice", SPEC, provider, pending_limit=1)
-    runtime.manager.bind("a", "notes", "alice", contract_version="1")
-    session = runtime.manager.create_session(Principal("Alice", "a"))
+    runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+    )
+    session = runtime.manager.create_session(ALICE)
     ref = await session.acquire(PATH, actions=frozenset({"read"}))
     try:
         first = await session.submit(ref, action="read", arguments={"value": "a"}, timeout=0.02)
@@ -366,7 +383,9 @@ async def test_async_authorization_rechecks_binding(scheme_harness: Harness) -> 
     h.policy.authorize_gate = asyncio.Event()
     pending = asyncio.create_task(h.alice.acquire(PATH, actions=frozenset({"read"})))
     await asyncio.wait_for(h.policy.authorize_entered.wait(), 1)
-    h.runtime.manager.bind("a", "notes", "bob", contract_version="1")
+    h.runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "bob", contract="ghrah.notes", contract_version="1"
+    )
     h.policy.authorize_gate.set()
     with pytest.raises(SchemeError, match=ErrorCode.STALE_BINDING):
         await pending
@@ -380,7 +399,9 @@ async def test_admission_is_distinct_from_dispatch(scheme_harness: Harness) -> N
     await asyncio.wait_for(h.policy.admit_entered.wait(), 1)
     state = await h.alice.observe(call)
     assert state.admission is AdmissionState.PENDING and state.effect is EffectState.NOT_DISPATCHED
-    h.runtime.manager.bind("a", "notes", "bob", contract_version="1")
+    h.runtime.manager.bind(
+        ALICE.scope, "ability", "notes", "bob", contract="ghrah.notes", contract_version="1"
+    )
     h.policy.admit_gate.set()
     state = await h.alice.observe(call, wait=1)
     assert state.admission is AdmissionState.ACCEPTED

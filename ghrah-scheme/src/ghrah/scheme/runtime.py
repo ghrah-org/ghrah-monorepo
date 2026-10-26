@@ -26,6 +26,7 @@ from ghrah.scheme.models import (
     AccessRequest,
     AccessStage,
     AdmissionState,
+    AgentScope,
     Authorization,
     CancelDisposition,
     CancellationState,
@@ -111,13 +112,13 @@ class SchemeRuntime:
         self._sessions: dict[str, SessionState] = {}
         self._providers: dict[str, Registration] = {}
         self._contracts: dict[tuple[str, str], str] = {}
-        self._bindings: dict[tuple[str, str, str], Binding] = {}
+        self._bindings: dict[tuple[AgentScope, str, str], Binding] = {}
         self._binding_sequence = 0
         self._resources: dict[tuple[str, int], ResourceEntry] = {}
         self._generations: dict[tuple[str, int], int] = {}
         self._invocations: OrderedDict[str, Invocation] = OrderedDict()
         self._call_refs: dict[str, tuple[str, str]] = {}
-        self._keys: dict[tuple[Principal, str], tuple[str, str]] = {}
+        self._keys: dict[tuple[AgentScope, str], tuple[str, str]] = {}
         self._controls: dict[str, asyncio.Task[Authorization]] = {}
         self._inflight = 0
         self._manager = RuntimeManager(self)
@@ -175,20 +176,23 @@ class SchemeRuntime:
     def _target(self, holder: str, path: str) -> Target:
         principal = self._session(holder).principal
         scheme, alias, resource = _path(path)
-        binding = self._bindings.get((principal.namespace, scheme, alias))
+        binding = self._bindings.get((principal.scope, scheme, alias))
         if binding is None:
             raise SchemeError(ErrorCode.NOT_FOUND)
         registration = self._providers[binding.provider_id]
         if registration.state is not ProviderState.READY:
             raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE)
         return Target(
-            scheme,
-            alias,
-            resource,
-            binding.provider_id,
-            registration.incarnation,
-            binding.version,
-            binding.revision,
+            scope=principal.scope,
+            kind=scheme,
+            alias=alias,
+            resource=resource,
+            provider_id=binding.provider_id,
+            incarnation=registration.incarnation,
+            contract=binding.contract,
+            contract_version=binding.version,
+            contract_digest=binding.digest,
+            binding_revision=binding.revision,
         )
 
     def _validate_target(self, holder: str, target: Target) -> Registration:
@@ -196,13 +200,20 @@ class SchemeRuntime:
         registration = self._providers.get(target.provider_id)
         if registration is None or registration.incarnation != target.incarnation:
             raise SchemeError(ErrorCode.STALE_PROVIDER)
-        key = session.principal.namespace, target.scheme, target.alias
+        key = session.principal.scope, target.kind, target.alias
         binding = self._bindings.get(key)
         if (
-            binding is None
+            target.scope != session.principal.scope
+            or binding is None
             or binding.revision != target.binding_revision
             or binding.provider_id != target.provider_id
             or binding.version != target.contract_version
+            or binding.contract != target.contract
+            or binding.digest != target.contract_digest
+            or registration.spec.kind != target.kind
+            or registration.spec.contract != target.contract
+            or registration.spec.version != target.contract_version
+            or registration.spec.digest != target.contract_digest
         ):
             raise SchemeError(ErrorCode.STALE_BINDING)
         if registration.state is not ProviderState.READY:
@@ -227,13 +238,23 @@ class SchemeRuntime:
         return entry
 
     async def _acquire(
-        self, holder: str, path: str, actions: frozenset[str], version: str | None
+        self,
+        holder: str,
+        path: str,
+        actions: frozenset[str],
+        contract: str | None,
+        version: str | None,
+        digest: str | None,
     ) -> ResourceRef:
         target = self._target(holder, path)
-        registration = self._providers[target.provider_id]
+        registration = self._validate_target(holder, target)
         if not isinstance(actions, frozenset) or not actions:
             raise SchemeError(ErrorCode.INVALID_ARGUMENT)
-        if version is not None and version != target.contract_version:
+        if (
+            (contract is not None and contract != target.contract)
+            or (version is not None and version != target.contract_version)
+            or (digest is not None and digest != target.contract_digest)
+        ):
             raise SchemeError(ErrorCode.CONTRACT_MISMATCH)
         for action in actions:
             registration.spec.action(action)
@@ -330,7 +351,7 @@ class SchemeRuntime:
                 allow_nan=False,
             ).encode()
         ).hexdigest()
-        key = (principal, request_key) if request_key is not None else None
+        key = (principal.scope, request_key) if request_key is not None else None
         lineage = tuple(item for item in _chain.get() if item[0] == self._boot)
         if any(
             (parent := self._invocations.get(item[2])) is None
@@ -638,10 +659,18 @@ class Session:
         self._holder = holder
 
     async def acquire(
-        self, target: str, *, actions: frozenset[str], contract_version: str | None = None
+        self,
+        target: str,
+        *,
+        actions: frozenset[str],
+        contract: str | None = None,
+        contract_version: str | None = None,
+        contract_digest: str | None = None,
     ) -> ResourceRef:
         """取得固定目标和动作上限的受限引用。"""
-        return await self._runtime._acquire(self._holder, target, actions, contract_version)
+        return await self._runtime._acquire(
+            self._holder, target, actions, contract, contract_version, contract_digest
+        )
 
     async def submit(
         self,
@@ -748,58 +777,65 @@ class RuntimeManager:
         previous = runtime._providers.get(provider_id)
         if previous is not None and previous.state is not ProviderState.WITHDRAWN:
             raise SchemeError(ErrorCode.PROVIDER_EXISTS)
-        signature = json.dumps(
-            [
-                {
-                    "name": action.name,
-                    "input": action.input_model.model_json_schema(),
-                    "output": action.output_model.model_json_schema(),
-                    "mutating": action.mutating,
-                    "cancellable": action.cancellable,
-                }
-                for action in spec.actions
-            ],
-            sort_keys=True,
-        )
-        contract_key = spec.name, spec.version
-        if contract_key in runtime._contracts and runtime._contracts[contract_key] != signature:
+        contract_key = spec.contract, spec.version
+        if contract_key in runtime._contracts and runtime._contracts[contract_key] != spec.digest:
             raise SchemeError(ErrorCode.CONTRACT_MISMATCH)
         if (previous is None and len(runtime._providers) >= runtime._limits.max_providers) or (
             contract_key not in runtime._contracts
             and len(runtime._contracts) >= runtime._limits.max_contracts
         ):
             raise SchemeError(ErrorCode.BUSY)
-        runtime._contracts[contract_key] = signature
+        runtime._contracts[contract_key] = spec.digest
         incarnation = uuid4().hex
         runtime._providers[provider_id] = Registration(
             spec, provider, incarnation, concurrency, pending_limit, asyncio.Semaphore(concurrency)
         )
         return incarnation
 
-    def bind(self, namespace: str, alias: str, provider_id: str, *, contract_version: str) -> int:
-        """安装领域 owner 认可的运行绑定，不签发 grant。"""
+    def bind(
+        self,
+        scope: AgentScope,
+        kind: str,
+        alias: str,
+        provider_id: str,
+        *,
+        contract: str,
+        contract_version: str,
+        contract_digest: str | None = None,
+    ) -> int:
+        """安装确定 Agent 运行的绑定，核对提供者契约，不签发 grant。"""
         runtime = self._runtime
         runtime._guard(writable=True)
+        if not isinstance(scope, AgentScope) or not re.fullmatch(r"[a-z][a-z0-9_-]*", alias):
+            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
         registration = runtime._providers.get(provider_id)
         if registration is None:
             raise SchemeError(ErrorCode.NOT_FOUND)
-        if registration.spec.version != contract_version:
+        spec = registration.spec
+        if (
+            spec.kind != kind
+            or spec.contract != contract
+            or spec.version != contract_version
+            or (contract_digest is not None and spec.digest != contract_digest)
+        ):
             raise SchemeError(ErrorCode.CONTRACT_MISMATCH)
-        if not namespace or not re.fullmatch(r"[a-z][a-z0-9_-]*", alias):
-            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
-        key = namespace, registration.spec.name, alias
+        key = scope, kind, alias
         if key not in runtime._bindings and len(runtime._bindings) >= runtime._limits.max_bindings:
             raise SchemeError(ErrorCode.BUSY)
         runtime._binding_sequence += 1
         revision = runtime._binding_sequence
-        runtime._bindings[key] = Binding(provider_id, contract_version, revision)
+        runtime._bindings[key] = Binding(
+            provider_id, spec.contract, spec.version, spec.digest, revision
+        )
         return revision
 
-    def unbind(self, namespace: str, scheme: str, alias: str) -> None:
-        """撤去局部选择，旧引用不能改指未来同名绑定。"""
+    def unbind(self, scope: AgentScope, kind: str, alias: str) -> None:
+        """撤去确定 Agent 运行的局部绑定，不影响其他 Agent 或运行。"""
         runtime = self._runtime
         runtime._guard(writable=True)
-        runtime._bindings.pop((namespace, scheme, alias), None)
+        if not isinstance(scope, AgentScope):
+            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
+        runtime._bindings.pop((scope, kind, alias), None)
 
     async def withdraw(
         self, provider_id: str, *, timeout: float = 1.0, cancel: bool = False

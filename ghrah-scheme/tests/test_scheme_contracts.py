@@ -30,12 +30,17 @@ def test_time_limits_reject_invalid_values(value: object) -> None:
 
 def test_schemes_reject_duplicate_actions_and_bad_identity() -> None:
     with pytest.raises(ValueError):
-        SchemeSpec("ability", "1", (SPEC.actions[0], SPEC.actions[0]))
+        SchemeSpec(
+            kind="ability",
+            contract="ghrah.notes",
+            version="1",
+            actions=(SPEC.actions[0], SPEC.actions[0]),
+        )
     for name in ("", "../ability", "Ability", "a/b"):
         with pytest.raises(ValueError):
-            SchemeSpec(name, "1", SPEC.actions)
+            SchemeSpec(kind=name, contract="ghrah.notes", version="1", actions=SPEC.actions)
     with pytest.raises(ValueError):
-        SchemeSpec("ability", "", SPEC.actions)
+        SchemeSpec(kind="ability", contract="ghrah.notes", version="", actions=SPEC.actions)
 
 
 def test_action_models_cannot_relax_validation() -> None:
@@ -56,6 +61,6 @@ def test_authorization_requires_basis_and_principal_requires_scope() -> None:
     with pytest.raises(ValueError):
         Authorization(True)
     with pytest.raises(ValueError):
-        Principal("", "a")
+        Principal("", "agent", "run")
     with pytest.raises(ValueError):
-        Principal("Alice", "")
+        Principal("project", "", "run")

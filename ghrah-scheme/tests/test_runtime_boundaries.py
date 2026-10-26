@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 from ghrah_scheme_support import (
+    ALICE,
     SPEC,
     Arguments,
     Harness,
@@ -23,7 +24,6 @@ from ghrah.scheme import (
     EffectState,
     ErrorCode,
     InvocationState,
-    Principal,
     ProviderCall,
     RuntimeLimits,
     SchemeError,
@@ -131,7 +131,7 @@ async def test_dedup_reconnect_same_identity_can_observe_original(scheme_harness
     original = await h.alice.submit(ref, action="write", arguments={"value": "x"}, request_key="k")
     result = await h.alice.observe(original, wait=1)
     await h.alice.close()
-    reconnected = h.runtime.manager.create_session(Principal("Alice", "a"))
+    reconnected = h.runtime.manager.create_session(ALICE)
     new = await reconnected.acquire(PATH, actions=frozenset({"write"}))
     retry = await reconnected.submit(new, action="write", arguments={"value": "x"}, request_key="k")
     assert (await reconnected.observe(retry)).invocation_id == result.invocation_id
@@ -188,19 +188,30 @@ async def test_metadata_capacity_and_closed_session_reclamation() -> None:
     )
     try:
         runtime.manager.publish("alice", SPEC, MemoryProvider())
-        runtime.manager.bind("a", "notes", "alice", contract_version="1")
-        first = runtime.manager.create_session(Principal("Alice", "a"))
+        runtime.manager.bind(
+            ALICE.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+        )
+        first = runtime.manager.create_session(ALICE)
         with pytest.raises(SchemeError, match=ErrorCode.BUSY):
-            runtime.manager.create_session(Principal("Alice", "a"))
+            runtime.manager.create_session(ALICE)
         with pytest.raises(SchemeError, match=ErrorCode.BUSY):
             runtime.manager.publish("extra", SPEC, MemoryProvider())
         with pytest.raises(SchemeError, match=ErrorCode.BUSY):
-            runtime.manager.bind("a", "other", "alice", contract_version="1")
+            runtime.manager.bind(
+                ALICE.scope,
+                "ability",
+                "other",
+                "alice",
+                contract="ghrah.notes",
+                contract_version="1",
+            )
         await first.close()
-        second = runtime.manager.create_session(Principal("Alice", "a"))
+        second = runtime.manager.create_session(ALICE)
         assert runtime.manager.diagnostics()["sessions"] == 1
-        runtime.manager.unbind("a", "ability", "notes")
-        runtime.manager.bind("a", "notes", "alice", contract_version="1")
+        runtime.manager.unbind(ALICE.scope, "ability", "notes")
+        runtime.manager.bind(
+            ALICE.scope, "ability", "notes", "alice", contract="ghrah.notes", contract_version="1"
+        )
         await second.acquire(PATH, actions=frozenset({"read"}))
         await runtime.manager.withdraw("alice")
         with pytest.raises(SchemeError, match=ErrorCode.BUSY):
@@ -211,7 +222,12 @@ async def test_metadata_capacity_and_closed_session_reclamation() -> None:
 
 async def test_same_contract_version_cannot_change_action_schema(scheme_harness: Harness) -> None:
     h = scheme_harness
-    changed = SchemeSpec("ability", "1", (ActionSpec("read", Arguments, Arguments),))
+    changed = SchemeSpec(
+        kind="ability",
+        contract="ghrah.notes",
+        version="1",
+        actions=(ActionSpec("read", Arguments, Arguments),),
+    )
     with pytest.raises(SchemeError, match=ErrorCode.CONTRACT_MISMATCH):
         h.runtime.manager.publish("different", changed, MemoryProvider())
 
@@ -249,12 +265,12 @@ async def test_cross_provider_nested_call_keeps_injected_identity(scheme_harness
 
     async def outer(call: ProviderCall) -> SchemeModel:
         child = await h.bob.submit(b, action="read", arguments={"value": "child"})
-        assert (await h.bob.observe(child, wait=1)).result["principal"] == "Bob"
-        return Output(value="parent", principal=call.principal.name)
+        assert (await h.bob.observe(child, wait=1)).result["principal"] == "agent-bob"
+        return Output(value="parent", principal=call.principal.agent_id)
 
     h.a.execute = outer
     call = await h.alice.submit(a, action="read", arguments={"value": "parent"})
-    assert (await h.alice.observe(call, wait=1)).result["principal"] == "Alice"
+    assert (await h.alice.observe(call, wait=1)).result["principal"] == "agent-alice"
 
 
 async def test_same_provider_reentry_including_dedup_is_rejected(scheme_harness: Harness) -> None:
