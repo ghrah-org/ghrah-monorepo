@@ -16,11 +16,27 @@ from dataclasses import asdict
 from typing import Any, cast
 from uuid import uuid4
 
+from ghrah.protocol.scheme import CatalogSnapshot, DiscoveredResource
 from pydantic import ValidationError
 
-from ghrah.scheme._state import Binding, Invocation, Registration, ResourceEntry, SessionState
+from ghrah.scheme._discovery import project_resource
+from ghrah.scheme._lifecycle import Lifecycles
+from ghrah.scheme._state import (
+    Binding,
+    Invocation,
+    Registration,
+    ResourceEntry,
+    ResourceOwner,
+    SessionState,
+)
 from ghrah.scheme.authority import Authority, DenyAuthority
-from ghrah.scheme.contracts import Provider, ProviderCall, SchemeModel, SchemeSpec
+from ghrah.scheme.contracts import (
+    Provider,
+    ProviderCall,
+    ProviderLifecycle,
+    SchemeModel,
+    SchemeSpec,
+)
 from ghrah.scheme.errors import ErrorCode, SchemeError
 from ghrah.scheme.models import (
     AccessRequest,
@@ -37,6 +53,9 @@ from ghrah.scheme.models import (
     InvocationState,
     JsonObject,
     JsonValue,
+    OwnerRef,
+    OwnerSnapshot,
+    OwnerState,
     Principal,
     ProviderState,
     ReleaseReport,
@@ -121,6 +140,10 @@ class SchemeRuntime:
         self._keys: dict[tuple[AgentScope, str], tuple[str, str]] = {}
         self._controls: dict[str, asyncio.Task[Authorization]] = {}
         self._inflight = 0
+        self._discoveries = 0
+        self._lifecycles = Lifecycles(
+            self._boot, self._limits.max_provider_owners, self._limits.default_timeout
+        )
         self._manager = RuntimeManager(self)
 
     @property
@@ -514,8 +537,7 @@ class SchemeRuntime:
         self._inflight -= 1
         if record.timer is not None:
             record.timer.cancel()
-        if record.registration.state is ProviderState.DRAINING and not record.registration.inflight:
-            record.registration.state = ProviderState.WITHDRAWN
+        self._lifecycles.finish_export(record.registration)
         record.touch()
         completed = [key for key, item in self._invocations.items() if item.settled]
         for key in completed[: -self._limits.max_retained_calls]:
@@ -622,33 +644,160 @@ class SchemeRuntime:
         return ReleaseReport(True)
 
     async def _drain(
-        self, records: list[Invocation], timeout: float, cancel: bool, *, controls: bool = False
+        self,
+        records: list[Invocation],
+        timeout: float,
+        cancel: bool,
+        *,
+        controls: bool = False,
+        owners: list[ResourceOwner] | None = None,
     ) -> DrainReport:
         duration = _budget(timeout, self._limits.default_timeout, zero=True)
-        tasks: set[asyncio.Future[Any]] = set()
+        units = owners or []
+        deadline = self._loop.time() + duration
         for record in records:
             if cancel:
                 self._request_cancel(record, ErrorCode.CANCELLED)
-            if record.task is not None and not record.task.done():
-                tasks.add(record.task)
         if controls:
             for task in self._controls.values():
-                if not task.done():
-                    if not task.cancelling():
-                        task.cancel()
-                    tasks.add(task)
-        if tasks:
-            await asyncio.wait(tasks, timeout=duration)
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+        while True:
+            for record in records:
+                self._settle(record)
+            for owner in units:
+                self._lifecycles.advance(owner)
+            tasks: set[asyncio.Future[Any]] = {
+                item.task for item in records if item.task is not None and not item.task.done()
+            }
+            if controls:
+                tasks.update(task for task in self._controls.values() if not task.done())
+            for owner in units:
+                if owner.stopping:
+                    tasks.update(
+                        task
+                        for task in (owner.prepare_task, owner.close_task)
+                        if task is not None and not task.done()
+                    )
+            remaining = deadline - self._loop.time()
+            if not tasks or remaining <= 0:
+                break
+            await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
         for record in records:
             self._settle(record)
             if not record.settled:
                 self._request_cancel(record, ErrorCode.CANCELLED)
+        self._lifecycles.cancel_pending(units)
         return DrainReport(
             tuple(self._snapshot(item) for item in records if not item.settled),
             tuple(key for key, task in self._controls.items() if not task.done())
             if controls
             else (),
+            self._lifecycles.residuals(units),
         )
+
+    async def _catalog(self, holder: str, kind: str | None, alias: str | None) -> CatalogSnapshot:
+        principal = self._session(holder).principal
+        if kind is not None and (
+            not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", kind)
+        ):
+            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
+        if alias is not None and (
+            not isinstance(alias, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", alias)
+        ):
+            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
+        if self._discoveries >= self._limits.max_discoveries:
+            raise SchemeError(ErrorCode.BUSY)
+        self._discoveries += 1
+        try:
+            candidates: list[
+                tuple[DiscoveredResource, tuple[AgentScope, str, str], Binding, Registration]
+            ] = []
+            # 单次目录读取有总期限，不因项目较多按条目累加无限等待。
+            async with asyncio.timeout(self._limits.default_timeout):
+                for (scope, item_kind, item_alias), binding in sorted(
+                    list(self._bindings.items()), key=lambda item: (item[0][1], item[0][2])
+                ):
+                    if scope != principal.scope or (kind is not None and kind != item_kind):
+                        continue
+                    if alias is not None and alias != item_alias:
+                        continue
+                    registration = self._providers[binding.provider_id]
+                    if (
+                        registration.spec.contract != binding.contract
+                        or registration.spec.version != binding.version
+                        or registration.spec.digest != binding.digest
+                        or registration.state in {ProviderState.DRAINING, ProviderState.WITHDRAWN}
+                    ):
+                        continue
+                    target = Target(
+                        scope,
+                        item_kind,
+                        item_alias,
+                        (),
+                        binding.provider_id,
+                        registration.incarnation,
+                        binding.contract,
+                        binding.version,
+                        binding.digest,
+                        binding.revision,
+                    )
+
+                    def valid() -> bool:
+                        self._session(holder)
+                        return (
+                            self._bindings.get((scope, item_kind, item_alias)) is binding
+                            and self._providers.get(binding.provider_id) is registration
+                            and registration.state
+                            not in {ProviderState.DRAINING, ProviderState.WITHDRAWN}
+                        )
+
+                    try:
+                        entry = await project_resource(
+                            principal, target, registration, self._authorize, valid
+                        )
+                    except SchemeError as error:
+                        if error.code in {ErrorCode.AUTHORITY_UNAVAILABLE, ErrorCode.BUSY}:
+                            continue
+                        raise
+                    if entry is not None:
+                        candidates.append(
+                            (entry, (scope, item_kind, item_alias), binding, registration)
+                        )
+                self._session(holder)
+            entries = []
+            for entry, key, original, registration in candidates:
+                if (
+                    self._bindings.get(key) is not original
+                    or self._providers.get(original.provider_id) is not registration
+                    or registration.state in {ProviderState.DRAINING, ProviderState.WITHDRAWN}
+                ):
+                    continue
+                available = registration.state is ProviderState.READY
+                entries.append(
+                    entry.model_copy(
+                        update={
+                            "available": available,
+                            "actions": [
+                                action.model_copy(
+                                    update={"invokable": action.invokable and available}
+                                )
+                                for action in entry.actions
+                            ],
+                        }
+                    )
+                )
+            result = CatalogSnapshot(entries=entries)
+            _json_object(
+                result.model_dump(mode="json"),
+                self._limits.max_result_bytes,
+                ErrorCode.INVALID_RESULT,
+            )
+            return result
+        except TimeoutError as error:
+            raise SchemeError(ErrorCode.AUTHORITY_UNAVAILABLE) from error
+        finally:
+            self._discoveries -= 1
 
 
 class Session:
@@ -657,6 +806,19 @@ class Session:
     def __init__(self, runtime: SchemeRuntime, holder: str) -> None:
         self._runtime = runtime
         self._holder = holder
+
+    async def catalog(self, kind: str | None = None) -> CatalogSnapshot:
+        """列出当前主体可发现的局部目录；只读核定不产生业务接纳。"""
+        return await self._runtime._catalog(self._holder, kind, None)
+
+    async def describe(self, kind: str, alias: str) -> DiscoveredResource:
+        """查询受控描述；隐藏与不存在统一返回 NOT_FOUND。"""
+        if not isinstance(kind, str) or not isinstance(alias, str):
+            raise SchemeError(ErrorCode.INVALID_ARGUMENT)
+        result = await self._runtime._catalog(self._holder, kind, alias)
+        if not result.entries:
+            raise SchemeError(ErrorCode.NOT_FOUND)
+        return result.entries[0]
 
     async def acquire(
         self,
@@ -762,6 +924,7 @@ class RuntimeManager:
         *,
         concurrency: int = 1,
         pending_limit: int = 16,
+        owner: OwnerRef | None = None,
     ) -> str:
         """发布已准备好的提供者；同名旧实例有在途时不能替换。"""
         runtime = self._runtime
@@ -775,8 +938,16 @@ class RuntimeManager:
         ):
             raise SchemeError(ErrorCode.INVALID_ARGUMENT)
         previous = runtime._providers.get(provider_id)
-        if previous is not None and previous.state is not ProviderState.WITHDRAWN:
+        if previous is not None and (
+            previous.state is not ProviderState.WITHDRAWN
+            or (previous.owner is not None and previous.owner.state is not OwnerState.CLOSED)
+        ):
             raise SchemeError(ErrorCode.PROVIDER_EXISTS)
+        unit = runtime._lifecycles.get(owner) if owner is not None else None
+        if unit is not None and (
+            unit.stopping or unit.state not in {OwnerState.PREPARING, OwnerState.READY}
+        ):
+            raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE)
         contract_key = spec.contract, spec.version
         if contract_key in runtime._contracts and runtime._contracts[contract_key] != spec.digest:
             raise SchemeError(ErrorCode.CONTRACT_MISMATCH)
@@ -787,9 +958,12 @@ class RuntimeManager:
             raise SchemeError(ErrorCode.BUSY)
         runtime._contracts[contract_key] = spec.digest
         incarnation = uuid4().hex
-        runtime._providers[provider_id] = Registration(
+        registration = Registration(
             spec, provider, incarnation, concurrency, pending_limit, asyncio.Semaphore(concurrency)
         )
+        if unit is not None:
+            runtime._lifecycles.attach(unit, registration)
+        runtime._providers[provider_id] = registration
         return incarnation
 
     def bind(
@@ -837,10 +1011,50 @@ class RuntimeManager:
             raise SchemeError(ErrorCode.INVALID_ARGUMENT)
         runtime._bindings.pop((scope, kind, alias), None)
 
+    def create_owner(self, lifecycle: ProviderLifecycle) -> OwnerRef:
+        """显式建立唯一资源 owner，开始有界准备；多个导出可共用此引用。"""
+        self._runtime._guard(writable=True)
+        return self._runtime._lifecycles.create(lifecycle)
+
+    def owner_status(self, reference: OwnerRef) -> OwnerSnapshot:
+        """读取确定 owner 的状态，不暴露可变记录或资源对象。"""
+        runtime = self._runtime
+        runtime._guard()
+        owner = runtime._lifecycles.get(reference)
+        return OwnerSnapshot(
+            owner.reference,
+            owner.state,
+            owner.error,
+            any(
+                task is not None and not task.done()
+                for task in (owner.prepare_task, owner.close_task)
+            )
+            or any(item.inflight for item in owner.exports),
+        )
+
+    async def wait_prepared(self, reference: OwnerRef, *, timeout: float = 1.0) -> OwnerSnapshot:
+        """有限等待准备回执；观察超时或等待者取消不取消实际准备任务。"""
+        runtime = self._runtime
+        runtime._guard()
+        duration = _budget(timeout, runtime._limits.default_timeout, zero=True)
+        owner = runtime._lifecycles.get(reference)
+        if owner.prepare_task is not None and not owner.prepare_task.done():
+            await asyncio.wait({owner.prepare_task}, timeout=duration)
+        return self.owner_status(reference)
+
+    def report_health(self, provider_id: str, incarnation: str, state: ProviderState) -> None:
+        """接受确定实例的健康报告；共享执行体的导出一起更新。"""
+        runtime = self._runtime
+        runtime._guard(writable=True)
+        registration = runtime._providers.get(provider_id)
+        if registration is None or registration.incarnation != incarnation:
+            raise SchemeError(ErrorCode.STALE_PROVIDER)
+        runtime._lifecycles.health(registration, state)
+
     async def withdraw(
         self, provider_id: str, *, timeout: float = 1.0, cancel: bool = False
     ) -> DrainReport:
-        """停止新访问，有限收束；WITHDRAWN 仅表示运行导出退出。"""
+        """停止新访问，收束调用，并在最后一个共享导出退出时关闭资源。"""
         runtime = self._runtime
         runtime._guard()
         _budget(timeout, runtime._limits.default_timeout, zero=True)
@@ -848,18 +1062,27 @@ class RuntimeManager:
         if registration is None:
             raise SchemeError(ErrorCode.NOT_FOUND)
         registration.state = ProviderState.DRAINING
+        runtime._lifecycles.finish_export(registration)
         records = [
             item
             for item in runtime._invocations.values()
             if item.registration is registration and not item.settled
         ]
-        report = await runtime._drain(records, timeout, cancel)
-        if not registration.inflight:
-            registration.state = ProviderState.WITHDRAWN
-        return report
+        return await runtime._drain(
+            records, timeout, cancel, owners=[registration.owner] if registration.owner else []
+        )
+
+    async def retry_close(self, owner: OwnerRef, *, timeout: float = 1.0) -> DrainReport:
+        """显式重试已结束但失败的关闭，不并发重复关闭非合作执行体。"""
+        runtime = self._runtime
+        runtime._guard()
+        _budget(timeout, runtime._limits.default_timeout, zero=True)
+        unit = runtime._lifecycles.get(owner)
+        runtime._lifecycles.retry(unit)
+        return await runtime._drain([], timeout, False, owners=[unit])
 
     async def close(self, *, timeout: float = 1.0) -> DrainReport:
-        """有界关闭整个实例；非合作调用及核定任务仍可见。"""
+        """按总预算关闭调用、核定与资源 owner，失败或非合作责任继续可见。"""
         runtime = self._runtime
         runtime._guard()
         _budget(timeout, runtime._limits.default_timeout, zero=True)
@@ -867,14 +1090,16 @@ class RuntimeManager:
         for session in runtime._sessions.values():
             session.active = False
         for provider in runtime._providers.values():
-            provider.state = (
-                ProviderState.DRAINING if provider.inflight else ProviderState.WITHDRAWN
-            )
+            if provider.owner is None:
+                provider.state = ProviderState.DRAINING
+                runtime._lifecycles.finish_export(provider)
+        runtime._lifecycles.stop_all()
         report = await runtime._drain(
             [item for item in runtime._invocations.values() if not item.settled],
             timeout,
             True,
             controls=True,
+            owners=list(runtime._lifecycles.owners.values()),
         )
         runtime._resources.clear()
         runtime._call_refs.clear()
@@ -899,5 +1124,7 @@ class RuntimeManager:
             "records": len(runtime._invocations),
             "request_keys": len(runtime._keys),
             "controls": len(runtime._controls),
+            "discoveries": self._runtime._discoveries,
+            "owners": {key: value.state.value for key, value in runtime._lifecycles.owners.items()},
             "providers": providers,
         }

@@ -370,3 +370,16 @@ export {
   type WritableWorkspaceSpec,
   WritableWorkspaceSpecSchema,
 } from "./payloads.js";
+
+export {
+  ActionDescriptorSchema,
+  ContractDescriptorSchema,
+  DiscoveredActionSchema,
+  DiscoveredResourceSchema,
+  CatalogSnapshotSchema,
+  type ActionDescriptor,
+  type ContractDescriptor,
+  type DiscoveredAction,
+  type DiscoveredResource,
+  type CatalogSnapshot,
+} from "./scheme.js";

@@ -4,12 +4,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from ghrah.protocol.scheme import ActionDescriptor, ContractDescriptor
 from pydantic import BaseModel, ConfigDict
 
 from ghrah.scheme.errors import ErrorCode, SchemeError
@@ -52,6 +51,7 @@ class SchemeSpec:
     version: str
     actions: tuple[ActionSpec, ...]
     digest: str = field(init=False)
+    _descriptor_json: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", self.kind):
@@ -64,28 +64,28 @@ class SchemeSpec:
             raise ValueError("必须显式声明非空动作元组")
         if len({action.name for action in self.actions}) != len(self.actions):
             raise ValueError("动作名不能重复")
-        # 只定义本地精确内容指纹；动作顺序不改变契约，schema 数组仍保留原序。
-        content = {
-            "format": "ghrah.scheme.local-contract.v1",
-            "kind": self.kind,
-            "contract": self.contract,
-            "version": self.version,
-            "actions": [
-                {
-                    "name": action.name,
-                    "input": action.input_model.model_json_schema(),
-                    "output": action.output_model.model_json_schema(),
-                    "mutating": action.mutating,
-                    "cancellable": action.cancellable,
-                    "description": action.description,
-                }
+        descriptor = ContractDescriptor(
+            kind=self.kind,
+            contract=self.contract,
+            version=self.version,
+            actions=[
+                ActionDescriptor(
+                    name=action.name,
+                    input_schema=action.input_model.model_json_schema(),
+                    output_schema=action.output_model.model_json_schema(),
+                    mutating=action.mutating,
+                    cancellable=action.cancellable,
+                    description=action.description,
+                )
                 for action in sorted(self.actions, key=lambda item: item.name)
             ],
-        }
-        encoded = json.dumps(
-            content, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-        object.__setattr__(self, "digest", "sha256:" + hashlib.sha256(encoded).hexdigest())
+        )
+        object.__setattr__(self, "digest", descriptor.fingerprint())
+        object.__setattr__(self, "_descriptor_json", descriptor.model_dump_json(by_alias=True))
+
+    def descriptor(self) -> ContractDescriptor:
+        """单向导出完整契约的隔离副本，仅供受信发布和受控投影使用。"""
+        return ContractDescriptor.model_validate_json(self._descriptor_json)
 
     def action(self, name: str) -> ActionSpec:
         """只解析已登记动作，不进行任意属性查找。"""
@@ -113,4 +113,16 @@ class Provider(Protocol):
 
     async def execute(self, call: ProviderCall) -> SchemeModel:
         """执行固定目标动作，不自行替换调用身份。"""
+        ...
+
+
+class ProviderLifecycle(Protocol):
+    """唯一执行体 owner 的准备与关闭端口，可被多个逻辑导出共享。"""
+
+    async def prepare(self) -> None:
+        """完成握手及资源准备，异常由 owner 保留；不得自行发布就绪。"""
+        ...
+
+    async def aclose(self) -> None:
+        """释放本 owner 的资源；允许显式重试，完成不冒充外部效果回滚。"""
         ...

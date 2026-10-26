@@ -1,0 +1,484 @@
+{
+  "descriptor": {
+    "format": "ghrah.scheme.local-contract.v1",
+    "kind": "ability",
+    "contract": "acme.reports",
+    "version": "1",
+    "actions": [
+      {
+        "name": "render",
+        "input": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        "output": {
+          "type": "object"
+        },
+        "mutating": false,
+        "cancellable": true,
+        "description": "渲染"
+      }
+    ]
+  },
+  "catalog": {
+    "format": "ghrah.scheme.catalog.v1",
+    "entries": [
+      {
+        "kind": "ability",
+        "alias": "reports",
+        "contract": "acme.reports",
+        "contract_version": "1",
+        "contract_digest": "sha256:7b1a79ff5243ad49c2bf551c09963d86f05934f7e6a2049e48b066a95da2ee0f",
+        "binding_revision": 1,
+        "available": true,
+        "actions": [
+          {
+            "name": "render",
+            "description": "渲染",
+            "mutating": false,
+            "cancellable": true,
+            "invokable": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                }
+              }
+            },
+            "output_schema": {
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "schemas": {
+    "ActionDescriptor": {
+      "additionalProperties": false,
+      "description": "一个动作的完整契约，不包含主体授权事实。",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "input": {
+          "additionalProperties": true,
+          "title": "Input",
+          "type": "object"
+        },
+        "output": {
+          "additionalProperties": true,
+          "title": "Output",
+          "type": "object"
+        },
+        "mutating": {
+          "title": "Mutating",
+          "type": "boolean"
+        },
+        "cancellable": {
+          "title": "Cancellable",
+          "type": "boolean"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": ["name", "input", "output", "mutating", "cancellable", "description"],
+      "title": "ActionDescriptor",
+      "type": "object"
+    },
+    "ContractDescriptor": {
+      "$defs": {
+        "ActionDescriptor": {
+          "additionalProperties": false,
+          "description": "一个动作的完整契约，不包含主体授权事实。",
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "input": {
+              "additionalProperties": true,
+              "title": "Input",
+              "type": "object"
+            },
+            "output": {
+              "additionalProperties": true,
+              "title": "Output",
+              "type": "object"
+            },
+            "mutating": {
+              "title": "Mutating",
+              "type": "boolean"
+            },
+            "cancellable": {
+              "title": "Cancellable",
+              "type": "boolean"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            }
+          },
+          "required": ["name", "input", "output", "mutating", "cancellable", "description"],
+          "title": "ActionDescriptor",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "确定版本的完整契约；精确指纹不等于语义兼容或来源认证。",
+      "properties": {
+        "format": {
+          "const": "ghrah.scheme.local-contract.v1",
+          "default": "ghrah.scheme.local-contract.v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "contract": {
+          "title": "Contract",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ActionDescriptor"
+          },
+          "title": "Actions",
+          "type": "array"
+        }
+      },
+      "required": ["kind", "contract", "version", "actions"],
+      "title": "ContractDescriptor",
+      "type": "object"
+    },
+    "DiscoveredAction": {
+      "additionalProperties": false,
+      "description": "按主体许可裁剪的动作；能发现不代表能读 schema 或执行。",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "mutating": {
+          "title": "Mutating",
+          "type": "boolean"
+        },
+        "cancellable": {
+          "title": "Cancellable",
+          "type": "boolean"
+        },
+        "invokable": {
+          "title": "Invokable",
+          "type": "boolean"
+        },
+        "input_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Input Schema"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Output Schema"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "mutating",
+        "cancellable",
+        "invokable",
+        "input_schema",
+        "output_schema"
+      ],
+      "title": "DiscoveredAction",
+      "type": "object"
+    },
+    "DiscoveredResource": {
+      "$defs": {
+        "DiscoveredAction": {
+          "additionalProperties": false,
+          "description": "按主体许可裁剪的动作；能发现不代表能读 schema 或执行。",
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "mutating": {
+              "title": "Mutating",
+              "type": "boolean"
+            },
+            "cancellable": {
+              "title": "Cancellable",
+              "type": "boolean"
+            },
+            "invokable": {
+              "title": "Invokable",
+              "type": "boolean"
+            },
+            "input_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Schema"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Schema"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "mutating",
+            "cancellable",
+            "invokable",
+            "input_schema",
+            "output_schema"
+          ],
+          "title": "DiscoveredAction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "一个可见局部绑定的只读快照，不含隐藏成员计数。",
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "alias": {
+          "title": "Alias",
+          "type": "string"
+        },
+        "contract": {
+          "title": "Contract",
+          "type": "string"
+        },
+        "contract_version": {
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "contract_digest": {
+          "title": "Contract Digest",
+          "type": "string"
+        },
+        "binding_revision": {
+          "title": "Binding Revision",
+          "type": "integer"
+        },
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/DiscoveredAction"
+          },
+          "title": "Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "alias",
+        "contract",
+        "contract_version",
+        "contract_digest",
+        "binding_revision",
+        "available",
+        "actions"
+      ],
+      "title": "DiscoveredResource",
+      "type": "object"
+    },
+    "CatalogSnapshot": {
+      "$defs": {
+        "DiscoveredAction": {
+          "additionalProperties": false,
+          "description": "按主体许可裁剪的动作；能发现不代表能读 schema 或执行。",
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "mutating": {
+              "title": "Mutating",
+              "type": "boolean"
+            },
+            "cancellable": {
+              "title": "Cancellable",
+              "type": "boolean"
+            },
+            "invokable": {
+              "title": "Invokable",
+              "type": "boolean"
+            },
+            "input_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Schema"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Schema"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "mutating",
+            "cancellable",
+            "invokable",
+            "input_schema",
+            "output_schema"
+          ],
+          "title": "DiscoveredAction",
+          "type": "object"
+        },
+        "DiscoveredResource": {
+          "additionalProperties": false,
+          "description": "一个可见局部绑定的只读快照，不含隐藏成员计数。",
+          "properties": {
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "alias": {
+              "title": "Alias",
+              "type": "string"
+            },
+            "contract": {
+              "title": "Contract",
+              "type": "string"
+            },
+            "contract_version": {
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "contract_digest": {
+              "title": "Contract Digest",
+              "type": "string"
+            },
+            "binding_revision": {
+              "title": "Binding Revision",
+              "type": "integer"
+            },
+            "available": {
+              "title": "Available",
+              "type": "boolean"
+            },
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/DiscoveredAction"
+              },
+              "title": "Actions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "alias",
+            "contract",
+            "contract_version",
+            "contract_digest",
+            "binding_revision",
+            "available",
+            "actions"
+          ],
+          "title": "DiscoveredResource",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "有界的可见目录；不返回未过滤总数或基于隐藏项的分页游标。",
+      "properties": {
+        "format": {
+          "const": "ghrah.scheme.catalog.v1",
+          "default": "ghrah.scheme.catalog.v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/DiscoveredResource"
+          },
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "required": ["entries"],
+      "title": "CatalogSnapshot",
+      "type": "object"
+    }
+  }
+}

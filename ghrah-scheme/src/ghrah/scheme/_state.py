@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from ghrah.scheme.contracts import ActionSpec, Provider, SchemeModel, SchemeSpec
+from ghrah.scheme.contracts import ActionSpec, Provider, ProviderLifecycle, SchemeModel, SchemeSpec
 from ghrah.scheme.errors import ErrorCode
 from ghrah.scheme.models import (
     AdmissionState,
@@ -15,6 +15,8 @@ from ghrah.scheme.models import (
     EffectState,
     InvocationState,
     JsonObject,
+    OwnerRef,
+    OwnerState,
     Principal,
     ProviderState,
     ResourceRef,
@@ -48,6 +50,7 @@ class Registration:
     semaphore: asyncio.Semaphore
     state: ProviderState = ProviderState.READY
     inflight: int = 0
+    owner: ResourceOwner | None = None
 
 
 @dataclass(frozen=True)
@@ -87,3 +90,16 @@ class Invocation:
         self.version += 1
         self.changed.set()
         self.changed = asyncio.Event()
+
+
+@dataclass
+class ResourceOwner:
+    reference: OwnerRef
+    lifecycle: ProviderLifecycle
+    state: OwnerState = OwnerState.PREPARING
+    error: ErrorCode | None = None
+    exports: list[Registration] = field(default_factory=list)
+    stopping: bool = False
+    prepare_task: asyncio.Task[None] | None = None
+    close_task: asyncio.Task[None] | None = None
+    timer: asyncio.TimerHandle | None = None

@@ -6,5 +6,5 @@ version = "0.1.0a0"
 [build]
 backend = "uv"
 member = "ghrah-scheme"
-depends_on = []
+depends_on = ["ghrah-protocol"]
 outputs = ["dist/*.whl"]

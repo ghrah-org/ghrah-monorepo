@@ -4,7 +4,7 @@ version = "0.1.0a0"
 description = "ghrah 自用的类型化 Scheme 与控制平面原语"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.0"]
+dependencies = ["pydantic>=2.0", "ghrah-protocol>=0.2.0a0"]
 authors = [{name = "chenxya", email = "chenxya@ghrah.org"}]
 license = "Apache-2.0"
 license-files = ["LICENSES/*"]

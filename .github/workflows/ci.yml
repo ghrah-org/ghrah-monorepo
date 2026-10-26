@@ -22,10 +22,14 @@ jobs:
       - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme
       - name: Scheme 构建与隔离安装
         run: |
-          uv build --package ghrah-scheme
-          for wheel in dist/ghrah_scheme-*.whl; do
-            uv run --isolated --no-project --with "$wheel" python -I -c "import importlib.util; import ghrah.scheme; assert importlib.util.find_spec('ghrah.abilities') is None"
+          for package in ghrah-plugin ghrah-protocol ghrah-scheme; do
+            uv build --package "$package" --out-dir dist/scheme-check
           done
+          scheme_wheel_args=()
+          for wheel in dist/scheme-check/*.whl; do
+            scheme_wheel_args+=(--with "$wheel")
+          done
+          uv run --isolated --no-project "${scheme_wheel_args[@]}" python -I -c "import importlib.util; import ghrah.scheme; assert importlib.util.find_spec('ghrah.abilities') is None"
 
   web:
     runs-on: ubuntu-latest

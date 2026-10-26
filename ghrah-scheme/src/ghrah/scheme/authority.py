@@ -11,7 +11,7 @@ class Authority(Protocol):
     """Core 等领域 owner 的授权和接纳端口。"""
 
     async def authorize(self, request: AccessRequest) -> Authorization:
-        """核定取得引用或结果正文的当前许可。"""
+        """核定发现、契约披露、工具投影、引用取得和结果读取的当前许可。"""
         ...
 
     async def admit(self, request: AccessRequest) -> Admission:
@@ -23,7 +23,7 @@ class DenyAuthority:
     """没有显式接入领域核定时拒绝所有访问。"""
 
     async def authorize(self, request: AccessRequest) -> Authorization:
-        """拒绝取得或读取结果。"""
+        """拒绝发现、披露、引用及结果读取。"""
         return Authorization(False)
 
     async def admit(self, request: AccessRequest) -> Admission:

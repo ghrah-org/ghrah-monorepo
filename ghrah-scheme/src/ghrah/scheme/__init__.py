@@ -2,8 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 """ghrah 自用的 Scheme 模型与进程内控制原语。"""
 
+from ghrah.protocol.scheme import (
+    ActionDescriptor,
+    CatalogSnapshot,
+    ContractDescriptor,
+    DiscoveredAction,
+    DiscoveredResource,
+)
+
 from ghrah.scheme.authority import Authority, DenyAuthority
-from ghrah.scheme.contracts import ActionSpec, Provider, ProviderCall, SchemeModel, SchemeSpec
+from ghrah.scheme.contracts import (
+    ActionSpec,
+    Provider,
+    ProviderCall,
+    ProviderLifecycle,
+    SchemeModel,
+    SchemeSpec,
+)
 from ghrah.scheme.errors import ErrorCode, SchemeError
 from ghrah.scheme.models import (
     AccessRequest,
@@ -21,6 +36,9 @@ from ghrah.scheme.models import (
     InvocationState,
     JsonObject,
     JsonValue,
+    OwnerRef,
+    OwnerSnapshot,
+    OwnerState,
     Principal,
     ProviderState,
     ReleaseReport,
@@ -31,6 +49,15 @@ from ghrah.scheme.models import (
 from ghrah.scheme.runtime import RuntimeManager, SchemeRuntime, Session
 
 __all__ = [
+    "ActionDescriptor",
+    "ContractDescriptor",
+    "CatalogSnapshot",
+    "DiscoveredAction",
+    "DiscoveredResource",
+    "ProviderLifecycle",
+    "OwnerRef",
+    "OwnerState",
+    "OwnerSnapshot",
     "AccessRequest",
     "AccessStage",
     "ActionSpec",

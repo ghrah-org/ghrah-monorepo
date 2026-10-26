@@ -67,8 +67,11 @@ class Target:
 
 
 class AccessStage(StrEnum):
-    """明确区分取得引用、最终接纳和结果正文读取。"""
+    """区分发现／披露／调用意图、取得引用、最终接纳和结果读取。"""
 
+    DISCOVER = "discover"
+    DESCRIBE = "describe"
+    INVOKE = "invoke"
     ACQUIRE = "acquire"
     ADMIT = "admit"
     RESULT = "result"
@@ -167,9 +170,43 @@ class CancellationState(StrEnum):
 class ProviderState(StrEnum):
     """描述运行导出；WITHDRAWN 不宣称任何 OS 进程已退出。"""
 
+    PREPARING = "preparing"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
     READY = "ready"
     DRAINING = "draining"
     WITHDRAWN = "withdrawn"
+
+
+class OwnerState(StrEnum):
+    """实际资源 owner 的状态，与逻辑导出和调用执行状态分开。"""
+
+    PREPARING = "preparing"
+    READY = "ready"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+    DRAINING = "draining"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    CLOSE_FAILED = "close_failed"
+
+
+@dataclass(frozen=True)
+class OwnerRef:
+    """仅供受信管理端口使用的确定资源 owner 引用。"""
+
+    boot: str
+    token: str
+
+
+@dataclass(frozen=True)
+class OwnerSnapshot:
+    """资源收尾的可诊断事实；失败时即使任务已结束仍不能报完成。"""
+
+    reference: OwnerRef
+    state: OwnerState
+    error: ErrorCode | None
+    pending: bool
 
 
 @dataclass(frozen=True)
@@ -214,17 +251,20 @@ class DrainReport:
 
     pending: tuple[InvocationSnapshot, ...]
     pending_controls: tuple[str, ...] = ()
+    pending_owners: tuple[OwnerSnapshot, ...] = ()
 
     @property
     def complete(self) -> bool:
         """是否已经没有在途调用。"""
-        return not self.pending and not self.pending_controls
+        return not self.pending and not self.pending_controls and not self.pending_owners
 
 
 @dataclass(frozen=True)
 class RuntimeLimits:
     """明确的内存、任务、引用和等待预算。"""
 
+    max_provider_owners: int = 64
+    max_discoveries: int = 8
     max_sessions: int = 128
     max_providers: int = 64
     max_bindings: int = 256
