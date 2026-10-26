@@ -8,6 +8,7 @@ dependencies = [
     "ghrah-core",
     "ghrah-plugin",
     "ghrah-protocol",
+    "ghrah-scheme",
     "ghrah-subject",
     "ghrah-taskstore",
     "aiohttp>=3.13.5",
@@ -19,6 +20,7 @@ members = [
     "ghrah-core",
     "ghrah-plugin",
     "ghrah-protocol",
+    "ghrah-scheme",
     "ghrah-subject",
     "ghrah-taskstore",
 ]
@@ -27,6 +29,7 @@ members = [
 ghrah-core = { workspace = true }
 ghrah-plugin = { workspace = true }
 ghrah-protocol = { workspace = true }
+ghrah-scheme = { workspace = true }
 ghrah-subject = { workspace = true }
 ghrah-taskstore = { workspace = true }
 

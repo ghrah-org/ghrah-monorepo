@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构建并审计 ghrah 的全部公开发布产物，不执行任何发布操作。"""
+"""构建并审计 ghrah 的全部交付产物（含内部包），不执行发布操作。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ PYTHON_PACKAGES = (
     "ghrah-protocol",
     "ghrah-subject",
     "ghrah-taskstore",
+    "ghrah-scheme",
 )
 NPM_PACKAGES = {
     "@ghrah/protocol": ROOT / "ghrah-observer-webui" / "packages" / "protocol",
@@ -266,7 +267,7 @@ def _build_typescript(output_dir: Path) -> list[Path]:
 def main() -> int:
     """执行完整构建审计，并返回适合 CI 的退出码。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--all", action="store_true", help="构建并审计全部公开发布面")
+    parser.add_argument("--all", action="store_true", help="构建并审计全部交付产物（含内部包）")
     parser.add_argument("--out-dir", type=Path, required=True, help="必须为空的产物输出目录")
     args = parser.parse_args()
     if not args.all:

@@ -16,9 +16,16 @@ jobs:
       - run: uv sync --all-packages --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      # mypy 门禁当前仅 protocol（零错误基线）；core/subject 存量 strict 债务见 plans/todo/mypy-strict-debt.md
+      # protocol 与 scheme 保持 strict 零错误；既有包不在本次扩展类型门禁。
       - run: cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol
-      - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore
+      - run: cd ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.scheme
+      - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme
+      - name: Scheme 构建与隔离安装
+        run: |
+          uv build --package ghrah-scheme
+          for wheel in dist/ghrah_scheme-*.whl; do
+            uv run --isolated --no-project --with "$wheel" python -I -c "import importlib.util; import ghrah.scheme; assert importlib.util.find_spec('ghrah.abilities') is None"
+          done
 
   web:
     runs-on: ubuntu-latest
