@@ -1,0 +1,82 @@
+manifest: ability
+version: '1'
+metadata:
+  namespace: ghrah.fs
+  name: read_file
+  title: Read File
+  description: Read the content of a file at the specified path
+  tags:
+  - filesystem
+  - read
+  icon: ''
+  deprecated: false
+  since: ''
+  permissions:
+    require_hitl: false
+    fs_read_only: true
+    fs_write: false
+    net_access: false
+    shell_access: false
+    allowed_paths: []
+    denied_paths: []
+    allowed_commands: []
+    denied_commands: []
+tool:
+  name: read_file
+  description: Read the content of a file at the specified path. With offset/limit,
+    the returned content is paginated and each line is prefixed with its 1-based line
+    number as '  N→text' (line numbers are for locating edits only — do not copy them
+    into edit_file old_str). Without offset/limit the whole file is returned without
+    line numbers.
+  strict: false
+  parameters:
+    file_path:
+      type: string
+      description: Path to the file to read
+      required: true
+      default: null
+      enum: null
+      minimum: null
+      maximum: null
+      items: null
+      sensitive: false
+    encoding:
+      type: string
+      description: Text encoding for the file
+      required: false
+      default: utf-8
+      enum: null
+      minimum: null
+      maximum: null
+      items: null
+      sensitive: false
+    offset:
+      type: integer
+      description: 0-based line number to start from
+      required: false
+      default: 0
+      enum: null
+      minimum: 0
+      maximum: null
+      items: null
+      sensitive: false
+    limit:
+      type: integer
+      description: Max lines to return; 0 = whole file (legacy behavior)
+      required: false
+      default: 0
+      enum: null
+      minimum: 0
+      maximum: null
+      items: null
+      sensitive: false
+implementation:
+  type: builtin
+  handler: read_file
+  entrypoint: null
+  source: null
+  module_ref: null
+hooks:
+  pre_execute: []
+  post_execute: []
+  on_error: []
