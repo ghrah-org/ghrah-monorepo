@@ -1,0 +1,391 @@
+# 文件系统能力容器 / Filesystem ability container
+#
+# 本文件是定义面（AbilityDefinition）：容器身份、成员契约与提供者槽要求。
+# 运行时声明（permissions / hooks）不在定义内——它们随实现脚本落在
+# operations/*.py 的模块级常量里，切换时由加载器合并回旧 manifest 形态。
+#
+# 由 ghrah-core/src/ghrah/manifest/builtins/ghrah.fs.*.yaml 归并而来。
+format: ghrah.ability-definition
+schema_version: 0.1-draft
+identity:
+  namespace: ghrah
+  name: fs
+  version: 0.1.0
+title: Filesystem
+description: Read, search, and mutate files and directories inside the delegated workspace.
+provider_requirements:
+  fs_backend:
+    contract: ghrah.fs.v1
+    # contract_digest 由发布路径从唯一规范计算并填入，作者不自签
+    required_capabilities: [request]
+operations:
+  read_file:
+    title: Read File
+    description: >-
+      Read the content of a file at the specified path. With offset/limit, the
+      returned content is paginated and each line is prefixed with its 1-based
+      line number as '  N→text' (line numbers are for locating edits only — do
+      not copy them into edit_file old_str). Without offset/limit the whole
+      file is returned without line numbers.
+    input_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: Path to the file to read
+        encoding:
+          type: string
+          description: Text encoding for the file
+          default: utf-8
+        offset:
+          type: integer
+          description: 0-based line number to start from
+          default: 0
+          minimum: 0
+        limit:
+          type: integer
+          description: Max lines to return; 0 = whole file (legacy behavior)
+          default: 0
+          minimum: 0
+      required: [file_path]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        content:
+          type: string
+        file_path:
+          type: string
+        total_lines:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+      required: [content, file_path, total_lines]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: read_file}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  write_file:
+    title: Write File
+    description: >-
+      Write content to a file. Creates the file and parent directories if they
+      do not exist. Overwrites existing content.
+    input_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: Path to the file to write
+        content:
+          type: string
+          description: Content to write to the file
+        create_dirs:
+          type: boolean
+          description: Create parent directories if they do not exist
+          default: true
+        encoding:
+          type: string
+          description: Text encoding for the file
+          default: utf-8
+      required: [file_path, content]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+        bytes_written:
+          type: integer
+      required: [file_path, bytes_written]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: write_file}
+    effects: [filesystem:write]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  edit_file:
+    title: Edit File
+    description: >-
+      Edit a file by replacing a unique string. The old_str must appear exactly
+      once in the file. If it appears multiple times, the operation fails and
+      you should provide more surrounding context to make it unique.
+    input_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: Path to the file to edit
+        old_str:
+          type: string
+          description: The exact string to find and replace (must be unique in the file)
+        new_str:
+          type: string
+          description: The replacement string
+        encoding:
+          type: string
+          description: Text encoding for the file
+          default: utf-8
+      required: [file_path, old_str, new_str]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+        replacements:
+          type: integer
+      required: [file_path, replacements]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: edit_file}
+    effects: [filesystem:write]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  move_file:
+    title: Move File
+    description: >-
+      Move or rename a file. Supports cross-directory moves. The source and
+      destination paths are both subject to permission checks.
+    input_schema:
+      type: object
+      properties:
+        source_path:
+          type: string
+          description: Path to the source file
+        destination_path:
+          type: string
+          description: Path to the destination
+        create_dirs:
+          type: boolean
+          description: Create parent directories of the destination if they do not exist
+          default: true
+        overwrite:
+          type: boolean
+          description: Overwrite the destination file if it already exists
+          default: false
+      required: [source_path, destination_path]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        source_path:
+          type: string
+        destination_path:
+          type: string
+      required: [source_path, destination_path]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: move_file}
+    effects: [filesystem:write]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  delete_file:
+    title: Delete File
+    description: Delete a file at the specified path. This operation is irreversible.
+    input_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: Path to the file to delete
+      required: [file_path]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+        deleted:
+          type: boolean
+      required: [file_path, deleted]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: delete_file}
+    effects: [filesystem:write]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  list_directory:
+    title: List Directory
+    description: >-
+      List files and directories at the specified path. Returns entry names,
+      types, and sizes. Use recursive=true to list all nested contents. For
+      large directories, set offset/limit to paginate (0-based entry index);
+      the response then carries total_entries/truncated/offset/limit. Without
+      offset/limit the whole listing is returned.
+    input_schema:
+      type: object
+      properties:
+        dir_path:
+          type: string
+          description: Path to the directory to list
+        recursive:
+          type: boolean
+          description: Recursively list nested directories
+          default: false
+        offset:
+          type: integer
+          description: >-
+            0-based entry index to start from (pagination; 0 with limit 0 =
+            legacy full listing)
+          default: 0
+          minimum: 0
+        limit:
+          type: integer
+          description: >-
+            Max number of entries to return (0 = no limit; pagination active
+            when offset or limit is set)
+          default: 0
+          minimum: 0
+      required: [dir_path]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        dir_path:
+          type: string
+        total_entries:
+          type: integer
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [file, directory]
+              size:
+                type: integer
+              path:
+                type: string
+            required: [name, type, path]
+            additionalProperties: false
+        offset:
+          type: integer
+        limit:
+          type: integer
+        truncated:
+          type: boolean
+        next_offset:
+          type: [integer, "null"]
+      required: [dir_path, total_entries, entries]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: list_directory}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  search_files:
+    title: Search Files
+    description: >-
+      Search file contents for a regex pattern. Returns matching lines with file
+      paths and line numbers. Much more efficient than list_directory + read_file
+      for locating code in large repositories. Use include to filter by file
+      glob (e.g. '*.py').
+    input_schema:
+      type: object
+      properties:
+        pattern:
+          type: string
+          description: Regular expression to search for
+        path:
+          type: string
+          description: Directory or file to search in
+        include:
+          type: string
+          description: Optional glob filter for file names (e.g. '*.py')
+        context_lines:
+          type: integer
+          description: Lines of context around each match (0-5)
+          default: 0
+        max_results:
+          type: integer
+          description: Maximum number of matching lines to return (1-200)
+          default: 50
+        ignore_case:
+          type: boolean
+          description: Case-insensitive search
+          default: false
+      required: [pattern, path]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        matches:
+          type: array
+          items:
+            type: object
+            properties:
+              file:
+                type: string
+              line:
+                type: integer
+              text:
+                type: string
+            required: [file, line, text]
+            additionalProperties: false
+        total:
+          type: integer
+        truncated:
+          type: boolean
+        pattern:
+          type: string
+        path:
+          type: string
+        exit_code:
+          type: integer
+      required: [matches, total, truncated, pattern, path]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: fs_backend, operation: search_files}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+skills: {}
+assets: {}

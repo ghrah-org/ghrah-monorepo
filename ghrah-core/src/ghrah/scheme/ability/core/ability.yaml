@@ -1,0 +1,333 @@
+# 核心运行时能力容器 / Core ability container
+#
+# 本文件是定义面（AbilityDefinition）：容器身份、成员契约与提供者槽要求。
+# 运行时声明（permissions / hooks）不在定义内——它们随实现脚本落在
+# operations/*.py 的模块级常量里，切换时由加载器合并回旧 manifest 形态。
+#
+# 由 ghrah-core/src/ghrah/manifest/builtins/ghrah.core.*.yaml 归并而来。
+format: ghrah.ability-definition
+schema_version: 0.1-draft
+identity:
+  namespace: ghrah
+  name: core
+  version: 0.1.0
+title: Core
+description: Session-level abilities owned by the runtime itself — conversation, task completion, discovery, skill loading, history recall, and introspection.
+provider_requirements:
+  core_backend:
+    contract: ghrah.core.v1
+    # contract_digest 由发布路径从唯一规范计算并填入，作者不自签
+    required_capabilities: [request]
+operations:
+  conversation:
+    # 无 tool 绑定：本成员不接受模型侧调用，仅作为一次不带工具的用户轮次入口。
+    # 是否保留为 Operation，还是改由会话层表达，待定。
+    title: Conversation
+    description: Direct conversation with the LLM without tool usage
+    input_schema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        response:
+          type: string
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: conversation}
+    effects: []
+    resources: {}
+    # 不进模型工具面：本成员没有工具绑定，只作为一次不带工具的用户轮次入口。
+    expose: false
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  end_task:
+    title: End Task
+    description: End the current task and generate a final response
+    input_schema:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: Optional summary of the task result
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        response:
+          type: string
+      required: [response]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: end_task}
+    effects: [session:end]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  list_abilities:
+    title: List Abilities
+    description: >-
+      List the abilities available in this deployment (read-only). Every row is
+      marked kind='core-ability' (declared manifests + registry) or
+      kind='skill-ability' (skill catalog). Pass full_name for one entry's
+      detail.
+    input_schema:
+      type: object
+      properties:
+        full_name:
+          type: string
+          description: >-
+            Optional full name of a single ability to inspect in detail (e.g.
+            'ghrah.fs.read_file' or 'research'). Omit to list everything.
+      additionalProperties: false
+    output_schema:
+      # 两种返回形状（清单 / 单条详情），待定是否用 oneOf 之外的统一形态表达。
+      oneOf:
+        - type: object
+          properties:
+            abilities:
+              type: array
+              items:
+                type: object
+            skills:
+              type: array
+              items:
+                type: object
+            count:
+              type: integer
+            sources:
+              type: object
+            truncated:
+              type: boolean
+            diff:
+              type: object
+          required: [abilities, skills, count, sources, truncated, diff]
+          additionalProperties: true
+        - type: object
+          properties:
+            full_name:
+              type: string
+            kind:
+              type: string
+            description:
+              type: string
+            handler:
+              type: string
+            in_registry:
+              type: boolean
+            tool:
+              type: object
+            permissions:
+              type: object
+            implementation:
+              type: object
+          required: [full_name, kind, handler, in_registry]
+          additionalProperties: true
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: list_abilities}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  load_skill:
+    title: Load Skill
+    description: >-
+      Load the full SKILL.md document of one skill from the available-skills
+      catalog, by its exact full name. Returns the document text and its path.
+      Skills are instruction documents, not invocable abilities — read one when
+      a task matches its description.
+    input_schema:
+      type: object
+      properties:
+        full_name:
+          type: string
+          description: >-
+            The skill's full name exactly as shown in the available-skills
+            catalog (e.g. 'research'). Use list_abilities to see the names.
+      required: [full_name]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        full_name:
+          type: string
+        skill_dir:
+          type: string
+        path:
+          type: string
+        content:
+          type: string
+        note:
+          type: string
+      required: [full_name, skill_dir, path, content]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: load_skill}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  recall_context:
+    title: Recall Context
+    description: >-
+      Recall original context from the action-chain history of the current
+      branch (fork ancestors included). Use after compaction to recover details
+      that were summarized away — first list nodes (compact nodes carry
+      summarized_range), then fetch messages by node_id or node_id_range.
+    input_schema:
+      type: object
+      properties:
+        mode:
+          type: string
+          description: >-
+            list summarizes nodes on the current branch; messages fetches
+            original messages of the selected nodes
+          default: list
+          enum: [list, messages]
+        node_id:
+          type: string
+          description: Target a single node on the current branch (exclusive with node_id_range)
+        node_id_range:
+          type: array
+          description: Inclusive [from_id, to_id] range of node ids on the current branch
+          items:
+            type: string
+            description: Node id
+        keyword:
+          type: string
+          description: Case-insensitive substring filter over message text
+        role:
+          type: string
+          description: Filter messages by role
+          enum: [system, user, ai, tool]
+        since_iteration:
+          type: integer
+          description: Only nodes with iteration >= this value
+          minimum: 0
+        limit:
+          type: integer
+          description: Max number of nodes returned (most recent first)
+          default: 20
+          minimum: 1
+          maximum: 500
+        max_output_tokens:
+          type: integer
+          description: Output budget; recall stops and sets truncated=True when exceeded
+          default: 2000
+          minimum: 100
+      additionalProperties: false
+    output_schema:
+      # 两种形状由 mode 决定：节点概要 / 节点原文。节点项字段随 compact 等
+      # 节点种类变化，故节点内部保留 additionalProperties。
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+              iteration:
+                type: integer
+              node_kind:
+                type: string
+              branch_id:
+                type: string
+              messages:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    role:
+                      type: string
+                    source:
+                      type: string
+                    text:
+                      type: string
+            additionalProperties: true
+        count:
+          type: integer
+        truncated:
+          type: boolean
+      required: [nodes, count]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: recall_context}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  session_info:
+    title: Session Info
+    description: >-
+      Introspect the runtime environment and session — deployment mode,
+      workspace root, allowed filesystem roots, HITL approval parameters,
+      current session, and cluster members. Read-only, no side effects.
+    input_schema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        environment:
+          type: [object, "null"]
+        environment_source:
+          type: string
+        agent:
+          type: object
+          properties:
+            name:
+              type: [string, "null"]
+            session_id:
+              type: [string, "null"]
+            active_branch_id:
+              type: [string, "null"]
+            session:
+              type: string
+            session_error:
+              type: string
+          additionalProperties: true
+        cluster:
+          type: [object, "null"]
+      required: [environment, environment_source, agent, cluster]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: core_backend, operation: session_info}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+skills: {}
+assets: {}
