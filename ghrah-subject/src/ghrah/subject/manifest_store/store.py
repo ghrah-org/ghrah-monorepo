@@ -5,14 +5,18 @@ import re
 from pathlib import Path
 
 import yaml
-from ghrah.manifest.ability import AbilityManifest
-from ghrah.manifest.agent import AgentManifest
-from ghrah.manifest.errors import (
+from ghrah.scheme.agent_manifest import AgentManifest
+from ghrah.scheme.loading.ability_view import AbilityManifest
+from ghrah.scheme.loading.manifest_fields import (
     DuplicateManifestError,
     ManifestNotFoundError,
     ManifestValidationError,
 )
-from ghrah.manifest.parser import parse_ability_manifest, parse_agent_manifest, validate_manifest
+from ghrah.scheme.loading.manifest_io import (
+    parse_ability_manifest,
+    parse_agent_manifest,
+    validate_manifest,
+)
 
 from ghrah.subject._fs import atomic_write_text
 

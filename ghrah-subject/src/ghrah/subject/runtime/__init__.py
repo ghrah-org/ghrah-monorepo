@@ -17,7 +17,6 @@ from ghrah.subject.runtime.ouroboros_bridge import (
     wait_active,
 )
 from ghrah.subject.runtime.service_keys import (
-    COMMAND_BRIDGE,
     COMMAND_RUNNER,
     CORE_CLUSTER_REGISTRY,
     DESIRED_STATE_STORE,
@@ -51,7 +50,6 @@ from ghrah.subject.runtime.third_party import (
 )
 
 __all__ = [
-    "COMMAND_BRIDGE",
     "COMMAND_RUNNER",
     "CORE_CLUSTER_REGISTRY",
     "DESIRED_STATE_STORE",

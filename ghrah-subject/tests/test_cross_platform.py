@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 import pytest
-from ghrah.abilities.paths import is_subpath, resolve_relative_path
+from ghrah.scheme.paths import is_subpath, resolve_relative_path
 
 from ghrah.subject._fs import atomic_write_text, is_writable
 from ghrah.subject.sandbox.executor import SandboxExecutor, SandboxExecutorConfig

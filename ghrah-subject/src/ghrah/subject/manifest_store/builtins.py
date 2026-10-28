@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 
 import yaml
-from ghrah.manifest.ability import AbilityManifest
-from ghrah.manifest.builtins import load_all_builtin_manifests
+from ghrah.scheme.loading.ability_catalog import load_all_builtin_manifests
+from ghrah.scheme.loading.ability_view import AbilityManifest
 
 from ghrah.subject.manifest_store.store import ManifestStore
 

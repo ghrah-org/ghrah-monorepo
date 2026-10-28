@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ghrah.manifest.builtins import load_all_builtin_manifests  # type: ignore[import-untyped]
-from ghrah.manifest.types import PermissionFlags  # type: ignore[import-untyped]
+from ghrah.scheme.loading.ability_catalog import load_all_builtin_manifests
+from ghrah.scheme.loading.manifest_fields import PermissionFlags
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.manifest_store.builtins import ensure_builtins

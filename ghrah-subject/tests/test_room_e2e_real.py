@@ -76,7 +76,7 @@ async def _make_project(ctx: Context, name: str = "demo") -> str:
 
 
 async def _spawn_agent_with_send(ctx: Context, project_id: str, name: str) -> str:
-    """spawn 一个带 ``send`` ability 的 agent（CoreUnit 经 AbilityRegistry 物化）。"""
+    """spawn 一个带 ``send`` ability 的 agent（CoreUnit 经扫盘工厂物化）。"""
     result = await bridge_command(
         ctx,
         "spawn_agent",

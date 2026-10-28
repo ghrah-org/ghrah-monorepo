@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ghrah.manifest.errors import (
+from ghrah.scheme.loading.manifest_fields import (
     DuplicateManifestError,
     ManifestNotFoundError,
     ManifestValidationError,

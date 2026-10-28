@@ -4,15 +4,15 @@ import dataclasses
 import logging
 from typing import Any
 
-from ghrah.manifest.errors import (
+from ghrah.protocol.types import (  # type: ignore[import-untyped]
+    MANIFEST_COMMANDS as _MANIFEST_COMMANDS,
+)
+from ghrah.scheme.agent_resolver import ManifestResolver
+from ghrah.scheme.loading.manifest_fields import (
     DuplicateManifestError,
     ManifestError,
     ManifestNotFoundError,
     ManifestValidationError,
-)
-from ghrah.manifest.resolver import ManifestResolver
-from ghrah.protocol.types import (  # type: ignore[import-untyped]
-    MANIFEST_COMMANDS as _MANIFEST_COMMANDS,
 )
 
 from ghrah.subject.manifest_store.store import ManifestStore

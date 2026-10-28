@@ -30,7 +30,6 @@ from ghrah.subject.runtime.ouroboros_bridge import (
     unmount_unit,
 )
 from ghrah.subject.runtime.plugin_session import PluginSession
-from ghrah.subject.runtime.service_keys import ABILITY_BRIDGE_UNIT
 from ghrah.subject.unit.base import SubjectUnit
 
 if TYPE_CHECKING:
@@ -131,14 +130,6 @@ def _resolve_unit_factory(spec: PluginSpec, entry: DiscoveredPlugin) -> SubjectU
     return None
 
 
-async def _notify_ability_bridge(ctx: Context) -> None:
-    """通知桥接 unit 全量重算（不在场时静默：非 full profile/未挂载）。"""
-    bridge = ctx.get(ABILITY_BRIDGE_UNIT.name, strict=False)
-    if bridge is None:
-        return
-    await bridge.reconcile()
-
-
 async def mount_enabled_plugins(
     ctx: Context,
     config: SubjectConfig,
@@ -226,8 +217,6 @@ async def mount_enabled_plugins(
     mounted = [o.plugin_id for o in report.outcomes if o.status == "mounted"]
     if mounted:
         await session.broadcast_negotiated(mounted)
-        # 装配清单变了 → 能力桥重算（挂载成功路径）
-        await _notify_ability_bridge(ctx)
     return report
 
 
@@ -374,8 +363,5 @@ def _make_crash_handler(
         )
         # 插件死了清单变了 → 重协商信号
         await session.broadcast_negotiated([crashed_id])
-        # 装配清单变了 → 能力桥重算（崩溃撤销路径；unmount 在前，
-        # ABILITY_BRIDGE 服务已随 fiber dispose 失活）
-        await _notify_ability_bridge(ctx)
 
     return on_crash

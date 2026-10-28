@@ -107,13 +107,6 @@ async def mount_builtin_units(
         if config.room_filter.enabled:
             units.append(RoomFilterUnit(config))
 
-        # 能力桥：requires CORE_CLUSTER_REGISTRY（registry 之后）；specs/
-        # ABILITY_BRIDGE 服务均 reconcile 时懒解析，挂载序与插件阶段无关
-        # （初始装配由 plugin_mount 挂载尾部钩子触发重算）
-        from ghrah.subject.runtime.ability_bridge import AbilityBridgeUnit
-
-        units.append(AbilityBridgeUnit())
-
     fibers: dict[str, Fiber] = {}
     for unit in units:
         fiber = ctx.plugin(mount_unit(unit, route_registry=route_registry))
