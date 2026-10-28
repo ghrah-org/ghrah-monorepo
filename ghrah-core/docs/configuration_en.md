@@ -176,7 +176,7 @@ llm = LLMFactory.create(resolved, ModelOverrides(temperature=0, max_tokens=2048)
 # resolved.capabilities、capability_sources 和 metadata 保留有效能力及来源。
 ```
 
-本消费契约要求 agentconf 0.3 候选 SDK。稳定依赖下限和正式锁定版本随联合发布验收更新；不把本机 path 写入依赖或锁文件。
+本消费契约要求 agentconf>=0.3.0,<0.4。根依赖与锁文件统一解析正式包，不使用本机 SDK path。运行 `uv sync --all-packages --group dev` 同步实际环境。
 
 ## Direct ChatFormat Construction (Fallback)
 

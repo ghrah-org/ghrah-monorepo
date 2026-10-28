@@ -5,9 +5,9 @@ description = " General Distributed Agent Cluster Framework"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.0",
+    "openai>=3.6.0",
     "anthropic>=0.40",
-    "agentconf>=0.1.0",
+    "agentconf>=0.3.0,<0.4",
     "aiosqlite>=0.20",
     "pyyaml>=6.0",
     "ghrah-protocol>=0.2.0a0",

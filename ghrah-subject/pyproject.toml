@@ -11,7 +11,7 @@ dependencies = [
     "ghrah-taskstore>=0.1.0a0",
     "cordis-ouroboros>=0.2.0",
     "aiosqlite>=0.20",
-    "agentconf",
+    "agentconf>=0.3.0,<0.4",
     "websockets>=12.0",
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.34.0",

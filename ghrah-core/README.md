@@ -24,7 +24,7 @@ uv sync
 uv run agentconf
 ```
 
-旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。本分支验证 agentconf 0.3 候选包，正式依赖与用户库切换随联合发布验收更新。
+旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。本分支依赖 agentconf 0.3.0（低于 0.4），同步依赖后使用显式端点配置；旧库与旧配置须先完成迁移。
 
 ### Direct Configuration (Without agentconf)
 

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -20,15 +20,15 @@ members = [
 
 [[package]]
 name = "agentconf"
-version = "0.1.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "textual" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/b5/aa826403c90e25dcc2aaafb4b9e51987a71394a3b80f2cded7734643115b/agentconf-0.1.0.tar.gz", hash = "sha256:2a9b2315392fa8c02b3ed4c8cb62b40edf7f23270cdf21132ac09f4f78a0a4a6", size = 66140, upload-time = "2026-05-21T15:12:54.871Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/18/94f9fac444f92e44dd3419d86d7658f6083278d46621f274db60e486aad1/agentconf-0.3.0.tar.gz", hash = "sha256:2ad981f82215038bf59e21c8230dd087a9c999d541b13e365ec26bdf427ee085", size = 163722, upload-time = "2026-10-28T16:21:42.475Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/0e/904aeca4fb0c3818e8c0616679d879cada334841458e61e78978de9cf258/agentconf-0.1.0-py3-none-any.whl", hash = "sha256:44955e4159e4d0029c7628312f20efbeb64ebafb6ec3ed47d65d57301030a7cd", size = 43381, upload-time = "2026-05-21T15:12:53.649Z" },
+    { url = "https://files.pythonhosted.org/packages/85/30/8d3965620560da867fbb27319ebf3b3e5fc892cc74ba2cccff322c6a168b/agentconf-0.3.0-py3-none-any.whl", hash = "sha256:085d63a84f5b024a47f457a06e3130e84be725551889101e38ddd56d19a9f5ad", size = 124017, upload-time = "2026-10-28T16:21:40.957Z" },
 ]
 
 [[package]]
@@ -487,12 +487,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf", specifier = ">=0.1.0" },
+    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "anthropic", specifier = ">=0.40" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9" },
-    { name = "openai", specifier = ">=1.0" },
+    { name = "openai", specifier = ">=3.6.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
@@ -527,7 +527,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf", specifier = ">=0.1.0" },
+    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
     { name = "aiohttp", specifier = ">=3.13.5" },
     { name = "ghrah-core", editable = "ghrah-core" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
@@ -633,7 +633,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf" },
+    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "cordis-ouroboros", specifier = ">=0.2.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
