@@ -10,7 +10,7 @@
 - 全部过滤器（node_id/范围含端点/keyword 大小写/role/since_iteration/limit 取尾）
 - max_output_tokens 截断 + truncated 标记
 - 查询边界：兄弟分支界外错误、未知 node_id、context_manager 未接线、非法参数
-- 双注册面（AbilityRegistry + builtin manifest + resolver）
+- 双面（定义面扫盘 + builtin manifest + resolver）
 """
 
 from __future__ import annotations
@@ -19,10 +19,13 @@ from typing import Any
 
 import pytest
 
-from ghrah.abilities.builtin.recall_context import RecallContextAbility, RecallContextInput
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.context.manager import ContextManager
+from ghrah.scheme.ability.core.operations.recall_context import (
+    RecallContextAbility,
+    RecallContextInput,
+)
+from ghrah.scheme.execution.context import AbilityExecutionContext
 from ghrah.types.results import ActionOutcome
 
 # ── 辅助 ──
@@ -357,12 +360,12 @@ class TestBoundary:
 
 class TestRegistration:
     def test_registry_has_recall_context(self) -> None:
-        from ghrah.abilities import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import has_handler
 
-        assert AbilityRegistry.has("recall_context")
+        assert has_handler("recall_context")
 
     def test_builtin_manifest_loads(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.scheme.loading.ability_catalog import load_builtin_manifest
 
         manifest = load_builtin_manifest("ghrah.core.recall_context")
         assert manifest.implementation.type == "builtin"
@@ -370,13 +373,13 @@ class TestRegistration:
         assert manifest.metadata.permissions.require_hitl is False
 
     def test_resolver_from_builtin(self) -> None:
-        from ghrah.manifest.resolver import ResolvedAbility
+        from ghrah.scheme.agent_resolver import ResolvedAbility
 
         resolved = ResolvedAbility.from_builtin("recall_context")
         assert resolved.ability_name == "ghrah.core.recall_context"
 
     def test_manifest_tool_parameters_match_input_model(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.scheme.loading.ability_catalog import load_builtin_manifest
 
         manifest = load_builtin_manifest("ghrah.core.recall_context")
         assert manifest.tool is not None

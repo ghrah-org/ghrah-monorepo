@@ -16,12 +16,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.list_abilities import ListAbilitiesAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
-from ghrah.manifest.types import ImplementationDef, PermissionFlags
-from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider
+import yaml
+
+from ghrah.scheme.ability.core.operations.list_abilities import ListAbilitiesAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.loading.ability_schema import SKILL_FILE_NAME
+from ghrah.scheme.loading.ability_view import AbilityManifest, AbilityMetadata
+from ghrah.scheme.loading.manifest_fields import ImplementationDef, PermissionFlags
+from ghrah.scheme.loading.skill_provider import SkillAbilityProvider
 
 
 def _ability_manifest(
@@ -81,14 +84,42 @@ def _make_context(
 def _write_skill(
     root: Path, dir_name: str, description: str = "对关系型数据库执行只读查询。"
 ) -> Path:
-    """写一个最小 skill 包（SKILL.md with frontmatter）。"""
-    skill_dir = root / dir_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / SKILL_FILE_NAME).write_text(
-        f"---\nname: {dir_name}\ndescription: {description}\n---\n\n正文。\n",
-        encoding="utf-8",
+    """造一个新格式能力包（``ability.yaml`` + ``skills/SKILL.md``）。
+
+    旧格式（只有带 frontmatter 的 ``SKILL.md``）已不再被扫盘识别，夹具必须写全。
+
+    Args:
+        root: 目录池根。
+        dir_name: 包目录名（同时作为容器名与成员键）。
+        description: 技能描述。
+
+    Returns:
+        新建的包目录。
+    """
+    package = root / dir_name
+    (package / "skills").mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": "ghrah.ability-definition",
+        "schema_version": "0.1-draft",
+        "identity": {"namespace": dir_name, "version": "0.1.0"},
+        "title": dir_name,
+        "description": "测试用能力包。",
+        "provider_requirements": {},
+        "operations": {},
+        "skills": {
+            dir_name: {
+                "title": dir_name,
+                "description": description,
+                "body": {"path": "skills/SKILL.md", "media_type": "text/markdown"},
+            }
+        },
+        "assets": {},
+    }
+    (package / "ability.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
-    return skill_dir
+    (package / "skills" / SKILL_FILE_NAME).write_text("正文。\n", encoding="utf-8")
+    return package
 
 
 def _rows_by_name(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -134,8 +165,7 @@ class TestListAbilitiesAbility:
         """registry-only 项（无 manifest 的注册 handler）进 diff 段。"""
         result = await ListAbilitiesAbility().execute(_make_context())
         diff = result.data["diff"]
-        # 现状已知：command_proxy / send 有注册无 yaml
-        assert "command_proxy" in diff["registered_without_manifest"]
+        # 现状已知：send 有注册无 yaml
         assert "send" in diff["registered_without_manifest"]
 
     async def test_list_with_fs_store_merges_custom(self) -> None:
@@ -193,7 +223,7 @@ class TestListAbilitiesAbility:
     async def test_detail_registry_only_handler(self) -> None:
         """registry-only 项按 handler 名查询 → SUCCESS + note 说明无档案。"""
         result = await ListAbilitiesAbility().execute(
-            _make_context(tool_args={"full_name": "command_proxy"})
+            _make_context(tool_args={"full_name": "send"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["in_registry"] is True
@@ -223,19 +253,22 @@ class TestListAbilitiesAbility:
         assert rows["custom.pkg.ghost"]["in_registry"] is False
 
     def test_registered_in_registry(self) -> None:
-        """本能力自身完成两级注册：Registry + 内置 yaml 白名单。"""
-        from ghrah.abilities.registry import AbilityRegistry
-        from ghrah.manifest.builtins import _BUILTIN_YAML_NAMES, load_all_builtin_manifests
+        """本能力自身完成两级登记：扫盘 handler 面 + 内置定义面。"""
+        from ghrah.scheme.loading.ability_catalog import (
+            builtin_full_names,
+            has_handler,
+            load_all_builtin_manifests,
+        )
 
-        assert AbilityRegistry.has("list_abilities")
-        assert "ghrah.core.list_abilities" in _BUILTIN_YAML_NAMES
+        assert has_handler("list_abilities")
+        assert "ghrah.core.list_abilities" in builtin_full_names()
         manifests = load_all_builtin_manifests()
         assert "ghrah.core.list_abilities" in manifests
         assert manifests["ghrah.core.list_abilities"].implementation.handler == "list_abilities"
 
     async def test_builtin_manifest_parses_and_binds(self) -> None:
         """新增 yaml 与类实现相互对齐：tool name 一致、handler 可解析。"""
-        from ghrah.manifest.builtins import load_all_builtin_manifests
+        from ghrah.scheme.loading.ability_catalog import load_all_builtin_manifests
 
         manifest = load_all_builtin_manifests()["ghrah.core.list_abilities"]
         tool = ListAbilitiesAbility().bind_tool()
@@ -293,14 +326,16 @@ class TestListAbilitiesSkillAbility:
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["kind"] == "skill-ability"
         assert result.data["skill_dir"] == str(skill_dir)
-        assert result.data["frontmatter"]["name"] == "db-query"
+        assert result.data["title"] == "db-query"
+        assert result.data["body_path"] == "skills/SKILL.md"
+        assert result.data["media_type"] == "text/markdown"
         # 尚无 lock → 未登记（recorded None），不是漂移
-        assert result.data["fingerprint"] == {
-            "current": result.data["fingerprint"]["current"],
-            "recorded": None,
-            "drifted": False,
-            "lock_issue": None,
-        }
+        entry = result.data["fingerprint"]["entry"]
+        assert entry["current"].startswith("sha256-entry-v1:")
+        assert entry["recorded"] is None
+        assert entry["drifted"] is False
+        assert result.data["fingerprint"]["record"] is None
+        assert result.data["fingerprint"]["lock_issue"] is None
 
     async def test_unknown_full_name_still_fails(self, tmp_path: Path) -> None:
         """skill 面接线后，真正的未命中仍是 FAILURE（不为 skill 放宽 ability 文案）。"""

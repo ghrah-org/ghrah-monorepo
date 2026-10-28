@@ -11,14 +11,14 @@ import os
 import tempfile
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.delete_file import DeleteFileAbility
-from ghrah.abilities.builtin.edit_file import EditFileAbility
-from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
-from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
-from ghrah.abilities.builtin.move_file import MoveFileAbility
-from ghrah.abilities.builtin.write_file import WriteFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.ability.fs.operations.delete_file import DeleteFileAbility
+from ghrah.scheme.ability.fs.operations.edit_file import EditFileAbility
+from ghrah.scheme.ability.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.scheme.ability.fs.operations.move_file import MoveFileAbility
+from ghrah.scheme.ability.fs.operations.write_file import WriteFileAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.permissions.fs_permissions import FSPermissionChecker
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:

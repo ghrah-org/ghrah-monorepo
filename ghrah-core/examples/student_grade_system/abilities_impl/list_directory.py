@@ -25,12 +25,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.permissions.fs_permissions import FSPermissionChecker
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
-    from ghrah.abilities.hooks import Hook
+    from ghrah.scheme.execution.context import AbilityExecutionContext
+    from ghrah.scheme.execution.hooks import Hook
 
 logger = logging.getLogger(__name__)
 

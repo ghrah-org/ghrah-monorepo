@@ -12,15 +12,12 @@ from typing import Any
 
 import pytest
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.command_safety import (
-    CommandSafetyCategory,
-    CommandSafetyChecker,
-)
-from ghrah.abilities.builtin.execute_command import CommandResult
-from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
-from ghrah.abilities.builtin.search_files import SearchFilesAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.ability.fs.operations.search_files import SearchFilesAbility
+from ghrah.scheme.ability.shell.operations.execute_command import CommandResult
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.permissions.command_safety import CommandSafetyCategory, CommandSafetyChecker
+from ghrah.scheme.permissions.fs_permissions import FSPermissionChecker
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:
@@ -95,7 +92,7 @@ class TestSchema:
         assert "parameters" in schema["function"]
 
     def test_input_schema_required_fields(self) -> None:
-        from ghrah.abilities.builtin.search_files import SearchFilesInput
+        from ghrah.scheme.ability.fs.operations.search_files import SearchFilesInput
 
         js = SearchFilesInput.model_json_schema()
         assert "pattern" in js["properties"]
@@ -154,7 +151,9 @@ class TestValidation:
 
 class TestPythonFallback:
     async def test_basic_search(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
@@ -169,7 +168,9 @@ class TestPythonFallback:
         assert result.data["truncated"] is False
 
     async def test_include_glob(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
@@ -181,7 +182,9 @@ class TestPythonFallback:
         assert not any("README" in f for f in files)
 
     async def test_ignore_case(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
@@ -195,7 +198,9 @@ class TestPythonFallback:
     async def test_max_results_truncation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         big = root / "big.txt"
         big.write_text("\n".join(f"alpha line {i}" for i in range(10)), encoding="utf-8")
@@ -211,7 +216,9 @@ class TestPythonFallback:
     async def test_invalid_regex_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
@@ -223,7 +230,9 @@ class TestPythonFallback:
     async def test_line_numbers_are_int(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
@@ -344,7 +353,9 @@ class TestLocalRg:
             _make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
         )
 
-        monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
+        monkeypatch.setattr(
+            "ghrah.scheme.ability.fs.operations.search_files.shutil.which", lambda _: None
+        )
         py_ability = SearchFilesAbility()
         py_result = await py_ability.execute(
             _make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
@@ -388,7 +399,7 @@ class TestRgWhitelist:
 
 class TestParseRgOutput:
     def test_parse_windows_paths_with_drive_colon(self) -> None:
-        from ghrah.abilities.builtin.search_files import _parse_rg_output
+        from ghrah.scheme.ability.fs.operations.search_files import _parse_rg_output
 
         out = "C:\\repo\\pkg\\a.py:12:found here\nC:\\repo\\b.py:3:also\n"
         parsed = _parse_rg_output(out, max_results=10)
@@ -399,7 +410,7 @@ class TestParseRgOutput:
         assert parsed["items"][1]["file"] == "C:\\repo\\b.py"
 
     def test_parse_context_separator_lines(self) -> None:
-        from ghrah.abilities.builtin.search_files import _parse_rg_output
+        from ghrah.scheme.ability.fs.operations.search_files import _parse_rg_output
 
         out = "a.py:1:hit\n--\nb.py:2:hit2\n--\n"
         parsed = _parse_rg_output(out, max_results=10)
@@ -407,7 +418,7 @@ class TestParseRgOutput:
         assert all(m["file"] for m in parsed["items"])
 
     def test_truncation_flag(self) -> None:
-        from ghrah.abilities.builtin.search_files import _parse_rg_output
+        from ghrah.scheme.ability.fs.operations.search_files import _parse_rg_output
 
         out = "\n".join(f"a.py:{i}:m" for i in range(1, 6))
         parsed = _parse_rg_output(out, max_results=3)

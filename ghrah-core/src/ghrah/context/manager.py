@@ -43,11 +43,11 @@ from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
 from ghrah.context.window import WindowManager
 from ghrah.core.window_protocol import MessageFactory
-from ghrah.skills.catalog import digest_catalog, render_catalog_message
+from ghrah.scheme.loading.skill_context import digest_skill_catalog, render_skill_catalog
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.core.message import AgentMessage
+    from ghrah.scheme.execution.context import AbilityExecutionContext
     from ghrah.types.config_types import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -1064,7 +1064,7 @@ class ContextManager:
         Returns:
             初始化后的 AbilityExecutionContext
         """
-        from ghrah.abilities.context import AbilityExecutionContext
+        from ghrah.scheme.execution.context import AbilityExecutionContext
 
         return AbilityExecutionContext(
             current_ability_name="",
@@ -1143,7 +1143,7 @@ class ContextManager:
             # 从未发布过且清单为空：无事可报（对齐 DSH），也不占位
             return None
 
-        digest = digest_catalog(scan.skills)
+        digest = digest_skill_catalog(scan.skills)
         first = self._skill_catalog_digest is None
         changed = not first and digest != self._skill_catalog_digest
         if scan.issues and (first or changed):
@@ -1156,7 +1156,7 @@ class ContextManager:
         self._skill_catalog_digest = digest
         return self._message_factory.create_message(
             role="user",
-            text=render_catalog_message(scan.skills, changed=changed),
+            text=render_skill_catalog(scan.skills, changed=changed),
             source="skill:catalog",
         )
 

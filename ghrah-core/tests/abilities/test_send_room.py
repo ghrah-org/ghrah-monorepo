@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.send import SendAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.core.room_protocol import ROOM_BRIDGE_UNAVAILABLE_ERROR, SerialRoomBridge
+from ghrah.scheme.ability.cluster.operations.send import SendAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.invocation import AbilityInvocation
 
 
 def _make_context(

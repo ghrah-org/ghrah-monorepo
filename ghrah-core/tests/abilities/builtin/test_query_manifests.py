@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.query_manifests import QueryManifestsAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.manifest.agent import AbilityRef, AgentManifest, AgentMetadata, ModelConfig
-from ghrah.manifest.types import PermissionFlags
+from ghrah.scheme.ability.cluster.operations.query_manifests import QueryManifestsAbility
+from ghrah.scheme.agent_manifest import AbilityRef, AgentManifest, AgentMetadata, ModelConfig
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.loading.manifest_fields import PermissionFlags
 
 
 def _agent_manifest(

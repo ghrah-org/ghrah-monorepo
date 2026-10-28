@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence.memory import InMemoryBackend
 from ghrah.core.config import AgentConfig, ContextConfig
 from ghrah.core.message import AgentMessage, MessageType
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 AGENT_NAME = "test-agent"
 AGENT_ID = "agent-fullchain-1"

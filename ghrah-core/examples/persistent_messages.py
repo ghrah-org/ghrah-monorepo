@@ -11,13 +11,13 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.base import ActorAgent
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import MessageKind, MessageManager
 from ghrah.core.config import AgentConfig
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 
 class DemoLLM:

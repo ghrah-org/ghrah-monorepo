@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hook_context import HookContext
-from ghrah.abilities.hook_runner import HookRunner
-from ghrah.abilities.hook_store import HookStore
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult, HookScope
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hook_context import HookContext
+from ghrah.scheme.execution.hook_runner import HookRunner
+from ghrah.scheme.execution.hook_store import HookStore
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult, HookScope
 from ghrah.types.results import ActionResult
 
 

@@ -12,8 +12,6 @@
 5. type 引用未注册的 builtin → ManifestValidationError
 6. ContextOverrides → WindowConfig/ContextConfig 映射
 7. runtime_name 覆盖
-8. AbilityRegistry.register_from_resolved — builtin 验证
-9. AbilityRegistry.register_from_resolved — 未注册 type 报错
 10. ModelOverrides 构建（ManifestResolver._build_config）
 11. WindowOverrides/PersistenceOverrides 零值正确处理（or → is not None）
 """
@@ -22,10 +20,8 @@ from __future__ import annotations
 
 import pytest
 
-from ghrah.abilities.registry import AbilityRegistry
 from ghrah.core.config import AgentConfig
-from ghrah.manifest.ability import AbilityHooks
-from ghrah.manifest.agent import (
+from ghrah.scheme.agent_manifest import (
     AbilityRef,
     AgentManifest,
     AgentMetadata,
@@ -34,10 +30,13 @@ from ghrah.manifest.agent import (
     PersistenceOverrides,
     WindowOverrides,
 )
-from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
-from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
-from ghrah.manifest.store import BuiltinManifestStore
-from ghrah.manifest.types import ImplementationDef, PermissionFlags
+from ghrah.scheme.agent_resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
+from ghrah.scheme.loading.manifest_fields import (
+    ManifestNotFoundError,
+    ManifestValidationError,
+    PermissionFlags,
+)
+from ghrah.scheme.loading.manifest_io import BuiltinManifestStore
 
 
 def _make_agent_manifest(
@@ -82,7 +81,9 @@ class TestBuiltinManifestStore:
     def test_list_abilities_no_filter(self) -> None:
         store = BuiltinManifestStore()
         names = store.list_abilities()
-        assert len(names) == 20
+        # 21 份 = 原 20 份 + ghrah.mcp.mcp_call：mcp_call 此前只在进程内注册表里
+        # 存在（registry-only），升格为正式能力包后才出现在定义面
+        assert len(names) == 21
         assert "ghrah.core.conversation" in names
         assert "ghrah.core.session_info" in names
 
@@ -290,63 +291,6 @@ class TestManifestResolver:
         result = resolver.resolve(manifest, runtime_name=None)
 
         assert result.config.name == "test_agent"
-
-
-class TestAbilityRegistryRegisterFromResolved:
-    """AbilityRegistry.register_from_resolved 测试。"""
-
-    def test_builtin_validation_passes(self) -> None:
-        resolved = ResolvedAbility.from_builtin("conversation")
-        AbilityRegistry.register_from_resolved(resolved)
-
-    def test_unknown_builtin_raises(self) -> None:
-        resolved = ResolvedAbility(
-            ability_name="test.unknown",
-            tool_schema=None,
-            permissions=PermissionFlags(),
-            implementation=ImplementationDef(type="builtin", handler="unknown_builtin"),
-            hooks=AbilityHooks(),
-        )
-        with pytest.raises(ManifestValidationError, match="Unknown builtin"):
-            AbilityRegistry.register_from_resolved(resolved)
-
-    def test_python_type_with_valid_module(self) -> None:
-        resolved = ResolvedAbility(
-            ability_name="test.python_ability",
-            tool_schema=None,
-            permissions=PermissionFlags(),
-            implementation=ImplementationDef(
-                type="python", handler="test_handler", module_ref="json"
-            ),
-            hooks=AbilityHooks(),
-        )
-        AbilityRegistry.register_from_resolved(resolved)
-
-    def test_python_type_with_invalid_module_raises(self) -> None:
-        resolved = ResolvedAbility(
-            ability_name="test.python_ability",
-            tool_schema=None,
-            permissions=PermissionFlags(),
-            implementation=ImplementationDef(
-                type="python",
-                handler="test_handler",
-                module_ref="totally_nonexistent_module_xyz",
-            ),
-            hooks=AbilityHooks(),
-        )
-        with pytest.raises(ManifestValidationError, match="Cannot import"):
-            AbilityRegistry.register_from_resolved(resolved)
-
-    def test_sandbox_type_raises(self) -> None:
-        resolved = ResolvedAbility(
-            ability_name="test.sandbox_ability",
-            tool_schema=None,
-            permissions=PermissionFlags(),
-            implementation=ImplementationDef(type="sandbox", handler="test"),
-            hooks=AbilityHooks(),
-        )
-        with pytest.raises(ManifestValidationError, match="Unsupported"):
-            AbilityRegistry.register_from_resolved(resolved)
 
 
 class TestModelOverridesBuild:

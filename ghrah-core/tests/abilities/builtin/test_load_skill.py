@@ -15,33 +15,62 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.load_skill import LoadSkillAbility, LoadSkillInput
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.registry import AbilityRegistry
-from ghrah.manifest.builtins import _BUILTIN_YAML_NAMES, load_all_builtin_manifests
-from ghrah.manifest.resolver import ResolvedAbility
-from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider, SkillParseError
-
-SKILL_TEXT = (
-    "---\n"
-    "name: db-query\n"
-    "description: 对关系型数据库执行只读查询。\n"
-    "---\n"
-    "\n"
-    "# 步骤\n"
-    "\n"
-    "1. 先看 schema。\n"
+from ghrah.scheme.ability.core.operations.load_skill import LoadSkillAbility, LoadSkillInput
+from ghrah.scheme.agent_resolver import ResolvedAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.loading.ability_catalog import (
+    builtin_full_names,
+    has_handler,
+    load_all_builtin_manifests,
 )
+from ghrah.scheme.loading.ability_schema import SKILL_FILE_NAME
+from ghrah.scheme.loading.skill_errors import SkillParseError
+from ghrah.scheme.loading.skill_provider import SkillAbilityProvider
+
+BODY_TEXT = "# 步骤\n\n1. 先看 schema。\n"
+"""正文内容：新格式的 ``skills/SKILL.md`` 是纯 Markdown，不再含 frontmatter。"""
 
 
-def _write_skill(root: Path, dir_name: str, text: str = SKILL_TEXT) -> Path:
-    skill_dir = root / dir_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / SKILL_FILE_NAME).write_text(text, encoding="utf-8")
-    return skill_dir
+def _write_skill(root: Path, dir_name: str) -> Path:
+    """造一个新格式能力包（``ability.yaml`` + ``skills/SKILL.md``）。
+
+    旧格式（只有带 frontmatter 的 ``SKILL.md``）已不再被扫盘识别。
+
+    Args:
+        root: 目录池根。
+        dir_name: 包目录名（同时作为容器名与技能成员键）。
+
+    Returns:
+        新建的包目录。
+    """
+    package = root / dir_name
+    (package / "skills").mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": "ghrah.ability-definition",
+        "schema_version": "0.1-draft",
+        "identity": {"namespace": dir_name, "version": "0.1.0"},
+        "title": dir_name,
+        "description": "对关系型数据库执行只读查询。",
+        "provider_requirements": {},
+        "operations": {},
+        "skills": {
+            dir_name: {
+                "title": dir_name,
+                "description": "对关系型数据库执行只读查询。",
+                "body": {"path": "skills/SKILL.md", "media_type": "text/markdown"},
+            }
+        },
+        "assets": {},
+    }
+    (package / "ability.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    (package / "skills" / SKILL_FILE_NAME).write_text(BODY_TEXT, encoding="utf-8")
+    return package
 
 
 def _make_context(
@@ -83,7 +112,9 @@ class TestLoadSkillAbilityContract:
         assert func["parameters"]["required"] == ["full_name"]
 
     def test_prompt_description(self) -> None:
-        assert LoadSkillAbility().to_prompt_description().startswith("load_skill(full_name: str)")
+        # 签名含两个可选参数（按需取 MCP 参数 schema），与工具 schema 保持一致。
+        description = LoadSkillAbility().to_prompt_description()
+        assert description.startswith("load_skill(full_name: str, server?: str, tool?: str)")
 
     def test_no_hooks(self) -> None:
         assert LoadSkillAbility().get_hooks() == []
@@ -107,8 +138,8 @@ class TestLoadSkillAbilityExecute:
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["full_name"] == "db-query"
         assert result.data["skill_dir"] == str(skill_dir)
-        assert result.data["path"] == str(skill_dir / SKILL_FILE_NAME)
-        assert result.data["content"] == SKILL_TEXT
+        assert result.data["path"] == str(skill_dir / "skills" / SKILL_FILE_NAME)
+        assert result.data["content"] == BODY_TEXT
         assert result.data["note"] == "skill-ability document — instructions to apply"
 
     async def test_missing_full_name(self) -> None:
@@ -178,10 +209,10 @@ class TestLoadSkillAbilityExecute:
 
 class TestLoadSkillRegistration:
     def test_registered_in_registry(self) -> None:
-        assert AbilityRegistry.has("load_skill")
+        assert has_handler("load_skill")
 
     def test_builtin_manifest_declared(self) -> None:
-        assert "ghrah.core.load_skill" in _BUILTIN_YAML_NAMES
+        assert "ghrah.core.load_skill" in builtin_full_names()
 
         manifest = load_all_builtin_manifests()["ghrah.core.load_skill"]
         assert manifest.implementation.handler == "load_skill"

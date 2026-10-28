@@ -20,10 +20,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.errors import AbilityNotFoundError
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.chat.content import ReasoningBlock, TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -32,6 +28,10 @@ from ghrah.core.events import CoreEventType
 from ghrah.core.exceptions import AgentError, HookError
 from ghrah.core.message import AgentMessage as Message
 from ghrah.core.message import MessageType
+from ghrah.scheme.errors import AbilityNotFoundError
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.types.config_types import WindowConfig
 
 # ----------------------------------------------------------------
@@ -563,7 +563,7 @@ class TestDriveLoop:
     @pytest.mark.asyncio
     async def test_toolcall_end_task_stops_loop(self) -> None:
         """LLM 通过 toolcall 调用 end_task 后应只执行一次并终止循环。"""
-        from ghrah.abilities.builtin.end_task import EndTaskAbility
+        from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
 
         agent = _create_agent()
         agent.register_ability(EndTaskAbility(mode="toolcall"))
@@ -593,7 +593,7 @@ class TestDriveLoop:
         load_skill 等查询类能力带 content/response）当最终回复，导致前端
         渲染出"上一轮查询结果"而不是模型输出。
         """
-        from ghrah.abilities.builtin.end_task import EndTaskAbility
+        from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
 
         agent = _create_agent()
         agent.register_ability(EndTaskAbility(mode="toolcall"))
@@ -823,7 +823,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_receive_with_ability(self) -> None:
         """有 ability 注册时，receive 触发驱动循环。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -850,8 +850,8 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_receive_multiple_abilities(self) -> None:
         """注册多个 ability，receive 正常工作。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
-        from ghrah.abilities.builtin.end_task import EndTaskAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -869,7 +869,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_receive_error_handling(self) -> None:
         """receive 中 AgentError 被重新抛出。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -886,7 +886,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_receive_sequential_messages(self) -> None:
         """连续多次 receive 正常工作。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -909,7 +909,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_reasoning_only_response_retries_for_visible_text(self) -> None:
         """终止响应只有 reasoning 时补全一次，且不把首次空响应写入历史。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -933,7 +933,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_reasoning_only_retry_uses_safe_visible_fallback(self) -> None:
         """补全仍无正文时给出安全提示，不能把 reasoning 当用户回复。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -952,7 +952,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_receive_does_not_republish_previous_chain_head(self) -> None:
         """第二条消息只发布新节点，不能先重放上一条回复节点。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())
@@ -977,7 +977,7 @@ class TestReceiveIntegration:
     @pytest.mark.asyncio
     async def test_room_delivery_context_survives_tool_call_iterations(self) -> None:
         """最终 conversation 节点没有 user delta 时仍携带 Room 归属。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(
@@ -1405,7 +1405,7 @@ class TestMessageQueue:
     @pytest.mark.asyncio
     async def test_receive_enqueues_initial_message(self) -> None:
         """receive() 将用户消息入队到 _message_queue。"""
-        from ghrah.abilities.builtin.conversation import ConversationAbility
+        from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
         agent = _create_agent()
         agent.register_ability(ConversationAbility())

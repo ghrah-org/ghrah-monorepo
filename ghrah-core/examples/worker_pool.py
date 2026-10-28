@@ -30,9 +30,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
 from ghrah.communication import SupervisorActor
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
 from ghrah.types.config_types import AgentConfig
 
 logging.basicConfig(

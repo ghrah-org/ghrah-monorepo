@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from ghrah.abilities.builtin.session_info import SessionInfoAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.ability.core.operations.session_info import SessionInfoAbility
+from ghrah.scheme.execution.context import AbilityExecutionContext
 from ghrah.types.results import ActionOutcome
 
 

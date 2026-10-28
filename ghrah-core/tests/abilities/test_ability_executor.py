@@ -17,15 +17,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
-from ghrah.abilities.hook_context import HookContext
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.event_publisher import EventPublisher, NullEventPublisher
 from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent
 from ghrah.core.hitl import HITLPromiseRegistry
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.executor import AbilityExecutor, LocalAbilityExecutor
+from ghrah.scheme.execution.hook_context import HookContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 
 # ─── 测试用 Ability 和 Hook ───
 

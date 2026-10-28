@@ -22,8 +22,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -31,6 +29,8 @@ from ghrah.context.compact import SUMMARY_MESSAGE_PREFIX
 from ghrah.core.config import AgentConfig
 from ghrah.core.events import CoreEventType
 from ghrah.core.exceptions import AgentError
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
 from ghrah.types.config_types import WindowConfig
 
 
@@ -137,7 +137,7 @@ class TestThresholdTriggerGate:
     @pytest.mark.asyncio
     async def test_compact_round_does_not_drain_queue_or_run_hooks(self) -> None:
         """compact 回合不排空消息队列、不执行 agent 级 HookPoint。"""
-        from ghrah.abilities.hooks import Hook, HookPoint
+        from ghrah.scheme.execution.hooks import Hook, HookPoint
 
         class _CountingHook(Hook):
             hook_point = HookPoint.BEFORE_ACTION
@@ -149,7 +149,7 @@ class TestThresholdTriggerGate:
                 return True
 
             async def execute(self, context: Any, result: Any) -> Any:
-                from ghrah.abilities.hooks import HookResult
+                from ghrah.scheme.execution.hooks import HookResult
 
                 self.calls += 1
                 return HookResult.continue_()

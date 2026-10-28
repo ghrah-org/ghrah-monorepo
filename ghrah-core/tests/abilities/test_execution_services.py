@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from ghrah.abilities.execution_services import AGENT_NAME, CONTEXT_MANAGER, ExecutionServices
+from ghrah.scheme.execution.execution_services import AGENT_NAME, CONTEXT_MANAGER, ExecutionServices
 
 
 def test_get_set_and_require() -> None:

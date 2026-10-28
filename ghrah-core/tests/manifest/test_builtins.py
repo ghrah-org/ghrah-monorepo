@@ -6,22 +6,22 @@ from __future__ import annotations
 
 import pytest
 
-from ghrah.manifest.builtins import (
-    _BUILTIN_YAML_NAMES,
+from ghrah.scheme.loading.ability_catalog import (
+    builtin_full_names,
     load_all_builtin_manifests,
     load_builtin_manifest,
 )
 
 
 class TestLoadBuiltinManifest:
-    @pytest.mark.parametrize("full_name", _BUILTIN_YAML_NAMES)
+    @pytest.mark.parametrize("full_name", builtin_full_names())
     def test_each_builtin_parses_successfully(self, full_name: str) -> None:
         manifest = load_builtin_manifest(full_name)
         assert manifest.manifest == "ability"
         assert manifest.implementation.type == "builtin"
         assert manifest.implementation.handler is not None
 
-    @pytest.mark.parametrize("full_name", _BUILTIN_YAML_NAMES)
+    @pytest.mark.parametrize("full_name", builtin_full_names())
     def test_full_name_matches_yaml_name(self, full_name: str) -> None:
         manifest = load_builtin_manifest(full_name)
         assert manifest.full_name == full_name
@@ -95,11 +95,11 @@ class TestLoadBuiltinManifest:
 class TestLoadAllBuiltinManifests:
     def test_returns_all_builtins(self) -> None:
         manifests = load_all_builtin_manifests()
-        assert len(manifests) == len(_BUILTIN_YAML_NAMES)
+        assert len(manifests) == len(builtin_full_names())
 
     def test_all_keys_are_full_names(self) -> None:
         manifests = load_all_builtin_manifests()
-        for full_name in _BUILTIN_YAML_NAMES:
+        for full_name in builtin_full_names():
             assert full_name in manifests
             assert manifests[full_name].full_name == full_name
 
@@ -112,7 +112,7 @@ class TestLoadAllBuiltinManifests:
 
 
 class TestBuiltinYamlRoundTrip:
-    @pytest.mark.parametrize("full_name", _BUILTIN_YAML_NAMES)
+    @pytest.mark.parametrize("full_name", builtin_full_names())
     def test_yaml_parse_produces_valid_manifest(self, full_name: str) -> None:
         manifest = load_builtin_manifest(full_name)
         assert manifest.manifest == "ability"
@@ -121,7 +121,7 @@ class TestBuiltinYamlRoundTrip:
         assert manifest.metadata.name
         assert manifest.metadata.description
 
-    @pytest.mark.parametrize("full_name", _BUILTIN_YAML_NAMES)
+    @pytest.mark.parametrize("full_name", builtin_full_names())
     def test_tool_parameters_match_ability_input(self, full_name: str) -> None:
         manifest = load_builtin_manifest(full_name)
         if manifest.tool is None:

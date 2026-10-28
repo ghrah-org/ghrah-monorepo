@@ -21,14 +21,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
 from ghrah.core.config import AgentConfig
 from ghrah.core.events import CoreEventType
 from ghrah.core.message import AgentMessage
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
 from ghrah.types.config_types import WindowConfig
 
 

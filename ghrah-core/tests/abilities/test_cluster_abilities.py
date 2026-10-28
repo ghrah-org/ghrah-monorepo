@@ -13,15 +13,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.query_agents import QueryAgentsAbility
-from ghrah.abilities.builtin.send_message import SendMessageAbility
-from ghrah.abilities.builtin.spawn_agent import SpawnAgentAbility
-from ghrah.abilities.builtin.terminate_agent import TerminateAgentAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.core.config import AgentConfig
+from ghrah.scheme.ability.cluster.operations.broadcast_message import BroadcastMessageAbility
+from ghrah.scheme.ability.cluster.operations.query_agents import QueryAgentsAbility
+from ghrah.scheme.ability.cluster.operations.send_message import SendMessageAbility
+from ghrah.scheme.ability.cluster.operations.spawn_agent import SpawnAgentAbility
+from ghrah.scheme.ability.cluster.operations.terminate_agent import TerminateAgentAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.invocation import AbilityInvocation
 
 
 def _make_context(
@@ -324,7 +324,7 @@ def _make_store() -> _FakeStore:
 def _patch_resolver(monkeypatch: Any, store: _FakeStore) -> None:
     """把 ManifestResolver.resolve 替换为消费 _FakeManifest 的 stub。"""
 
-    from ghrah.manifest import resolver as resolver_mod
+    from ghrah.scheme import agent_resolver as resolver_mod
 
     class _ResolvedAbility:
         def __init__(self, manifest_ref: str) -> None:
@@ -479,47 +479,59 @@ class TestSpawnAgentAbility:
         assert "name conflict" in result.data["error"]
 
 
-# ── AbilityRegistry 注册测试 ──
+# ── 扫盘解析（handler 面）测试 ──
 
 
-class TestClusterAbilityRegistry:
+class TestClusterAbilityResolution:
     def test_all_cluster_abilities_registered(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            has_handler,
+        )
 
-        assert AbilityRegistry.has("query_agents")
-        assert AbilityRegistry.has("send_message")
-        assert AbilityRegistry.has("broadcast_message")
-        assert AbilityRegistry.has("spawn_agent")
-        assert AbilityRegistry.has("terminate_agent")
+        assert has_handler("query_agents")
+        assert has_handler("send_message")
+        assert has_handler("broadcast_message")
+        assert has_handler("spawn_agent")
+        assert has_handler("terminate_agent")
 
     def test_registry_create_query_agents(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            create_ability,
+        )
 
-        ability = AbilityRegistry.create("query_agents")
+        ability = create_ability("query_agents")
         assert isinstance(ability, QueryAgentsAbility)
 
     def test_registry_create_send_message(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            create_ability,
+        )
 
-        ability = AbilityRegistry.create("send_message")
+        ability = create_ability("send_message")
         assert isinstance(ability, SendMessageAbility)
 
     def test_registry_create_broadcast_message(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            create_ability,
+        )
 
-        ability = AbilityRegistry.create("broadcast_message")
+        ability = create_ability("broadcast_message")
         assert isinstance(ability, BroadcastMessageAbility)
 
     def test_registry_create_spawn_agent(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            create_ability,
+        )
 
-        ability = AbilityRegistry.create("spawn_agent")
+        ability = create_ability("spawn_agent")
         assert isinstance(ability, SpawnAgentAbility)
 
     def test_registry_create_terminate_agent(self) -> None:
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import (
+            create_ability,
+        )
 
-        ability = AbilityRegistry.create("terminate_agent")
+        ability = create_ability("terminate_agent")
         assert isinstance(ability, TerminateAgentAbility)
 
 

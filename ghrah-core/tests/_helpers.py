@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.context.node import ContextNode
+from ghrah.scheme.execution.base import ActionOutcome, ActionResult
 
 
 class ScriptedLLM:

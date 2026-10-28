@@ -13,13 +13,13 @@ from typing import Any
 
 import pytest
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.execute_command import (
+from ghrah.scheme.ability.shell.operations.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     ExecuteCommandInput,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:

@@ -24,23 +24,22 @@ from typing import Any
 from abilities_impl.init_project import InitProjectAbility
 from abilities_impl.list_directory import StudentGradeListDirectoryAbility
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.builtin import (
-    ConversationAbility,
-    EditFileAbility,
-    EndTaskAbility,
-    FSPermissionChecker,
-    ReadFileAbility,
-    WriteFileAbility,
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
+from ghrah.scheme.ability.fs.operations.edit_file import EditFileAbility
+from ghrah.scheme.ability.fs.operations.read_file import ReadFileAbility
+from ghrah.scheme.ability.fs.operations.write_file import WriteFileAbility
+from ghrah.scheme.agent_manifest import AgentManifest
+from ghrah.scheme.agent_resolver import ManifestResolver, ResolvedAbility
+from ghrah.scheme.execution.base import Ability
+from ghrah.scheme.loading.ability_view import AbilityManifest
+from ghrah.scheme.loading.manifest_fields import ManifestNotFoundError, PermissionFlags
+from ghrah.scheme.loading.manifest_io import (
+    BuiltinManifestStore,
+    ManifestStoreProtocol,
+    parse_ability_manifest,
 )
-from ghrah.manifest.ability import AbilityManifest
-from ghrah.manifest.agent import AgentManifest
-from ghrah.manifest.errors import ManifestNotFoundError
-from ghrah.manifest.parser import parse_ability_manifest
-from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility
-from ghrah.manifest.store import BuiltinManifestStore
-from ghrah.manifest.types import PermissionFlags
+from ghrah.scheme.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.config_types import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -139,7 +138,7 @@ class StudentGradeRunner:
         self._store.register_ability_from_file(yaml_path)
 
     def load_manifest(self, yaml_path: Path) -> AgentManifest:
-        from ghrah.manifest.parser import parse_agent_manifest
+        from ghrah.scheme.loading.manifest_io import parse_agent_manifest
 
         raw = yaml_path.read_text(encoding="utf-8")
         raw = self._apply_template_vars(raw)

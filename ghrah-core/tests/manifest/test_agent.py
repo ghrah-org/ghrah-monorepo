@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ghrah.manifest.agent import (
+from ghrah.scheme.agent_manifest import (
     AbilityRef,
     AgentHooks,
     AgentManifest,
@@ -17,8 +17,7 @@ from ghrah.manifest.agent import (
     PersistenceOverrides,
     WindowOverrides,
 )
-from ghrah.manifest.errors import ManifestVersionError
-from ghrah.manifest.types import HookDef, PermissionFlags
+from ghrah.scheme.loading.manifest_fields import HookDef, ManifestVersionError, PermissionFlags
 
 
 def _make_agent_manifest(**overrides) -> AgentManifest:

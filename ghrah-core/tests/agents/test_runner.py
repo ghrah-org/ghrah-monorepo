@@ -12,13 +12,13 @@ from typing import Any
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.agents.runner import AgentRunner, detached_runner_context
 from ghrah.chat.format import LLMResponse
 from ghrah.communication.message_manager import MessageKind, MessageManager
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 
 class BlockingLLM(ScriptedLLM):

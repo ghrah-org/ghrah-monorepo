@@ -11,7 +11,7 @@
 import pytest
 
 from ghrah.core.config.builders import build_window_from_dict, build_window_from_overrides
-from ghrah.manifest.agent import WindowOverrides
+from ghrah.scheme.agent_manifest import WindowOverrides
 from ghrah.types.config_types import WindowConfig
 
 

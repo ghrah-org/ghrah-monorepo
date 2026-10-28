@@ -16,13 +16,13 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.message import ChatMessage
 from ghrah.communication import DeliveryState, MessageKind, MessageManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.config import AgentConfig
 from ghrah.core.events import ActionChainUpdatedEvent
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 from ghrah.types.config_types import ContextConfig, WindowConfig
 
 

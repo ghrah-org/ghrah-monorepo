@@ -13,8 +13,6 @@ from __future__ import annotations
 import pytest
 from _helpers import make_action_result
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.message import ChatMessage
 from ghrah.context.manager import ContextManager
@@ -22,6 +20,8 @@ from ghrah.context.node import ContextNode
 from ghrah.context.token_estimator import WeightedTokenEstimator
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage as Message
+from ghrah.scheme.execution.base import ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
 
 # ----------------------------------------------------------------
 # 辅助工厂

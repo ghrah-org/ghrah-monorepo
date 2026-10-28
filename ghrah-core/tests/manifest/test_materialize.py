@@ -20,19 +20,13 @@ from typing import Any
 
 import pytest
 
-# 触发内置 Ability 注册（instantiate_resolved_abilities 依赖 AbilityRegistry）
-import ghrah.abilities  # noqa: F401
-from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.manifest.agent import (
-    AbilityRef,
-    AgentManifest,
-    AgentMetadata,
-    ModelConfig,
-)
-from ghrah.manifest.materialize import instantiate_resolved_abilities
-from ghrah.manifest.resolver import ManifestResolver
-from ghrah.manifest.store import BuiltinManifestStore
-from ghrah.manifest.types import ImplementationDef, PermissionFlags
+# 不再需要任何注册或副作用导入：instantiate_resolved_abilities 走扫盘解析
+from ghrah.scheme.agent_manifest import AbilityRef, AgentManifest, AgentMetadata, ModelConfig
+from ghrah.scheme.agent_resolver import ManifestResolver
+from ghrah.scheme.execution.ability_build import instantiate_resolved_abilities
+from ghrah.scheme.loading.manifest_fields import ImplementationDef, PermissionFlags
+from ghrah.scheme.loading.manifest_io import BuiltinManifestStore
+from ghrah.scheme.permissions.fs_permissions import AccessApprovalHook, FSPermissionChecker
 
 
 def _agent_manifest(
@@ -100,8 +94,8 @@ class TestInstantiateResolvedAbilities:
 
     def test_non_builtin_skipped_with_warning(self, caplog) -> None:
         # 构造非 builtin implementation：python 类型无 handler
-        from ghrah.manifest.ability import AbilityHooks
-        from ghrah.manifest.resolver import ResolvedAbility
+        from ghrah.scheme.agent_resolver import ResolvedAbility
+        from ghrah.scheme.loading.ability_view import AbilityHooks
 
         ra = ResolvedAbility(
             ability_name="custom.python",
@@ -218,8 +212,8 @@ class TestGenericHITLWiring:
 
     async def test_hitl_hook_returns_hitl_result(self) -> None:
         """包装后的 hook 执行返回 HookResult.hitl（requires_hitl=True）。"""
-        from ghrah.abilities.context import AbilityExecutionContext
-        from ghrah.abilities.hooks import HookResult
+        from ghrah.scheme.execution.context import AbilityExecutionContext
+        from ghrah.scheme.execution.hooks import HookResult
 
         abilities = _resolved([AbilityRef(ref="ghrah.cluster.spawn_agent")])
         result = instantiate_resolved_abilities(abilities, workspace_root=None)
@@ -273,10 +267,12 @@ class TestHandleSpawnAgentManifestRef:
     @pytest.fixture
     def unit_with_store(self, tmp_path) -> Any:
         from ghrah.core.unit import CoreUnitConfig, create_core_unit
-        from ghrah.manifest.ability import AbilityManifest
-        from ghrah.manifest.parser import parse_agent_manifest
-        from ghrah.manifest.protocols import ManifestStoreProtocol
-        from ghrah.manifest.store import BuiltinManifestStore
+        from ghrah.scheme.loading.ability_view import AbilityManifest
+        from ghrah.scheme.loading.manifest_io import (
+            BuiltinManifestStore,
+            ManifestStoreProtocol,
+            parse_agent_manifest,
+        )
 
         planner_yaml = """\
 manifest: agent
@@ -318,7 +314,7 @@ abilities:
             def load_agent(self, full_name: str) -> AgentManifest:
                 if full_name in self._agents:
                     return self._agents[full_name]
-                from ghrah.manifest.errors import ManifestNotFoundError
+                from ghrah.scheme.loading.manifest_fields import ManifestNotFoundError
 
                 raise ManifestNotFoundError(f"Agent manifest not found: {full_name}")
 

@@ -16,14 +16,14 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.send_message import SendMessageAbility
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import DeliveryState, MessageManager, SupervisorActor
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.config import AgentConfig
+from ghrah.scheme.ability.cluster.operations.broadcast_message import BroadcastMessageAbility
+from ghrah.scheme.ability.cluster.operations.send_message import SendMessageAbility
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 
 class RequestLLM(ScriptedLLM):
@@ -339,7 +339,7 @@ async def test_structured_input_and_reply_blocks_survive_persistent_route(tmp_pa
 
 
 async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
-    from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+    from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 
     observed = []
 

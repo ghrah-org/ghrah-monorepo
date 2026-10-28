@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ghrah.abilities.paths import extract_paths, is_subpath, resolve_relative_path
+from ghrah.scheme.paths import extract_paths, is_subpath, resolve_relative_path
 
 
 class TestIsSubpath:

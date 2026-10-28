@@ -17,9 +17,6 @@ from typing import Any
 import pytest
 from ghrah.protocol.types import CommandType, EventType
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.core.events import ContextUsageUpdatedEvent, HITLRequestEvent
 from ghrah.core.unit import (
     CoreUnit,
@@ -27,6 +24,9 @@ from ghrah.core.unit import (
     UnitEventPublisher,
     create_core_unit,
 )
+from ghrah.scheme.execution.base import Ability
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome, ActionResult
 

@@ -16,14 +16,14 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.content import ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import DeliveryState, MessageKind, MessageManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.config import AgentConfig
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.types.config_types import ContextConfig
 
 

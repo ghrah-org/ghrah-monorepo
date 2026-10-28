@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.permissions.fs_permissions import AccessApprovalHook, FSPermissionChecker
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:

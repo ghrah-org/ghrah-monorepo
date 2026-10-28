@@ -11,15 +11,18 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.message import ChatMessage
 from ghrah.context.manager import ContextManager
-from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider
+from ghrah.scheme.loading.ability_schema import SKILL_FILE_NAME
+from ghrah.scheme.loading.skill_provider import SkillAbilityProvider
 
 SKILL_MD = """---
 name: db-query
@@ -43,13 +46,43 @@ def _make_cm(**overrides) -> ContextManager:
 def _write_skill(
     root: Path, dir_name: str, description: str = "对关系型数据库执行只读查询。"
 ) -> Path:
-    skill_dir = root / dir_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / SKILL_FILE_NAME).write_text(
-        f"---\nname: {dir_name}\ndescription: {description}\n---\n\n正文。\n",
-        encoding="utf-8",
+    """造一个新格式能力包（``ability.yaml`` + ``skills/SKILL.md``）。
+
+    旧的"只有 SKILL.md frontmatter"格式已不再被识别，扫盘只认定义面，因此夹具
+    必须写成完整的包——否则这些用例会静默变成"目录里没有技能"。
+
+    Args:
+        root: 目录池根。
+        dir_name: 包目录名（同时作为容器名与成员键）。
+        description: 技能描述。
+
+    Returns:
+        新建的包目录。
+    """
+    package = root / dir_name
+    (package / "skills").mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": "ghrah.ability-definition",
+        "schema_version": "0.1-draft",
+        "identity": {"namespace": dir_name, "version": "0.1.0"},
+        "title": dir_name,
+        "description": "测试用能力包。",
+        "provider_requirements": {},
+        "operations": {},
+        "skills": {
+            dir_name: {
+                "title": dir_name,
+                "description": description,
+                "body": {"path": "skills/SKILL.md", "media_type": "text/markdown"},
+            }
+        },
+        "assets": {},
+    }
+    (package / "ability.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
-    return skill_dir
+    (package / "skills" / SKILL_FILE_NAME).write_text("正文。\n", encoding="utf-8")
+    return package
 
 
 class _BrokenProvider:
@@ -118,8 +151,7 @@ class TestSkillCatalogInjection:
         cm = _make_cm(skill_provider=SkillAbilityProvider.from_root(tmp_path))
         await cm.get_llm_messages()
 
-        (skill_dir / SKILL_FILE_NAME).unlink()
-        skill_dir.rmdir()
+        shutil.rmtree(skill_dir)
         messages = await cm.get_llm_messages()
 
         assert "The available skill catalog changed." in messages[-1].text
@@ -137,8 +169,7 @@ class TestSkillCatalogInjection:
         cm = _make_cm(skill_provider=SkillAbilityProvider.from_root(tmp_path))
         await cm.get_llm_messages()
 
-        (skill_dir / SKILL_FILE_NAME).unlink()
-        skill_dir.rmdir()
+        shutil.rmtree(skill_dir)
         messages = await cm.get_llm_messages()
 
         assert "No skills are currently available" in messages[-1].text

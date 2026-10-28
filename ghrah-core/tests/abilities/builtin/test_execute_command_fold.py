@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.execute_command import (
+from ghrah.scheme.ability.shell.operations.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     _fold_text,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:
@@ -80,7 +80,7 @@ class TestFoldTextUnit:
         assert "[... 920 lines omitted ...]" in folded
 
     def test_head_and_tail_sizes(self) -> None:
-        from ghrah.abilities.builtin.execute_command import (
+        from ghrah.scheme.ability.shell.operations.execute_command import (
             _FOLD_HEAD_LINES,
             _FOLD_TAIL_LINES,
         )

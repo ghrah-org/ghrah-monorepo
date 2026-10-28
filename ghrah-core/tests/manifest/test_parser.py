@@ -8,8 +8,12 @@ import json
 
 import pytest
 
-from ghrah.manifest.errors import ManifestValidationError
-from ghrah.manifest.parser import parse_ability_manifest, parse_agent_manifest, validate_manifest
+from ghrah.scheme.loading.manifest_fields import ManifestValidationError
+from ghrah.scheme.loading.manifest_io import (
+    parse_ability_manifest,
+    parse_agent_manifest,
+    validate_manifest,
+)
 
 VALID_ABILITY_YAML = """\
 manifest: ability

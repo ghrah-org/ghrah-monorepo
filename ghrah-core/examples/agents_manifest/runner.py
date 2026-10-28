@@ -29,20 +29,17 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.builtin import (
-    ConversationAbility,
-    EndTaskAbility,
-    FSPermissionChecker,
-    ListDirectoryAbility,
-    ReadFileAbility,
-    WriteFileAbility,
-)
-from ghrah.manifest.agent import AgentManifest
-from ghrah.manifest.parser import parse_agent_manifest
-from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
-from ghrah.manifest.store import BuiltinManifestStore
-from ghrah.manifest.types import PermissionFlags
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
+from ghrah.scheme.ability.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.scheme.ability.fs.operations.read_file import ReadFileAbility
+from ghrah.scheme.ability.fs.operations.write_file import WriteFileAbility
+from ghrah.scheme.agent_manifest import AgentManifest
+from ghrah.scheme.agent_resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
+from ghrah.scheme.execution.base import Ability
+from ghrah.scheme.loading.manifest_fields import PermissionFlags
+from ghrah.scheme.loading.manifest_io import BuiltinManifestStore, parse_agent_manifest
+from ghrah.scheme.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.config_types import AgentConfig
 
 logger = logging.getLogger(__name__)

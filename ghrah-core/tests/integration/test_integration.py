@@ -19,17 +19,17 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from ghrah.abilities.base import ActionResult
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
-from ghrah.abilities.builtin.read_file import ReadFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage as Message
 from ghrah.core.message import MessageType
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
+from ghrah.scheme.ability.fs.operations.read_file import ReadFileAbility
+from ghrah.scheme.execution.base import ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 
 # ── Helpers ──
 

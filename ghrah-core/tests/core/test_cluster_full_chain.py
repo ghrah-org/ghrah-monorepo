@@ -30,15 +30,17 @@ import pytest
 from _helpers import ScriptedLLM
 from test_core_unit import FakeCtx
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.chat.content import ToolCallBlock
 from ghrah.communication import MessageKind, MessageManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.config import AgentConfig
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
-from ghrah.manifest.parser import parse_agent_manifest
-from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.store import BuiltinManifestStore
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.loading.manifest_io import (
+    BuiltinManifestStore,
+    ManifestStoreProtocol,
+    parse_agent_manifest,
+)
 
 _ORCHESTRATOR_YAML = """\
 manifest: agent

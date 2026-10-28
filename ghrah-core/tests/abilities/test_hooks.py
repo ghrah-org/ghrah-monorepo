@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from ghrah.abilities.base import ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.scheme.execution.base import ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 
 # ── 辅助：用于测试的具体 Hook 子类 ──
 

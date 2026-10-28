@@ -16,9 +16,9 @@ from typing import Any
 from _helpers import ScriptedLLM
 from test_core_unit import FakeCtx
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.core.message import AgentMessage, MessageType
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 from ghrah.types.config_types import AgentConfig
 
 _AGENT_YAML = """\
@@ -42,7 +42,7 @@ class _SingleAgentStore:
     """最小 ManifestStoreProtocol stub（仅 load_agent 被消费）。"""
 
     def __init__(self) -> None:
-        from ghrah.manifest.parser import parse_agent_manifest
+        from ghrah.scheme.loading.manifest_io import parse_agent_manifest
 
         self._agents = {"smoke.coder": parse_agent_manifest(_AGENT_YAML)}
 

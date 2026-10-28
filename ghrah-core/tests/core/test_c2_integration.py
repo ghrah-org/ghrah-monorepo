@@ -20,9 +20,11 @@ from typing import Any
 from ghrah.protocol.types import EventType
 
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
-from ghrah.manifest.parser import parse_agent_manifest
-from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.store import BuiltinManifestStore
+from ghrah.scheme.loading.manifest_io import (
+    BuiltinManifestStore,
+    ManifestStoreProtocol,
+    parse_agent_manifest,
+)
 
 _PARENT_YAML = """\
 manifest: agent
@@ -75,7 +77,7 @@ class _CompositeStore(ManifestStoreProtocol):
     def load_agent(self, full_name: str) -> Any:
         if full_name in self._agents:
             return self._agents[full_name]
-        from ghrah.manifest.errors import ManifestNotFoundError
+        from ghrah.scheme.loading.manifest_fields import ManifestNotFoundError
 
         raise ManifestNotFoundError(full_name)
 

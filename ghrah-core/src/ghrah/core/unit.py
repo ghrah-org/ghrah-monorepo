@@ -65,7 +65,6 @@ from ghrah.protocol.types import (
     generate_request_id,
 )
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.core.ability_protocol import AbilityProtocol
@@ -95,7 +94,7 @@ from ghrah.core.events import (
 )
 from ghrah.core.hitl import HITLPromiseRegistry
 from ghrah.core.room_protocol import SerialRoomBridge
-from ghrah.core.subject_bridge import SubjectCommandBridge
+from ghrah.scheme.execution.context import AbilityExecutionContext
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome
 
@@ -458,7 +457,7 @@ def _create_ability_from_def(
     """将 AbilityDefinitionPayload 转换为 Ability 实例。
 
     与原 server/router.py 的 ``_create_ability_from_def`` 共享同一套常量与
-    AbilityRegistry.create 工厂：
+    扫盘工厂（``create_ability``）：
     1. 文件系统类（FS_ABILITY_TYPES）：将 require_hitl/allowed_paths/
        denied_paths/workspace_root 原始字段转换为 FSPermissionChecker。
     2. execute_command：将 require_approval 标记转换为
@@ -474,12 +473,14 @@ def _create_ability_from_def(
     ``command_runner`` 非 None 时注入 execute_command（Subject 挂载模式的
     SandboxExecutor；None = standalone 直跑 subprocess）。
     """
-    from ghrah.abilities import (
-        FS_ABILITY_TYPES,
-        AbilityRegistry,
-        AccessApprovalHook,
+    from ghrah.scheme.kinds import FS_ABILITY_TYPES
+    from ghrah.scheme.loading.ability_catalog import create_ability
+    from ghrah.scheme.permissions.command_safety import (
         CommandApprovalHook,
         CommandSafetyChecker,
+    )
+    from ghrah.scheme.permissions.fs_permissions import (
+        AccessApprovalHook,
         FSPermissionChecker,
     )
 
@@ -540,63 +541,7 @@ def _create_ability_from_def(
     if ability_type == "end_task":
         params["mode"] = "toolcall"
 
-    return AbilityRegistry.create(ability_type, **params)
-
-
-def _materialize_command_proxy(
-    params: dict[str, Any],
-    subject_bridge: SubjectCommandBridge | None,
-    *,
-    auto_approve_abilities: tuple[str, ...] = (),
-) -> AbilityProtocol:
-    """command_proxy descriptor → Ability 实例（Core 侧物化）。
-
-    过渡形态（REGISTER_ABILITY params 通道）的物化入口，三段职责：
-
-    1. descriptor 校验：``CommandProxyDescriptor`` pydantic 模型
-       （``extra="forbid"``，未知字段拒绝，hooks 类字段无从混入）；
-    2. 强制闸门：HITL 默认开启，仅 ``auto_approve_abilities`` 白名单
-       可关闭；descriptor 的 ``require_hitl`` 声明不具自批效力
-       （挂载面声明不得削弱部署方信任闸）；
-    3. 非白名单包装：``HITLRequiredAbility``（内核固定实现，复用自
-       materialize 物化器的通用 HITL 接线）。
-
-    Args:
-        params: REGISTER_ABILITY 命令的 ``ability.params``（descriptor dict）
-        subject_bridge: 宿主命令面桥（standalone 时为 None——工具执行
-            时明确报错，注册不拒绝）
-        auto_approve_abilities: 部署方强制放行的能力名白名单
-
-    Returns:
-        已物化的 Ability 实例（非白名单时含 HITL 包装）
-
-    Raises:
-        pydantic.ValidationError: descriptor 不合法（未知字段/缺必填/
-            非法值）
-    """
-    from ghrah.abilities.builtin.command_proxy import CommandProxyDescriptor
-    from ghrah.abilities.hitl import HITLRequiredAbility
-    from ghrah.abilities.registry import AbilityRegistry
-
-    descriptor = CommandProxyDescriptor.model_validate(params)
-    ability = AbilityRegistry.create(
-        "command_proxy",
-        tool_name=descriptor.tool_name,
-        description=descriptor.description,
-        parameters=descriptor.parameters,
-        bridge=subject_bridge,
-        command=descriptor.command,
-        timeout=descriptor.timeout,
-    )
-    if descriptor.tool_name in auto_approve_abilities:
-        return ability
-    return HITLRequiredAbility(
-        ability,
-        ability_name=descriptor.tool_name,
-        reason=(
-            f"command_proxy '{descriptor.command}' requires HITL approval (plugin-provided ability)"
-        ),
-    )
+    return create_ability(ability_type, **params)
 
 
 # ----------------------------------------------------------------
@@ -701,13 +646,6 @@ class CoreUnit:
         serial = getattr(ctx, "serial", None)
         room_bridge = SerialRoomBridge(serial) if callable(serial) else None
 
-        # Subject command bridge（command_proxy 工具回路）：同一 serial 桥接
-        # 协议命令面（standalone 场景无 serial → bridge 为 None，工具执行
-        # 时明确报错，注册不拒绝——对齐 send/ROOM_BRIDGE_UNAVAILABLE 模式）
-        self._subject_bridge: SubjectCommandBridge | None = (
-            SubjectCommandBridge(serial) if callable(serial) else None
-        )
-
         if (
             self._config.message_manager is not None
             and self._config.message_manager.project_id != self._config.project_id
@@ -717,7 +655,7 @@ class CoreUnit:
         # （skill 面缺席由消费方显式说明，零隐式）。
         skill_provider: Any = None
         if self._config.skill_root:
-            from ghrah.skills import SkillAbilityProvider
+            from ghrah.scheme.loading.skill_provider import SkillAbilityProvider
 
             skill_provider = SkillAbilityProvider.from_root(self._config.skill_root)
 
@@ -930,7 +868,7 @@ class CoreUnit:
     ) -> None:
         """将环境快照写入已实例化的 SessionInfoAbility（duck-typed best-effort）。
 
-        SessionInfoAbility 经 AbilityRegistry 裸实例化（无参），静态部署
+        SessionInfoAbility 经扫盘工厂裸实例化（无参），静态部署
         快照由本方法在 spawn 装配期回填——快照单一真源在
         ``_environment_snapshot``，此处只做单向派生注入。
 
@@ -966,8 +904,8 @@ class CoreUnit:
         DTO 往返）；无 manifest_ref 时消费 Observer 直传的
         ``AbilityDefinitionPayload`` 列表（真跨 WS 路径，wire DTO 合理存在）。
         """
-        from ghrah.manifest.materialize import instantiate_resolved_abilities
-        from ghrah.manifest.resolver import ManifestResolver
+        from ghrah.scheme.agent_resolver import ManifestResolver
+        from ghrah.scheme.execution.ability_build import instantiate_resolved_abilities
 
         supervisor = self._require_supervisor()
         sp = SpawnAgentPayload.model_validate(payload)
@@ -1252,21 +1190,11 @@ class CoreUnit:
         supervisor = self._require_supervisor()
         rp = RegisterAbilityPayload.model_validate(payload)
         self._validate_agent(rp.project_id, rp.agent_id, rp.agent_name)
-        if rp.ability.ability_type == "command_proxy":
-            # 插件能力桥：descriptor 校验 + 强制闸门在物化器内完成，
-            # 实例经专用通道注册（不经 params 工厂）
-            ability = _materialize_command_proxy(
-                rp.ability.params,
-                self._subject_bridge,
-                auto_approve_abilities=self._config.auto_approve_abilities,
-            )
-            result = await supervisor.register_ability_instance_for_agent(rp.agent_name, ability)
-        else:
-            result = await supervisor.register_ability_for_agent(
-                agent_name=rp.agent_name,
-                ability_type=rp.ability.ability_type,
-                ability_params=rp.ability.params,
-            )
+        result = await supervisor.register_ability_for_agent(
+            agent_name=rp.agent_name,
+            ability_type=rp.ability.ability_type,
+            ability_params=rp.ability.params,
+        )
         return self._ok({"agent_name": rp.agent_name, "ability": result, "registered": True})
 
     async def _handle_unregister_ability(
@@ -1317,14 +1245,14 @@ class CoreUnit:
         agent_handle = await supervisor.get_agent_handle(gp.name)
         state = agent_handle.get_state()
         abilities = agent_handle.get_abilities()
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import builtin_handlers
 
         return self._ok(
             {
                 "name": gp.name,
                 "state": state,
                 "abilities": abilities,
-                "available_ability_types": sorted(AbilityRegistry.list_types()),
+                "available_ability_types": sorted(builtin_handlers()),
                 "context_usage": agent_handle.get_context_usage_snapshot(),
             }
         )

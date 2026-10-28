@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ghrah.manifest.types import (
+from ghrah.scheme.loading.manifest_fields import (
     HookDef,
     ImplementationDef,
     PermissionFlags,

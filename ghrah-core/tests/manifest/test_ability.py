@@ -7,12 +7,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ghrah.manifest.ability import AbilityHooks, AbilityManifest, AbilityMetadata
-from ghrah.manifest.errors import ManifestVersionError
-from ghrah.manifest.types import (
-    HookDef,
-    PermissionFlags,
-)
+from ghrah.scheme.loading.ability_view import AbilityHooks, AbilityManifest, AbilityMetadata
+from ghrah.scheme.loading.manifest_fields import HookDef, ManifestVersionError, PermissionFlags
 
 
 def _make_ability_manifest(**overrides) -> AbilityManifest:

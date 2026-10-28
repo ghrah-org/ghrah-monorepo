@@ -43,13 +43,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any
 
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.errors import AbilityNotFoundError
-from ghrah.abilities.hook_context import HookContext
-from ghrah.abilities.hook_runner import HookRunner
-from ghrah.abilities.hook_store import HookListView, HookStore
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
-from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.agents.runner import AgentRunner
 from ghrah.chat.content import ContentBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
@@ -90,6 +83,13 @@ from ghrah.core.exceptions import (
 )
 from ghrah.core.llm_protocol import LLMProtocol, LLMResponseProtocol
 from ghrah.core.message import AgentMessage, MessageType, classify_source
+from ghrah.scheme.errors import AbilityNotFoundError
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hook_context import HookContext
+from ghrah.scheme.execution.hook_runner import HookRunner
+from ghrah.scheme.execution.hook_store import HookListView, HookStore
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
+from ghrah.scheme.execution.invocation import AbilityInvocation
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome, ActionResult
 

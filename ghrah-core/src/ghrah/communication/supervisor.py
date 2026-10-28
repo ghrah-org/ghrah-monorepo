@@ -257,13 +257,14 @@ class SupervisorActor:
                     f"list, configure SupervisorActor(default_abilities=[...]), "
                     f"or spawn via manifest_ref. Refusing implicit defaults."
                 )
-            from ghrah.abilities.registry import AbilityRegistry
+            from ghrah.scheme.loading.ability_catalog import create_ability
+            from ghrah.scheme.loading.manifest_fields import ManifestValidationError
 
             abilities = []
             for ability_type in self._default_ability_names:
                 try:
-                    abilities.append(AbilityRegistry.create(ability_type))
-                except KeyError as exc:
+                    abilities.append(create_ability(ability_type))
+                except ManifestValidationError as exc:
                     raise RegistryError(
                         f"default_abilities contains unknown ability type "
                         f"'{ability_type}' — assembly error must fail at "
@@ -791,9 +792,9 @@ class SupervisorActor:
         ability_type: str,
         ability_params: dict[str, Any] | None = None,
     ) -> str:
-        """为指定 Agent 注册 Ability（通过 AbilityRegistry 动态创建）。
+        """为指定 Agent 注册 Ability（按 handler 名扫盘解析实现类）。
 
-        通过类型名从 AbilityRegistry 查找 Ability 类并实例化，
+        按 handler 名从定义面扫盘定位实现脚本并实例化，
         然后注册到目标 Agent。这使得外部调用方不再需要直接实例化 Ability，
         而是通过 Supervisor 在 Core 侧完成。
 
@@ -804,7 +805,7 @@ class SupervisorActor:
 
         Args:
             agent_name: Agent 名称
-            ability_type: Ability 类型名（在 AbilityRegistry 中注册的）
+            ability_type: Ability handler 名（定义面 ``operations`` 表里的成员键）
             ability_params: Ability 构造参数
 
         Returns:
@@ -815,7 +816,7 @@ class SupervisorActor:
             KeyError: Ability 类型未注册
             ValueError: params 含内核物化保留键（hooks 等）
         """
-        from ghrah.abilities.registry import AbilityRegistry
+        from ghrah.scheme.loading.ability_catalog import create_ability
 
         info = self._registry.get_info(agent_name)
         params = ability_params or {}
@@ -828,8 +829,8 @@ class SupervisorActor:
                 f"materialization paths may construct these"
             )
 
-        # 通过 AbilityRegistry 创建实例
-        ability = AbilityRegistry.create(ability_type, **params)
+        # 扫盘解析并创建实例
+        ability = create_ability(ability_type, **params)
 
         # 注册到 Agent
         result = info.actor_handle.register_ability(ability)
@@ -845,9 +846,8 @@ class SupervisorActor:
     ) -> str:
         """为指定 Agent 注册已实例化的 Ability。
 
-        command_proxy 等经 Core 侧物化器（descriptor 校验 + 强制闸门 +
-        HITL 包装）构造的能力实例走本通道——不经 AbilityRegistry 的
-        params 工厂（物化器对构造面负责，注册面只负责落到 Agent）。
+        由调用方自行构造的能力实例走本通道——不经扫盘工厂的
+        params 工厂（构造面归调用方，注册面只负责落到 Agent）。
 
         Args:
             agent_name: Agent 名称

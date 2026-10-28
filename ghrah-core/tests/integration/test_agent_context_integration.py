@@ -21,9 +21,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -32,6 +29,9 @@ from ghrah.core.config import AgentConfig, ContextConfig
 from ghrah.core.exceptions import AgentError
 from ghrah.core.message import AgentMessage as Message
 from ghrah.core.message import MessageType
+from ghrah.scheme.execution.base import Ability, ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.hooks import Hook, HookPoint, HookResult
 
 # ----------------------------------------------------------------
 # 辅助工具

@@ -12,9 +12,6 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.send_message import SendMessageAbility
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import DeliveryState, MessageKind, MessageManager, SupervisorActor
@@ -22,6 +19,9 @@ from ghrah.communication.errors import RegistryError
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage
+from ghrah.scheme.ability.cluster.operations.broadcast_message import BroadcastMessageAbility
+from ghrah.scheme.ability.cluster.operations.send_message import SendMessageAbility
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 
 class SenderLLM(ScriptedLLM):
@@ -271,8 +271,8 @@ async def test_wrong_backend_is_rejected_before_registering_or_binding(tmp_path)
 
 
 async def test_room_send_fails_before_log_or_background_delivery():
-    from ghrah.abilities.builtin.send import SendAbility
-    from ghrah.abilities.context import AbilityExecutionContext
+    from ghrah.scheme.ability.cluster.operations.send import SendAbility
+    from ghrah.scheme.execution.context import AbilityExecutionContext
 
     class Bridge:
         def __init__(self):

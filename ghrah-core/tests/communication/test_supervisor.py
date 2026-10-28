@@ -14,14 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
 from ghrah.chat.message import ChatMessage
 from ghrah.communication.errors import AgentNotFoundError, RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence.memory import InMemoryBackend
 from ghrah.core.config import AgentConfig
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
+from ghrah.scheme.ability.core.operations.end_task import EndTaskAbility
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ class TestSupervisorActor:
     async def test_register_ability_instance_channel(
         self, supervisor: SupervisorActor, registered_agent
     ) -> None:
-        """实例通道：预构造 Ability 直接注册（command_proxy 物化路径）。"""
+        """实例通道：预构造 Ability 直接注册。"""
         ability = ConversationAbility()
         registered_agent.register_ability.return_value = "conversation"
 

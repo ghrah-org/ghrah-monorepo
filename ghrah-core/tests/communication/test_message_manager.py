@@ -16,11 +16,11 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication.message_manager import DeliveryState, MessageKind, MessageManager
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage, MessageType
+from ghrah.scheme.ability.core.operations.conversation import ConversationAbility
 
 
 def make_manager(path: Path, **kwargs) -> MessageManager:

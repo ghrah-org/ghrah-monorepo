@@ -18,8 +18,8 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.execution.base import ActionOutcome, ActionResult
+from ghrah.scheme.execution.context import AbilityExecutionContext
 
 
 def _make_context(**overrides) -> AbilityExecutionContext:

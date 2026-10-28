@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.read_file import ReadFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.scheme.ability.fs.operations.read_file import ReadFileAbility
+from ghrah.scheme.execution.base import ActionOutcome
+from ghrah.scheme.execution.context import AbilityExecutionContext
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:
@@ -134,7 +134,7 @@ class TestLineNumberFormat:
 
 class TestSchema:
     def test_schema_has_offset_limit(self) -> None:
-        from ghrah.abilities.builtin.read_file import ReadFileInput
+        from ghrah.scheme.ability.fs.operations.read_file import ReadFileInput
 
         js = ReadFileInput.model_json_schema()
         assert "offset" in js["properties"]

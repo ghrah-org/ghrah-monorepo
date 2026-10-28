@@ -19,7 +19,6 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence import create_persistence
 from ghrah.context.token_estimator import TokenEstimator
@@ -28,6 +27,7 @@ from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher, NullEventPublisher
 from ghrah.core.llm_protocol import LLMProtocol
 from ghrah.llm.factory import LLMFactory
+from ghrah.scheme.execution.executor import AbilityExecutor, LocalAbilityExecutor
 from ghrah.types.config_types import AgentConfig, WindowConfig
 
 logger = logging.getLogger(__name__)

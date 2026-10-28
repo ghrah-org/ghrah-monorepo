@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.execution_data import LLM_RESPONSE
-from ghrah.abilities.execution_services import AGENT_NAME
-from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.execution.execution_data import LLM_RESPONSE
+from ghrah.scheme.execution.execution_services import AGENT_NAME
+from ghrah.scheme.execution.invocation import AbilityInvocation
 
 
 def test_old_constructor_populates_new_structures() -> None:

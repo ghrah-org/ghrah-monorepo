@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
 from ghrah.context import IterationState
+from ghrah.scheme.execution.base import ActionOutcome, ActionResult
 
 
 class TestIterationStateDefaults:

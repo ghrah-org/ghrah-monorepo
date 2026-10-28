@@ -10,12 +10,12 @@ from typing import Any
 
 import pytest
 
-from ghrah.abilities.builtin.command_safety import (
+from ghrah.scheme.execution.context import AbilityExecutionContext
+from ghrah.scheme.permissions.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
     CommandSafetyChecker,
 )
-from ghrah.abilities.context import AbilityExecutionContext
 
 
 def _make_context(**overrides: Any) -> AbilityExecutionContext:

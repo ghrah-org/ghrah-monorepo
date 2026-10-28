@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.execution_data import (
+from ghrah.scheme.execution.execution_data import (
     CUMULATIVE_TOKEN_USAGE,
     LLM_RESPONSE,
     TOOL_ARGS,
