@@ -1,5 +1,5 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: ghrah.examples
   name: planner
@@ -7,7 +7,7 @@ metadata:
   description: 任务规划专家，分解复杂任务并输出设计文档
   tags: [planning, design]
 model:
-  agent_config_name: planner
+  endpoint_name: planner
   temperature: 0.7
 system_prompt: |
   你是一个任务规划专家。请将复杂任务分解为清晰的步骤，

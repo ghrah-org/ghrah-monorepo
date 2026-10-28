@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SUPPORTED_VERSIONS: frozenset[str] = frozenset({"1"})
-"""Supported major versions. Minor versions are always accepted."""
+SUPPORTED_AGENT_VERSIONS: frozenset[str] = frozenset({"2"})
+SUPPORTED_ABILITY_VERSIONS: frozenset[str] = frozenset({"1"})
 
 
 class PermissionFlags(BaseModel):

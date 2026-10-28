@@ -431,7 +431,7 @@ class ActorAgent:
         通过 llm_factory 回调创建 LLM 实例。
         采用惰性初始化避免进程间序列化问题。
 
-        使用 config.effective_agent_config_name 查找 agentconf 配置，
+        使用 config.endpoint_name 查找 agentconf 配置，
         支持运行时名称与 LLM 配置名称分离（如 worker 池场景）。
 
         LLM 创建后自动 configure_tools，使 LLM 能在响应中返回 tool_calls。

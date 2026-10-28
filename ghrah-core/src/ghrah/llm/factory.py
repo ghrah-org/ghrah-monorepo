@@ -1,179 +1,67 @@
-# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
-#
 # SPDX-License-Identifier: Apache-2.0
-
-"""LLM 工厂：基于 agentconf SDK 创建 ChatFormat 实例。
-
-数据流：
-    agentconf SQLite DB
-        └── resolve_agent(agent_name)
-                ├── provider_type: ProviderType  →  决定使用哪个 ChatFormat 子类
-                ├── base_url: str                →  API 端点
-                ├── api_key: SecretStr           →  认证密钥（安全获取）
-                ├── model_name: str              →  模型标识
-                ├── temperature: float | None    →  Agent 级参数
-                ├── top_p: float | None          →  Agent 级参数
-                └── max_tokens: int | None       →  Agent 级参数
-                        │
-                        ▼
-                LLMFactory.create(resolved)
-                        │
-                        ▼
-                ChatFormat 实例（OpenAIFormat / AnthropicFormat）
-"""
+"""消费 agentconf 模型端点；请求参数由 ghrah 调用者提供。"""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from agentconf import ProviderType
-
 from ghrah.chat.format import ChatFormat
-from ghrah.llm.errors import LLMError
+from ghrah.llm.errors import LLMError, UnsupportedFormat
+from ghrah.types.config_types import ModelOverrides
 
-logger = logging.getLogger(__name__)
 
-
-def _get_secret_value(api_key: Any) -> str | None:
-    """安全提取 API Key。
-
-    agentconf 使用 Pydantic SecretStr 保护 api_key，
-    需要调用 get_secret_value() 提取实际值。
-    """
-    if api_key is None:
-        return None
-    if hasattr(api_key, "get_secret_value"):
-        return api_key.get_secret_value()
-    return str(api_key)
+def _get_secret_value(value: Any) -> Any:
+    """显式提取 SDK 的秘密包装值，不记录其内容。"""
+    return value.get_secret_value() if hasattr(value, "get_secret_value") else value
 
 
 class LLMFactory:
-    """基于 agentconf resolved 配置创建 ChatFormat 实例。
-
-    Usage:
-        from agentconf import AgentsConfig
-
-        config = AgentsConfig()
-        resolved = config.resolve_agent("code-reviewer")
-        llm = LLMFactory.create(resolved)
-    """
+    """按端点用途、接口格式和厂商创建适配器，不查询旧 Agent 配置。"""
 
     @classmethod
-    def create(cls, resolved_agent: Any) -> ChatFormat:
-        """从 agentconf resolved 配置创建 ChatFormat 实例。
+    def create(cls, resolved: Any, params: ModelOverrides | None = None) -> ChatFormat:
+        """创建 LLM；拒绝非 LLM 用途和未实现的格式，保留能力与来源。"""
+        if resolved.model.model_type != "llm":
+            raise LLMError("endpoint", f"Unsupported model purpose: {resolved.model.model_type!r}")
+        connection = resolved.connection
+        fmt = connection.api_format
+        if fmt == "openai.chat_completions":
+            if connection.provider_type == "deepseek":
+                from ghrah.chat.format.deepseek import DeepSeekFormat
 
-        Args:
-            resolved_agent: agentconf 的 resolve_agent() 返回值，
-                           包含完整的 Provider → LLM → Agent 配置链。
+                adapter = DeepSeekFormat
+            else:
+                from ghrah.chat.format.openai import OpenAIFormat
 
-        Returns:
-            ChatFormat 实例。
+                adapter = OpenAIFormat
+        elif fmt == "openai.responses":
+            from ghrah.chat.format.openai_responses import OpenAIResponsesFormat
 
-        Raises:
-            LLMError: 不支持的 provider 类型或创建失败。
-        """
-        try:
-            llm_config = resolved_agent.model
-            provider_type = llm_config.provider_type
-            model_name = llm_config.model_name
-            base_url = llm_config.base_url
-            api_key = _get_secret_value(llm_config.api_key)
-
-            temperature = getattr(resolved_agent, "temperature", None) or 0.7
-            max_tokens = getattr(resolved_agent, "max_tokens", None)
-            top_p = getattr(resolved_agent, "top_p", None)
-
-            logger.info(
-                f"Creating ChatFormat: provider={provider_type!r}, "
-                f"model={model_name}, base_url={base_url}"
-            )
-
-            chat_format = cls._build_chat_format(
-                provider_type=provider_type,
-                model_name=model_name,
-                base_url=base_url,
-                api_key=api_key,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
-
-            capabilities = getattr(llm_config, "capabilities", None)
-            if capabilities is not None and hasattr(capabilities, "model_dump"):
-                values = capabilities.model_dump(mode="json")
-                if isinstance(values, dict):
-                    chat_format.model_capabilities = values
-            sources = getattr(llm_config, "capability_sources", None)
-            if isinstance(sources, dict):
-                chat_format.capability_sources = dict(sources)
-
-            logger.info(f"ChatFormat created successfully: {type(chat_format).__name__}")
-            return chat_format
-
-        except LLMError:
-            raise
-        except Exception as e:
-            raise LLMError(
-                provider=str(
-                    resolved_agent.model.provider_type
-                    if hasattr(resolved_agent, "llm")
-                    else "unknown"
-                ),
-                message=f"Failed to create ChatFormat from agentconf: {e}",
-            ) from e
-
-    @classmethod
-    def _build_chat_format(
-        cls,
-        provider_type: ProviderType,
-        model_name: str,
-        base_url: str,
-        api_key: str | None,
-        temperature: float,
-        max_tokens: int | None,
-        top_p: float | None,
-    ) -> ChatFormat:
-        """根据 ProviderType 枚举构建对应的 ChatFormat。"""
-
-        if provider_type in (ProviderType.OPENAI, ProviderType.CUSTOM):
-            from ghrah.chat.format.openai import OpenAIFormat
-
-            return OpenAIFormat(
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url or None,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
-
-        if provider_type == ProviderType.ANTHROPIC:
+            adapter = OpenAIResponsesFormat
+        elif fmt == "anthropic.messages":
             from ghrah.chat.format.anthropic import AnthropicFormat
 
-            return AnthropicFormat(
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url or None,
-                temperature=temperature,
-                max_tokens=max_tokens or 4096,
-                top_p=top_p,
+            adapter = AnthropicFormat
+        else:
+            raise UnsupportedFormat(
+                str(connection.provider_type), f"Unsupported api_format: {fmt!r}"
             )
-
-        if provider_type == ProviderType.DEEPSEEK:
-            from ghrah.chat.format.deepseek import DeepSeekFormat
-
-            return DeepSeekFormat(
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url or None,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
-
-        supported = [pt.value for pt in ProviderType]
-        raise LLMError(
-            provider=str(provider_type),
-            message=f"Unsupported provider type: {provider_type!r}. Supported types: {supported}",
+        options = _get_secret_value(connection.connection_options) or {}
+        allowed_options = {"timeout", "max_retries", "default_headers", "default_query"}
+        if not isinstance(options, dict) or options.keys() - allowed_options:
+            raise LLMError(str(connection.provider_type), "Unsupported connection_options fields")
+        result = adapter(
+            model=resolved.model.model_name,
+            api_key=_get_secret_value(connection.api_key),
+            base_url=_get_secret_value(connection.base_url) or None,
+            connection_options=options,
+            temperature=None,
         )
+        if params is not None:
+            result.apply_model_overrides(params)
+        result.model_capabilities = resolved.capabilities.model_dump(mode="json")
+        result.capability_sources = dict(resolved.capability_sources)
+        result.model_metadata = (
+            resolved.metadata.model_dump(mode="json") if resolved.metadata is not None else None
+        )
+        return result

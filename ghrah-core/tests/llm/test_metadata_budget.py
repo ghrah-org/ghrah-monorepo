@@ -20,16 +20,21 @@ from ghrah.types.config_types import AgentConfig, WindowConfig
 def resolved_config(window: int | None = 256000) -> SimpleNamespace:
     return SimpleNamespace(
         model=SimpleNamespace(
-            provider_type=ProviderType.OPENAI,
             model_name="gpt-4o",
+            model_type="llm",
             base_url="https://local.invalid/v1",
             api_key="test-key",
-            capabilities=LLMCapabilities(max_context_length=window),
-            capability_sources={"max_context_length": "models.dev"},
         ),
-        temperature=0.7,
-        max_tokens=None,
-        top_p=None,
+        connection=SimpleNamespace(
+            provider_type=ProviderType.OPENAI,
+            api_format="openai.chat_completions",
+            base_url="https://local.invalid/v1",
+            api_key="test-key",
+            connection_options={},
+        ),
+        capabilities=LLMCapabilities(max_context_length=window),
+        capability_sources={"max_context_length": "models.dev"},
+        metadata=None,
     )
 
 
@@ -46,7 +51,7 @@ async def test_factory_and_agent_prefer_resolved_capabilities(declared, expected
     assert llm.model_capabilities["max_context_length"] == 256000
     assert llm.capability_sources == {"max_context_length": "models.dev"}
     # 来源描述是客户端自己的副本，后续修改解析对象不影响它。
-    resolved.model.capability_sources.clear()
+    resolved.capability_sources.clear()
     assert llm.capability_sources["max_context_length"] == "models.dev"
     agent = AgentBuilder.from_config(
         AgentConfig(name="metadata-test", window=WindowConfig(max_tokens=declared)),
@@ -71,9 +76,9 @@ async def test_explicit_unknown_window_does_not_reenter_legacy_table() -> None:
 
 
 async def test_client_without_metadata_keeps_legacy_table() -> None:
-    resolved = resolved_config()
-    resolved.model.capabilities = None
-    llm = LLMFactory.create(resolved)
+    from ghrah.chat.format.openai import OpenAIFormat
+
+    llm = OpenAIFormat(model="gpt-4o")
     agent = AgentBuilder.from_config(
         AgentConfig(name="legacy-window", window=WindowConfig()),
         llm_factory=lambda _: llm,

@@ -123,12 +123,17 @@ class AgentEntity(_EntityPort):
         return AgentSnapshot.model_validate(await self._call("snapshot"))
 
     async def configure_model(
-        self, agent_config_name: str, *, expected_revision: int
+        self,
+        endpoint_name: str,
+        *,
+        expected_revision: int,
+        model_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """停止后修改模型配置引用，使用项目版本校验。"""
+        """停止后修改端点，校验项目版本；参数为 None 时保留，空字典清空。"""
         return await self._call(
             "model.configure",
-            agent_config_name=agent_config_name,
+            endpoint_name=endpoint_name,
+            model_overrides=model_overrides,
             expected_revision=expected_revision,
         )
 

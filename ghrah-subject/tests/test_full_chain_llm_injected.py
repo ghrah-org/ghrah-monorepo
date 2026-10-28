@@ -36,13 +36,13 @@ from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
 
 CODER_MANIFEST_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: e2e
   name: coder
   description: scripted coder
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You are a coder.
 max_iterations: 3
 abilities:

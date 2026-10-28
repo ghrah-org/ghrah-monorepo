@@ -18,6 +18,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ghrah.plugin.assembly import PluginAssembly
+from ghrah.protocol.payloads.model import EndpointReferenceModel
 from ghrah.protocol.types import ProjectStatus, RecoveryAction
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
@@ -113,7 +114,7 @@ class WritableWorkspaceSpec(BaseModel):
     default_for_agents: bool = False
 
 
-class AgentSpec(BaseModel):
+class AgentSpec(EndpointReferenceModel):
     """Project 内 agent desired-state 摘要。
 
     不含 ``default_workspace_id``（决策 B）：agent 所属 workspace = project 内
@@ -136,7 +137,8 @@ class AgentSpec(BaseModel):
     name: str
     cluster_id: str
     agent_id: str = ""
-    agent_config_name: str | None = None
+    endpoint_name: str | None = None
+    model_overrides: dict[str, Any] | None = None
     manifest_ref: str = ""
     instance_manifest_path: str = ""
     system_prompt: str = ""

@@ -28,7 +28,7 @@ agent = await manager.agents.create(
         project_id=project_id,
         cluster_id=cluster_id,
         name="designer",
-        agent_config_name="shared-model",  # agentconf 中已有的配置名称
+        endpoint_name="shared-model",  # agentconf 中已有的配置名称
         start=False,  # 必须显式选择；此时仅创建持久规格
         ability_types=["send_message"],
     )
@@ -65,7 +65,7 @@ await entity.start();
 
 新增命令由 Subject ProjectUnit 处理，Python 与 TypeScript 契约同步：
 
-- `agent_entity_create`：显式 `project_id/name/cluster_id/start`，可选 `agent_config_name/manifest_ref/system_prompt/ability_types`。
+- `agent_entity_create`：显式 `project_id/name/cluster_id/start`，可选 `endpoint_name/manifest_ref/system_prompt/ability_types`。
 - `agent_entity_list`：按项目列出持久实体及运行观测，不加载全部历史。
 - `agent_entity`：固定 `project_id/agent_id`，加闭集 `operation`，不接受任意方法名或身份覆盖。
 
@@ -133,10 +133,12 @@ await entity.start();
 
 ## 模型绑定与聊天投递诊断
 
-实体的 `agent_config_name` 仅是 agentconf 的配置引用，不保存密钥或复制模型配置。创建表单要求选择已有配置；已有实体可以停止后在概览中修改绑定。manifest 实体继续由 manifest 的 model 字段决定。旧规格未绑定时保留按实体名称查找的兼容行为，不猜测默认模型。
+实体的 `endpoint_name` 仅是 agentconf 的配置引用，不保存密钥或复制模型配置。创建表单要求选择已有配置；已有实体可以停止后在概览中修改绑定。manifest 实体继续由 manifest 的 model 字段决定。默认工厂要求显式端点引用；旧规格必须通过 Agent 导出离线转换。请求参数保存在规格的 `model_overrides` 中，并随重启传给 Core。
 
 实体启动会显式请求 Core 校验默认模型工厂的配置引用链，缺失时返回 `model_configuration_invalid`，不注册在线实例。供应商鉴权、网络和推理服务可用性仍在首次真实调用时验证；自定义 LLM 工厂继续负责自己的配置来源。
 
 Room 日志查询从 MessageManager 权威读取投递状态和错误，状态不写回 Room 日志。聊天页对待处理记录每 3 秒刷新，离开页面后停止；也可手动刷新。失败或阻塞记录显示具体原因，恢复通过接收实体的消息页显式执行。模型配置修复不会自动重试历史失败消息。
 
 补充验收覆盖配置缺失拒绝启动、停止后绑定、在线禁止修改、稳定身份重启、Room 实际接收与回复、供应商失败状态读通、前端错误显示和轮询释放。现场使用既有 GLM 配置恢复了此前因模型配置缺失失败的消息。
+
+模型端点格式、请求参数和旧规格转换详见 [模型端点与配置迁移](model-endpoints.md)。

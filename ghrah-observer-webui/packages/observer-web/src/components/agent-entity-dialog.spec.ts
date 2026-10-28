@@ -189,7 +189,7 @@ it("creates a persistent entity with explicit start and selected cluster", async
       project_id: "p1",
       cluster_id: "c1",
       name: "new-agent",
-      agent_config_name: "shared-model",
+      endpoint_name: "shared-model",
       start: false,
       ability_types: ["send_message"],
     }),

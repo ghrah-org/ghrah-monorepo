@@ -45,7 +45,8 @@ from ghrah.manifest.responses import (
 )
 from ghrah.manifest.store import BuiltinManifestStore
 from ghrah.manifest.types import (
-    SUPPORTED_VERSIONS,
+    SUPPORTED_ABILITY_VERSIONS,
+    SUPPORTED_AGENT_VERSIONS,
     HookDef,
     ImplementationDef,
     PermissionFlags,
@@ -83,7 +84,8 @@ __all__ = [
     "ResolvedAbilityData",
     "ResolvedAgent",
     "ResolvedAgentData",
-    "SUPPORTED_VERSIONS",
+    "SUPPORTED_AGENT_VERSIONS",
+    "SUPPORTED_ABILITY_VERSIONS",
     "ToolParameter",
     "ToolSchema",
     "ValidateResult",

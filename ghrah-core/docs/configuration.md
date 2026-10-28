@@ -11,7 +11,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="my-agent",  # Agent 运行时名称（必填，用于消息路由和持久化路径）
-    agent_config_name="assistant",  # agentconf 中的配置名称（可选，None 时回退到 name）
+    endpoint_name="assistant",  # agentconf 模型端点名称（默认工厂必填）
     description="通用助手",  # Agent 描述（用于发现和路由）
     system_prompt="你是一个助手",  # 系统提示词
     max_iterations=10,  # 最大推理迭代次数
@@ -26,7 +26,7 @@ config = AgentConfig(
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `name` | `str` | **必填** | Agent 运行时唯一名称，用于消息路由和持久化路径 |
-| `agent_config_name` | `str \| None` | `None` | agentconf 中的配置名称，`None` 时回退到 `name`（向后兼容） |
+| `endpoint_name` | `str \| None` | `None` | agentconf 模型端点名称；默认工厂要求显式指定 |
 | `description` | `str` | `""` | Agent 能力描述，用于 Agent 发现和路由 |
 | `system_prompt` | `str` | `""` | 系统提示词 |
 | `max_iterations` | `int` | `10` | 最大推理迭代次数（防止死循环的安全阀） |
@@ -39,33 +39,29 @@ config = AgentConfig(
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `effective_agent_config_name` | `str` | 有效的 agentconf 查找名称，优先使用 `agent_config_name`，未指定时回退到 `name` |
 | `num_cpus` | `float \| None` | 需要的 CPU 资源数 |
 | `num_gpus` | `float \| None` | 需要的 GPU 资源数 |
 
-### agent_config_name 使用场景
+### endpoint_name 使用场景
 
-当多个运行时 Agent 共享同一份 LLM 配置时（如 Worker 池场景），可以通过 `agent_config_name` 将运行时名称与 agentconf 配置名称分离：
+当多个运行时 Agent 共享同一份 LLM 配置时（如 Worker 池场景），可以通过 `endpoint_name` 将运行时名称与 agentconf 配置名称分离：
 
 ```python
 # Worker 池：多个 worker 共享同一份 agentconf 配置
 for i in range(num_workers):
     config = AgentConfig(
         name=f"solve_worker_{i}",  # 运行时唯一标识
-        agent_config_name="solve_worker",  # agentconf 中的模板名称
+        endpoint_name="solve_worker",  # agentconf 中的端点名称
         system_prompt=f"你是解题 Worker #{i}",
     )
     # Agent 初始化时会使用 "solve_worker" 查找 agentconf 配置
     # 而不是查找不存在的 "solve_worker_0", "solve_worker_1" 等
 ```
 
-当 `agent_config_name` 未指定时，自动回退到 `name`，保持向后兼容：
+默认工厂不再回退到运行时 `name`。旧 Agent 名称必须经导出映射转换；即使端点名称看起来相同，也不能直接把旧字段改名。迁移方法见 [模型端点与配置迁移](model-endpoints.md)。
 
 ```python
-# 单 Agent 场景：name 与 agentconf 配置名称一致
-config = AgentConfig(
-    name="planner",  # agent_config_name 未指定，自动使用 "planner" 查找 agentconf
-)
+config = AgentConfig(name="planner", endpoint_name="planning-endpoint")
 ```
 
 ## WindowConfig
@@ -160,52 +156,40 @@ backend = context_config.create_persistence()  # 返回 JsonFileBackend 实例
 
 ## agentconf 配置
 
-LLM 相关配置通过 [agentconf](https://github.com/ghrah/agentconf) 管理。0.2 的配置职责如下：
+agentconf 0.3 管理 Provider 连接、模型端点、能力档案，以及独立的 MCP 连接。模型端点保存实际请求模型名、用途、接口格式和可选能力引用；请求参数留在 ghrah。
 
-- Provider：协议类型、API 端点与密钥。
-- 能力档案：固定模型的上下文、模态、推理与工具等发布能力，来源可以是 models.dev、人工声明或虚构示例。
-- ModelInstance：全局唯一的绑定名称、实际请求模型名，以及 Provider 和能力档案的引用。
-- Agent：模型绑定与 temperature、top_p、max_tokens 等请求参数。
+无能力引用的 LLM 默认上下文为 1M，支持工具与推理。`resolved.capabilities` 是有效能力，`capability_sources` 表示逐字段来源，`metadata` 保存档案来源与版本，也可以为空。最大输出能力是模型上限，`ModelOverrides.max_tokens` 才是本次请求预算。
 
-能力档案与请求名互相独立；选择 `example-VLA` 不会把它作为请求模型名发送。
-未绑定档案的 LLM 使用默认上下文 1M，支持工具与推理。档案的最大输出长度是能力上限，
-Agent 的 `max_tokens` 才是实际请求参数。
-
-### 配置入口
-
-执行 `agentconf` 打开 TUI，创建 Provider、模型绑定和 Agent。程序初始化仅加载随包目录，
-不访问网络。需要新增参考数据时先预览，再接受固定快照：
+执行 `uv run agentconf` 使用 TUI；CLI 的 Provider/端点创建使用 JSON 文件和显式 apply：
 
 ```sh
-agentconf catalog import --plan-out /tmp/catalog-plan.json
-agentconf catalog import --plan /tmp/catalog-plan.json --apply-all --types llm
+agentconf provider create --file provider.json
+agentconf provider create --file provider.json --apply
+agentconf endpoint create --file endpoint.json
+agentconf endpoint create --file endpoint.json --apply
 ```
 
-已有档案的差异只报告，不自动覆盖；上游缺项也不会删除本地档案。
+字段样例、格式分派及迁移方法见 [模型端点与配置迁移](model-endpoints.md)。
 
 ### SDK 使用
 
 ```python
 from agentconf import AgentsConfig
+from ghrah.llm.factory import LLMFactory
+from ghrah.types.config_types import ModelOverrides
 
 with AgentsConfig() as config:
-    # Provider、绑定和 Agent 可提前在 TUI 中创建。
-    # 创建绑定时 capabilities_key 显式选择目录中的规范模型键。
-    resolved = config.resolve_agent("assistant")
-    model = resolved.model
-    # model.base_url / model.api_key 只来自 Provider。
-    # model.capabilities 是补齐默认值后的有效能力。
-    # model.capabilities_key 保留档案键；capability_sources 逐字段说明来源。
-    # resolved.temperature / resolved.max_tokens 是请求参数。
+    resolved = config.resolve_model_endpoint("assistant")
+llm = LLMFactory.create(resolved, ModelOverrides(temperature=0, max_tokens=2048))
+# resolved.model.model_name 是实际请求模型；resolved.connection 是连接信息。
+# resolved.capabilities、capability_sources 和 metadata 保留有效能力及来源。
 ```
 
-此接口使用 agentconf 0.2。跨仓验收通过 `PYTHONPATH` 加载本地新版源码；发布前不向
-monorepo 锁文件写入本地 path 依赖。0.1 的客户端可继续走原有工厂兼容路径，但不提供
-本节的能力目录功能。
+本消费契约要求 agentconf 0.3 候选 SDK。稳定依赖下限和正式锁定版本随联合发布验收更新；不把本机 path 写入依赖或锁文件。
 
 ## 直接构造 ChatFormat（Fallback）
 
-当不想使用 agentconf 时，可以直接构造 `ChatFormat` 子类并通过 `agent._llm` 注入到 Agent 中。这种方式跳过了 agentconf 的 Provider → LLM → Agent 继承链，将 LLM 参数的管控权完全交给调用方。
+当不想使用 agentconf 时，可以直接构造 `ChatFormat` 子类并通过 `agent._llm` 注入到 Agent 中。这种方式跳过了 agentconf 的 Provider → 模型端点解析，将 LLM 参数的管控权完全交给调用方。
 
 > **原理**：`ActorAgent._ensure_llm()` 在首次调用时检查 `self._llm`，若已设置则直接返回，不再走 agentconf 解析路径。因此在 `receive()` / `chat()` 之前赋值即可。
 
@@ -229,6 +213,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="assistant",
+    endpoint_name="assistant",
     system_prompt="你是一个友好的 AI 助手。",
 )
 ```
@@ -240,6 +225,7 @@ from ghrah.core.config import AgentConfig, WindowConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     description="代码编写助手",
     system_prompt="你是一个代码编写专家。请根据需求编写高质量的代码。",
     max_iterations=15,
@@ -271,6 +257,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 # 规划者 — 轻量配置
 planner_config = AgentConfig(
     name="planner",
+    endpoint_name="planner",
     description="任务规划专家",
     system_prompt="你是一个任务规划专家。请将复杂任务分解为清晰的步骤。",
     max_iterations=5,
@@ -279,6 +266,7 @@ planner_config = AgentConfig(
 # 编码者 — 完整配置
 coder_config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     description="代码编写专家",
     system_prompt="你是一个代码编写专家。",
     max_iterations=15,
@@ -291,15 +279,16 @@ coder_config = AgentConfig(
 # 审查者 — 中等配置
 reviewer_config = AgentConfig(
     name="reviewer",
+    endpoint_name="reviewer",
     description="代码审查专家",
     system_prompt="你是一个代码审查专家。",
     max_iterations=10,
 )
 ```
 
-### Worker 池配置（agent_config_name）
+### Worker 池配置（endpoint_name）
 
-当多个 Agent 共享同一份 LLM 配置时（如 Worker 池场景），使用 `agent_config_name` 将运行时名称与 agentconf 配置名称分离：
+当多个 Agent 共享同一份 LLM 配置时（如 Worker 池场景），使用 `endpoint_name` 将运行时名称与 agentconf 配置名称分离：
 
 ```python
 from ghrah.core.config import AgentConfig
@@ -309,7 +298,7 @@ from ghrah.core.config import AgentConfig
 worker_configs = [
     AgentConfig(
         name=f"solve_worker_{i}",  # 运行时唯一标识
-        agent_config_name="solve_worker",  # agentconf 中的模板名称
+        endpoint_name="solve_worker",  # agentconf 中的端点名称
         description=f"解题 Worker #{i}",
         system_prompt=f"你是解题 Worker #{i}。",
     )
@@ -319,7 +308,7 @@ worker_configs = [
 # 角色别名：不同运行时名称，共享同一份 LLM 配置
 reviewer_config = AgentConfig(
     name="code_reviewer_v2",  # 新版本运行时标识
-    agent_config_name="reviewer",  # 复用 reviewer 的 LLM 配置
+    endpoint_name="reviewer",  # 复用 reviewer 的 LLM 配置
     description="代码审查专家 v2",
     system_prompt="你是一个代码审查专家。",
 )
@@ -336,6 +325,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="你是一个代码编写专家。",
     context=ContextConfig(
         persistence_type="remote",

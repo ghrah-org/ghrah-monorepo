@@ -147,6 +147,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     context=ContextConfig(
         persistence_type="json_file",  # "json_file" | "memory" | "sqlite" | "remote" | None
         persistence_root_dir="/tmp/agent_data",
@@ -210,6 +211,7 @@ from ghrah.core.config import AgentConfig, WindowConfig
 
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     window=WindowConfig(
         max_tokens=4096,  # Token budget
         strategies=["tool_call_fold", "truncation"],  # Strategy list
@@ -340,6 +342,7 @@ from ghrah.core.config import AgentConfig, WindowConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     description="Code writing assistant",
     system_prompt="You are a code writing expert.",
     max_iterations=15,

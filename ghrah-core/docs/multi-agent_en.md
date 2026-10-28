@@ -44,16 +44,19 @@ from ghrah.core.config import AgentConfig
 configs = [
     AgentConfig(
         name="planner",
+        endpoint_name="planner",
         description="Task planning expert, responsible for breaking down complex tasks",
         system_prompt="You are a task planning expert. Break down complex tasks into clear steps.",
     ),
     AgentConfig(
         name="coder",
+        endpoint_name="coder",
         description="Code writing expert",
         system_prompt="You are a code writing expert. Write high-quality code based on designs.",
     ),
     AgentConfig(
         name="reviewer",
+        endpoint_name="reviewer",
         description="Code review expert",
         system_prompt="You are a code review expert. Review code and provide improvement suggestions.",
     ),
@@ -206,9 +209,15 @@ supervisor = SupervisorActor()
 
 # Register Agents
 configs = [
-    AgentConfig(name="planner", description="Task planning", system_prompt="..."),
-    AgentConfig(name="coder", description="Code writing", system_prompt="..."),
-    AgentConfig(name="reviewer", description="Code review", system_prompt="..."),
+    AgentConfig(
+        name="planner", endpoint_name="planner", description="Task planning", system_prompt="..."
+    ),
+    AgentConfig(
+        name="coder", endpoint_name="coder", description="Code writing", system_prompt="..."
+    ),
+    AgentConfig(
+        name="reviewer", endpoint_name="reviewer", description="Code review", system_prompt="..."
+    ),
 ]
 for config in configs:
     await supervisor.spawn_agent(config)

@@ -56,10 +56,15 @@ export class AgentEntity {
       }),
     );
   }
-  configureModel(agentConfigName: string, expectedRevision: number) {
+  configureModel(
+    endpointName: string,
+    expectedRevision: number,
+    modelOverrides?: Record<string, unknown> | null,
+  ) {
     return this.call({
       type: "model.configure",
-      agent_config_name: agentConfigName,
+      endpoint_name: endpointName,
+      model_overrides: modelOverrides,
       expected_revision: expectedRevision,
     });
   }

@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.protocol.enums import ProjectStatus, RecoveryAction
+from ghrah.protocol.payloads.model import EndpointReferenceModel
 
 # ─── Project 载荷模型 ───
 
@@ -38,13 +39,14 @@ class WritableWorkspaceSpec(BaseModel):
     default_for_agents: bool = False
 
 
-class AgentSpecSchema(BaseModel):
+class AgentSpecSchema(EndpointReferenceModel):
     """Project 内 agent desired-state 摘要。"""
 
     agent_id: str = ""
     name: str
     cluster_id: str
-    agent_config_name: str | None = None
+    endpoint_name: str | None = None
+    model_overrides: dict[str, Any] | None = None
     manifest_ref: str = ""
     instance_manifest_path: str = ""
     system_prompt: str = ""

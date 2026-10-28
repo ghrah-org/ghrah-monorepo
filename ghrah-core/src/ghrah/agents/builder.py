@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
+from ghrah.agents.base import ActorAgent
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence import create_persistence
 from ghrah.context.token_estimator import TokenEstimator
@@ -284,12 +285,11 @@ def _default_llm_factory(config: AgentConfig) -> LLMProtocol:
     """默认 LLM 工厂 — 从 agentconf 创建 ChatFormat。"""
     from agentconf import AgentsConfig
 
+    if not config.endpoint_name or not config.endpoint_name.strip():
+        raise ValueError("endpoint_name is required; migrate legacy Agent configuration first")
     with AgentsConfig() as config_client:
-        resolved = config_client.resolve_agent(config.effective_agent_config_name)
-    llm = LLMFactory.create(resolved)
-    if config.model_overrides is not None:
-        llm.apply_model_overrides(config.model_overrides)
-    return llm
+        resolved = config_client.resolve_model_endpoint(config.endpoint_name)
+    return LLMFactory.create(resolved, config.model_overrides)
 
 
 class AgentBuilder:
@@ -304,7 +304,7 @@ class AgentBuilder:
         event_publisher: EventPublisher | None = None,
         llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
         persistence_factory: Callable[[AgentConfig], Any] | None = None,
-    ) -> Any:
+    ) -> ActorAgent:
         """从 AgentConfig 构建 ActorAgent（默认注入策略）。
 
         Args:
@@ -321,10 +321,7 @@ class AgentBuilder:
         Returns:
             配置好的 ActorAgent 实例
         """
-        from ghrah.agents.base import ActorAgent
-
         resolved_llm_factory = llm_factory or _default_llm_factory
-
         context_manager = _build_context_manager(
             config, persistence_factory, llm_factory=resolved_llm_factory, supervisor=supervisor
         )

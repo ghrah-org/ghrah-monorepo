@@ -15,11 +15,19 @@
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ghrah.chat.content import ContentBlock, ReasoningBlock, TextBlock, ToolCallBlock
+from ghrah.chat.content import (
+    ContentBlock,
+    ReasoningBlock,
+    TextBlock,
+    ToolCallBlock,
+    ToolCallChunkBlock,
+)
 from ghrah.chat.message import ChatMessage
 from ghrah.types.tokens import TokenUsage
 
@@ -58,6 +66,14 @@ class LLMResponse:
         )
 
 
+@dataclass
+class LLMStreamEvent:
+    """流式增量：内容块、最终响应或错误；取消以 CancelledError 传播。"""
+
+    block: ContentBlock | ToolCallChunkBlock | None = None
+    response: LLMResponse | None = None
+
+
 class ChatFormat(ABC):
     _tools: list[dict[str, Any]]
 
@@ -66,6 +82,8 @@ class ChatFormat(ABC):
         # None 表示调用方未提供能力信息；字典是 agentconf 的完整解析结果。
         self.model_capabilities: dict[str, Any] | None = None
         self.capability_sources: dict[str, str] = {}
+        self.model_metadata: dict[str, Any] | None = None
+        self._extra_params: dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -78,26 +96,20 @@ class ChatFormat(ABC):
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse: ...
 
-    # 预留流式接口（当前不实现）
-    # async def stream(
-    #     self, messages: list[ChatMessage], tools: list[dict[str, Any]] | None = None
-    # ) -> AsyncIterator[TextBlock | ToolCallChunkBlock]:
-    #     ...
+    async def stream(
+        self, messages: list[ChatMessage], tools: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """返回结构化增量；未提供原生流式适配的实现明确拒绝。"""
+        raise NotImplementedError(f"{type(self).__name__} does not support streaming")
+        yield  # 保持异步生成器签名。
 
     def configure_tools(self, tools: list[dict[str, Any]]) -> None:
         self._tools = tools
 
     def apply_model_overrides(self, overrides: ModelOverrides) -> None:
-        """将 Manifest 模型覆盖值应用到当前实例。
-
-        由 ActorAgent._ensure_llm() 在创建 ChatFormat 后调用，
-        Manifest 的 model_overrides 优先级高于 agentconf 解析结果。
-        子类应重写此方法以处理子类特有的属性（如 top_k），
-        并调用 super().apply_model_overrides(overrides) 处理共享属性。
-
-        Args:
-            overrides: 来自 AgentManifest.model 的覆盖值，非 None 字段覆盖当前值
-        """
+        """应用调用者的请求参数；显式类型字段优先于扩展参数。"""
+        self._validate_extra_params(overrides.extra_params)
+        self._extra_params = dict(overrides.extra_params)
         if overrides.temperature is not None:
             self._temperature = overrides.temperature
         if overrides.max_tokens is not None:
@@ -105,8 +117,56 @@ class ChatFormat(ABC):
         if overrides.top_p is not None:
             self._top_p = overrides.top_p
 
+    @staticmethod
+    def _validate_extra_params(params: dict[str, Any]) -> None:
+        """扩展参数只含请求选项，禁止改写连接、请求消息或 SDK 包装层。"""
+        forbidden = {
+            "model",
+            "api_key",
+            "base_url",
+            "provider_type",
+            "api_format",
+            "endpoint_name",
+            "connection_options",
+            "messages",
+            "input",
+            "tools",
+            "system",
+            "instructions",
+            "extra_body",
+            "extra_headers",
+            "extra_query",
+            "http_client",
+            "default_headers",
+            "default_query",
+            "organization",
+            "project",
+            "previous_response_id",
+            "conversation",
+        }
+        if not isinstance(params, dict) or params.keys() & forbidden:
+            raise ValueError("extra_params cannot override model, connection or request identity")
 
-__all__ = ["ChatFormat", "LLMResponse", "TokenUsage", "create_format"]
+    def _request_kwargs(
+        self, explicit: dict[str, Any], create: Any, extra_params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """已知 SDK 参数直接传入，其余厂商扩展通过 extra_body 无损传递。"""
+        params = dict(self._extra_params if extra_params is None else extra_params)
+        params.update(explicit)
+        if params.get("stream"):
+            raise ValueError("stream=True is unsupported by this adapter; use Responses.stream")
+        accepted = inspect.signature(create).parameters
+        # 接受任意关键字参数的包装调用方自行处理字段；显式 SDK 签名按字段分流。
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
+            return params
+        body = {k: v for k, v in params.items() if k not in accepted}
+        result = {k: v for k, v in params.items() if k in accepted}
+        if body:
+            result["extra_body"] = body
+        return result
+
+
+__all__ = ["ChatFormat", "LLMResponse", "LLMStreamEvent", "TokenUsage", "create_format"]
 
 
 def create_format(provider_type: str, **kwargs: object) -> ChatFormat:

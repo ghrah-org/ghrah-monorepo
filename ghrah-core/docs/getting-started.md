@@ -18,47 +18,30 @@ uv sync
 
 ## 配置 LLM
 
-ghrah 使用 [agentconf](https://github.com/ghrah/agentconf) 管理 LLM 配置，采用 Provider → LLM → Agent 三层继承结构。
+ghrah 使用 agentconf 管理 Provider、模型端点和静态能力。运行时通过显式 `endpoint_name` 选择端点，请求参数由 ghrah 的 `ModelOverrides` 持有。
 
-### 1. 创建 Provider
-
-Provider 定义 LLM 服务提供者的连接信息：
+使用 agentconf 0.3 的 TUI 配置 Provider 与端点：
 
 ```bash
-agentconf provider create openai \
-    --type openai \
-    --base-url "https://api.openai.com/v1" \
-    --api-key "sk-your-api-key"
+uv run agentconf
 ```
 
-也支持其他兼容 OpenAI API 的服务：
+端点必须声明实际请求模型名和接口格式：`openai.chat_completions`、`openai.responses` 或 `anthropic.messages`。DeepSeek 使用 `provider_type=deepseek` 与 `openai.chat_completions`，以保留推理内容回传。
 
-```bash
-agentconf provider create deepseek \
-    --type openai \
-    --base-url "https://api.deepseek.com/v1" \
-    --api-key "sk-your-deepseek-key"
+也可以用 SDK 显式创建配置（需要先安装兼容的 agentconf 0.3）：
+
+```python
+import os
+from agentconf import AgentsConfig
+
+with AgentsConfig() as config:
+    config.create_provider(
+        "openai", "openai", "https://api.openai.com/v1", os.environ["OPENAI_API_KEY"]
+    )
+    config.create_model_endpoint("openai", "assistant", "your-model-name", "openai.responses")
 ```
 
-### 2. 创建 LLM Instance
-
-LLM Instance 绑定到 Provider，指定模型名称：
-
-```bash
-agentconf llm create gpt4o \
-    --provider openai \
-    --model-name "gpt-4o"
-```
-
-### 3. 创建 Agent
-
-Agent 绑定到 LLM Instance，可覆盖模型参数：
-
-```bash
-agentconf agent create assistant \
-    --llm gpt4o \
-    --temperature 0.7
-```
+ghrah 配置使用 `AgentConfig(name="runtime-name", endpoint_name="assistant")`。运行时名称不参与端点查找。旧库与旧配置先按 [模型端点与配置迁移](model-endpoints.md) 转换，不能直接改名旧 Agent 引用。
 
 ### 环境变量
 
@@ -94,6 +77,7 @@ from ghrah.core.config import AgentConfig
 async def main():
     config = AgentConfig(
         name="assistant",
+        endpoint_name="assistant",
         description="通用对话助手",
         system_prompt="你是一个友好的 AI 助手，请用中文回答问题。",
     )
@@ -126,9 +110,10 @@ from ghrah.core.config import AgentConfig
 
 
 async def main():
-    # 创建 Agent 配置（name 对应 agentconf 中的 agent name）
+    # 创建 Agent 配置（endpoint_name 显式选择 agentconf 模型端点）
     config = AgentConfig(
         name="assistant1",
+        endpoint_name="assistant1",
         description="通用对话助手",
         system_prompt="你是一个友好的 AI 助手，请用中文回答问题。",
     )
@@ -183,9 +168,9 @@ supervisor = SupervisorActor()
 
 # 注册多个 Agent
 configs = [
-    AgentConfig(name="planner", description="任务规划专家"),
-    AgentConfig(name="coder", description="代码编写专家"),
-    AgentConfig(name="reviewer", description="代码审查专家"),
+    AgentConfig(name="planner", endpoint_name="planner", description="任务规划专家"),
+    AgentConfig(name="coder", endpoint_name="coder", description="代码编写专家"),
+    AgentConfig(name="reviewer", endpoint_name="reviewer", description="代码审查专家"),
 ]
 for config in configs:
     await supervisor.spawn_agent(config)
@@ -214,7 +199,7 @@ from ghrah.abilities.builtin import (
 )
 
 # 创建带文件权限的 Agent
-config = AgentConfig(name="coder", description="代码编写助手")
+config = AgentConfig(name="coder", endpoint_name="coder", description="代码编写助手")
 agent = ActorAgent(config)
 
 # 注册 Ability

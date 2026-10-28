@@ -1,0 +1,24 @@
+{
+  "agents": [
+    {
+      "name": "worker_0",
+      "agent_config_name": "example-concise",
+      "model_overrides": {
+        "max_tokens": 1024,
+        "top_p": 0
+      },
+      "cluster_id": "example-cluster",
+      "desired_state": "stopped"
+    },
+    {
+      "name": "example-creative",
+      "cluster_id": "example-cluster",
+      "desired_state": "stopped"
+    }
+  ],
+  "project_id": "example-project",
+  "name": "migration-example",
+  "cluster_ids": [
+    "example-cluster"
+  ]
+}

@@ -1,11 +1,11 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: student_grade
   name: backend_coder
   description: 后端开发者 — FastAPI + SQLite 数据持久化与 CRUD 端点
 model:
-  agent_config_name: coder-glm-4.7
+  endpoint_name: coder-glm-4.7
   temperature: 0.7
 system_prompt: |
   你是一个 Python 后端开发专家，精通 FastAPI 和 SQLite。

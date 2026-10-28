@@ -26,9 +26,9 @@ def _agent_manifest(
 ) -> AgentManifest:
     return AgentManifest(
         manifest="agent",
-        version="1",
+        version="2",
         metadata=AgentMetadata(namespace="ghrah", name=name, description=f"manifest {name}"),
-        model=ModelConfig(agent_config_name="default"),
+        model=ModelConfig(endpoint_name="default"),
         system_prompt=f"You are {name}.",
         abilities=abilities or [AbilityRef(type="conversation")],
     )

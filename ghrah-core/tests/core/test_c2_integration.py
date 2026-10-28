@@ -26,13 +26,13 @@ from ghrah.manifest.store import BuiltinManifestStore
 
 _PARENT_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: smoke
   name: orchestrator
   description: orchestrator
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You orchestrate.
 max_iterations: 5
 abilities:
@@ -44,13 +44,13 @@ abilities:
 
 _CHILD_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: smoke
   name: worker
   description: worker
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You work.
 max_iterations: 5
 abilities:

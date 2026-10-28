@@ -59,13 +59,13 @@ implementation:
 
 VALID_AGENT_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: my_project
   name: dev_agent
   description: A dev agent
 model:
-  agent_config_name: gpt-4o-dev
+  endpoint_name: gpt-4o-dev
 system_prompt: You are a dev agent.
 abilities:
   - type: conversation
@@ -73,13 +73,13 @@ abilities:
 
 VALID_AGENT_YAML_2 = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: my_project
   name: test_agent
   description: A test agent
 model:
-  agent_config_name: gpt-4o-mini
+  endpoint_name: gpt-4o-mini
 system_prompt: You are a test agent.
 abilities:
   - type: end_task

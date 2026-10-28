@@ -53,7 +53,7 @@ classDiagram
     }
     class AgentConfig {
         name: str
-        agent_config_name: str
+        endpoint_name: str
         description: str
         system_prompt: str
         max_iterations: int
@@ -857,7 +857,7 @@ classDiagram
         on_error: list~HookDef~
     }
     class ModelConfig {
-        agent_config_name: str | None
+        endpoint_name: str | None
         temperature: float | None
         max_tokens: int | None
         top_p: float | None

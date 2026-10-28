@@ -344,7 +344,9 @@ class CoreClusterRegistryUnit(SubjectUnit):
         self, manager: Any, project: dict[str, Any], payload: dict[str, Any]
     ) -> dict[str, Any]:
         # ACTIVE 校验已在 _project() 的 _RUNTIME_REVIVING_COMMANDS 守卫统一完成。
-        config = payload.get("config") or {}
+        from ghrah.protocol.payloads.agent import AgentConfigPayload
+
+        config = AgentConfigPayload.model_validate(payload.get("config") or {}).model_dump()
         name = str(config.get("name") or "")
         if not name:
             raise ValueError("config.name required")
@@ -367,6 +369,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                     "expected_version": project["version"],
                     "agent": {
                         "agent_id": str(config.get("agent_id") or ""),
+                        "endpoint_name": config.get("endpoint_name"),
+                        "model_overrides": config.get("model_overrides"),
                         "name": name,
                         "cluster_id": cluster_id,
                         "manifest_ref": str(payload.get("manifest_ref") or ""),

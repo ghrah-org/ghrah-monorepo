@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     config = AgentConfig(
         name="assistant1",
+        endpoint_name="assistant1",
         description="通用对话助手",
         system_prompt="你是一个友好的 AI 助手，请用中文回答问题。",
     )

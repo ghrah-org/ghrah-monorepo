@@ -433,7 +433,7 @@ def _agent_config_to_wire(config: AgentConfig) -> dict[str, Any]:
     return {
         "agent_id": config.effective_agent_id,
         "name": config.name,
-        "agent_config_name": config.agent_config_name,
+        "endpoint_name": config.endpoint_name,
         "description": config.description,
         "system_prompt": config.system_prompt,
         "max_iterations": config.max_iterations,
@@ -958,15 +958,20 @@ class CoreUnit:
     # Agent 生命周期命令
     # ----------------------------------------------------------------
 
-    def _validate_model_config(self, name: str) -> None:
+    def _validate_model_config(self, name: str | None) -> None:
         """启动前检查默认工厂的配置链；自定义工厂管理自己的模型来源。"""
         if self._config.llm_factory is not None:
             return
         from agentconf import AgentsConfig
 
+        if not name or not name.strip():
+            raise ValueError(
+                "model_configuration_invalid: endpoint_name is required; "
+                "migrate legacy Agent configuration"
+            )
         try:
             with AgentsConfig() as config:
-                config.resolve_agent(name)
+                config.resolve_model_endpoint(name)
         except Exception as exc:
             raise ValueError(f"model_configuration_invalid: {name}") from exc
 
@@ -1001,7 +1006,7 @@ class CoreUnit:
                 logger.exception("CoreUnit.spawn_agent: manifest resolve failed: %s", e)
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
-                self._validate_model_config(resolved.config.effective_agent_config_name)
+                self._validate_model_config(resolved.config.endpoint_name)
             ability_instances: list[AbilityProtocol] | None = instantiate_resolved_abilities(
                 resolved.abilities,
                 workspace_root=self._config.workspace_root,
@@ -1069,7 +1074,7 @@ class CoreUnit:
         core_config = AgentConfig(
             name=sp.config.name,
             agent_id=sp.config.agent_id,
-            agent_config_name=sp.config.agent_config_name,
+            endpoint_name=sp.config.endpoint_name,
             description=sp.config.description,
             system_prompt=sp.config.system_prompt,
             max_iterations=sp.config.max_iterations,
@@ -1087,7 +1092,7 @@ class CoreUnit:
         # 注入开关关闭时 session_info 工具同样拿不到快照——快照仅此一处组装。
 
         if sp.validate_model:
-            self._validate_model_config(core_config.effective_agent_config_name)
+            self._validate_model_config(core_config.endpoint_name)
         ability_instances = None
         if sp.abilities:
             ability_instances = []

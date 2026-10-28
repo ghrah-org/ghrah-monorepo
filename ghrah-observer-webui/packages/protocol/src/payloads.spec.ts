@@ -141,19 +141,19 @@ describe("AgentConfigPayloadSchema", () => {
     expect(result.max_iterations).toBe(10);
     expect(result.description).toBe("");
     expect(result.system_prompt).toBe("");
-    expect(result.agent_config_name).toBeUndefined();
+    expect(result.endpoint_name).toBeUndefined();
   });
 
   it("parses with all fields", () => {
     const result = AgentConfigPayloadSchema.parse({
       name: "agent-1",
-      agent_config_name: "default",
+      endpoint_name: "default",
       description: "desc",
       system_prompt: "prompt",
       max_iterations: 5,
     });
     expect(result.max_iterations).toBe(5);
-    expect(result.agent_config_name).toBe("default");
+    expect(result.endpoint_name).toBe("default");
   });
 
   it("rejects missing name", () => {

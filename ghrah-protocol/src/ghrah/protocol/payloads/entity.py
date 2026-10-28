@@ -115,10 +115,11 @@ class EntityAbilityConfigureOperation(EntityModel):
 
 
 class EntityModelConfigureOperation(EntityModel):
-    """停止后修改模型配置引用，配置正文仍由 agentconf 管理。"""
+    """停止后修改模型配置引用，端点由 agentconf 管理，请求参数由当前规格持有。"""
 
     type: Literal["model.configure"]
-    agent_config_name: Identifier
+    endpoint_name: Identifier
+    model_overrides: dict[str, Any] | None = None
     expected_revision: int = Field(ge=1)
 
 
@@ -150,7 +151,8 @@ class AgentEntityCreatePayload(EntityModel):
     name: Identifier
     cluster_id: Identifier
     start: bool
-    agent_config_name: Identifier | None = None
+    endpoint_name: Identifier | None = None
+    model_overrides: dict[str, Any] | None = None
     manifest_ref: str = ""
     system_prompt: str = ""
     ability_types: list[Identifier] | None = Field(default=None, min_length=1)

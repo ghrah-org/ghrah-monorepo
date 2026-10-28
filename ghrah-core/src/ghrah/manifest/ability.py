@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghrah.manifest.errors import ManifestVersionError
 from ghrah.manifest.types import (
-    SUPPORTED_VERSIONS,
+    SUPPORTED_ABILITY_VERSIONS,
     HookDef,
     ImplementationDef,
     PermissionFlags,
@@ -59,10 +59,10 @@ class AbilityManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_version(self) -> AbilityManifest:
-        if self.version.split(".")[0] not in SUPPORTED_VERSIONS:
+        if self.version.split(".")[0] not in SUPPORTED_ABILITY_VERSIONS:
             raise ManifestVersionError(
                 f"Unsupported manifest version: {self.version!r}. "
-                f"Supported major versions: {sorted(SUPPORTED_VERSIONS)}"
+                f"Supported major versions: {sorted(SUPPORTED_ABILITY_VERSIONS)}"
             )
         return self
 

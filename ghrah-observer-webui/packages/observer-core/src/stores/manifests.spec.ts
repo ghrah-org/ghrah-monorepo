@@ -48,7 +48,7 @@ function makeAgent(fullName: string, overrides?: Partial<AgentManifestInfo>): Ag
     title: name,
     description: "Test agent",
     tags: ["test"],
-    agent_config_name: "default",
+    endpoint_name: "default",
     system_prompt: "You are helpful.",
     ability_refs: [],
     max_iterations: 10,

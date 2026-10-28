@@ -42,13 +42,13 @@ from ghrah.manifest.store import BuiltinManifestStore
 
 _ORCHESTRATOR_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: cluster
   name: orchestrator
   description: orchestrator
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You orchestrate.
 max_iterations: 8
 abilities:
@@ -61,13 +61,13 @@ abilities:
 
 _WORKER_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: cluster
   name: worker
   description: worker
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You work.
 max_iterations: 5
 abilities:

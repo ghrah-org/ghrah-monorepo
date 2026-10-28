@@ -11,7 +11,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="my-agent",  # Agent runtime name (required, for routing and persistence paths)
-    agent_config_name="assistant",  # agentconf configuration name (optional, falls back to name)
+    endpoint_name="assistant",  # agentconf 模型端点名称（默认工厂必填）
     description="General assistant",  # Agent description (for discovery and routing)
     system_prompt="You are an assistant",  # System prompt
     max_iterations=10,  # Maximum reasoning iterations
@@ -26,7 +26,7 @@ config = AgentConfig(
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `str` | **Required** | Agent runtime unique name, for message routing and persistence paths |
-| `agent_config_name` | `str \| None` | `None` | Configuration name in agentconf, falls back to `name` when `None` (backward compatible) |
+| `endpoint_name` | `str \| None` | `None` | agentconf 模型端点名称；默认工厂要求显式指定 |
 | `description` | `str` | `""` | Agent capability description, for discovery and routing |
 | `system_prompt` | `str` | `""` | System prompt |
 | `max_iterations` | `int` | `10` | Maximum reasoning iterations (safety valve against infinite loops) |
@@ -39,33 +39,29 @@ config = AgentConfig(
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `effective_agent_config_name` | `str` | Effective agentconf lookup name, uses `agent_config_name` if set, falls back to `name` |
 | `num_cpus` | `float \| None` | Number of CPUs required |
 | `num_gpus` | `float \| None` | Number of GPUs required |
 
-### agent_config_name Usage
+### endpoint_name Usage
 
-When multiple runtime Agents share the same LLM configuration (e.g., Worker pool scenarios), use `agent_config_name` to separate the runtime name from the agentconf configuration name:
+When multiple runtime Agents share the same LLM configuration (e.g., Worker pool scenarios), use `endpoint_name` to separate the runtime name from the agentconf configuration name:
 
 ```python
 # Worker pool: multiple workers share the same agentconf configuration
 for i in range(num_workers):
     config = AgentConfig(
         name=f"solve_worker_{i}",  # Runtime unique identifier
-        agent_config_name="solve_worker",  # Template name in agentconf
+        endpoint_name="solve_worker",  # Model endpoint name in agentconf
         system_prompt=f"You are solve Worker #{i}",
     )
     # Agent initialization uses "solve_worker" to look up agentconf configuration
     # instead of looking up non-existent "solve_worker_0", "solve_worker_1", etc.
 ```
 
-When `agent_config_name` is not specified, it automatically falls back to `name`, maintaining backward compatibility:
+默认工厂不再回退到运行时 `name`。旧 Agent 名称必须经导出映射转换；即使端点名称看起来相同，也不能直接把旧字段改名。迁移方法见 [模型端点与配置迁移](model-endpoints.md)。
 
 ```python
-# Single Agent scenario: name matches agentconf configuration name
-config = AgentConfig(
-    name="planner",  # agent_config_name not specified, uses "planner" for agentconf lookup
-)
+config = AgentConfig(name="planner", endpoint_name="planning-endpoint")
 ```
 
 ## WindowConfig
@@ -149,71 +145,42 @@ context_config = ContextConfig(persistence_type="json_file", persistence_root_di
 backend = context_config.create_persistence()  # Returns JsonFileBackend instance
 ```
 
-## agentconf Configuration
+## agentconf 配置
 
-LLM-related configuration is managed through [agentconf](https://github.com/ghrah/agentconf) with a three-tier inheritance structure:
+agentconf 0.3 管理 Provider 连接、模型端点、能力档案，以及独立的 MCP 连接。模型端点保存实际请求模型名、用途、接口格式和可选能力引用；请求参数留在 ghrah。
 
-```
-Provider (service provider)
-├── base_url: API endpoint
-├── api_key: Authentication key
-└── type: Provider type (openai / anthropic)
-    │
-    └── LLM Instance (model instance)
-        ├── model_name: Model identifier
-        ├── temperature: Temperature parameter (overridable)
-        ├── top_p: Top-P parameter (overridable)
-        └── max_tokens: Max token count (overridable)
-            │
-            └── Agent (agent)
-                ├── temperature: Temperature parameter (overrides LLM level)
-                ├── top_p: Top-P parameter (overrides LLM level)
-                └── max_tokens: Max token count (overrides LLM level)
+无能力引用的 LLM 默认上下文为 1M，支持工具与推理。`resolved.capabilities` 是有效能力，`capability_sources` 表示逐字段来源，`metadata` 保存档案来源与版本，也可以为空。最大输出能力是模型上限，`ModelOverrides.max_tokens` 才是本次请求预算。
+
+执行 `uv run agentconf` 使用 TUI；CLI 的 Provider/端点创建使用 JSON 文件和显式 apply：
+
+```sh
+agentconf provider create --file provider.json
+agentconf provider create --file provider.json --apply
+agentconf endpoint create --file endpoint.json
+agentconf endpoint create --file endpoint.json --apply
 ```
 
-### CLI Commands
+字段样例、格式分派及迁移方法见 [模型端点与配置迁移](model-endpoints.md)。
 
-```bash
-# Create Provider
-agentconf provider create openai \
-    --type openai \
-    --base-url "https://api.openai.com/v1" \
-    --api-key "sk-your-api-key"
-
-# Create LLM Instance
-agentconf llm create gpt4o \
-    --provider openai \
-    --model-name "gpt-4o"
-
-# Create Agent
-agentconf agent create assistant \
-    --llm gpt4o \
-    --temperature 0.7
-```
-
-### SDK Usage
+### SDK 使用
 
 ```python
 from agentconf import AgentsConfig
+from ghrah.llm.factory import LLMFactory
+from ghrah.types.config_types import ModelOverrides
 
-config_client = AgentsConfig()
-
-# Resolve Agent configuration (includes full Provider → LLM → Agent inheritance chain)
-resolved = config_client.resolve_agent("assistant")
-
-# resolved contains:
-# - provider_type: ProviderType
-# - base_url: str
-# - api_key: SecretStr
-# - model_name: str
-# - temperature: float | None
-# - top_p: float | None
-# - max_tokens: int | None
+with AgentsConfig() as config:
+    resolved = config.resolve_model_endpoint("assistant")
+llm = LLMFactory.create(resolved, ModelOverrides(temperature=0, max_tokens=2048))
+# resolved.model.model_name 是实际请求模型；resolved.connection 是连接信息。
+# resolved.capabilities、capability_sources 和 metadata 保留有效能力及来源。
 ```
+
+本消费契约要求 agentconf 0.3 候选 SDK。稳定依赖下限和正式锁定版本随联合发布验收更新；不把本机 path 写入依赖或锁文件。
 
 ## Direct ChatFormat Construction (Fallback)
 
-When you don't want to use agentconf, you can directly construct a `ChatFormat` subclass and inject it into the Agent via `agent._llm`. This approach bypasses the agentconf Provider → LLM → Agent inheritance chain, giving the caller full control over LLM parameter management.
+When you don't want to use agentconf, you can directly construct a `ChatFormat` subclass and inject it into the Agent via `agent._llm`. This approach bypasses the agentconf Provider → 模型端点解析, giving the caller full control over LLM parameter management.
 
 > **How it works**: `ActorAgent._ensure_llm()` checks `self._llm` on first invocation. If already set, it returns immediately without going through agentconf resolution. Simply assign the ChatFormat before calling `receive()` / `chat()`.
 
@@ -237,6 +204,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="assistant",
+    endpoint_name="assistant",
     system_prompt="You are a friendly AI assistant.",
 )
 ```
@@ -248,6 +216,7 @@ from ghrah.core.config import AgentConfig, WindowConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     description="Code writing assistant",
     system_prompt="You are a code writing expert. Write high-quality code based on requirements.",
     max_iterations=15,
@@ -279,6 +248,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 # Planner — lightweight configuration
 planner_config = AgentConfig(
     name="planner",
+    endpoint_name="planner",
     description="Task planning expert",
     system_prompt="You are a task planning expert. Break down complex tasks into clear steps.",
     max_iterations=5,
@@ -287,6 +257,7 @@ planner_config = AgentConfig(
 # Coder — full configuration
 coder_config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     description="Code writing expert",
     system_prompt="You are a code writing expert.",
     max_iterations=15,
@@ -299,15 +270,16 @@ coder_config = AgentConfig(
 # Reviewer — medium configuration
 reviewer_config = AgentConfig(
     name="reviewer",
+    endpoint_name="reviewer",
     description="Code review expert",
     system_prompt="You are a code review expert.",
     max_iterations=10,
 )
 ```
 
-### Worker Pool Configuration (agent_config_name)
+### Worker Pool Configuration (endpoint_name)
 
-When multiple Agents share the same LLM configuration (e.g., Worker pool scenarios), use `agent_config_name` to separate the runtime name from the agentconf configuration name:
+When multiple Agents share the same LLM configuration (e.g., Worker pool scenarios), use `endpoint_name` to separate the runtime name from the agentconf configuration name:
 
 ```python
 from ghrah.core.config import AgentConfig
@@ -317,7 +289,7 @@ from ghrah.core.config import AgentConfig
 worker_configs = [
     AgentConfig(
         name=f"solve_worker_{i}",  # Runtime unique identifier
-        agent_config_name="solve_worker",  # Template name in agentconf
+        endpoint_name="solve_worker",  # Model endpoint name in agentconf
         description=f"Solve Worker #{i}",
         system_prompt=f"You are solve Worker #{i}.",
     )
@@ -327,7 +299,7 @@ worker_configs = [
 # Role alias: different runtime name, shared LLM configuration
 reviewer_config = AgentConfig(
     name="code_reviewer_v2",  # New version runtime identifier
-    agent_config_name="reviewer",  # Reuse reviewer's LLM configuration
+    endpoint_name="reviewer",  # Reuse reviewer's LLM configuration
     description="Code review expert v2",
     system_prompt="You are a code review expert.",
 )
@@ -344,6 +316,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="You are a code writing expert.",
     context=ContextConfig(
         persistence_type="remote",

@@ -135,7 +135,7 @@ const deliveryStates = new Set([
 
 function applySnapshot(value: AgentSnapshot) {
   snapshot.value = value;
-  modelName.value = value.specification.agent_config_name ?? "";
+  modelName.value = value.specification.endpoint_name ?? "";
   modelNames.value = stringArrayOrNull(value.abilities.model_config_names) ?? [];
   modelCatalogError.value =
     typeof value.abilities.model_catalog_error === "string"
@@ -286,7 +286,7 @@ async function create() {
         name: name.value.trim(),
         cluster_id: cluster.value,
         start: startNow.value,
-        agent_config_name: source.value === "types" ? modelName.value : null,
+        endpoint_name: source.value === "types" ? modelName.value : null,
         system_prompt: prompt.value,
         manifest_ref: source.value === "manifest" ? manifest.value.trim() : "",
         ability_types: source.value === "types" ? selectedTypes.value : null,

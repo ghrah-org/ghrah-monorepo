@@ -16,11 +16,13 @@ uv sync
 
 ### (推荐) 配置 Agentconf
 
-使用 Agentconf 的 TUI 配置你的 LLM 供应商、模型、Agent
+使用 Agentconf 0.3 的 TUI 配置 Provider 与模型端点。ghrah 通过显式 `endpoint_name` 引用端点，请求参数由自身保存。
 
 ```bash
 uv run agentconf
 ```
+
+旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。本分支验证 agentconf 0.3 候选包，正式依赖与用户库切换随联合发布验收更新。
 
 ### 直接配置（无需 agentconf）
 
@@ -46,7 +48,7 @@ agent._llm = OpenAIFormat(
 response = await agent.chat("你好！")
 ```
 
-支持的 `ChatFormat` 子类：`OpenAIFormat`、`AnthropicFormat`、`DeepSeekFormat`。详见 [配置参考](docs/configuration.md)。
+支持的 `ChatFormat` 子类：`OpenAIFormat`、`AnthropicFormat`、`DeepSeekFormat`、`OpenAIResponsesFormat`。详见 [配置参考](docs/configuration.md)。
 
 ### 运行示例
 

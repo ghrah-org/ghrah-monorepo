@@ -47,13 +47,13 @@ hooks:
 
 VALID_AGENT_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: my_project
   name: dev_agent
   description: A dev agent
 model:
-  agent_config_name: gpt-4o-dev
+  endpoint_name: gpt-4o-dev
   temperature: 0.3
 system_prompt: You are a dev agent.
 max_iterations: 20
@@ -117,7 +117,7 @@ class TestParseAbilityManifest:
     def test_wrong_manifest_type(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: x
   name: y
@@ -202,7 +202,7 @@ class TestParseAgentManifest:
         assert manifest.metadata.namespace == "my_project"
         assert manifest.metadata.name == "dev_agent"
         assert manifest.full_name == "my_project.dev_agent"
-        assert manifest.model.agent_config_name == "gpt-4o-dev"
+        assert manifest.model.endpoint_name == "gpt-4o-dev"
         assert manifest.model.temperature == 0.3
         assert manifest.max_iterations == 20
         assert manifest.communication_timeout == 300.0
@@ -216,9 +216,9 @@ class TestParseAgentManifest:
     def test_json_parse(self) -> None:
         data = {
             "manifest": "agent",
-            "version": "1",
+            "version": "2",
             "metadata": {"namespace": "ns", "name": "agent1"},
-            "model": {"agent_config_name": "cfg"},
+            "model": {"endpoint_name": "cfg"},
             "system_prompt": "prompt",
             "abilities": [{"type": "conversation"}],
         }
@@ -229,19 +229,19 @@ class TestParseAgentManifest:
         with pytest.raises(ManifestValidationError):
             parse_agent_manifest(
                 "version: '1'\nmetadata:\n  namespace: x\n  name: y\n"
-                "model:\n  agent_config_name: z\n"
+                "model:\n  endpoint_name: z\n"
                 "system_prompt: p\nabilities:\n  - type: t"
             )
 
     def test_ability_ref_mutual_exclusion(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: x
   name: y
 model:
-  agent_config_name: z
+  endpoint_name: z
 system_prompt: prompt
 abilities:
   - ref: some.ref
@@ -253,12 +253,12 @@ abilities:
     def test_ability_ref_neither(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: x
   name: y
 model:
-  agent_config_name: z
+  endpoint_name: z
 system_prompt: prompt
 abilities:
   - {}
@@ -269,12 +269,12 @@ abilities:
     def test_communication_timeout_default(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: test_ns
   name: test_agent
 model:
-  agent_config_name: test_cfg
+  endpoint_name: test_cfg
 system_prompt: prompt
 abilities:
   - type: conversation
@@ -285,12 +285,12 @@ abilities:
     def test_communication_timeout_custom(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: test_ns
   name: test_agent
 model:
-  agent_config_name: test_cfg
+  endpoint_name: test_cfg
 system_prompt: prompt
 max_iterations: 20
 communication_timeout: 600.0
@@ -303,12 +303,12 @@ abilities:
     def test_communication_timeout_infinite(self) -> None:
         yaml_str = """
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: test_ns
   name: test_agent
 model:
-  agent_config_name: test_cfg
+  endpoint_name: test_cfg
 system_prompt: prompt
 communication_timeout: -1
 abilities:

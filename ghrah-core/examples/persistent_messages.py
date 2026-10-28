@@ -47,7 +47,7 @@ class DemoLLM:
 def make_agent(agent_id: str, text: str) -> ActorAgent:
     """创建使用稳定 ID 和独立上下文的真实 agent。"""
     return AgentBuilder.from_config(
-        AgentConfig(name=f"demo-{agent_id}", agent_id=agent_id),
+        AgentConfig(name=f"demo-{agent_id}", endpoint_name="chat", agent_id=agent_id),
         abilities=[ConversationAbility()],
         llm_factory=lambda config: DemoLLM(text),
     )

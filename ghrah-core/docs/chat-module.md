@@ -248,9 +248,10 @@ fmt = create_format("anthropic", model="claude-sonnet-4-20250514", api_key="sk-a
 from ghrah.llm.factory import LLMFactory
 from agentconf import AgentsConfig
 
-resolved = AgentsConfig().resolve_agent("assistant")
+with AgentsConfig() as config:
+    resolved = config.resolve_model_endpoint("assistant")
 fmt = LLMFactory.create(resolved)
-# 根据 resolved.provider_type 自动选择 OpenAIFormat 或 AnthropicFormat
+# 根据 resolved.connection.api_format 分派接口，按 provider_type 适配厂商差异。
 ```
 
 ## 消息序列化

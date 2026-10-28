@@ -24,20 +24,23 @@ export const WritableWorkspaceSpecSchema = z.object({
   default_for_agents: z.boolean().optional().default(false),
 });
 
-export const AgentSpecSchema = z.object({
-  agent_config_name: z.string().nullable().optional(),
-  agent_id: z.string().optional(),
-  name: z.string(),
-  cluster_id: z.string(),
-  manifest_ref: z.string().optional().default(""),
-  instance_manifest_path: z.string().optional().default(""),
-  system_prompt: z.string().optional().default(""),
-  abilities: z.array(z.string()).nullable().optional(),
-  desired_state: z.enum(["running", "stopped"]).optional().default("running"),
-  path_grants: z.array(PathGrantSchema).optional().default([]),
-  runtime_status: z.string().optional().default("pending"),
-  runtime_error: z.string().optional().default(""),
-});
+export const AgentSpecSchema = z
+  .object({
+    endpoint_name: z.string().nullable().optional(),
+    model_overrides: z.record(z.unknown()).nullable().optional(),
+    agent_id: z.string().optional(),
+    name: z.string(),
+    cluster_id: z.string(),
+    manifest_ref: z.string().optional().default(""),
+    instance_manifest_path: z.string().optional().default(""),
+    system_prompt: z.string().optional().default(""),
+    abilities: z.array(z.string()).nullable().optional(),
+    desired_state: z.enum(["running", "stopped"]).optional().default("running"),
+    path_grants: z.array(PathGrantSchema).optional().default([]),
+    runtime_status: z.string().optional().default("pending"),
+    runtime_error: z.string().optional().default(""),
+  })
+  .strict();
 
 export const IsolationSpecPayloadSchema = z.object({
   agent_path_grants: z.record(z.array(PathGrantSchema)).optional().default({}),

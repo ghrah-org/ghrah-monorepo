@@ -1,5 +1,5 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: ghrah.examples
   name: reviewer
@@ -7,7 +7,7 @@ metadata:
   description: 代码审查专家，审查代码并提供改进建议
   tags: [review, quality]
 model:
-  agent_config_name: reviewer
+  endpoint_name: reviewer
   temperature: 0.7
 system_prompt: |
   你是一个代码审查专家。请审查提供的代码，从以下角度进行评估：

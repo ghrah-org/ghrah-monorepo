@@ -191,6 +191,7 @@ async def main() -> None:
     agents_config = [
         AgentConfig(
             name="planner",
+            endpoint_name="planner",
             description="任务规划专家，负责分解复杂任务并输出设计文档",
             system_prompt=(
                 "你是一个任务规划专家。请将复杂任务分解为清晰的步骤，"
@@ -210,6 +211,7 @@ async def main() -> None:
         ),
         AgentConfig(
             name="coder",
+            endpoint_name="coder",
             description="代码编写专家，根据设计文档实现代码",
             system_prompt=(
                 "你是一个代码编写专家。请根据提供的设计文档编写高质量的 Python 代码。"
@@ -228,6 +230,7 @@ async def main() -> None:
         ),
         AgentConfig(
             name="reviewer",
+            endpoint_name="reviewer",
             description="代码审查专家，审查代码并提供改进建议",
             system_prompt=(
                 "你是一个代码审查专家。请审查提供的代码，从以下角度进行评估：\n"

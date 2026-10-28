@@ -122,8 +122,9 @@
       "agent_id": "a1",
       "operation": {
         "type": "model.configure",
-        "agent_config_name": "shared-model",
-        "expected_revision": 1
+        "endpoint_name": "shared-model",
+        "expected_revision": 1,
+        "model_overrides": null
       }
     }
   ],
@@ -135,7 +136,8 @@
     "manifest_ref": "",
     "system_prompt": "",
     "ability_types": ["send_message"],
-    "agent_config_name": null
+    "endpoint_name": null,
+    "model_overrides": null
   },
   "list": {
     "project_id": "p1"
@@ -157,7 +159,8 @@
       "path_grants": [],
       "runtime_status": "pending",
       "runtime_error": "",
-      "agent_config_name": null
+      "endpoint_name": null,
+      "model_overrides": null
     },
     "specification_revision": 2,
     "runtime": {

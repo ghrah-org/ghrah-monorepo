@@ -6,7 +6,7 @@ import { useAgentsStore } from "./agents.js";
 
 const config = (name: string): AgentConfigPayload => ({
   name,
-  agent_config_name: null,
+  endpoint_name: null,
   description: "",
   system_prompt: "",
   max_iterations: 10,

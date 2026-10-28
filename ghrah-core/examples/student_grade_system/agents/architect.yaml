@@ -1,11 +1,11 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: student_grade
   name: architect
   description: 架构师 — 定义前后端职责、核心数据结构、前后端交互端点
 model:
-  agent_config_name: architect
+  endpoint_name: architect
   temperature: 0.7
 system_prompt: |
   你是一个全栈系统架构师。你负责分析需求并设计系统的整体架构，

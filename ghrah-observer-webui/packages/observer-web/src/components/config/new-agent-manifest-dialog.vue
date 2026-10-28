@@ -30,7 +30,7 @@ const form = reactive({
   description: "",
   tags: "",
   // model
-  agent_config_name: "",
+  endpoint_name: "",
   temperature: "" as string,
   max_tokens: "" as string,
   // prompt
@@ -47,7 +47,7 @@ const canSubmit = computed(() => {
   return (
     form.namespace.trim() !== "" &&
     form.name.trim() !== "" &&
-    form.agent_config_name.trim() !== "" &&
+    form.endpoint_name.trim() !== "" &&
     form.system_prompt.trim() !== "" &&
     form.abilities.length > 0 &&
     form.abilities.every((a) => a.value.trim() !== "")
@@ -100,7 +100,7 @@ function buildYaml(): string {
   const lines: string[] = [];
 
   lines.push("manifest: agent");
-  lines.push('version: "1"');
+  lines.push('version: "2"');
 
   // metadata
   lines.push("metadata:");
@@ -116,7 +116,7 @@ function buildYaml(): string {
 
   // model
   lines.push("model:");
-  lines.push(`  agent_config_name: ${quote(form.agent_config_name.trim())}`);
+  lines.push(`  endpoint_name: ${quote(form.endpoint_name.trim())}`);
   if (form.temperature !== "") {
     lines.push(`  temperature: ${form.temperature}`);
   }
@@ -279,10 +279,10 @@ async function handleSubmit() {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-              {{ t("config.manifest.agentConfigName") }}
+              {{ t("config.manifest.endpointName") }}
             </label>
             <input
-              v-model="form.agent_config_name"
+              v-model="form.endpoint_name"
               type="text"
               required
               class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

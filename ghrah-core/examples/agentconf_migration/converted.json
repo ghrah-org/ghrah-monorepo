@@ -1,0 +1,39 @@
+{
+  "agents": [
+    {
+      "name": "worker_0",
+      "model_overrides": {
+        "temperature": 0.0,
+        "max_tokens": 1024,
+        "top_p": 0,
+        "top_k": 0,
+        "extra_params": {
+          "stream": false,
+          "stop": null
+        }
+      },
+      "cluster_id": "example-cluster",
+      "desired_state": "stopped",
+      "endpoint_name": "chat"
+    },
+    {
+      "name": "example-creative",
+      "cluster_id": "example-cluster",
+      "desired_state": "stopped",
+      "endpoint_name": "chat",
+      "model_overrides": {
+        "temperature": 0.8,
+        "max_tokens": 2048,
+        "top_k": 0,
+        "extra_params": {
+          "stream": true
+        }
+      }
+    }
+  ],
+  "project_id": "example-project",
+  "name": "migration-example",
+  "cluster_ids": [
+    "example-cluster"
+  ]
+}

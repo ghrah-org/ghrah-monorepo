@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ghrah.core._base_error import ActorAgentError
 
-__all__ = ["LLMError"]
+__all__ = ["LLMError", "UnsupportedFormatError", "UnsupportedFormat"]
 
 
 class LLMError(ActorAgentError):
@@ -17,3 +17,10 @@ class LLMError(ActorAgentError):
     def __init__(self, provider: str, message: str):
         self.provider = provider
         super().__init__(f"LLM[{provider}]: {message}")
+
+
+class UnsupportedFormatError(LLMError):
+    """端点声明了当前运行时尚不支持的接口格式。"""
+
+
+UnsupportedFormat = UnsupportedFormatError

@@ -18,11 +18,13 @@ uv sync
 
 ### Configure Agentconf (Recommended)
 
-Use the Agentconf TUI to configure your LLM provider, model, and Agent
+使用 Agentconf 0.3 的 TUI 配置 Provider 与模型端点。ghrah 通过显式 `endpoint_name` 引用端点，请求参数由自身保存。
 
 ```bash
 uv run agentconf
 ```
+
+旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。本分支验证 agentconf 0.3 候选包，正式依赖与用户库切换随联合发布验收更新。
 
 ### Direct Configuration (Without agentconf)
 

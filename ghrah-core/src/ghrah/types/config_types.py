@@ -67,16 +67,13 @@ class WindowConfig:
 
 @dataclass
 class ModelOverrides:
-    """Manifest 模型配置覆盖值。
-
-    这些值来自 AgentManifest.model，优先级高于 agentconf 解析结果。
-    在 _ensure_llm() 中创建 ChatFormat 后覆盖对应属性。
-    """
+    """调用者持有的请求参数；None 表示未指定，0/False 保留原值。"""
 
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
     top_k: int | None = None
+    extra_params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -113,11 +110,11 @@ class AgentConfig:
     """Agent 框架层配置。
 
     LLM 配置（provider、model、api_key 等）通过 agentconf SDK 管理，
-    ActorAgent 初始化时会调用 `AgentsConfig().resolve_agent(effective_agent_config_name)`
+    默认工厂通过 `AgentsConfig().resolve_model_endpoint(endpoint_name)`
     获取完整 LLM 配置。
 
     当多个运行时 Agent 共享同一份 LLM 配置时（如 worker 池场景），
-    可通过 agent_config_name 指定 agentconf 中的配置名称，
+    可通过 endpoint_name 指定 agentconf 中的配置名称，
     而 name 仅作为运行时唯一标识。
 
     Agent 的行为完全由注册的 Ability 组合决定（组合优于继承），
@@ -126,7 +123,7 @@ class AgentConfig:
     Attributes:
         agent_id: durable Agent 的稳定标识；空值时兼容回退到 name。
         name: CoreUnit 内运行时唯一显示名（用于 Actor 注册、消息路由）
-        agent_config_name: agentconf 中的配置名称，None 时回退到 name（向后兼容）
+        endpoint_name: agentconf 模型端点名称；默认工厂要求显式指定
         description: Agent 能力描述（用于 Agent 发现和路由）
         system_prompt: 系统提示词
         max_iterations: 最大推理迭代次数（生命周期语义，防止死循环的安全阀）
@@ -134,7 +131,7 @@ class AgentConfig:
         resources: 资源配置，如 {"CPU": 2, "GPU": 1}
         window: 窗口管理配置，None 表示不启用窗口管理
         context: ContextManager 配置，None 表示使用默认值
-        model_overrides: Manifest 模型配置覆盖值
+        model_overrides: ghrah 持有的请求参数
         workspace_root: 工作区根目录，用于将相对路径解析到沙盒内（None 表示不限制）
         cluster_context_injection: 集群身份注入开关——True 时 AgentBuilder
             在 system_prompt 头部拼接 [Cluster Context] 段（cluster_id +
@@ -149,7 +146,7 @@ class AgentConfig:
 
     name: str
     agent_id: str = ""
-    agent_config_name: str | None = None
+    endpoint_name: str | None = None
     description: str = ""
     system_prompt: str = ""
     max_iterations: int = 10
@@ -162,14 +159,6 @@ class AgentConfig:
     cluster_context_injection: bool = False
     environment_context_injection: bool = False
     environment_info: dict[str, Any] | None = None
-
-    @property
-    def effective_agent_config_name(self) -> str:
-        """获取有效的 agentconf 查找名称。
-
-        优先使用 agent_config_name，未指定时回退到 name（向后兼容）。
-        """
-        return self.agent_config_name or self.name
 
     @property
     def effective_agent_id(self) -> str:

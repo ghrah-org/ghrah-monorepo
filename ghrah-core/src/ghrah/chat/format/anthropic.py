@@ -31,9 +31,10 @@ class AnthropicFormat(ChatFormat):
         model: str = "",
         api_key: str | None = None,
         base_url: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         max_tokens: int = 4096,
         top_p: float | None = None,
+        connection_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -45,6 +46,7 @@ class AnthropicFormat(ChatFormat):
         self._top_p = top_p
         self._top_k: int | None = None
         self._client: Any = None
+        self._connection_options = dict(connection_options or {})
 
     @property
     def model(self) -> str:
@@ -60,7 +62,7 @@ class AnthropicFormat(ChatFormat):
         if self._client is None:
             import anthropic
 
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, Any] = dict(self._connection_options)
             if self._api_key:
                 kwargs["api_key"] = self._api_key
             if self._base_url:
@@ -80,12 +82,14 @@ class AnthropicFormat(ChatFormat):
             "model": self._model,
             "messages": formatted,
             "max_tokens": self._max_tokens,
-            "temperature": self._temperature,
         }
         if system_prompt is not None:
             api_kwargs["system"] = system_prompt
 
-        effective_tools = tools or self._tools
+        if self._temperature is not None:
+            api_kwargs["temperature"] = self._temperature
+
+        effective_tools = tools if tools is not None else self._tools
         if effective_tools:
             api_kwargs["tools"] = self._format_tools(effective_tools)
 
@@ -94,7 +98,9 @@ class AnthropicFormat(ChatFormat):
         if self._top_k is not None:
             api_kwargs["top_k"] = self._top_k
 
-        response = await client.messages.create(**api_kwargs)
+        response = await client.messages.create(
+            **self._request_kwargs(api_kwargs, client.messages.create)
+        )
         return self._parse_response(response)
 
     def _format_messages(

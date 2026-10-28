@@ -139,7 +139,7 @@ class ManifestResolver:
     def _build_config(self, manifest: AgentManifest, runtime_name: str | None) -> AgentConfig:
         """从 AgentManifest 构建 AgentConfig。"""
         name = runtime_name or manifest.metadata.name
-        agent_config_name = manifest.model.agent_config_name
+        endpoint_name = manifest.model.endpoint_name
         system_prompt = manifest.system_prompt
         max_iterations = manifest.max_iterations
         communication_timeout = manifest.communication_timeout
@@ -157,7 +157,7 @@ class ManifestResolver:
 
         return AgentConfig(
             name=name,
-            agent_config_name=agent_config_name,
+            endpoint_name=endpoint_name,
             description=manifest.description,
             system_prompt=system_prompt,
             max_iterations=max_iterations,

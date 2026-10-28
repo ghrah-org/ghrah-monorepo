@@ -51,6 +51,7 @@ async def demo_manual_registration() -> None:
 
     config = AgentConfig(
         name="tool-agent",
+        endpoint_name="tool-agent",
         description="带文件读取能力的 Agent",
         system_prompt="你是一个文件助手。用户可以让你读取文件内容。",
     )
@@ -98,6 +99,7 @@ async def demo_custom_ability() -> None:
 
     config = AgentConfig(
         name="review-agent",
+        endpoint_name="review-agent",
         description="代码审查 Agent",
     )
 
@@ -122,6 +124,7 @@ async def demo_supervisor_integration() -> None:
     # 注册带自定义 Ability 的 Agent
     config = AgentConfig(
         name="file-assistant",
+        endpoint_name="file-assistant",
         description="文件助手",
         system_prompt="你是一个文件助手。",
     )
@@ -133,6 +136,7 @@ async def demo_supervisor_integration() -> None:
     # 注册使用显式基础两件套的 Agent（spawn 不再做任何隐式注入）
     default_config = AgentConfig(
         name="default-agent",
+        endpoint_name="default-agent",
         description="默认对话 Agent",
     )
     await supervisor.spawn_agent(

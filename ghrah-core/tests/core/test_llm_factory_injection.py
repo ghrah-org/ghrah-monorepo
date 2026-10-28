@@ -23,13 +23,13 @@ from ghrah.types.config_types import AgentConfig
 
 _AGENT_YAML = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: smoke
   name: coder
   description: coder
 model:
-  agent_config_name: default
+  endpoint_name: default
 system_prompt: You code.
 max_iterations: 5
 abilities:

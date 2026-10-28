@@ -18,47 +18,30 @@ uv sync
 
 ## LLM Configuration
 
-ghrah uses [agentconf](https://github.com/ghrah/agentconf) to manage LLM configurations with a Provider → LLM → Agent three-tier inheritance structure.
+ghrah 使用 agentconf 管理 Provider、模型端点和静态能力。运行时通过显式 `endpoint_name` 选择端点，请求参数由 ghrah 的 `ModelOverrides` 持有。
 
-### 1. Create a Provider
-
-A Provider defines the LLM service provider's connection information:
+使用 agentconf 0.3 的 TUI 配置 Provider 与端点：
 
 ```bash
-agentconf provider create openai \
-    --type openai \
-    --base-url "https://api.openai.com/v1" \
-    --api-key "sk-your-api-key"
+uv run agentconf
 ```
 
-Also supports other OpenAI API-compatible services:
+端点必须声明实际请求模型名和接口格式：`openai.chat_completions`、`openai.responses` 或 `anthropic.messages`。DeepSeek 使用 `provider_type=deepseek` 与 `openai.chat_completions`，以保留推理内容回传。
 
-```bash
-agentconf provider create deepseek \
-    --type openai \
-    --base-url "https://api.deepseek.com/v1" \
-    --api-key "sk-your-deepseek-key"
+也可以用 SDK 显式创建配置（需要先安装兼容的 agentconf 0.3）：
+
+```python
+import os
+from agentconf import AgentsConfig
+
+with AgentsConfig() as config:
+    config.create_provider(
+        "openai", "openai", "https://api.openai.com/v1", os.environ["OPENAI_API_KEY"]
+    )
+    config.create_model_endpoint("openai", "assistant", "your-model-name", "openai.responses")
 ```
 
-### 2. Create an LLM Instance
-
-An LLM Instance binds to a Provider and specifies the model name:
-
-```bash
-agentconf llm create gpt4o \
-    --provider openai \
-    --model-name "gpt-4o"
-```
-
-### 3. Create an Agent
-
-An Agent binds to an LLM Instance and can override model parameters:
-
-```bash
-agentconf agent create assistant \
-    --llm gpt4o \
-    --temperature 0.7
-```
+ghrah 配置使用 `AgentConfig(name="runtime-name", endpoint_name="assistant")`。运行时名称不参与端点查找。旧库与旧配置先按 [模型端点与配置迁移](model-endpoints.md) 转换，不能直接改名旧 Agent 引用。
 
 ### Environment Variables
 
@@ -94,6 +77,7 @@ from ghrah.core.config import AgentConfig
 async def main():
     config = AgentConfig(
         name="assistant",
+        endpoint_name="assistant",
         description="General chat assistant",
         system_prompt="You are a friendly AI assistant.",
     )
@@ -129,6 +113,7 @@ async def main():
     # Create Agent config (name corresponds to agentconf agent name)
     config = AgentConfig(
         name="assistant1",
+        endpoint_name="assistant1",
         description="General chat assistant",
         system_prompt="You are a friendly AI assistant.",
     )
@@ -183,9 +168,9 @@ supervisor = SupervisorActor()
 
 # Register multiple Agents
 configs = [
-    AgentConfig(name="planner", description="Task planning expert"),
-    AgentConfig(name="coder", description="Code writing expert"),
-    AgentConfig(name="reviewer", description="Code review expert"),
+    AgentConfig(name="planner", endpoint_name="planner", description="Task planning expert"),
+    AgentConfig(name="coder", endpoint_name="coder", description="Code writing expert"),
+    AgentConfig(name="reviewer", endpoint_name="reviewer", description="Code review expert"),
 ]
 for config in configs:
     await supervisor.spawn_agent(config)
@@ -214,7 +199,7 @@ from ghrah.abilities.builtin import (
 )
 
 # Create Agent with file permissions
-config = AgentConfig(name="coder", description="Code writing assistant")
+config = AgentConfig(name="coder", endpoint_name="coder", description="Code writing assistant")
 agent = ActorAgent(config)
 
 # Register Abilities

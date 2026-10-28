@@ -46,7 +46,7 @@ def _make_agent_manifest(
     namespace: str = "test_ns",
     name: str = "test_agent",
     system_prompt: str = "You are a test agent.",
-    agent_config_name: str = "gpt-4o",
+    endpoint_name: str = "gpt-4o",
     communication_timeout: float = 300.0,
 ) -> AgentManifest:
     """创建测试用 AgentManifest。"""
@@ -54,9 +54,9 @@ def _make_agent_manifest(
         abilities = [AbilityRef(type="conversation")]
     return AgentManifest(
         manifest="agent",
-        version="1",
+        version="2",
         metadata=AgentMetadata(namespace=namespace, name=name, description="test"),
-        model=ModelConfig(agent_config_name=agent_config_name),
+        model=ModelConfig(endpoint_name=endpoint_name),
         system_prompt=system_prompt,
         max_iterations=10,
         communication_timeout=communication_timeout,
@@ -143,7 +143,7 @@ class TestManifestResolver:
         assert isinstance(result, ResolvedAgent)
         assert isinstance(result.config, AgentConfig)
         assert result.config.name == "test_agent"
-        assert result.config.agent_config_name == "gpt-4o"
+        assert result.config.endpoint_name == "gpt-4o"
         assert result.config.system_prompt == "You are a test agent."
         assert len(result.abilities) == 1
         assert result.abilities[0].ability_name == "ghrah.core.conversation"
@@ -357,7 +357,7 @@ class TestModelOverridesBuild:
         resolver = ManifestResolver(store)
         manifest = _make_agent_manifest()
         manifest.model = ModelConfig(
-            agent_config_name="gpt-4o",
+            endpoint_name="gpt-4o",
             temperature=0.5,
             max_tokens=2048,
             top_p=0.9,
@@ -384,7 +384,7 @@ class TestModelOverridesBuild:
         resolver = ManifestResolver(store)
         manifest = _make_agent_manifest()
         manifest.model = ModelConfig(
-            agent_config_name="gpt-4o",
+            endpoint_name="gpt-4o",
             temperature=0.3,
         )
         result = resolver.resolve(manifest)
@@ -400,7 +400,7 @@ class TestModelOverridesBuild:
         resolver = ManifestResolver(store)
         manifest = _make_agent_manifest()
         manifest.model = ModelConfig(
-            agent_config_name="gpt-4o",
+            endpoint_name="gpt-4o",
             top_k=40,
         )
         result = resolver.resolve(manifest)

@@ -66,7 +66,7 @@ def _agent_config_to_dict(config: AgentConfig) -> dict[str, Any]:
     return {
         "agent_id": config.effective_agent_id,
         "name": config.name,
-        "agent_config_name": config.agent_config_name,
+        "endpoint_name": config.endpoint_name,
         "description": config.description,
         "system_prompt": config.system_prompt,
         "max_iterations": config.max_iterations,

@@ -18,12 +18,15 @@ from ghrah.agents.base import ActorAgent
 from ghrah.core.config import AgentConfig
 
 # Local mode
-config = AgentConfig(name="my-agent", system_prompt="You are an assistant")
+config = AgentConfig(
+    name="my-agent", endpoint_name="my-agent", system_prompt="You are an assistant"
+)
 agent = ActorAgent(config)
 
 # Distributed mode (enabled via ContextConfig.persistence_type="remote")
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     system_prompt="You are an assistant",
     context=ContextConfig(persistence_type="remote"),
 )
@@ -45,17 +48,17 @@ Core data models:
 
 LLM configuration is managed through agentconf — no hardcoded API keys or model parameters in the framework.
 
-### agentconf = Configuration Management Layer
+### agentconf 与 ghrah 的配置职责
 
-Three-tier inheritance structure: Provider → LLM → Agent:
+Provider 保存地址和密钥，模型端点引用 Provider、声明实际请求模型和接口格式，并可绑定静态能力档案。ghrah 通过显式 `endpoint_name` 调用 `resolve_model_endpoint`，在自身的 `ModelOverrides` 保存请求参数。运行时 `name` 不参与端点查找。
 
+```text
+agentconf: Provider → 模型端点 → 可选能力档案
+                         ↑
+ghrah: AgentConfig.endpoint_name + ModelOverrides
 ```
-Provider (service provider: API endpoint, key)
-    └── LLM Instance (model instance: model name, parameter overrides)
-        └── Agent (agent: temperature, max tokens, etc.)
-```
 
-The Agent's `name` corresponds to the agent identifier in agentconf. [`ActorAgent`](../src/ghrah/agents/base.py) calls `AgentsConfig().resolve_agent(name)` during initialization to get the full LLM configuration.
+旧配置转换和三个接口格式见 [模型端点与配置迁移](model-endpoints.md)。
 
 ## Dual-Mode Architecture
 

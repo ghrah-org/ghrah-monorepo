@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
+from ghrah.protocol.payloads.model import EndpointReferenceModel
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghrah.manifest.errors import ManifestVersionError
 from ghrah.manifest.types import (
-    SUPPORTED_VERSIONS,
+    SUPPORTED_AGENT_VERSIONS,
     HookDef,
     PermissionFlags,
 )
@@ -39,14 +40,15 @@ class AgentMetadata(BaseModel):
     deprecated: bool = False
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(EndpointReferenceModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_config_name: str = Field(min_length=1)
+    endpoint_name: str = Field(min_length=1)
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
     top_k: int | None = None
+    extra_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class AbilityRef(BaseModel):
@@ -122,14 +124,17 @@ class AgentManifest(BaseModel):
     context: ContextOverrides | None = None
     hooks: AgentHooks = Field(default_factory=AgentHooks)
 
-    @model_validator(mode="after")
-    def _validate_version(self) -> AgentManifest:
-        if self.version.split(".")[0] not in SUPPORTED_VERSIONS:
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_version(cls, data: Any) -> Any:
+        version = str(data.get("version", "")) if isinstance(data, dict) else ""
+        if version.split(".")[0] not in SUPPORTED_AGENT_VERSIONS:
             raise ManifestVersionError(
-                f"Unsupported manifest version: {self.version!r}. "
-                f"Supported major versions: {sorted(SUPPORTED_VERSIONS)}"
+                f"Unsupported manifest version: {version!r}. "
+                f"Supported major versions: {sorted(SUPPORTED_AGENT_VERSIONS)}. "
+                "Migrate legacy Agent manifests with scripts/migrate_agentconf_consumer.py"
             )
-        return self
+        return data
 
     @property
     def full_name(self) -> str:

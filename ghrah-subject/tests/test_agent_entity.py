@@ -28,9 +28,19 @@ def model_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         config.create_provider(
             name="test", provider_type="openai", base_url="http://localhost:1/v1", api_key="test"
         )
-        config.create_model(provider_name="test", name="test", model_name="test", model_type="llm")
+        config.create_model_endpoint(
+            provider_name="test",
+            name="test",
+            model_name="test",
+            api_format="openai.chat_completions",
+        )
         for name in ("entity", "second", "worker", "a", "b", "one", "two"):
-            config.create_agent(name=name, model_name="test")
+            config.create_model_endpoint(
+                provider_name="test",
+                name=name,
+                model_name="test",
+                api_format="openai.chat_completions",
+            )
     yield
 
 
@@ -46,6 +56,7 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
                 project_id=pid,
                 cluster_id=cluster,
                 name="entity",
+                endpoint_name="entity",
                 start=False,
                 ability_types=["send_message"],
             )
@@ -121,6 +132,7 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
                 project_id=pid,
                 cluster_id=cluster,
                 name="second",
+                endpoint_name="second",
                 start=True,
                 ability_types=["send_message"],
             )
@@ -165,6 +177,7 @@ async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> 
                         project_id=project["project_id"],
                         cluster_id=project["cluster_ids"][0],
                         name=name,
+                        endpoint_name=name,
                         start=True,
                         ability_types=["send_message"],
                     )
@@ -236,6 +249,7 @@ async def test_failed_stop_preserves_intent_and_serializes_recovery(
                 project_id=pid,
                 cluster_id=cluster,
                 name="worker",
+                endpoint_name="worker",
                 start=True,
                 ability_types=["send_message"],
             )
@@ -308,6 +322,7 @@ async def test_failed_start_is_queryable_and_can_be_retried(
                     "project_id": pid,
                     "cluster_id": cluster,
                     "name": "worker",
+                    "endpoint_name": "worker",
                     "start": False,
                     "ability_types": ["send_message"],
                 },
@@ -341,9 +356,11 @@ async def test_model_binding_preflight_and_room_reply(
     from test_project_message_manager import EchoLLM
 
     resolved_names = []
+    request_params = []
 
-    def create_llm(resolved):
-        resolved_names.append(resolved.agent_name)
+    def create_llm(resolved, params=None):
+        resolved_names.append(resolved.name)
+        request_params.append(params)
         return EchoLLM()
 
     monkeypatch.setattr(LLMFactory, "create", create_llm)
@@ -367,7 +384,11 @@ async def test_model_binding_preflight_and_room_reply(
         revision = (await entity.snapshot()).specification_revision
         with pytest.raises(StableError, match="model_configuration_invalid"):
             await entity.configure_model("missing", expected_revision=revision)
-        await entity.configure_model("worker", expected_revision=revision)
+        await entity.configure_model(
+            "worker",
+            expected_revision=revision,
+            model_overrides={"temperature": 0, "extra_params": {"vendor_flag": False}},
+        )
         await entity.start()
         with pytest.raises(StableError, match="agent_must_be_stopped"):
             await entity.configure_model(
@@ -406,6 +427,8 @@ async def test_model_binding_preflight_and_room_reply(
         assert [e["data"]["message"] for e in logs] == ["What is civil law?", "ready"]
         assert logs[0]["data"]["deliveries"][0]["state"] == "completed"
         assert resolved_names == ["worker"]
+        assert request_params[0].temperature == 0
+        assert request_params[0].extra_params == {"vendor_flag": False}
 
         async def fail_generate(self, messages, tools=None):
             raise RuntimeError("provider temporarily unavailable")
@@ -434,4 +457,6 @@ async def test_model_binding_preflight_and_room_reply(
         await entity.stop()
         await entity.start()
         assert entity.identity == identity
-        assert (await entity.snapshot()).specification.agent_config_name == "worker"
+        final = await entity.snapshot()
+        assert final.specification.endpoint_name == "worker"
+        assert final.specification.model_overrides["temperature"] == 0

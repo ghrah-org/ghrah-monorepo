@@ -24,13 +24,13 @@ from ghrah.manifest.types import HookDef, PermissionFlags
 def _make_agent_manifest(**overrides) -> AgentManifest:
     defaults: dict = {
         "manifest": "agent",
-        "version": "1",
+        "version": "2",
         "metadata": {
             "namespace": "my_project",
             "name": "dev_agent",
         },
         "model": {
-            "agent_config_name": "gpt-4o-dev",
+            "endpoint_name": "gpt-4o-dev",
         },
         "system_prompt": "You are a dev agent.",
         "abilities": [
@@ -76,12 +76,12 @@ class TestAgentMetadata:
 
 class TestModelConfig:
     def test_valid(self) -> None:
-        config = ModelConfig(agent_config_name="gpt-4o-dev")
-        assert config.agent_config_name == "gpt-4o-dev"
+        config = ModelConfig(endpoint_name="gpt-4o-dev")
+        assert config.endpoint_name == "gpt-4o-dev"
 
     def test_with_overrides(self) -> None:
         config = ModelConfig(
-            agent_config_name="gpt-4o-dev",
+            endpoint_name="gpt-4o-dev",
             temperature=0.3,
             max_tokens=8192,
             top_p=0.95,
@@ -90,13 +90,13 @@ class TestModelConfig:
         assert config.temperature == 0.3
         assert config.max_tokens == 8192
 
-    def test_agent_config_name_required(self) -> None:
+    def test_endpoint_name_required(self) -> None:
         with pytest.raises(ValidationError):
-            ModelConfig(agent_config_name="")
+            ModelConfig(endpoint_name="")
 
     def test_extra_forbid(self) -> None:
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            ModelConfig(agent_config_name="x", unknown=True)
+            ModelConfig(endpoint_name="x", unknown=True)
 
 
 class TestAbilityRef:
@@ -181,7 +181,7 @@ class TestAgentManifest:
     def test_valid_manifest(self) -> None:
         manifest = _make_agent_manifest()
         assert manifest.manifest == "agent"
-        assert manifest.version == "1"
+        assert manifest.version == "2"
         assert manifest.metadata.namespace == "my_project"
         assert manifest.full_name == "my_project.dev_agent"
 
@@ -191,11 +191,11 @@ class TestAgentManifest:
 
     def test_version_unsupported(self) -> None:
         with pytest.raises((ValidationError, ManifestVersionError)):
-            _make_agent_manifest(version="2")
+            _make_agent_manifest(version="1")
 
     def test_version_minor_compatible(self) -> None:
-        manifest = _make_agent_manifest(version="1.1")
-        assert manifest.version == "1.1"
+        manifest = _make_agent_manifest(version="2.1")
+        assert manifest.version == "2.1"
 
     def test_system_prompt_required(self) -> None:
         with pytest.raises(ValidationError):
@@ -257,11 +257,22 @@ class TestAgentManifest:
             AgentManifest.model_validate(
                 {
                     "manifest": "agent",
-                    "version": "1",
+                    "version": "2",
                     "metadata": {"namespace": "x", "name": "y"},
-                    "model": {"agent_config_name": "z"},
+                    "model": {"endpoint_name": "z"},
                     "system_prompt": "prompt",
                     "abilities": [{"ref": "a"}],
                     "unknown": True,
                 }
             )
+
+
+def test_legacy_agent_manifest_has_migration_diagnostic_before_model_validation():
+    from ghrah.manifest.parser import validate_manifest
+
+    legacy = 'manifest: agent\nversion: "1"\nmodel:\n  agent_config_name: old\n'
+    valid, errors = validate_manifest(legacy)
+    assert not valid
+    assert "migrate_agentconf_consumer" in errors[0]
+    with pytest.raises(ValidationError, match="agent_config_name was removed"):
+        ModelConfig.model_validate({"endpoint_name": "new", "agent_config_name": "old"})

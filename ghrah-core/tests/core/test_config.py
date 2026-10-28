@@ -14,7 +14,7 @@ class TestAgentConfig:
         """默认值。"""
         config = AgentConfig(name="test")
         assert config.name == "test"
-        assert config.agent_config_name is None
+        assert config.endpoint_name is None
         assert config.description == ""
         assert config.system_prompt == ""
         assert config.max_iterations == 10
@@ -46,48 +46,46 @@ class TestAgentConfig:
         )
         assert config.communication_timeout == -1
 
-    def test_agent_config_name_default_none(self):
-        """agent_config_name 默认为 None。"""
+    def test_endpoint_name_default_none(self):
+        """endpoint_name 默认为 None。"""
         config = AgentConfig(name="planner")
-        assert config.agent_config_name is None
+        assert config.endpoint_name is None
 
-    def test_effective_agent_config_name_fallback_to_name(self):
-        """effective_agent_config_name 在 agent_config_name 为 None 时回退到 name。"""
+    def test_endpoint_name_has_no_name_fallback(self):
+        """endpoint_name 为 None 时不按运行时 name 查找。"""
         config = AgentConfig(name="planner")
-        assert config.effective_agent_config_name == "planner"
+        assert config.endpoint_name is None
 
-    def test_effective_agent_config_name_explicit(self):
-        """effective_agent_config_name 在指定 agent_config_name 时使用显式值。"""
+    def test_endpoint_name_explicit(self):
+        """endpoint_name 在指定 endpoint_name 时使用显式值。"""
         config = AgentConfig(
             name="solve_worker_3",
-            agent_config_name="solve_worker",
+            endpoint_name="solve_worker",
         )
         assert config.name == "solve_worker_3"
-        assert config.agent_config_name == "solve_worker"
-        assert config.effective_agent_config_name == "solve_worker"
+        assert config.endpoint_name == "solve_worker"
 
-    def test_effective_agent_config_name_empty_string_fallback(self):
-        """effective_agent_config_name 在 agent_config_name 为空字符串时回退到 name。"""
-        config = AgentConfig(name="planner", agent_config_name="")
-        # 空字符串是 falsy，应回退到 name
-        assert config.effective_agent_config_name == "planner"
+    def test_endpoint_name_empty_string_has_no_fallback(self):
+        """空端点不按运行时名称回退，交由默认工厂明确诊断。"""
+        config = AgentConfig(name="planner", endpoint_name="")
+        assert config.endpoint_name == ""
 
     def test_worker_pool_scenario(self):
         """Worker 池场景：多个 worker 共享同一份 agentconf 配置。"""
         config = AgentConfig(
             name="solve_worker_0",
-            agent_config_name="solve_worker",
+            endpoint_name="solve_worker",
             description="解题 Worker #0",
         )
         assert config.name == "solve_worker_0"
-        assert config.effective_agent_config_name == "solve_worker"
+        assert config.endpoint_name == "solve_worker"
 
     def test_role_alias_scenario(self):
         """角色别名场景：不同运行时名称，共享同一份 LLM 配置。"""
         config = AgentConfig(
             name="code_reviewer_v2",
-            agent_config_name="reviewer",
+            endpoint_name="reviewer",
             description="代码审查专家 v2",
         )
         assert config.name == "code_reviewer_v2"
-        assert config.effective_agent_config_name == "reviewer"
+        assert config.endpoint_name == "reviewer"

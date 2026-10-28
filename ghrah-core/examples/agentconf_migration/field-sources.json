@@ -1,0 +1,62 @@
+[
+  {
+    "path": "$.agents[0].model_overrides.temperature",
+    "source": "agent_export",
+    "value": 0.0
+  },
+  {
+    "path": "$.agents[0].model_overrides.max_tokens",
+    "source": "ghrah",
+    "value": 1024
+  },
+  {
+    "path": "$.agents[0].model_overrides.top_p",
+    "source": "ghrah",
+    "value": 0
+  },
+  {
+    "path": "$.agents[0].model_overrides.top_k",
+    "source": "agent_export",
+    "value": 0
+  },
+  {
+    "path": "$.agents[0].model_overrides.extra_params.stream",
+    "source": "agent_export",
+    "value": false
+  },
+  {
+    "path": "$.agents[0].model_overrides.extra_params.stop",
+    "source": "agent_export",
+    "value": null
+  },
+  {
+    "path": "$.agents[0].endpoint_name",
+    "source": "agent_export:example-concise",
+    "value": "chat"
+  },
+  {
+    "path": "$.agents[1].model_overrides.temperature",
+    "source": "agent_export",
+    "value": 0.8
+  },
+  {
+    "path": "$.agents[1].model_overrides.max_tokens",
+    "source": "agent_export",
+    "value": 2048
+  },
+  {
+    "path": "$.agents[1].model_overrides.top_k",
+    "source": "agent_export",
+    "value": 0
+  },
+  {
+    "path": "$.agents[1].model_overrides.extra_params.stream",
+    "source": "agent_export",
+    "value": true
+  },
+  {
+    "path": "$.agents[1].endpoint_name",
+    "source": "agent_export:example-creative",
+    "value": "chat"
+  }
+]

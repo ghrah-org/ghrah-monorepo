@@ -1,6 +1,6 @@
 {
   "name": "agent-1",
-  "agent_config_name": "default",
+  "endpoint_name": "default",
   "description": "desc",
   "system_prompt": "prompt",
   "max_iterations": 5

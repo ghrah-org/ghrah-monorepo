@@ -129,7 +129,7 @@ ghrah (核心框架)
 │
 └── 📦 manifest/  【声明式清单系统 — 独立子系统】
     ├── types.py          → ToolSchema, ToolParameter, HookDef,
-    │                        ImplementationDef, PermissionFlags, SUPPORTED_VERSIONS
+    │                        ImplementationDef, PermissionFlags, SUPPORTED_AGENT_VERSIONS / SUPPORTED_ABILITY_VERSIONS
     ├── ability.py        → AbilityManifest, AbilityMetadata, AbilityHooks
     ├── agent.py          → AgentManifest, AgentMetadata, AgentHooks,
     │                        AbilityRef, ModelConfig, ContextOverrides,

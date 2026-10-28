@@ -1,32 +1,36 @@
 import { z } from "zod";
 import { BranchInfoPayloadSchema } from "./session.js";
 
-export const AgentConfigPayloadSchema = z.object({
-  name: z.string(),
-  agent_id: z.string().optional(),
-  agent_config_name: z.string().nullable().optional(),
-  description: z.string().optional().default(""),
-  system_prompt: z.string().optional().default(""),
-  max_iterations: z.number().int().optional().default(10),
-  communication_timeout: z.number().optional(),
-  window: z.record(z.unknown()).nullable().optional(),
-  context: z.record(z.unknown()).nullable().optional(),
-  model_overrides: z.record(z.unknown()).nullable().optional(),
-});
+export const AgentConfigPayloadSchema = z
+  .object({
+    name: z.string(),
+    agent_id: z.string().optional(),
+    endpoint_name: z.string().nullable().optional(),
+    description: z.string().optional().default(""),
+    system_prompt: z.string().optional().default(""),
+    max_iterations: z.number().int().optional().default(10),
+    communication_timeout: z.number().optional(),
+    window: z.record(z.unknown()).nullable().optional(),
+    context: z.record(z.unknown()).nullable().optional(),
+    model_overrides: z.record(z.unknown()).nullable().optional(),
+  })
+  .strict();
 
 export const AbilityDefinitionPayloadSchema = z.object({
   ability_type: z.string(),
   params: z.record(z.unknown()).optional().default({}),
 });
 
-export const SpawnAgentPayloadSchema = z.object({
-  validate_model: z.boolean().optional(),
-  project_id: z.string(),
-  cluster_id: z.string().optional().default(""),
-  config: AgentConfigPayloadSchema,
-  abilities: z.array(AbilityDefinitionPayloadSchema).nullable().optional(),
-  manifest_ref: z.string().nullable().optional(),
-});
+export const SpawnAgentPayloadSchema = z
+  .object({
+    validate_model: z.boolean().optional(),
+    project_id: z.string(),
+    cluster_id: z.string().optional().default(""),
+    config: AgentConfigPayloadSchema,
+    abilities: z.array(AbilityDefinitionPayloadSchema).nullable().optional(),
+    manifest_ref: z.string().nullable().optional(),
+  })
+  .strict();
 
 export const TerminateAgentPayloadSchema = z.object({
   project_id: z.string(),

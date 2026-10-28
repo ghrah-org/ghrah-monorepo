@@ -45,7 +45,7 @@ function truncate(text: string, max: number): string {
       </div>
       <div>
         <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.config") }}</span>
-        <span class="ml-1 font-mono">{{ manifest.agent_config_name || "—" }}</span>
+        <span class="ml-1 font-mono">{{ manifest.endpoint_name || "—" }}</span>
       </div>
       <div>
         <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.temperature") }}</span>

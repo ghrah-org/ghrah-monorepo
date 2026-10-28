@@ -38,11 +38,16 @@ async def test_bound_catalog_reaches_actual_agent_budget(
             )
         )
         cfg.create_provider("local", "openai", "https://local.invalid/v1", "test-key")
-        cfg.create_model("local", "alias", "request-deployment", capabilities_key=key)
-        cfg.create_agent("configured", "alias")
+        cfg.create_model_endpoint(
+            "local",
+            "alias",
+            "request-deployment",
+            api_format="openai.chat_completions",
+            capabilities_key=key,
+        )
     # 重开后直接消费本地权威档案，不需要数据源在线。
     with AgentsConfig(path) as cfg:
-        resolved = cfg.resolve_agent("configured")
+        resolved = cfg.resolve_model_endpoint("alias")
         llm = LLMFactory.create(resolved)
     agent = AgentBuilder.from_config(
         AgentConfig(name="runtime", window=WindowConfig()),
@@ -64,9 +69,14 @@ async def test_bound_catalog_reaches_actual_agent_budget(
 async def test_runtime_window_declaration_precedes_bound_catalog(tmp_path) -> None:
     with AgentsConfig(tmp_path / "config.db") as cfg:
         cfg.create_provider("p", "openai", "https://local.invalid", "test-key")
-        cfg.create_model("p", "m", "request", capabilities_key="example-VLA")
-        cfg.create_agent("a", "m")
-        llm = LLMFactory.create(cfg.resolve_agent("a"))
+        cfg.create_model_endpoint(
+            "p",
+            "m",
+            "request",
+            api_format="openai.chat_completions",
+            capabilities_key="example-VLA",
+        )
+        llm = LLMFactory.create(cfg.resolve_model_endpoint("m"))
     agent = AgentBuilder.from_config(
         AgentConfig(name="runtime", window=WindowConfig(max_tokens=64000)),
         llm_factory=lambda _: llm,

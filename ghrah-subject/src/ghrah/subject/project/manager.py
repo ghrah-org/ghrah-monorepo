@@ -721,7 +721,8 @@ class ProjectManager:
                     / f"{p.agent.name}.yaml"
                 )
             ),
-            agent_config_name=p.agent.agent_config_name,
+            endpoint_name=p.agent.endpoint_name,
+            model_overrides=p.agent.model_overrides,
             system_prompt=p.agent.system_prompt,
             abilities=p.agent.abilities,
             desired_state=p.agent.desired_state,
@@ -871,13 +872,14 @@ class ProjectManager:
         self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
     ) -> tuple[str | None, str | None]:
         spawn_payload = SpawnAgentPayload(
-            validate_model=validate_model or bool(agent.agent_config_name),
+            validate_model=validate_model or bool(agent.endpoint_name),
             project_id=project_id,
             cluster_id=agent.cluster_id,
             config=AgentConfigPayload(
                 name=agent.name,
                 agent_id=agent.agent_id,
-                agent_config_name=agent.agent_config_name,
+                endpoint_name=agent.endpoint_name,
+                model_overrides=agent.model_overrides,
                 system_prompt=agent.system_prompt or "",
             ),
             abilities=(

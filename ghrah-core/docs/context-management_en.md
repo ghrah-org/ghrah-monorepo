@@ -234,6 +234,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     context=ContextConfig(
         persistence_type="json_file",  # Or "memory"
         persistence_root_dir="/tmp/data",  # JSON file storage directory

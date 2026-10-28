@@ -1,7 +1,7 @@
 export default {
   agentEntity: {
-    modelConfig: "模型配置",
-    noModelConfigs: "暂无模型配置。请先在 agentconf 中创建 Agent 配置，再刷新。",
+    modelConfig: "模型端点",
+    noModelConfigs: "暂无模型配置。请先在 agentconf 中创建模型端点，再刷新。",
     modelHint:
       "实体名称与模型配置独立。停止 Agent 后可修改绑定。启动时校验配置引用；供应商鉴权在首次请求时验证。",
     modelManifest: "模型配置由 manifest 管理。",
@@ -623,7 +623,7 @@ export default {
       tags: "标签",
       tagsPlaceholder: "逗号分隔，例如 coding, design",
       model: "模型",
-      agentConfigName: "Agent 配置名称 *",
+      endpointName: "模型端点名称 *",
       maxIterations: "最大迭代次数",
       temperature: "温度",
       temperaturePlaceholder: "可选，例如 0.7",

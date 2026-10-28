@@ -23,7 +23,7 @@ const manifest = {
   title: "Helper",
   description: "",
   tags: [],
-  agent_config_name: "default",
+  endpoint_name: "default",
   system_prompt: "Help",
   ability_refs: [],
   max_iterations: 10,

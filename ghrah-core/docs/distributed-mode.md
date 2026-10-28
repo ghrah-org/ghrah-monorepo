@@ -20,7 +20,7 @@ ghrah 支持本地（Local）和分布式（Distributed）两种运行模式。�
 ```python
 from ghrah.core.config import AgentConfig
 
-config = AgentConfig(name="my-agent", system_prompt="你是一个助手")
+config = AgentConfig(name="my-agent", endpoint_name="my-agent", system_prompt="你是一个助手")
 agent = ActorAgent(config)
 # 使用 LocalAbilityExecutor + NullEventPublisher + 本地持久化
 ```
@@ -65,6 +65,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     system_prompt="你是一个助手",
     context=ContextConfig(persistence_type="remote"),
 )
@@ -172,6 +173,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="你是一个代码编写专家。",
     context=ContextConfig(
         persistence_type="sqlite",
@@ -187,6 +189,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="你是一个代码编写专家。",
     context=ContextConfig(
         persistence_type="remote",

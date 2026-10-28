@@ -1,8 +1,8 @@
 export default {
   agentEntity: {
-    modelConfig: "Model configuration",
+    modelConfig: "Model endpoint",
     noModelConfigs:
-      "No model configurations available. Create an Agent configuration in agentconf, then refresh.",
+      "No model configurations available. Create a model endpoint in agentconf, then refresh.",
     modelHint:
       "The entity name and model configuration are independent. Stop the agent before changing the binding. Startup validates configuration references; provider authentication is checked on the first request.",
     modelManifest: "Model configuration is managed by the manifest.",
@@ -654,7 +654,7 @@ export default {
       tags: "Tags",
       tagsPlaceholder: "Comma separated, e.g. coding, design",
       model: "Model",
-      agentConfigName: "Agent Config Name *",
+      endpointName: "Model Endpoint Name *",
       maxIterations: "Max Iterations",
       temperature: "Temperature",
       temperaturePlaceholder: "Optional, e.g. 0.7",

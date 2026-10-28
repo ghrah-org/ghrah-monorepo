@@ -1,93 +1,104 @@
-# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
-#
 # SPDX-License-Identifier: Apache-2.0
+"""按 SDK 端点契约分派，检查参数、用途和来源。"""
 
-"""LLM Factory 测试"""
+from __future__ import annotations
 
-from unittest.mock import MagicMock
+import json
+from pathlib import Path
+from unittest.mock import patch
 
-from agentconf import ProviderType
+import pytest
+from agentconf import ResolvedModelEndpoint
 
-from ghrah.llm.errors import LLMError
+from ghrah.agents.builder import _default_llm_factory
+from ghrah.chat.format.anthropic import AnthropicFormat
+from ghrah.chat.format.deepseek import DeepSeekFormat
+from ghrah.chat.format.openai import OpenAIFormat
+from ghrah.chat.format.openai_responses import OpenAIResponsesFormat
+from ghrah.llm.errors import LLMError, UnsupportedFormat
 from ghrah.llm.factory import LLMFactory, _get_secret_value
+from ghrah.types.config_types import AgentConfig, ModelOverrides
 
 
-class TestGetSecretValue:
-    def test_none_returns_none(self):
-        assert _get_secret_value(None) is None
-
-    def test_string_returns_string(self):
-        assert _get_secret_value("sk-test") == "sk-test"
-
-    def test_secret_str_extracted(self):
-        mock_secret = MagicMock()
-        mock_secret.get_secret_value.return_value = "sk-secret"
-        assert _get_secret_value(mock_secret) == "sk-secret"
+def endpoint(name="chat", **connection):
+    data = json.loads((Path(__file__).parent / "fixtures/resolved_endpoints.json").read_text())[
+        name
+    ]
+    data["connection"].update(connection)
+    return ResolvedModelEndpoint.model_validate(data)
 
 
-class TestLLMFactory:
-    def _make_resolved_agent(
-        self,
-        provider_type: ProviderType = ProviderType.OPENAI,
-        model_name: str = "gpt-4o",
-        base_url: str = "https://api.openai.com/v1",
-        api_key: str = "sk-test",
-        temperature: float = 0.7,
-        max_tokens: int | None = None,
-        top_p: float | None = None,
-    ) -> MagicMock:
-        """创建模拟的 agentconf resolved agent 对象。"""
-        mock_api_key = MagicMock()
-        mock_api_key.get_secret_value.return_value = api_key
+@pytest.mark.parametrize(
+    "name,adapter",
+    [
+        ("chat", OpenAIFormat),
+        ("responses", OpenAIResponsesFormat),
+        ("deepseek-chat", DeepSeekFormat),
+    ],
+)
+def test_frozen_sdk_samples(name, adapter):
+    resolved = endpoint(name)
+    llm = LLMFactory.create(resolved, ModelOverrides(temperature=0, max_tokens=32, top_p=0))
+    assert isinstance(llm, adapter)
+    assert llm.model == resolved.model.model_name
+    assert llm._temperature == 0
+    assert llm._top_p == 0
+    assert llm._max_tokens == 32
+    assert llm.model_capabilities == resolved.capabilities.model_dump(mode="json")
+    assert llm.capability_sources == resolved.capability_sources
+    assert llm._base_url == resolved.connection.base_url.get_secret_value()
+    assert llm._api_key == resolved.connection.api_key.get_secret_value()
+    assert llm.model_metadata == (
+        resolved.metadata.model_dump(mode="json") if resolved.metadata else None
+    )
 
-        llm_config = MagicMock()
-        llm_config.provider_type = provider_type
-        llm_config.model_name = model_name
-        llm_config.base_url = base_url
-        llm_config.api_key = mock_api_key
 
-        resolved = MagicMock()
-        resolved.model = llm_config
-        resolved.temperature = temperature
-        resolved.max_tokens = max_tokens
-        resolved.top_p = top_p
+@pytest.mark.parametrize("provider", ["custom", "future-vendor", "anthropic"])
+def test_format_is_explicit_and_independent_of_provider(provider):
+    assert isinstance(LLMFactory.create(endpoint(provider_type=provider)), OpenAIFormat)
+    assert isinstance(
+        LLMFactory.create(endpoint(provider_type=provider, api_format="anthropic.messages")),
+        AnthropicFormat,
+    )
 
-        return resolved
 
-    def test_create_openai(self):
-        resolved = self._make_resolved_agent(provider_type=ProviderType.OPENAI)
-        chat_format = LLMFactory.create(resolved)
-        assert chat_format is not None
-        assert chat_format.model == "gpt-4o"
+def test_unknown_format_and_non_llm_are_rejected():
+    with pytest.raises(UnsupportedFormat, match="api_format"):
+        LLMFactory.create(endpoint(api_format="unknown"))
+    resolved = endpoint()
+    resolved = resolved.model_copy(
+        update={"model": resolved.model.model_copy(update={"model_type": "stt"})}
+    )
+    with pytest.raises(LLMError, match="purpose"):
+        LLMFactory.create(resolved)
 
-    def test_create_custom_provider(self):
-        resolved = self._make_resolved_agent(
-            provider_type=ProviderType.CUSTOM,
-            base_url="https://my-llm.example.com/v1",
+
+def test_connection_options_and_secrets():
+    llm = LLMFactory.create(endpoint(connection_options={"timeout": 8, "max_retries": 0}))
+    assert llm._connection_options == {"timeout": 8, "max_retries": 0}
+    for value in [None, "test"]:
+        assert _get_secret_value(value) == value
+    with pytest.raises(LLMError, match="connection_options"):
+        LLMFactory.create(endpoint(connection_options={"api_key": "override"}))
+
+
+def test_builder_resolves_explicit_endpoint_and_passes_own_params():
+    params = ModelOverrides(temperature=0, extra_params={"stop": ["END"]})
+    with patch("agentconf.AgentsConfig") as sdk:
+        client = sdk.return_value.__enter__.return_value
+        client.resolve_model_endpoint.return_value = endpoint()
+        llm = _default_llm_factory(
+            AgentConfig(name="runtime", endpoint_name="shared", model_overrides=params)
         )
-        chat_format = LLMFactory.create(resolved)
-        assert chat_format is not None
+        client.resolve_model_endpoint.assert_called_once_with("shared")
+        client.resolve_agent.assert_not_called()
+    assert llm._temperature == 0
+    assert llm._extra_params == {"stop": ["END"]}
 
-    def test_create_deepseek(self):
-        resolved = self._make_resolved_agent(
-            provider_type=ProviderType.DEEPSEEK,
-            base_url="https://api.deepseek.com/v1",
-        )
-        chat_format = LLMFactory.create(resolved)
-        assert chat_format is not None
-        from ghrah.chat.format.deepseek import DeepSeekFormat
 
-        assert isinstance(chat_format, DeepSeekFormat)
-
-    def test_unsupported_provider_type(self):
-        """测试不支持的 ProviderType 枚举值。
-
-        使用一个不在预期范围内的 provider_type 值来触发错误。
-        """
-        resolved = self._make_resolved_agent()
-        resolved.model.provider_type = "unsupported_string"
-        try:
-            LLMFactory.create(resolved)
-            assert False, "Should have raised LLMError"
-        except LLMError as e:
-            assert "Unsupported provider type" in str(e)
+@pytest.mark.parametrize("name", [None, "", " "])
+def test_builder_never_falls_back_to_runtime_name(name):
+    with patch("agentconf.AgentsConfig") as sdk:
+        with pytest.raises(ValueError, match="endpoint_name"):
+            _default_llm_factory(AgentConfig(name="runtime", endpoint_name=name))
+        sdk.assert_not_called()

@@ -31,7 +31,7 @@ export interface AgentManifestInfo {
   title: string;
   description: string;
   tags: string[];
-  agent_config_name: string;
+  endpoint_name: string;
   system_prompt: string;
   ability_refs: string[];
   max_iterations: number;

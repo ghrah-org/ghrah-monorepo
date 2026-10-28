@@ -107,7 +107,7 @@ const DEFAULT_CONFIG = {
   description: "",
   system_prompt: "",
   max_iterations: 10,
-  agent_config_name: null,
+  endpoint_name: null,
 } as const;
 
 describe("connectStores", () => {
@@ -1844,7 +1844,7 @@ describe("connectStores", () => {
                 title: "Dev Agent",
                 description: "A dev agent",
                 tags: [],
-                agent_config_name: "gpt-4o",
+                endpoint_name: "gpt-4o",
                 system_prompt: "You are a dev agent.",
                 ability_refs: [],
                 max_iterations: 10,

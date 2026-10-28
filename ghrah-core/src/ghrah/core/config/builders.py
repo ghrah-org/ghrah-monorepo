@@ -62,11 +62,15 @@ def build_context_from_dict(data: dict[str, Any]) -> ContextConfig:
 
 def build_model_overrides_from_dict(data: dict[str, Any]) -> ModelOverrides:
     """从 dict 构建 ModelOverrides（wire payload 格式）。"""
+    unknown = data.keys() - {"temperature", "max_tokens", "top_p", "top_k", "extra_params"}
+    if unknown:
+        raise ValueError(f"Unknown model request parameter fields: {sorted(unknown)}")
     return ModelOverrides(
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         top_p=data.get("top_p"),
         top_k=data.get("top_k"),
+        extra_params=dict(data.get("extra_params") or {}),
     )
 
 
@@ -120,7 +124,7 @@ def build_model_overrides_from_config(model: Any) -> ModelOverrides | None:
     仅在至少一个覆盖字段非 None 时返回 ModelOverrides，
     否则返回 None（表示无覆盖）。
     """
-    if not any(
+    if not model.extra_params and not any(
         v is not None for v in [model.temperature, model.max_tokens, model.top_p, model.top_k]
     ):
         return None
@@ -129,4 +133,5 @@ def build_model_overrides_from_config(model: Any) -> ModelOverrides | None:
         max_tokens=model.max_tokens,
         top_p=model.top_p,
         top_k=model.top_k,
+        extra_params=dict(model.extra_params),
     )

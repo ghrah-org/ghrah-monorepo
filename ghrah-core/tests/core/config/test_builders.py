@@ -136,3 +136,24 @@ class TestWindowConfigValidation:
         """程序化构造 threshold=0 拒绝。"""
         with pytest.raises(ValueError, match="compact_threshold"):
             WindowConfig(compact_threshold=0)
+
+
+def test_request_parameter_extensions_cross_both_builders():
+    from ghrah.core.config.builders import (
+        build_model_overrides_from_config,
+        build_model_overrides_from_dict,
+    )
+    from ghrah.manifest.agent import ModelConfig
+
+    params = {"temperature": 0, "top_p": 0, "extra_params": {"vendor": False}}
+    assert build_model_overrides_from_dict(params).extra_params == {"vendor": False}
+    model = ModelConfig(endpoint_name="shared", **params)
+    result = build_model_overrides_from_config(model)
+    assert result.temperature == 0 and result.top_p == 0
+    assert result.extra_params == {"vendor": False}
+    only_extra = build_model_overrides_from_config(
+        ModelConfig(endpoint_name="shared", extra_params={"stop": ["END"]})
+    )
+    assert only_extra.extra_params == {"stop": ["END"]}
+    with pytest.raises(ValueError, match="Unknown model request"):
+        build_model_overrides_from_dict({"agent_config_name": "legacy"})

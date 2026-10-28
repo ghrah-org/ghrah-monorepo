@@ -47,16 +47,19 @@ async def main() -> None:
     agents_config = [
         AgentConfig(
             name="planner",
+            endpoint_name="planner",
             description="任务规划专家，负责分解复杂任务",
             system_prompt="你是一个任务规划专家。请将复杂任务分解为清晰的步骤。",
         ),
         AgentConfig(
             name="coder",
+            endpoint_name="coder",
             description="代码编写专家",
             system_prompt="你是一个代码编写专家。请根据需求编写高质量的代码。",
         ),
         AgentConfig(
             name="reviewer",
+            endpoint_name="reviewer",
             description="代码审查专家",
             system_prompt="你是一个代码审查专家。请审查代码并提供改进建议。",
         ),

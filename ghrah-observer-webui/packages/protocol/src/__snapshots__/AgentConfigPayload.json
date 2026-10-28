@@ -1,6 +1,6 @@
 {
   "name": "test-agent",
-  "agent_config_name": null,
+  "endpoint_name": null,
   "description": "",
   "system_prompt": "",
   "max_iterations": 10

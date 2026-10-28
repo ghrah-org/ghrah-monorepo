@@ -50,7 +50,11 @@ class AgentEntityManager:
 
         try:
             with AgentsConfig() as config:
-                return {"model_config_names": sorted(a.name for a in config.list_agents())}
+                return {
+                    "model_config_names": sorted(
+                        a.name for a in config.list_model_endpoints() if a.model_type == "llm"
+                    )
+                }
         except Exception:
             return {"model_config_names": [], "model_catalog_error": "model_catalog_unavailable"}
 
@@ -61,7 +65,7 @@ class AgentEntityManager:
 
         try:
             with AgentsConfig() as config:
-                config.resolve_agent(name)
+                config.resolve_model_endpoint(name)
         except Exception as exc:
             raise StableError(
                 "model_configuration_invalid", f"Cannot resolve model configuration: {name}"
@@ -82,7 +86,8 @@ class AgentEntityManager:
                         "name": request.name,
                         "cluster_id": request.cluster_id,
                         "manifest_ref": request.manifest_ref,
-                        "agent_config_name": request.agent_config_name,
+                        "endpoint_name": request.endpoint_name,
+                        "model_overrides": request.model_overrides,
                         "system_prompt": request.system_prompt,
                         "abilities": request.ability_types,
                         "desired_state": "running" if request.start else "stopped",
@@ -322,10 +327,11 @@ class AgentEntityManager:
                     raise StableError("agent_must_be_stopped")
                 if agent.manifest_ref:
                     raise StableError("model_managed_by_manifest")
-                self.validate_model_name(op["agent_config_name"])
-                project, agent = await self._save(
-                    project, agent, {"agent_config_name": op["agent_config_name"]}
-                )
+                self.validate_model_name(op["endpoint_name"])
+                changes: dict[str, Any] = {"endpoint_name": op["endpoint_name"]}
+                if op.get("model_overrides") is not None:
+                    changes["model_overrides"] = op["model_overrides"]
+                project, agent = await self._save(project, agent, changes)
                 return await self._snapshot(project, agent)
             if kind == "abilities.configure":
                 if agent.desired_state != "stopped" or runtime["availability"] != "offline":

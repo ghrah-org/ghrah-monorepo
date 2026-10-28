@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Worker 池示例 — 演示 agent_config_name 实现多 Agent 共享 LLM 配置。
+"""Worker 池示例 — 演示 endpoint_name 实现多 Agent 共享 LLM 配置。
 
 场景：
     多个 solve_worker 并行处理不同的任务，它们共享同一份 agentconf 配置。
-    通过 agent_config_name 字段，运行时名称（solve_worker_0, solve_worker_1, ...）
+    通过 endpoint_name 字段，运行时名称（solve_worker_0, solve_worker_1, ...）
     可以与 agentconf 中的配置名称（solve_worker）分离。
 
     这解决了以下问题：
@@ -16,7 +16,7 @@
 
 前置条件：
     1. 已配置 agentconf（运行 `agentconf --help` 查看配置方法）
-    2. 至少配置了以下 Agent：
+    2. 至少配置了以下模型端点：
        - planner
        - solve_worker
     注意：只需要创建一个 solve_worker 配置，所有 worker 实例共享此配置。
@@ -49,15 +49,16 @@ async def main() -> None:
     num_workers = 3
 
     print("=" * 60)
-    print("Worker 池示例 — agent_config_name 演示")
+    print("Worker 池示例 — endpoint_name 演示")
     print("=" * 60)
 
     # 1. 创建 Supervisor
     supervisor = SupervisorActor()
 
-    # 2. 创建 planner Agent（name 与 agentconf 配置名称一致，无需 agent_config_name）
+    # 2. 创建 planner Agent（显式引用 planner 端点）
     planner_config = AgentConfig(
         name="planner",
+        endpoint_name="planner",
         description="任务规划专家，负责分解问题并分配给 worker",
         system_prompt=(
             "你是一个任务规划专家。请将复杂问题分解为多个独立的子任务，"
@@ -68,16 +69,16 @@ async def main() -> None:
         max_iterations=5,
     )
 
-    # 3. 创建 worker 池（关键：agent_config_name 指向 agentconf 中的模板配置）
+    # 3. 创建 worker 池（关键：endpoint_name 指向 agentconf 中的模型端点）
     #    - name: 运行时唯一标识（solve_worker_0, solve_worker_1, ...）
-    #    - agent_config_name: agentconf 中的配置名称（solve_worker）
+    #    - endpoint_name: agentconf 中的配置名称（solve_worker）
     #
     #    这样所有 worker 共享同一份 LLM 配置，无需在 agentconf 中
     #    为每个 worker 创建单独的配置。
     worker_configs = [
         AgentConfig(
             name=f"solve_worker_{i}",
-            agent_config_name="solve_worker",  # 指向 agentconf 中的模板配置
+            endpoint_name="solve_worker",  # 指向 agentconf 中的模型端点
             description=f"解题 Worker #{i}",
             system_prompt=(
                 f"你是解题 Worker #{i}。请独立完成分配给你的子任务。"
@@ -100,10 +101,7 @@ async def main() -> None:
         registered_name = await supervisor.spawn_agent(
             config, abilities=[ConversationAbility(), EndTaskAbility()]
         )
-        print(
-            f"  ✓ Agent 注册成功: {registered_name} "
-            f"(agent_config_name={config.effective_agent_config_name})"
-        )
+        print(f"  ✓ Agent 注册成功: {registered_name} (endpoint_name={config.endpoint_name})")
 
     # 5. 健康检查
     print("\n" + "=" * 60)

@@ -43,9 +43,9 @@ def _agent_manifest(
 ) -> AgentManifest:
     return AgentManifest(
         manifest="agent",
-        version="1",
+        version="2",
         metadata=AgentMetadata(namespace=namespace, name=name, description="test"),
-        model=ModelConfig(agent_config_name="default"),
+        model=ModelConfig(endpoint_name="default"),
         system_prompt="test",
         max_iterations=10,
         communication_timeout=300.0,
@@ -280,13 +280,13 @@ class TestHandleSpawnAgentManifestRef:
 
         planner_yaml = """\
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: ghrah.examples
   name: planner
   description: planner
 model:
-  agent_config_name: planner
+  endpoint_name: planner
 system_prompt: You are a planner.
 max_iterations: 10
 abilities:
@@ -349,7 +349,7 @@ abilities:
         )
         assert result["success"], result.get("error")
 
-        # 断言：get_agent_info 返回 manifest 全部能力 + agent_config_name
+        # 断言：get_agent_info 返回 manifest 全部能力 + endpoint_name
         info = await unit.handle_command(
             "get_agent_info",
             {"project_id": "default", "agent_id": "planner-1", "name": "planner-1"},

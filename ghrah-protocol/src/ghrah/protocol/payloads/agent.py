@@ -12,15 +12,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ghrah.protocol.payloads.model import EndpointReferenceModel
+
 # ─── 命令载荷模型 ───
 
 
-class AgentConfigPayload(BaseModel):
+class AgentConfigPayload(EndpointReferenceModel):
     """Agent 配置载荷，对应 ghrah-core 的 AgentConfig。"""
 
     name: str
     agent_id: str = ""
-    agent_config_name: str | None = None
+    endpoint_name: str | None = None
     description: str = ""
     system_prompt: str = ""
     max_iterations: int = 10
@@ -30,7 +32,7 @@ class AgentConfigPayload(BaseModel):
     model_overrides: dict[str, Any] | None = None
 
 
-class SpawnAgentPayload(BaseModel):
+class SpawnAgentPayload(EndpointReferenceModel):
     """spawn_agent 命令载荷。"""
 
     project_id: str

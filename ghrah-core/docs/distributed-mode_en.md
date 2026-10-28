@@ -20,7 +20,9 @@ Local mode is the default, with all components running in a single process:
 ```python
 from ghrah.core.config import AgentConfig
 
-config = AgentConfig(name="my-agent", system_prompt="You are an assistant")
+config = AgentConfig(
+    name="my-agent", endpoint_name="my-agent", system_prompt="You are an assistant"
+)
 agent = ActorAgent(config)
 # Uses LocalAbilityExecutor + NullEventPublisher + local persistence
 ```
@@ -65,6 +67,7 @@ from ghrah.core.config import AgentConfig
 
 config = AgentConfig(
     name="my-agent",
+    endpoint_name="my-agent",
     system_prompt="You are an assistant",
     context=ContextConfig(persistence_type="remote"),
 )
@@ -172,6 +175,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="You are a code writing expert.",
     context=ContextConfig(
         persistence_type="sqlite",
@@ -187,6 +191,7 @@ from ghrah.core.config import AgentConfig, ContextConfig
 
 config = AgentConfig(
     name="coder",
+    endpoint_name="coder",
     system_prompt="You are a code writing expert.",
     context=ContextConfig(
         persistence_type="remote",

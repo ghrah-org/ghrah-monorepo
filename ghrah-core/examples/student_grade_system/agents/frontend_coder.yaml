@@ -1,11 +1,11 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: student_grade
   name: frontend_coder
   description: 前端开发者 — Vue 交互界面与表单
 model:
-  agent_config_name: coder-glm-4.7
+  endpoint_name: coder-glm-4.7
   temperature: 0.7
 system_prompt: |
   你是一个 Vue.js 前端开发专家，擅长 Vue 3 (Composition API) + Vite。

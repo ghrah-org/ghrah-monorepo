@@ -7,7 +7,7 @@
   "recovery_mode": "",
   "config": {
     "name": "agent-1",
-    "agent_config_name": null,
+    "endpoint_name": null,
     "description": "",
     "system_prompt": "",
     "max_iterations": 10

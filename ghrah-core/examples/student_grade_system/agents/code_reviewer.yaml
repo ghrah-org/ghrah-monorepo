@@ -1,11 +1,11 @@
 manifest: agent
-version: "1"
+version: "2"
 metadata:
   namespace: student_grade
   name: code_reviewer
   description: 代码审查者 — 审查前后端代码，提出改进意见
 model:
-  agent_config_name: coder-glm-4.7
+  endpoint_name: coder-glm-4.7
   temperature: 0.7
 system_prompt: |
   你是一个资深代码审查专家。你擅长审查前后端代码，

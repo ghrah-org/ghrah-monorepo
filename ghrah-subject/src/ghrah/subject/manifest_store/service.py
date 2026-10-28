@@ -34,7 +34,7 @@ def _config_to_payload_dict(config: Any) -> dict[str, Any]:
     )
     return {
         "name": config.name,
-        "agent_config_name": config.agent_config_name,
+        "endpoint_name": config.endpoint_name,
         "description": config.description,
         "system_prompt": config.system_prompt,
         "max_iterations": config.max_iterations,
@@ -133,7 +133,7 @@ def handle_manifest_command(
                             "title": m.metadata.title,
                             "description": m.description,
                             "tags": m.metadata.tags,
-                            "agent_config_name": m.model.agent_config_name,
+                            "endpoint_name": m.model.endpoint_name,
                             "system_prompt": m.system_prompt,
                             "ability_refs": [ar.ref or ar.type or "" for ar in m.abilities],
                             "max_iterations": m.max_iterations,
