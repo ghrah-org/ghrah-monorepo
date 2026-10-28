@@ -1414,6 +1414,7 @@ export class MockState {
       instance_manifest_path: "",
       system_prompt: config.system_prompt,
       abilities: null,
+      desired_state: "running",
       path_grants: [],
       runtime_status: "running",
       runtime_error: "",

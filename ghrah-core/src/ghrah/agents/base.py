@@ -296,6 +296,42 @@ class ActorAgent:
         """获取所有已注册的能力名称列表。"""
         return list(self._abilities.keys())
 
+    @property
+    def busy(self) -> bool:
+        """公开运行忙闲状态，供实体管理端口在安全边界执行操作。"""
+        return self._runner.busy or self._context_manager.in_iteration
+
+    def get_entity_context(self) -> dict[str, Any]:
+        """读取此执行实例的会话目录，不暴露可写 ContextManager。"""
+        from ghrah.context.persistence.serialization import (
+            serialize_action_session,
+            serialize_branch,
+        )
+
+        sessions = self._context_manager.list_sessions()
+        return {
+            "active_session_id": self._context_manager.active_session_id,
+            "sessions": [serialize_action_session(session) for session in sessions],
+            "branches": [
+                serialize_branch(branch)
+                for session in sessions
+                for branch in self._context_manager.list_branches(session.session_id)
+            ],
+        }
+
+    def get_entity_history(self, session_id: str, branch_id: str, limit: int) -> dict[str, Any]:
+        """读取实体内指定会话分支的已提交历史。"""
+        from ghrah.context.persistence.serialization import serialize_node
+
+        nodes = self._context_manager.get_history(
+            session_id=session_id, branch_id=branch_id, limit=limit
+        )
+        return {
+            "session_id": session_id,
+            "branch_id": branch_id,
+            "nodes": [serialize_node(node) for node in nodes],
+        }
+
     def set_event_publisher(self, publisher: EventPublisher) -> None:
         """注入事件发布器（由 Supervisor 在创建时注入）。
         本地模式使用 NullEventPublisher（默认），Unit 挂载模式由宿主注入实现。

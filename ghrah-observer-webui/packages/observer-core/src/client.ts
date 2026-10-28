@@ -1,5 +1,8 @@
+import { AgentEntity } from "./agent-entity.js";
 import {
   type AbilityDefinitionPayload,
+  type AgentEntityCreatePayload,
+  AgentEntityCreatePayloadSchema,
   type AgentConfigPayload,
   ClientType,
   type CommandResultPayload,
@@ -55,6 +58,27 @@ export interface ObserverRequestContext {
 }
 
 export class ObserverClient extends ServerClient {
+  /** Bind a persistent Agent identity, including when its actor is stopped. */
+  agent(projectId: string, agentId: string): AgentEntity {
+    return new AgentEntity(this, projectId, agentId);
+  }
+
+  async createAgentEntity(input: AgentEntityCreatePayload): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.AGENT_ENTITY_CREATE,
+      client_type: ClientType.OBSERVER,
+      payload: AgentEntityCreatePayloadSchema.parse(input),
+    });
+  }
+
+  async listAgentEntities(projectId: string): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.AGENT_ENTITY_LIST,
+      client_type: ClientType.OBSERVER,
+      payload: { project_id: projectId },
+    });
+  }
+
   private readonly _requestContexts = new Map<string, ObserverRequestContext>();
 
   override async request(message: ServerMessage, timeout = 30_000): Promise<CommandResultPayload> {

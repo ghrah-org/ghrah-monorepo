@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +48,7 @@ class AgentSpecSchema(BaseModel):
     instance_manifest_path: str = ""
     system_prompt: str = ""
     abilities: list[str] | None = None
+    desired_state: Literal["running", "stopped"] = "running"
     path_grants: list[PathGrantSchema] = Field(default_factory=list)
     runtime_status: str = "pending"
     runtime_error: str = ""

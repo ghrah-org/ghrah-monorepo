@@ -104,6 +104,23 @@ class CoreUnitHandle:
             return {"success": False, "error": "cluster_id_mismatch"}
         return await self._dispatch("spawn_agent", payload.model_dump(mode="json"))
 
+    def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
+        """查询本集群中的实体运行状态，不懒启动。"""
+        if not self._alive:
+            return {
+                "availability": "offline",
+                "incarnation_id": None,
+                "busy": None,
+                "loaded_abilities": None,
+            }
+        return self._unit.get_entity_runtime(self._project_id, agent_id)
+
+    async def entity_context(self, agent_id: str, operation: dict[str, Any]) -> dict[str, Any]:
+        """将实体 Context 操作交给所属 Core。"""
+        if not self._alive:
+            raise ValueError("agent_offline")
+        return await self._unit.entity_context(self._project_id, agent_id, operation)
+
     async def list_agents(self, project_id: str | None = None) -> list[dict[str, Any]]:
         """经进程内 CoreUnit 发 list_agents，返回 agent 信息列表。"""
         if not self._alive:

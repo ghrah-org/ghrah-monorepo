@@ -1310,6 +1310,58 @@ class CoreUnit:
         result = await supervisor.health_check()
         return self._ok(result)
 
+    def get_entity_runtime(self, project_id: str, agent_id: str) -> dict[str, Any]:
+        """按实体身份读取当前执行实例，不返回可写 Actor 引用。"""
+        from ghrah.communication.errors import AgentNotFoundError
+
+        self._validate_project(project_id)
+        try:
+            info = self._require_supervisor()._registry.get_info_by_id(agent_id)
+        except AgentNotFoundError:
+            return {
+                "availability": "offline",
+                "incarnation_id": None,
+                "busy": None,
+                "loaded_abilities": None,
+            }
+        return {
+            "availability": "online",
+            "incarnation_id": info.incarnation_id,
+            "busy": info.actor_handle.busy,
+            "loaded_abilities": info.actor_handle.get_abilities(),
+        }
+
+    async def entity_context(
+        self, project_id: str, agent_id: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        """执行身份限定的 Context 操作，不通过 Subject 访问 Actor 私有成员。"""
+        from ghrah.communication.errors import AgentNotFoundError
+        from ghrah.context.persistence.serialization import serialize_action_session
+
+        self._validate_project(project_id)
+        try:
+            info = self._require_supervisor()._registry.get_info_by_id(agent_id)
+        except AgentNotFoundError as exc:
+            raise ValueError("agent_offline") from exc
+        actor = info.actor_handle
+        kind = operation["type"]
+        if kind == "context.list_sessions":
+            return actor.get_entity_context()
+        if kind == "context.get_history":
+            return actor.get_entity_history(
+                operation["session_id"], operation["branch_id"], operation["limit"]
+            )
+        if actor.busy:
+            raise ValueError("agent_busy")
+        if kind == "context.create_session":
+            session = await actor.create_session(
+                name=operation.get("name"), system_prompt=operation.get("system_prompt")
+            )
+            return {"session": serialize_action_session(session)}
+        if kind == "context.activate_session":
+            return {"session": await actor.activate_session(operation["session_id"])}
+        raise ValueError("unsupported_entity_context_operation")
+
     async def _handle_get_agent_info(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         gp = GetAgentInfoPayload.model_validate(payload)

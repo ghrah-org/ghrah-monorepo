@@ -157,12 +157,15 @@ class SqliteBackend(PersistenceBackend):
     Args:
         db_path: SQLite 数据库文件路径，默认为 ~/.ghrah/data/ghrah.db
         run_id: 运行 ID，默认自动生成（格式：run_{ISO8601}）
+        read_only: 只读查询既有数据库，不迁移建表或登记 run。
     """
 
     def __init__(
         self,
         db_path: str | Path | None = None,
         run_id: str | None = None,
+        *,
+        read_only: bool = False,
     ) -> None:
         if db_path is None:
             db_path = Path.home() / ".ghrah" / "data" / "ghrah.db"
@@ -172,6 +175,8 @@ class SqliteBackend(PersistenceBackend):
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
+        self._read_only = read_only
+        self._context_schema_present = True
 
     @property
     def db_path(self) -> Path:
@@ -220,6 +225,44 @@ class SqliteBackend(PersistenceBackend):
         """
         if self._db is not None:
             raise RuntimeError("Database already connected.")
+
+        if self._read_only:
+            # 实体离线查询不得建库、迁移 schema 或插入新的 run。
+            self._db = await aiosqlite.connect(
+                self._db_path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+            )
+            self._db.row_factory = aiosqlite.Row
+            try:
+                await self._db.execute("PRAGMA query_only=ON")
+                await self._db.execute("BEGIN")
+                table = await (
+                    await self._db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name='context_schema'"
+                    )
+                ).fetchone()
+                self._context_schema_present = table is not None
+                if not self._context_schema_present:
+                    legacy = await (
+                        await self._db.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' "
+                            "AND name IN ('sessions', 'chain_meta', 'nodes', 'branches')"
+                        )
+                    ).fetchone()
+                    if legacy is not None:
+                        raise RuntimeError("Unsupported context database schema")
+                    self._initialized = True
+                    return
+                row = await (
+                    await self._db.execute("SELECT version FROM context_schema WHERE singleton=1")
+                ).fetchone()
+                if row is None or row[0] != 3:
+                    raise RuntimeError("Unsupported context database schema")
+                self._initialized = True
+            except BaseException:
+                await self.close()
+                raise
+            return
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None 启用手动事务控制，避免隐式事务冲突
@@ -441,9 +484,48 @@ class SqliteBackend(PersistenceBackend):
                 (changes.agent_name, changes.active_session_id),
             )
 
+    async def load_session_catalog(self, agent_name: str) -> dict[str, Any]:
+        """读取实体的会话目录，不加载所有历史节点。"""
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return {"active_session_id": None, "sessions": [], "branches": []}
+        meta = await (
+            await db.execute(
+                "SELECT active_session_id FROM chain_meta WHERE agent_name=?", (agent_name,)
+            )
+        ).fetchone()
+        sessions = await (
+            await db.execute(
+                "SELECT * FROM sessions WHERE agent_name=? AND lifecycle!='deleted' "
+                "ORDER BY created_at, session_id",
+                (agent_name,),
+            )
+        ).fetchall()
+        branches = await (
+            await db.execute(
+                "SELECT b.* FROM branches b JOIN sessions s ON s.session_id=b.session_id "
+                "WHERE s.agent_name=? AND s.lifecycle!='deleted' "
+                "AND b.lifecycle!='deleted' ORDER BY b.created_at, b.branch_id",
+                (agent_name,),
+            )
+        ).fetchall()
+        return {
+            "active_session_id": meta[0] if meta else None,
+            "sessions": [
+                serialize_action_session(deserialize_action_session(self._session_row_to_dict(row)))
+                for row in sessions
+            ],
+            "branches": [
+                serialize_branch(deserialize_branch(self._branch_row_to_dict(row)))
+                for row in branches
+            ],
+        }
+
     async def load_checkpoint(self, agent_name: str) -> ContextCheckpoint | None:
         """从 SQLite 加载 Agent 的 v3 checkpoint。"""
         db = await self._ensure_db()
+        if not self._context_schema_present:
+            return None
         meta_cursor = await db.execute(
             "SELECT active_session_id FROM chain_meta WHERE agent_name = ?", (agent_name,)
         )

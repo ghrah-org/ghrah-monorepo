@@ -1,0 +1,208 @@
+{
+  "requests": [
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "snapshot"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "start",
+        "expected_revision": null,
+        "expected_incarnation_id": null
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "stop",
+        "expected_revision": null,
+        "expected_incarnation_id": null
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "context.list_sessions"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "abilities.list"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "context.create_session",
+        "name": null,
+        "system_prompt": null
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "mailbox.list_inbox",
+        "limit": 50,
+        "before_seq": null
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "mailbox.list_outbox",
+        "limit": 50,
+        "before_seq": null
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "context.get_history",
+        "session_id": "s1",
+        "branch_id": "b1",
+        "limit": 100
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "context.activate_session",
+        "session_id": "s1"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "mailbox.get_message",
+        "message_id": "m1"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "mailbox.retry",
+        "delivery_id": "d1"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "mailbox.resume",
+        "delivery_id": "d1"
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "abilities.configure",
+        "ability_types": ["send_message"],
+        "expected_revision": 2
+      }
+    }
+  ],
+  "create": {
+    "project_id": "p1",
+    "name": "designer",
+    "cluster_id": "c1",
+    "start": false,
+    "manifest_ref": "",
+    "system_prompt": "",
+    "ability_types": ["send_message"]
+  },
+  "list": {
+    "project_id": "p1"
+  },
+  "snapshot": {
+    "identity": {
+      "project_id": "p1",
+      "agent_id": "a1"
+    },
+    "specification": {
+      "agent_id": "a1",
+      "name": "designer",
+      "cluster_id": "c1",
+      "manifest_ref": "",
+      "instance_manifest_path": "",
+      "system_prompt": "",
+      "abilities": ["send_message"],
+      "desired_state": "stopped",
+      "path_grants": [],
+      "runtime_status": "pending",
+      "runtime_error": ""
+    },
+    "specification_revision": 2,
+    "runtime": {
+      "availability": "offline",
+      "incarnation_id": null,
+      "busy": null,
+      "error": null
+    },
+    "context": {
+      "availability": "available",
+      "session_count": 1
+    },
+    "mailbox": {
+      "availability": "available",
+      "inbox_counts": {
+        "pending": 2
+      }
+    },
+    "abilities": {
+      "configured_types": ["send_message"],
+      "loaded_names": null
+    },
+    "observed_at": "2026-10-27T00:00:00+00:00"
+  },
+  "invalid_operations": [
+    {
+      "type": "context.get_history",
+      "session_id": "s1"
+    },
+    {
+      "type": "mailbox.list_inbox",
+      "limit": 0
+    },
+    {
+      "type": "mailbox.list_outbox",
+      "limit": 201
+    },
+    {
+      "type": "stop",
+      "agent_id": "other"
+    },
+    {
+      "type": "abilities.configure",
+      "ability_types": [],
+      "expected_revision": 1
+    },
+    {
+      "type": "abilities.configure",
+      "ability_types": ["send_message"]
+    },
+    {
+      "type": "context.activate_session",
+      "session_id": ""
+    },
+    {
+      "type": "arbitrary_method"
+    }
+  ]
+}

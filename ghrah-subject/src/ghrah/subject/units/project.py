@@ -37,7 +37,7 @@ __all__ = ["ProjectUnit"]
 logger = logging.getLogger(__name__)
 
 # 不改变 ProjectStore 权威状态的命令：跳过 DesiredStateStore 全量重投影。
-_READ_ONLY_COMMANDS = frozenset({"project_get", "project_list"})
+_READ_ONLY_COMMANDS = frozenset({"project_get", "project_list", "agent_entity_list"})
 
 
 class ProjectUnit(SubjectUnit):
@@ -135,7 +135,18 @@ class ProjectUnit(SubjectUnit):
     ) -> dict[str, Any]:
         result = await self.service.handle_command(command, payload)
         # 只读命令不触发 desired-state 全量重投影（写放大收敛）。
-        if result.get("success") and command not in _READ_ONLY_COMMANDS:
+        operation = payload.get("operation")
+        entity_write = (
+            command == "agent_entity"
+            and isinstance(operation, dict)
+            and operation.get("type") in {"start", "stop", "abilities.configure"}
+        )
+        # 生命周期失败也可能已保存停止意图；投影始终从 ProjectStore 重建。
+        if entity_write or (
+            result.get("success")
+            and command not in _READ_ONLY_COMMANDS
+            and command != "agent_entity"
+        ):
             await self._save_desired()
         return result
 
