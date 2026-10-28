@@ -63,6 +63,9 @@ class ChatFormat(ABC):
 
     def __init__(self) -> None:
         self._tools: list[dict[str, Any]] = []
+        # None 表示调用方未提供能力信息；字典是 agentconf 的完整解析结果。
+        self.model_capabilities: dict[str, Any] | None = None
+        self.capability_sources: dict[str, str] = {}
 
     @property
     @abstractmethod

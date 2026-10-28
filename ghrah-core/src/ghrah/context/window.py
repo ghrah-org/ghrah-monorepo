@@ -148,9 +148,10 @@ class WindowManager:
     3. SlidingWindowStrategy — 确保总消息数在窗口内
     4. TruncationStrategy    — 最终兜底，暴力截断
 
-    预算来源三级：显式声明（declared）> 模型窗口表（model_table）>
-    内置默认（default）。``max_tokens=None`` 表示未声明，首线 LLM 就绪后
-    经 :meth:`resolve_budget_from_model` 查表落定；厂商超限错误的运行时
+    预算优先使用显式声明（declared），其次为 agentconf 解析结果（agentconf）。
+    未接入能力数据的客户端才回落模型窗口表（model_table）和内置默认（default）。
+    ``max_tokens=None`` 表示未声明，首线 LLM 就绪后优先经
+    :meth:`resolve_budget_from_capabilities` 落定；厂商超限错误的运行时
     回填经 :meth:`correct_budget_from_vendor`，口径以厂商为真值。
 
     Args:
@@ -190,8 +191,24 @@ class WindowManager:
 
     @property
     def max_tokens_source(self) -> str:
-        """预算来源："declared" | "model_table" | "default" | "vendor"。"""
+        """预算来源：declared / agentconf / model_table / default / vendor。"""
         return self._max_tokens_source
+
+    def resolve_budget_from_capabilities(self, capabilities: dict[str, Any]) -> bool:
+        """优先消费配置层解析的窗口；显式声明和厂商回填不受影响。
+
+        配置层会完成外部参考数据、模型覆盖和默认值的合并。字段显式为
+        None 或非法时保留内置默认，不再通过模型名前缀猜测覆盖它。
+        """
+        if self._max_tokens_source not in ("default", "model_table"):
+            return False
+        window = capabilities.get("max_context_length")
+        if type(window) is not int or window <= 0:
+            return False
+        self._max_tokens = window
+        self._max_tokens_source = "agentconf"
+        logger.info("WindowManager: budget resolved from agentconf — budget=%d", window)
+        return True
 
     def resolve_budget_from_model(self, model_name: str) -> bool:
         """未声明预算时按模型名查内置窗口表落定。

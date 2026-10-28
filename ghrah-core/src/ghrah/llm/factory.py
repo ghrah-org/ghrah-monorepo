@@ -99,6 +99,15 @@ class LLMFactory:
                 top_p=top_p,
             )
 
+            capabilities = getattr(llm_config, "capabilities", None)
+            if capabilities is not None and hasattr(capabilities, "model_dump"):
+                values = capabilities.model_dump(mode="json")
+                if isinstance(values, dict):
+                    chat_format.model_capabilities = values
+            sources = getattr(llm_config, "capability_sources", None)
+            if isinstance(sources, dict):
+                chat_format.capability_sources = dict(sources)
+
             logger.info(f"ChatFormat created successfully: {type(chat_format).__name__}")
             return chat_format
 

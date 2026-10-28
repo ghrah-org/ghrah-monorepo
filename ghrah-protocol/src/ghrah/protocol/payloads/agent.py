@@ -267,7 +267,8 @@ class ContextUsageUpdatedPayload(BaseModel):
     （可能为 None，如首次调用/head 变更后），post_call 取本次 LLM 调用
     真实 input_tokens（basis="real"，归一化口径：恒为总输入，含缓存
     部分）。budget_tokens 为落定预算（无 WindowManager 时为 0），来源由
-    budget_source 标注：显式声明（declared）/ 模型窗口表（model_table）/
+    budget_source 标注：显式声明（declared）/ 配置层解析（agentconf）/
+    模型窗口表（model_table）/
     内置默认（default）/ 厂商超限错误回填（vendor）。
     """
 
@@ -282,7 +283,7 @@ class ContextUsageUpdatedPayload(BaseModel):
     """occupied_tokens 计量口径："anchor"（占用锚点）/"real"（本次调用真实值）"""
     budget_tokens: int = 0
     budget_source: str | None = None
-    """预算来源："declared"/"model_table"/"default"/"vendor"（无 WindowManager 时为 None）"""
+    """预算来源：declared/agentconf/model_table/default/vendor（无 WindowManager 时为 None）"""
     compact_threshold: float | None = None
     real_input_tokens: int | None = None
     """本次调用总输入 token 数（归一化口径，含缓存命中与缓存写入部分）"""

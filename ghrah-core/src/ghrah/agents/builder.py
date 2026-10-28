@@ -284,8 +284,8 @@ def _default_llm_factory(config: AgentConfig) -> LLMProtocol:
     """默认 LLM 工厂 — 从 agentconf 创建 ChatFormat。"""
     from agentconf import AgentsConfig
 
-    config_client = AgentsConfig()
-    resolved = config_client.resolve_agent(config.effective_agent_config_name)
+    with AgentsConfig() as config_client:
+        resolved = config_client.resolve_agent(config.effective_agent_config_name)
     llm = LLMFactory.create(resolved)
     if config.model_overrides is not None:
         llm.apply_model_overrides(config.model_overrides)

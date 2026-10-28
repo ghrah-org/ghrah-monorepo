@@ -308,6 +308,7 @@ export const ContextUsageUpdatedPayloadSchema = z.object({
   occupied_tokens: z.number().int().nullable().optional(),
   basis: z.string(),
   budget_tokens: z.number().int().optional().default(0),
+  // declared / agentconf / model_table / default / vendor
   budget_source: z.string().nullable().optional(),
   compact_threshold: z.number().nullable().optional(),
   real_input_tokens: z.number().int().nullable().optional(),

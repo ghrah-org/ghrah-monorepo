@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ghrah.context.model_windows import lookup_model_window
 from ghrah.context.window import (
     WindowManager,
@@ -39,6 +41,28 @@ class TestLookupModelWindow:
 
 
 class TestWindowManagerBudgetSource:
+    def test_agentconf_replaces_legacy_table(self) -> None:
+        wm = WindowManager()
+        wm.resolve_budget_from_model("gpt-4o")
+        assert wm.resolve_budget_from_capabilities({"max_context_length": 256000}) is True
+        assert wm.max_tokens == 256000
+        assert wm.max_tokens_source == "agentconf"
+        assert wm.resolve_budget_from_model("claude-sonnet-4") is False
+
+    @pytest.mark.parametrize("window", [None, 0, -1, True, "128000"])
+    def test_invalid_capability_window_keeps_default(self, window: object) -> None:
+        wm = WindowManager()
+        assert wm.resolve_budget_from_capabilities({"max_context_length": window}) is False
+        assert wm.max_tokens == DEFAULT_WINDOW_MAX_TOKENS
+
+    def test_agentconf_does_not_override_declared_or_vendor(self) -> None:
+        wm = WindowManager(max_tokens=4096)
+        assert wm.resolve_budget_from_capabilities({"max_context_length": 128000}) is False
+        assert wm.max_tokens == 4096
+        wm.correct_budget_from_vendor(32768)
+        assert wm.resolve_budget_from_capabilities({"max_context_length": 128000}) is False
+        assert wm.max_tokens == 32768
+
     def test_declared_budget(self) -> None:
         wm = WindowManager(max_tokens=8192)
         assert wm.max_tokens == 8192
@@ -46,8 +70,14 @@ class TestWindowManagerBudgetSource:
 
     def test_undeclared_falls_back_to_default(self) -> None:
         wm = WindowManager()
-        assert wm.max_tokens == DEFAULT_WINDOW_MAX_TOKENS
+        assert wm.max_tokens == DEFAULT_WINDOW_MAX_TOKENS == 1_000_000
         assert wm.max_tokens_source == "default"
+
+    def test_vendor_correction_overrides_default(self) -> None:
+        wm = WindowManager()
+        assert wm.correct_budget_from_vendor(128_000) is True
+        assert wm.max_tokens == 128_000
+        assert wm.max_tokens_source == "vendor"
 
     def test_resolve_from_model_table(self) -> None:
         wm = WindowManager()

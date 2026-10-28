@@ -197,7 +197,7 @@ class ContextUsageUpdatedEvent(CoreEvent):
         occupied_tokens: 占用 token 数（口径随 phase）
         basis: occupied_tokens 计量口径 "anchor" | "real"
         budget_tokens: 运营者声明预算（无 WindowManager 时为 0）
-        budget_source: 预算来源 "declared" | "model_table" | "default" |
+        budget_source: 预算来源 "declared" | "agentconf" | "model_table" | "default" |
             "vendor"（无 WindowManager 时为 None）
         compact_threshold: 压缩阈值比率（未配置时为 None）
         real_input_tokens: 本次调用真实 input_tokens（pre_call 为 None）

@@ -87,10 +87,19 @@ window_config = WindowConfig(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `max_tokens` | `int` | `4096` | LLM 上下文窗口大小（token 预算） |
+| `max_tokens` | `int \| None` | `None` | LLM 上下文窗口大小（token 预算）；未声明时优先使用 agentconf 解析后的窗口，缺少能力接口时才查模型窗口表，最终兜底为 1M（1,000,000）tokens |
 | `strategies` | `list[str]` | `["tool_call_fold", "truncation"]` | 策略名称列表，按执行顺序排列 |
 | `tool_call_max_length` | `int` | `500` | `ToolCallFoldStrategy` 的最大 content 长度 |
 | `sliding_window_size` | `int` | `20` | `SlidingWindowStrategy` 的窗口大小 |
+
+agentconf 0.2 将模型绑定显式指向能力档案，未声明的字段按模型类型补默认值。LLM 工厂将完整能力与来源
+携带到客户端，Agent 创建首个 LLM 后使用其中的 `max_context_length` 落定预算，
+事件中的 `budget_source` 为 `agentconf`。显式填写的 `WindowConfig.max_tokens` 优先。
+自定义注入客户端若没有携带能力信息，保留模型窗口表的兼容路径；能力信息中的窗口显式
+为 `None` 时使用兜底预算，不再进入前缀查表。参考输出上限仅表示模型能力，不会自动
+把它设为每次调用的输出 token 数，也不会因推理能力标记而强制启用厂商推理模式。
+厂商返回上下文超限错误时，
+运行时仍会按错误中的实际窗口大小修正预算，并执行紧急压缩。
 
 ### 可用策略
 
@@ -151,65 +160,48 @@ backend = context_config.create_persistence()  # 返回 JsonFileBackend 实例
 
 ## agentconf 配置
 
-LLM 相关配置通过 [agentconf](https://github.com/ghrah/agentconf) 管理，采用三层继承结构：
+LLM 相关配置通过 [agentconf](https://github.com/ghrah/agentconf) 管理。0.2 的配置职责如下：
 
+- Provider：协议类型、API 端点与密钥。
+- 能力档案：固定模型的上下文、模态、推理与工具等发布能力，来源可以是 models.dev、人工声明或虚构示例。
+- ModelInstance：全局唯一的绑定名称、实际请求模型名，以及 Provider 和能力档案的引用。
+- Agent：模型绑定与 temperature、top_p、max_tokens 等请求参数。
+
+能力档案与请求名互相独立；选择 `example-VLA` 不会把它作为请求模型名发送。
+未绑定档案的 LLM 使用默认上下文 1M，支持工具与推理。档案的最大输出长度是能力上限，
+Agent 的 `max_tokens` 才是实际请求参数。
+
+### 配置入口
+
+执行 `agentconf` 打开 TUI，创建 Provider、模型绑定和 Agent。程序初始化仅加载随包目录，
+不访问网络。需要新增参考数据时先预览，再接受固定快照：
+
+```sh
+agentconf catalog import --plan-out /tmp/catalog-plan.json
+agentconf catalog import --plan /tmp/catalog-plan.json --apply-all --types llm
 ```
-Provider（服务提供者）
-├── base_url: API 端点
-├── api_key: 认证密钥
-└── type: 提供者类型（openai / anthropic）
-    │
-    └── LLM Instance（模型实例）
-        ├── model_name: 模型标识
-        ├── temperature: 温度参数（可覆盖）
-        ├── top_p: Top-P 参数（可覆盖）
-        └── max_tokens: 最大 token 数（可覆盖）
-            │
-            └── Agent（智能体）
-                ├── temperature: 温度参数（覆盖 LLM 级）
-                ├── top_p: Top-P 参数（覆盖 LLM 级）
-                └── max_tokens: 最大 token 数（覆盖 LLM 级）
-```
 
-### CLI 命令
-
-```bash
-# 创建 Provider
-agentconf provider create openai \
-    --type openai \
-    --base-url "https://api.openai.com/v1" \
-    --api-key "sk-your-api-key"
-
-# 创建 LLM Instance
-agentconf llm create gpt4o \
-    --provider openai \
-    --model-name "gpt-4o"
-
-# 创建 Agent
-agentconf agent create assistant \
-    --llm gpt4o \
-    --temperature 0.7
-```
+已有档案的差异只报告，不自动覆盖；上游缺项也不会删除本地档案。
 
 ### SDK 使用
 
 ```python
 from agentconf import AgentsConfig
 
-config_client = AgentsConfig()
-
-# 解析 Agent 配置（包含 Provider → LLM → Agent 的完整继承链）
-resolved = config_client.resolve_agent("assistant")
-
-# resolved 包含：
-# - provider_type: ProviderType
-# - base_url: str
-# - api_key: SecretStr
-# - model_name: str
-# - temperature: float | None
-# - top_p: float | None
-# - max_tokens: int | None
+with AgentsConfig() as config:
+    # Provider、绑定和 Agent 可提前在 TUI 中创建。
+    # 创建绑定时 capabilities_key 显式选择目录中的规范模型键。
+    resolved = config.resolve_agent("assistant")
+    model = resolved.model
+    # model.base_url / model.api_key 只来自 Provider。
+    # model.capabilities 是补齐默认值后的有效能力。
+    # model.capabilities_key 保留档案键；capability_sources 逐字段说明来源。
+    # resolved.temperature / resolved.max_tokens 是请求参数。
 ```
+
+此接口使用 agentconf 0.2。跨仓验收通过 `PYTHONPATH` 加载本地新版源码；发布前不向
+monorepo 锁文件写入本地 path 依赖。0.1 的客户端可继续走原有工厂兼容路径，但不提供
+本节的能力目录功能。
 
 ## 直接构造 ChatFormat（Fallback）
 

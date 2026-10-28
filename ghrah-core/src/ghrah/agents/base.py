@@ -455,11 +455,15 @@ class ActorAgent:
 
             self._inject_llm_into_summary_strategy(self._llm)
 
-            # 预算来源解析：未显式声明 max_tokens 时按模型名查内置窗口表
-            # （幂等；declared/vendor 已落定不受影响）
+            # agentconf 已完成参考数据与模型覆盖的合并；缺少能力接口的
+            # 注入客户端保留模型表兼容路径。declared/vendor 不受影响。
             wm = self._context_manager.window_manager
             if wm is not None:
-                wm.resolve_budget_from_model(self._llm.model)
+                capabilities = getattr(self._llm, "model_capabilities", None)
+                if isinstance(capabilities, dict):
+                    wm.resolve_budget_from_capabilities(capabilities)
+                else:
+                    wm.resolve_budget_from_model(self._llm.model)
 
             self._initialized = True
 

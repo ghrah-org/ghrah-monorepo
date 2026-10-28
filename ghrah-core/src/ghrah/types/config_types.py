@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-DEFAULT_WINDOW_MAX_TOKENS = 200_000
+DEFAULT_WINDOW_MAX_TOKENS = 1_000_000
 
 
 DEFAULT_COMPACT_METHOD = "ghrah.builtin"
@@ -24,9 +24,10 @@ class WindowConfig:
 
     Attributes:
         max_tokens: LLM 上下文窗口大小（token 预算）；None 表示未声明，
-            未声明时首线 LLM 就绪后按模型名查内置窗口表落定
+            未声明时优先使用 agentconf 解析后的 max_context_length；
+            未携带能力信息的客户端才按模型名查内置窗口表
             （``ghrah.context.model_windows``），查表未命中回落
-            DEFAULT_WINDOW_MAX_TOKENS（200000，现役 LLM 上下文窗口下限口径）。
+            DEFAULT_WINDOW_MAX_TOKENS（1M，即 1000000 tokens，接入默认预算）。
             显式声明是运营者声明合约：引擎永不推断目标模型的真实窗口，
             须按目标模型真实窗口 − 输出余量设定；厂商上下文超限错误是
             唯一运行时真相信号（触发预算回填与紧急压缩阶梯）
