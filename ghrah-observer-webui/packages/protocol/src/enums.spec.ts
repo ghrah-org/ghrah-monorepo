@@ -102,6 +102,9 @@ describe("CommandType", () => {
     "project_restore",
     "project_delete",
     "project_add_agent",
+    "agent_entity",
+    "agent_entity_create",
+    "agent_entity_list",
     "project_remove_agent",
     "project_link_task",
     "project_unlink_task",
@@ -416,6 +419,9 @@ describe("PROJECT_COMMANDS", () => {
     "project_restore",
     "project_delete",
     "project_add_agent",
+    "agent_entity",
+    "agent_entity_create",
+    "agent_entity_list",
     "project_remove_agent",
     "project_link_task",
     "project_unlink_task",
@@ -425,7 +431,7 @@ describe("PROJECT_COMMANDS", () => {
     "project_stop",
   ]);
 
-  it("contains exactly 15 project command values", () => {
+  it("contains exactly 18 project command values", () => {
     expect(PROJECT_COMMANDS).toEqual(PYTHON_PROJECT);
   });
 });

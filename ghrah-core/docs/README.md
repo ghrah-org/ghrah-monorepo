@@ -8,6 +8,7 @@
 |------|------|---------|
 | 安装与快速开始 | [getting-started.md](getting-started.md) | [getting-started_en.md](getting-started_en.md) |
 | 核心概念 | [core-concepts.md](core-concepts.md) | [core-concepts_en.md](core-concepts_en.md) |
+| Agent 实体接口 | [agent-entity.md](agent-entity.md) | — |
 | Ability 系统 | [ability-system.md](ability-system.md) | [ability-system_en.md](ability-system_en.md) |
 | Hook 机制 | [hook-mechanism.md](hook-mechanism.md) | [hook-mechanism_en.md](hook-mechanism_en.md) |
 | 上下文管理 | [context-management.md](context-management.md) | [context-management_en.md](context-management_en.md) |

@@ -20,6 +20,7 @@ export const AbilityDefinitionPayloadSchema = z.object({
 });
 
 export const SpawnAgentPayloadSchema = z.object({
+  validate_model: z.boolean().optional(),
   project_id: z.string(),
   cluster_id: z.string().optional().default(""),
   config: AgentConfigPayloadSchema,

@@ -65,6 +65,7 @@ describe("useProjectsStore", () => {
             instance_manifest_path: "",
             system_prompt: "",
             path_grants: [],
+            desired_state: "running",
             runtime_status: "pending",
             runtime_error: "",
           },

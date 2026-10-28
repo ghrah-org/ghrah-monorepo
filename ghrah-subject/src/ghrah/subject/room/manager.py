@@ -514,6 +514,13 @@ class RoomManager:
                     (message_id,),
                 )
             ).fetchone()
+            deliveries = await (
+                await db.execute(
+                    "SELECT delivery_id, recipient_id, state, error, blocked_reason "
+                    "FROM mm_deliveries WHERE message_id=? ORDER BY seq",
+                    (message_id,),
+                )
+            ).fetchall()
         if row is None or row[1] not in (record.author, f"human:{record.author}"):
             raise ValueError("Room message reference is missing or has a different author")
         metadata = json.loads(row[2])
@@ -525,6 +532,16 @@ class RoomManager:
             data["message"] = row[0]
         if metadata.get("targets"):
             data["targets"] = metadata["targets"]
+        data["deliveries"] = [
+            {
+                "delivery_id": d[0],
+                "recipient_id": d[1],
+                "state": "blocked" if d[4] else d[2],
+                "error": d[3],
+                "blocked_reason": d[4],
+            }
+            for d in deliveries
+        ]
         return record.model_copy(update={"data": data})
 
     async def append_log(

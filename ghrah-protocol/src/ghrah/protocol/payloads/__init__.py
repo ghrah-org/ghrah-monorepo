@@ -41,6 +41,14 @@ from ghrah.protocol.payloads.agent import (  # noqa: F401
     UnregisterAbilityPayload,
     UnsubscribePayload,
 )
+from ghrah.protocol.payloads.entity import (  # noqa: F401
+    AgentEntityCreatePayload,
+    AgentEntityListPayload,
+    AgentEntityPayload,
+    AgentIdentity,
+    AgentRuntimeSnapshot,
+    AgentSnapshot,
+)
 from ghrah.protocol.payloads.manifest import (  # noqa: F401
     ManifestAbilityEventPayload,
     ManifestAgentEventPayload,
@@ -192,6 +200,12 @@ from ghrah.protocol.payloads.workspace import (  # noqa: F401
 
 # 全部域模型符号（新增类型须同步此处，否则不出现在聚合导出面）
 __all__ = [
+    "AgentIdentity",
+    "AgentSnapshot",
+    "AgentRuntimeSnapshot",
+    "AgentEntityPayload",
+    "AgentEntityCreatePayload",
+    "AgentEntityListPayload",
     "AbilityDefinitionPayload",
     "AbilityResultPayload",
     "ActionChainUpdatedPayload",

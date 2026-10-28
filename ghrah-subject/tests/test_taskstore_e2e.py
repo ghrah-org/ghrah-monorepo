@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -49,6 +50,9 @@ def _make_checker(name: str) -> Any:
 
 def _config(db_path: str) -> SubjectConfig:
     return SubjectConfig(
+        db_path=str(Path(db_path).parent / "subject.sqlite3"),
+        workspace_root=str(Path(db_path).parent / "workspace"),
+        manifest_root=str(Path(db_path).parent / "manifests"),
         taskstore_slice=TaskStoreConfig(enabled=True, db_path=db_path),
     )
 

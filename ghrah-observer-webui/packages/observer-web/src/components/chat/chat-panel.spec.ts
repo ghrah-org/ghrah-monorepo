@@ -7,8 +7,9 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const roomSendMock = vi.fn();
+const getRoomLogMock = vi.fn();
 vi.mock("@/composables/useObserver", () => ({
-  useObserver: () => ({ roomSend: roomSendMock }),
+  useObserver: () => ({ roomSend: roomSendMock, getRoomLog: getRoomLogMock }),
 }));
 
 import ChatPanel from "./chat-panel.vue";
@@ -305,4 +306,51 @@ describe("ChatPanel", () => {
     expect(el.scrollTop).toBe(300);
     wrapper.unmount();
   });
+});
+
+it("shows authoritative delivery failure", async () => {
+  vi.useFakeTimers();
+  try {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "question", {
+        deliveries: [
+          {
+            delivery_id: "d1",
+            recipient_id: "a1",
+            state: "failed",
+            error: "model_configuration_invalid",
+          },
+        ],
+      }),
+    ]);
+    const w = mountPanel();
+    expect(w.text()).toContain("model_configuration_invalid");
+    expect(w.text()).toContain("Failed");
+    w.unmount();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("refreshes pending delivery status and stops polling after unmount", async () => {
+  vi.useFakeTimers();
+  getRoomLogMock.mockClear().mockResolvedValue({ success: true });
+  try {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "question", {
+        deliveries: [{ delivery_id: "d", recipient_id: "a", state: "processing" }],
+      }),
+    ]);
+    const w = mountPanel();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(getRoomLogMock).toHaveBeenCalledOnce();
+    expect(getRoomLogMock).toHaveBeenCalledWith("r1");
+    w.unmount();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(getRoomLogMock).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });

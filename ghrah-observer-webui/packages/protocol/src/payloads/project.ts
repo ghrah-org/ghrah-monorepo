@@ -25,6 +25,7 @@ export const WritableWorkspaceSpecSchema = z.object({
 });
 
 export const AgentSpecSchema = z.object({
+  agent_config_name: z.string().nullable().optional(),
   agent_id: z.string().optional(),
   name: z.string(),
   cluster_id: z.string(),
@@ -32,6 +33,7 @@ export const AgentSpecSchema = z.object({
   instance_manifest_path: z.string().optional().default(""),
   system_prompt: z.string().optional().default(""),
   abilities: z.array(z.string()).nullable().optional(),
+  desired_state: z.enum(["running", "stopped"]).optional().default("running"),
   path_grants: z.array(PathGrantSchema).optional().default([]),
   runtime_status: z.string().optional().default("pending"),
   runtime_error: z.string().optional().default(""),

@@ -126,6 +126,11 @@ class ProjectManagerService(Protocol):
     ) -> None:
         """持久化 agent 运行诊断（running / error；best-effort，允许陈旧）。"""
 
+    async def restore_agent_if_desired(
+        self, project_id: str, agent_id: str, agent_name: str
+    ) -> tuple[str | None, str | None]:
+        """锁内重读持久意图并恢复实例，避免启动显式停止的实体。"""
+
 
 class RoomManagerService(Protocol):
     """Room command orchestration contract exposed to runtime dispatch.
@@ -161,6 +166,16 @@ class ClusterHandle(Protocol):
     def is_connected(self) -> bool:
         """该 cluster 的 CoreUnit 实例是否在运行。"""
 
+    @property
+    def project_id(self) -> str:
+        """返回 cluster 所属项目。"""
+
+    def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
+        """查询稳定身份当前对应的执行实例。"""
+
+    async def entity_context(self, agent_id: str, operation: dict[str, Any]) -> dict[str, Any]:
+        """访问在线实体的受限上下文端口。"""
+
     async def spawn_agent(self, payload: Any) -> dict[str, Any]:
         """发 spawn_agent，返回 command_result dict。"""
 
@@ -188,6 +203,9 @@ class CoreClusterRegistryService(Protocol):
 
     def get_handle(self, cluster_id: str) -> ClusterHandle:
         """取已挂载 handle；不存在 raise KeyError。"""
+
+    def get_message_manager(self, project_id: str) -> Any:
+        """读取已装配的项目 MessageManager，不隐式启动。"""
 
     def has_cluster(self, cluster_id: str) -> bool:
         """某 cluster 实例是否已挂载。"""

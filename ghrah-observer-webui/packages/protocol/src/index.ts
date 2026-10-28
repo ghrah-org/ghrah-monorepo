@@ -370,6 +370,7 @@ export {
   type WritableWorkspaceSpec,
   WritableWorkspaceSpecSchema,
 } from "./payloads.js";
+export * from "./payloads/entity.js";
 
 export {
   ActionDescriptorSchema,

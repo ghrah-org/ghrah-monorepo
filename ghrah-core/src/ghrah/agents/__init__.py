@@ -6,5 +6,6 @@
 
 from ghrah.agents.base import ActorAgent
 from ghrah.agents.builder import AgentBuilder
+from ghrah.agents.entity import AgentEntity
 
-__all__ = ["ActorAgent", "AgentBuilder"]
+__all__ = ["ActorAgent", "AgentBuilder", "AgentEntity"]

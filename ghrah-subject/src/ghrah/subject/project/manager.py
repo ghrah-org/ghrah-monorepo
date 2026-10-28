@@ -24,6 +24,11 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ghrah.protocol.payloads.entity import (
+    AgentEntityCreatePayload,
+    AgentEntityListPayload,
+    AgentEntityPayload,
+)
 from ghrah.protocol.types import (
     AbilityDefinitionPayload,
     AgentConfigPayload,
@@ -44,6 +49,7 @@ from ghrah.protocol.types import (
 from pydantic import ValidationError
 
 from ghrah.subject.errors import StableError
+from ghrah.subject.project.entities import AgentEntityManager
 from ghrah.subject.project.isolation import (
     validate_path_grants_non_overlapping,
     validate_workspace_locators_non_nested,
@@ -185,6 +191,7 @@ class ProjectManager:
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self._scoped_resources: list[Any] = []
         self._room_store: Any | None = None
+        self.agents = AgentEntityManager(self)
 
     async def handle_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = _HANDLERS.get(command)
@@ -207,6 +214,27 @@ class ProjectManager:
             return _err_code(e.code, e.detail)
         except ValueError as e:
             return _err(str(e))
+
+    async def _handle_entity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return _ok(
+            await self.agents.execute(AgentEntityPayload.model_validate(_strip_envelope(payload)))
+        )
+
+    async def _handle_entity_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        entity = await self.agents.create(
+            AgentEntityCreatePayload.model_validate(_strip_envelope(payload))
+        )
+        return _ok((await entity.snapshot()).model_dump(mode="json"))
+
+    async def _handle_entity_list(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request = AgentEntityListPayload.model_validate(_strip_envelope(payload))
+        return _ok(
+            {
+                "items": await self.agents.list(request.project_id),
+                "available_ability_types": self.agents.available_ability_types(),
+                **self.agents.model_catalog(),
+            }
+        )
 
     # ─── helpers ───
 
@@ -672,7 +700,9 @@ class ProjectManager:
                 }
             )
 
-    async def _handle_add_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_add_agent(
+        self, payload: dict[str, Any], *, validate_model: bool = False
+    ) -> dict[str, Any]:
         p = ProjectAddAgentPayload.model_validate(payload)
         existing, error = await self._get_active_project(p.project_id)
         if error is not None:
@@ -691,8 +721,11 @@ class ProjectManager:
                     / f"{p.agent.name}.yaml"
                 )
             ),
+            agent_config_name=p.agent.agent_config_name,
             system_prompt=p.agent.system_prompt,
             abilities=p.agent.abilities,
+            desired_state=p.agent.desired_state,
+            runtime_status="stopped" if p.agent.desired_state == "stopped" else "pending",
             path_grants=[
                 PathGrant(workspace_id=g.workspace_id, subpath=g.subpath)
                 for g in p.agent.path_grants
@@ -706,13 +739,17 @@ class ProjectManager:
         updated = await self._store.update(p.project_id, expected, mutator)
         # active 且 cluster 缺该 agent 则 spawn
         runtime_error: str | None = None
-        if updated.status == ProjectStatus.ACTIVE:
+        if updated.status == ProjectStatus.ACTIVE and agent.desired_state == "running":
             runtime_error = await self._ensure_agent_spawned(
-                agent, updated.project_id, updated.project_root_locator
+                agent,
+                updated.project_id,
+                updated.project_root_locator,
+                validate_model=validate_model,
             )
         # 运行诊断持久化（pending→running/error）：失败不改变命令结果，
         # 只影响重启后的可诊断性，best-effort。
-        await self.mark_agent_runtime(updated.project_id, agent.agent_id, runtime_error)
+        if updated.status == ProjectStatus.ACTIVE and agent.desired_state == "running":
+            await self.mark_agent_runtime(updated.project_id, agent.agent_id, runtime_error)
         refreshed = await self._store.get(updated.project_id) or updated
         await self._emit_agent("project_agent_added", refreshed, agent)
         return _ok(
@@ -772,8 +809,48 @@ class ProjectManager:
                     )
         return
 
+    async def restore_agent_if_desired(
+        self, project_id: str, agent_id: str, agent_name: str
+    ) -> tuple[str | None, str | None]:
+        """在生命周期锁内重读权威；已停止或移除的实体不会被旧快照拉起。"""
+        async with self._lifecycle_lock(project_id):
+            project, error = await self._get_active_project(project_id)
+            if error or project is None or project.status != ProjectStatus.ACTIVE:
+                return "skipped", None
+            agent = next(
+                (
+                    a
+                    for a in project.agents
+                    if (agent_id and a.agent_id == agent_id)
+                    or (not agent_id and not a.agent_id and a.name == agent_name)
+                ),
+                None,
+            )
+            if agent is None or agent.desired_state != "running":
+                return "skipped", None
+            handle = await self._cluster_transport.ensure_cluster(
+                agent.cluster_id,
+                project_id=project_id,
+                project_root_locator=project.project_root_locator,
+            )
+            existing = await handle.list_agents(project_id)
+            if any(
+                (agent.agent_id and a.get("agent_id") == agent.agent_id)
+                or (not agent.agent_id and a.get("name") == agent.name)
+                for a in existing
+            ):
+                return "skipped", None
+            mode, spawn_error = await self._spawn_agent_spec(handle, agent, project_id)
+            await self.mark_agent_runtime(project_id, agent.agent_id, spawn_error)
+            return mode, spawn_error
+
     async def _ensure_agent_spawned(
-        self, agent: AgentSpec, project_id: str, project_root_locator: str
+        self,
+        agent: AgentSpec,
+        project_id: str,
+        project_root_locator: str,
+        *,
+        validate_model: bool = False,
     ) -> str | None:
         """启动 desired Agent；失败保留定义并返回可诊断 pending 原因。"""
         try:
@@ -785,12 +862,22 @@ class ProjectManager:
         except Exception as exc:  # noqa: BLE001
             logger.warning("add_agent: ensure_cluster %s failed: %s", agent.cluster_id, exc)
             return str(exc)
+        _, error = await self._spawn_agent_spec(
+            handle, agent, project_id, validate_model=validate_model
+        )
+        return error
+
+    async def _spawn_agent_spec(
+        self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
+    ) -> tuple[str | None, str | None]:
         spawn_payload = SpawnAgentPayload(
+            validate_model=validate_model or bool(agent.agent_config_name),
             project_id=project_id,
             cluster_id=agent.cluster_id,
             config=AgentConfigPayload(
                 name=agent.name,
                 agent_id=agent.agent_id,
+                agent_config_name=agent.agent_config_name,
                 system_prompt=agent.system_prompt or "",
             ),
             abilities=(
@@ -804,11 +891,11 @@ class ProjectManager:
             result = await handle.spawn_agent(spawn_payload)
             if not result.get("success"):
                 logger.warning("add_agent: spawn %s rejected: %s", agent.name, result.get("error"))
-                return str(result.get("error") or "spawn rejected")
+                return None, str(result.get("error") or "spawn rejected")
         except Exception as exc:  # noqa: BLE001
             logger.warning("add_agent: spawn %s failed: %s", agent.name, exc)
-            return str(exc)
-        return None
+            return None, str(exc)
+        return str((result.get("data") or {}).get("recovery_mode") or "spawned"), None
 
     async def _handle_remove_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectRemoveAgentPayload.model_validate(payload)
@@ -1118,6 +1205,9 @@ _HANDLERS: dict[str, Callable[[ProjectManager, dict[str, Any]], Awaitable[dict[s
     "project_restore": ProjectManager._handle_restore,
     "project_delete": ProjectManager._handle_delete,
     "project_add_agent": ProjectManager._handle_add_agent,
+    "agent_entity": ProjectManager._handle_entity,
+    "agent_entity_create": ProjectManager._handle_entity_create,
+    "agent_entity_list": ProjectManager._handle_entity_list,
     "project_remove_agent": ProjectManager._handle_remove_agent,
     "project_link_task": ProjectManager._handle_link_task,
     "project_unlink_task": ProjectManager._handle_unlink_task,

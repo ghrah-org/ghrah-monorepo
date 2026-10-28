@@ -13,15 +13,25 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 
+import AgentEntityDialog from "./agent-entity-dialog.vue";
+import { useObserver } from "@/composables/useObserver";
 import AgentCommunicationPanel from "./agent-communication-panel.vue";
 import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
 
 const props = defineProps<{ projectId: string }>();
+const entityTarget = ref<string | null>(null);
+const createEntity = ref(false);
+const { listProjects, listAgents } = useObserver();
+async function refreshEntities() {
+  await Promise.all([listProjects(), listAgents(props.projectId)]);
+}
 const abilitiesTarget = ref<AgentTarget | null>(null);
 watch(
   () => props.projectId,
   () => {
     abilitiesTarget.value = null;
+    entityTarget.value = null;
+    createEntity.value = false;
   },
 );
 const emit = defineEmits<{ openAgent: [target: ChainTarget] }>();
@@ -101,7 +111,12 @@ function openAgent(row: (typeof rows.value)[number]) {
         <span class="section-eyebrow">{{ t("agentsOverview.eyebrow") }}</span>
         <h2>{{ t("agentsOverview.title", { project: project?.name ?? projectId }) }}</h2>
       </div>
-      <span class="project-panel-count">{{ rows.length }}</span>
+      <div class="flex items-center gap-2">
+        <button type="button" class="btn-primary" @click="createEntity = true">
+          {{ t("agentEntity.create") }}
+        </button>
+        <span class="project-panel-count">{{ rows.length }}</span>
+      </div>
     </header>
     <AgentCommunicationPanel :key="projectId" :project-id="projectId" />
     <div v-if="rows.length === 0" class="project-panel-empty">{{ t("agentsOverview.empty") }}</div>
@@ -172,7 +187,15 @@ function openAgent(row: (typeof rows.value)[number]) {
             ><span>{{ row.clusterId }}</span></span
           >
         </button>
-        <div class="px-3 pb-3">
+        <div class="flex gap-2 px-3 pb-3">
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="!row.agentId"
+            @click="entityTarget = row.agentId"
+          >
+            {{ t("agentEntity.manage") }}
+          </button>
           <button
             type="button"
             class="btn-secondary"
@@ -188,6 +211,21 @@ function openAgent(row: (typeof rows.value)[number]) {
         <p v-if="row.runtimeError" class="agents-overview-error">{{ row.runtimeError }}</p>
       </li>
     </ul>
+    <AgentEntityDialog
+      v-if="entityTarget || createEntity"
+      :key="entityTarget ?? 'create'"
+      :project-id="projectId"
+      :agent-id="entityTarget ?? undefined"
+      @close="
+        entityTarget = null;
+        createEntity = false;
+      "
+      @changed="refreshEntities"
+      @created="
+        entityTarget = $event;
+        createEntity = false;
+      "
+    />
     <AgentAbilitiesDialog
       v-if="abilitiesTarget"
       :target="abilitiesTarget"

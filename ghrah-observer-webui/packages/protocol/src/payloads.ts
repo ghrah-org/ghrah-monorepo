@@ -8,3 +8,4 @@ export * from "./payloads/session.js";
 export * from "./payloads/system.js";
 export * from "./payloads/task.js";
 export * from "./payloads/workspace.js";
+export * from "./payloads/entity.js";
