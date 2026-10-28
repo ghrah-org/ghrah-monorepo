@@ -1,0 +1,10 @@
+# ghrah 内部库组件；没有运行入口或独立服务导出。
+schema = 1
+id = "ghrah-scheme"
+version = "0.1.0a0"
+
+[build]
+backend = "uv"
+member = "ghrah-scheme"
+depends_on = ["ghrah-protocol"]
+outputs = ["dist/*.whl"]

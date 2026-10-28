@@ -371,3 +371,16 @@ export {
   WritableWorkspaceSpecSchema,
 } from "./payloads.js";
 export * from "./payloads/entity.js";
+
+export {
+  ActionDescriptorSchema,
+  ContractDescriptorSchema,
+  DiscoveredActionSchema,
+  DiscoveredResourceSchema,
+  CatalogSnapshotSchema,
+  type ActionDescriptor,
+  type ContractDescriptor,
+  type DiscoveredAction,
+  type DiscoveredResource,
+  type CatalogSnapshot,
+} from "./scheme.js";

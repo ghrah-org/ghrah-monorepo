@@ -15,6 +15,9 @@ path = "ghrah-plugin"
 [components.ghrah-protocol]
 path = "ghrah-protocol"
 
+[components.ghrah-scheme]
+path = "ghrah-scheme"
+
 [components.ghrah-core]
 path = "ghrah-core"
 
@@ -37,7 +40,7 @@ path = "ghrah-observer-webui/packages/observer-core"
 path = "ghrah-observer-webui/packages/observer-web"
 
 [distro.generic]
-components = ["ghrah-plugin", "ghrah-protocol", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
+components = ["ghrah-plugin", "ghrah-protocol", "ghrah-scheme", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
 roots = ["subject/server"]
 gate = "basic"
 

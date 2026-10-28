@@ -9,6 +9,7 @@
 - `ghrah-protocol/` — Python 协议包（PyPI: ghrah-protocol）
 - `ghrah-subject/` — Python subject 包（PyPI: ghrah-subject）
 - `ghrah-taskstore/` — Python 任务归因内核包（**可选组件**、首个接入插件系统的插件；tasks/claims/evidence 三表权威 + checker 扩展点宿主；**未纳入 `publish.yml` 白名单，暂无发布通道**）
+- `ghrah-scheme/` — Python Scheme 控制平面原型（monorepo 自用；类型化契约、五个控制原语与有界生命周期；既有运行时尚未迁移，未纳入发布白名单）
 - `ghrah-observer-webui/` — TS 观察端（pnpm workspace: packages/* + vscode-extension）
 - `scripts/start_all.py` — 全栈一键启动入口（subject :4112 内嵌 Core + webui dev :5173）
 
@@ -75,8 +76,12 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 ## 测试与验收
 
 ```sh
-# Python 五包（根目录执行；成员目录跑测试须 env -u PYTHONPATH uv run pytest -q）
-uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore
+# Python 六包（根目录执行；成员目录跑测试须 env -u PYTHONPATH uv run pytest -q）
+uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme
+
+# strict 类型门禁（两个包各自执行）
+cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol
+cd ../ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.scheme
 
 # TS（webui 目录执行）
 pnpm vitest run        # 注意：根级无 test script，用 vitest run
@@ -89,7 +94,7 @@ pnpm lint
 
 ## 提交约定
 
-- Conventional Commits，中文描述：`feat(subject): …` / `fix(core)!…`（破坏性加 `!`）；范围用包短名（core/plugin/protocol/subject/taskstore/observer/webui/ci/docs）。
+- Conventional Commits，中文描述：`feat(subject): …` / `fix(core)!…`（破坏性加 `!`）；范围用包短名（core/plugin/protocol/subject/taskstore/scheme/observer/webui/ci/docs）。
 
 ## plans 目录约定
 

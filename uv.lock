@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
     "python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.15' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'emscripten')",
 ]
 
 [manifest]
@@ -13,6 +13,7 @@ members = [
     "ghrah-monorepo",
     "ghrah-plugin",
     "ghrah-protocol",
+    "ghrah-scheme",
     "ghrah-subject",
     "ghrah-taskstore",
 ]
@@ -511,6 +512,7 @@ dependencies = [
     { name = "ghrah-core" },
     { name = "ghrah-plugin" },
     { name = "ghrah-protocol" },
+    { name = "ghrah-scheme" },
     { name = "ghrah-subject" },
     { name = "ghrah-taskstore" },
 ]
@@ -530,6 +532,7 @@ requires-dist = [
     { name = "ghrah-core", editable = "ghrah-core" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
+    { name = "ghrah-scheme", editable = "ghrah-scheme" },
     { name = "ghrah-subject", editable = "ghrah-subject" },
     { name = "ghrah-taskstore", editable = "ghrah-taskstore" },
 ]
@@ -585,6 +588,21 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[[package]]
+name = "ghrah-scheme"
+version = "0.1.0a0"
+source = { editable = "ghrah-scheme" }
+dependencies = [
+    { name = "ghrah-protocol" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
