@@ -28,6 +28,7 @@ agent = await manager.agents.create(
         project_id=project_id,
         cluster_id=cluster_id,
         name="designer",
+        agent_config_name="shared-model",  # agentconf 中已有的配置名称
         start=False,  # 必须显式选择；此时仅创建持久规格
         ability_types=["send_message"],
     )
@@ -64,7 +65,7 @@ await entity.start();
 
 新增命令由 Subject ProjectUnit 处理，Python 与 TypeScript 契约同步：
 
-- `agent_entity_create`：显式 `project_id/name/cluster_id/start`，可选 `manifest_ref/system_prompt/ability_types`。
+- `agent_entity_create`：显式 `project_id/name/cluster_id/start`，可选 `agent_config_name/manifest_ref/system_prompt/ability_types`。
 - `agent_entity_list`：按项目列出持久实体及运行观测，不加载全部历史。
 - `agent_entity`：固定 `project_id/agent_id`，加闭集 `operation`，不接受任意方法名或身份覆盖。
 
@@ -72,7 +73,7 @@ await entity.start();
 
 在项目的 **Agent 概览** 中，点击 **创建 Agent 实体**，或在已有 Agent 条目中点击 **管理实体**。管理入口绑定持久身份，Agent 离线时仍可打开。
 
-- **创建**：选择 cluster，填写名称和可选 system prompt；从后端注册表多选能力类型，或填写 manifest 引用。是否立即启动由复选框显式选择，默认仅创建持久规格。
+- **创建**：选择 cluster，填写名称和可选 system prompt，选择已有模型配置（配置名不等于模型名）；从后端注册表多选能力类型，或填写 manifest 引用。是否立即启动由复选框显式选择，默认仅创建持久规格。
 - **概览**：展示 project_id / agent_id、期望状态、实际在线状态、忙碌状态、incarnation_id 和错误原因。启动保留实体身份；停止需要确认，可能中断当前执行。
 - **会话与历史**：在线或离线均可浏览持久会话、分支和已提交历史；页面每次最多显示 100 个节点，可展开查看消息与执行结果。选择会话仅用于浏览，不改变活动会话。创建和激活会话要求实体在线、空闲且期望运行。
 - **消息**：切换收件箱与发件箱，按每页 20 条加载更早记录，查看发送者、回复关联、投递状态及失败/阻塞原因。符合 MessageManager 恢复条件的收件记录可在确认后重试或续跑；不自动跳过失败消息。
@@ -94,6 +95,7 @@ await entity.start();
 | `mailbox.get_message` | 仅当前实体参与的消息；接收者只看自己的投递记录 |
 | `mailbox.retry/resume` | 仅在线实体可显式恢复投递给自己的消息，遵循 MM 原有可重试/可续跑规则 |
 | `abilities.configure` | 实体已停止且实际离线时更新 AgentSpec.abilities，必须提供 expected_revision |
+| `model.configure` | 停止且实际离线时保存已有 agentconf 配置引用，要求 expected_revision；manifest 管理的模型不可覆盖 |
 | `start/stop` | 显式改变持久期望状态，并操作对应的 ActorAgent |
 
 `specification_revision` 使用现有 ProjectRecord.version，是**项目级**乐观锁版本；其他 Agent 的规格或诊断变化也可能导致冲突，应重新查询后由调用者决定是否重试。`stop` 可额外携带 `expected_incarnation_id`，避免过期操作停止新实例。
@@ -120,10 +122,21 @@ await entity.start();
 
 ## 验收记录（2026-10-28）
 
-- Python 五包全量：3,101 passed，8 skipped。测试数据使用临时目录；修正了 TaskStore 端到端测试直接构造配置时落入用户目录的问题。
-- 前端五个测试包：1,101 passed，4 skipped，其中实体页面新增 9 项测试。WebSocket 测试在本机临时端口运行。
+- Python 五包全量：3,102 passed，8 skipped。测试数据使用临时目录；修正了 TaskStore 端到端测试直接构造配置时落入用户目录的问题。
+- 前端五个测试包：1,104 passed，4 skipped，其中实体页面 10 项测试。WebSocket 测试在本机临时端口运行。
 - `pnpm build`、`pnpm type-check`、`pnpm lint` 通过；lint 保留原有 20 条 warning，无 error。
 - `uv run ruff check .`、`uv run ruff format --check .`、`git diff --check` 通过。
 - 浏览器使用隔离项目和独立服务验证：离线会话/历史可见、启动后实际在线、确认停止后实际离线、修改并保存能力配置。未重启原有运行服务；原服务使用新命令前需加载新版后端。
 
 本次交付覆盖实体接口、Subject 适配、生命周期、协议、SDK 和前端实体管理页面。执行中任意位置的暂停/续跑、跨主机实体后端不在本次实现内。
+
+
+## 模型绑定与聊天投递诊断
+
+实体的 `agent_config_name` 仅是 agentconf 的配置引用，不保存密钥或复制模型配置。创建表单要求选择已有配置；已有实体可以停止后在概览中修改绑定。manifest 实体继续由 manifest 的 model 字段决定。旧规格未绑定时保留按实体名称查找的兼容行为，不猜测默认模型。
+
+实体启动会显式请求 Core 校验默认模型工厂的配置引用链，缺失时返回 `model_configuration_invalid`，不注册在线实例。供应商鉴权、网络和推理服务可用性仍在首次真实调用时验证；自定义 LLM 工厂继续负责自己的配置来源。
+
+Room 日志查询从 MessageManager 权威读取投递状态和错误，状态不写回 Room 日志。聊天页对待处理记录每 3 秒刷新，离开页面后停止；也可手动刷新。失败或阻塞记录显示具体原因，恢复通过接收实体的消息页显式执行。模型配置修复不会自动重试历史失败消息。
+
+补充验收覆盖配置缺失拒绝启动、停止后绑定、在线禁止修改、稳定身份重启、Room 实际接收与回复、供应商失败状态读通、前端错误显示和轮询释放。现场使用既有 GLM 配置恢复了此前因模型配置缺失失败的消息。

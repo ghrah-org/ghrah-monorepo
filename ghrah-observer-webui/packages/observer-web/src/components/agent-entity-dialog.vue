@@ -17,6 +17,9 @@ const tab = ref<"overview" | "context" | "mailbox" | "abilities">("overview");
 const tabs = ["overview", "context", "mailbox", "abilities"] as const;
 const types = ref<string[]>([]);
 const selectedTypes = ref<string[]>([]);
+const modelName = ref("");
+const modelNames = ref<string[]>([]);
+const modelCatalogError = ref("");
 const name = ref("");
 const cluster = ref("");
 const prompt = ref("");
@@ -50,7 +53,9 @@ const canCreate = computed(
     !!name.value.trim() &&
     !!cluster.value &&
     (!startNow.value || active.value) &&
-    (source.value === "manifest" ? !!manifest.value.trim() : selectedTypes.value.length > 0),
+    (source.value === "manifest"
+      ? !!manifest.value.trim()
+      : selectedTypes.value.length > 0 && !!modelName.value),
 );
 function stringArrayOrNull(value: unknown): string[] | null {
   const parsed = z.array(z.string()).safeParse(value);
@@ -130,6 +135,12 @@ const deliveryStates = new Set([
 
 function applySnapshot(value: AgentSnapshot) {
   snapshot.value = value;
+  modelName.value = value.specification.agent_config_name ?? "";
+  modelNames.value = stringArrayOrNull(value.abilities.model_config_names) ?? [];
+  modelCatalogError.value =
+    typeof value.abilities.model_catalog_error === "string"
+      ? value.abilities.model_catalog_error
+      : "";
   selectedTypes.value = [...(value.specification.abilities ?? [])];
   types.value = [
     ...new Set([
@@ -151,10 +162,18 @@ async function refresh() {
               .filter(Boolean)
               .join(": "),
           );
-        return z.object({ available_ability_types: z.array(z.string()) }).parse(result.data);
+        return z
+          .object({
+            available_ability_types: z.array(z.string()),
+            model_config_names: z.array(z.string()).optional().default([]),
+            model_catalog_error: z.string().optional(),
+          })
+          .parse(result.data);
       },
       (result) => {
         types.value = result.available_ability_types;
+        modelNames.value = result.model_config_names;
+        modelCatalogError.value = result.model_catalog_error ?? "";
       },
     );
     return;
@@ -267,6 +286,7 @@ async function create() {
         name: name.value.trim(),
         cluster_id: cluster.value,
         start: startNow.value,
+        agent_config_name: source.value === "types" ? modelName.value : null,
         system_prompt: prompt.value,
         manifest_ref: source.value === "manifest" ? manifest.value.trim() : "",
         ability_types: source.value === "types" ? selectedTypes.value : null,
@@ -282,6 +302,11 @@ async function create() {
       emit("created", value.identity.agent_id);
     },
     true,
+  );
+}
+function saveModel() {
+  return mutate(() =>
+    entity().configureModel(modelName.value, snapshot.value!.specification_revision),
   );
 }
 function startAgent() {
@@ -355,6 +380,17 @@ onMounted(() => {
               <option value="manifest">{{ t("agentEntity.manifest") }}</option>
             </select></label
           >
+          <label v-if="source === 'types'"
+            >{{ t("agentEntity.modelConfig") }}
+            <select v-model="modelName" :disabled="busy" required data-testid="model-config">
+              <option value="" disabled>{{ t("agentEntity.choose") }}</option>
+              <option v-for="item in modelNames" :key="item" :value="item">{{ item }}</option>
+            </select>
+          </label>
+          <p v-if="source === 'types' && !modelNames.length">
+            {{ t("agentEntity.noModelConfigs") }}
+          </p>
+          <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
           <label v-if="source === 'manifest'"
             >{{ t("agentEntity.manifest") }}<input v-model="manifest" :disabled="busy" required
           /></label>
@@ -460,6 +496,28 @@ onMounted(() => {
               </button>
             </div>
             <p>{{ t("agentEntity.lifecycleHint") }}</p>
+            <p>{{ t("agentEntity.modelHint") }}</p>
+            <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.modelManifest") }}</p>
+            <template v-else>
+              <label
+                >{{ t("agentEntity.modelConfig") }}
+                <select v-model="modelName" :disabled="!canConfigure" data-testid="model-config">
+                  <option value="" disabled>
+                    {{ snapshot.specification.name }} ({{ t("agentEntity.legacyModel") }})
+                  </option>
+                  <option v-for="item in modelNames" :key="item" :value="item">{{ item }}</option>
+                </select>
+              </label>
+              <p v-if="!modelNames.length">{{ t("agentEntity.noModelConfigs") }}</p>
+              <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
+              <button
+                class="btn-secondary"
+                :disabled="!canConfigure || !modelName"
+                @click="saveModel"
+              >
+                {{ t("agentEntity.saveModel") }}
+              </button>
+            </template>
           </section>
           <section v-if="tab === 'abilities'" class="entity-stack">
             <p>

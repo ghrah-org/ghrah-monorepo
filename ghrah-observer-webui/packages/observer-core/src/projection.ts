@@ -4,6 +4,13 @@ export type ChatEntryKind =
   "human_input" | "conversation" | "send_message" | "broadcast" | "end_task";
 
 export interface ChatEntry {
+  deliveries?: Array<{
+    delivery_id: string;
+    recipient_id: string;
+    state: string;
+    error?: string | null;
+    blocked_reason?: string | null;
+  }>;
   projectId?: string;
   agentId?: string;
   sessionId?: string;
@@ -100,8 +107,21 @@ export function roomLogToChatEntries(
     Array.isArray(rawTargets) && rawTargets.every((t) => typeof t === "string")
       ? (rawTargets as string[])
       : undefined;
+  const deliveries = Array.isArray(data.deliveries)
+    ? data.deliveries.filter(
+        (d): d is NonNullable<ChatEntry["deliveries"]>[number] =>
+          !!d &&
+          typeof d === "object" &&
+          typeof d.delivery_id === "string" &&
+          typeof d.recipient_id === "string" &&
+          typeof d.state === "string" &&
+          (d.error == null || typeof d.error === "string") &&
+          (d.blocked_reason == null || typeof d.blocked_reason === "string"),
+      )
+    : undefined;
   const ability = typeof data.ability === "string" ? data.ability : "";
   return {
+    deliveries,
     projectId: scope.projectId,
     agentId: entry.author_type === "agent" ? scope.agentId : undefined,
     from: entry.author,

@@ -1,5 +1,17 @@
 export default {
   agentEntity: {
+    modelConfig: "Model configuration",
+    noModelConfigs:
+      "No model configurations available. Create an Agent configuration in agentconf, then refresh.",
+    modelHint:
+      "The entity name and model configuration are independent. Stop the agent before changing the binding. Startup validates configuration references; provider authentication is checked on the first request.",
+    modelManifest: "Model configuration is managed by the manifest.",
+    legacyModel: "legacy name fallback",
+    saveModel: "Save model binding",
+    deliveryRefresh: "Refresh delivery status",
+    deliveryHint:
+      "Delivery status refreshes every 3 seconds while pending. For recovery, open the recipient entity’s Messages tab.",
+
     backendUpdate:
       "The running backend does not support agent entities yet. Update and restart the backend, then refresh this page.",
     manage: "Manage entity",

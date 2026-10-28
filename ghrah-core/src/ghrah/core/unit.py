@@ -958,6 +958,18 @@ class CoreUnit:
     # Agent 生命周期命令
     # ----------------------------------------------------------------
 
+    def _validate_model_config(self, name: str) -> None:
+        """启动前检查默认工厂的配置链；自定义工厂管理自己的模型来源。"""
+        if self._config.llm_factory is not None:
+            return
+        from agentconf import AgentsConfig
+
+        try:
+            with AgentsConfig() as config:
+                config.resolve_agent(name)
+        except Exception as exc:
+            raise ValueError(f"model_configuration_invalid: {name}") from exc
+
     async def _handle_spawn_agent(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         """spawn_agent — 接收 SpawnAgentPayload。
 
@@ -988,6 +1000,8 @@ class CoreUnit:
             except Exception as e:
                 logger.exception("CoreUnit.spawn_agent: manifest resolve failed: %s", e)
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
+            if sp.validate_model:
+                self._validate_model_config(resolved.config.effective_agent_config_name)
             ability_instances: list[AbilityProtocol] | None = instantiate_resolved_abilities(
                 resolved.abilities,
                 workspace_root=self._config.workspace_root,
@@ -1072,6 +1086,8 @@ class CoreUnit:
         # 环境快照在 abilities 实例化后组装（需从 FS checker 收集授权根）；
         # 注入开关关闭时 session_info 工具同样拿不到快照——快照仅此一处组装。
 
+        if sp.validate_model:
+            self._validate_model_config(core_config.effective_agent_config_name)
         ability_instances = None
         if sp.abilities:
             ability_instances = []

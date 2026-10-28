@@ -136,6 +136,7 @@ class AgentSpec(BaseModel):
     name: str
     cluster_id: str
     agent_id: str = ""
+    agent_config_name: str | None = None
     manifest_ref: str = ""
     instance_manifest_path: str = ""
     system_prompt: str = ""

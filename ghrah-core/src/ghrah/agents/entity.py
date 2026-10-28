@@ -122,6 +122,16 @@ class AgentEntity(_EntityPort):
         """读取实体规格及各子系统的当前观测，不缓存第二份事实。"""
         return AgentSnapshot.model_validate(await self._call("snapshot"))
 
+    async def configure_model(
+        self, agent_config_name: str, *, expected_revision: int
+    ) -> dict[str, Any]:
+        """停止后修改模型配置引用，使用项目版本校验。"""
+        return await self._call(
+            "model.configure",
+            agent_config_name=agent_config_name,
+            expected_revision=expected_revision,
+        )
+
     async def start(self, *, expected_revision: int | None = None) -> dict[str, Any]:
         """显式启动运行实例，复用实体身份和历史。"""
         return await self._call("start", expected_revision=expected_revision)

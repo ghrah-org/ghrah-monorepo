@@ -43,6 +43,30 @@ class AgentEntityManager:
         """返回当前注册的类型目录，供离线实体配置使用。"""
         return sorted(AbilityRegistry.list_types())
 
+    @staticmethod
+    def model_catalog() -> dict[str, Any]:
+        """只返回既有模型配置名称，不向观察端传输凭据。"""
+        from agentconf import AgentsConfig
+
+        try:
+            with AgentsConfig() as config:
+                return {"model_config_names": sorted(a.name for a in config.list_agents())}
+        except Exception:
+            return {"model_config_names": [], "model_catalog_error": "model_catalog_unavailable"}
+
+    @staticmethod
+    def validate_model_name(name: str) -> None:
+        """校验 agentconf 的完整配置引用；不发送模型请求。"""
+        from agentconf import AgentsConfig
+
+        try:
+            with AgentsConfig() as config:
+                config.resolve_agent(name)
+        except Exception as exc:
+            raise StableError(
+                "model_configuration_invalid", f"Cannot resolve model configuration: {name}"
+            ) from exc
+
     async def create(self, request: AgentEntityCreatePayload) -> AgentEntity:
         """经原 ProjectManager 创建持久规格，显式选择初始启停状态。"""
         async with self._projects._lifecycle_lock(request.project_id):
@@ -58,11 +82,13 @@ class AgentEntityManager:
                         "name": request.name,
                         "cluster_id": request.cluster_id,
                         "manifest_ref": request.manifest_ref,
+                        "agent_config_name": request.agent_config_name,
                         "system_prompt": request.system_prompt,
                         "abilities": request.ability_types,
                         "desired_state": "running" if request.start else "stopped",
                     },
                 },
+                validate_model=True,
             )
         if not result.get("success"):
             raise StableError("agent_create_failed", str(result.get("error")))
@@ -131,6 +157,7 @@ class AgentEntityManager:
     @staticmethod
     def _abilities(agent: AgentSpec, runtime: dict[str, Any]) -> dict[str, Any]:
         return {
+            **AgentEntityManager.model_catalog(),
             "configured_types": agent.abilities,
             "available_types": AgentEntityManager.available_ability_types(),
             "manifest_ref": agent.manifest_ref,
@@ -290,6 +317,16 @@ class AgentEntityManager:
             incarnation = op.get("expected_incarnation_id")
             if incarnation is not None and incarnation != runtime.get("incarnation_id"):
                 raise StableError("agent_incarnation_conflict")
+            if kind == "model.configure":
+                if agent.desired_state != "stopped" or runtime["availability"] != "offline":
+                    raise StableError("agent_must_be_stopped")
+                if agent.manifest_ref:
+                    raise StableError("model_managed_by_manifest")
+                self.validate_model_name(op["agent_config_name"])
+                project, agent = await self._save(
+                    project, agent, {"agent_config_name": op["agent_config_name"]}
+                )
+                return await self._snapshot(project, agent)
             if kind == "abilities.configure":
                 if agent.desired_state != "stopped" or runtime["availability"] != "offline":
                     raise StableError("agent_must_be_stopped")
@@ -307,7 +344,7 @@ class AgentEntityManager:
                     project, agent = await self._save(project, agent, {"desired_state": "running"})
                 if runtime["availability"] == "offline":
                     error = await self._projects._ensure_agent_spawned(
-                        agent, project.project_id, project.project_root_locator
+                        agent, project.project_id, project.project_root_locator, validate_model=True
                     )
                     await self._projects.mark_agent_runtime(
                         project.project_id, agent.agent_id, error

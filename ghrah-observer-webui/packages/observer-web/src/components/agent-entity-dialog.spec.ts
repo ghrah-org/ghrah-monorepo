@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   retry: vi.fn(),
   resume: vi.fn(),
   configure: vi.fn(),
+  configureModel: vi.fn(),
   create: vi.fn(),
   list: vi.fn(),
 }));
@@ -53,6 +54,7 @@ function snapshot(online = false) {
       configured_types: ["send_message"],
       loaded_names: online ? ["send_message"] : null,
       available_types: ["send_message", "conversation"],
+      model_config_names: ["shared-model"],
     },
     observed_at: "now",
   };
@@ -82,7 +84,11 @@ beforeEach(() => {
   api.snapshot.mockResolvedValue(snapshot());
   api.list.mockResolvedValue({
     success: true,
-    data: { items: [], available_ability_types: ["send_message", "conversation"] },
+    data: {
+      items: [],
+      available_ability_types: ["send_message", "conversation"],
+      model_config_names: ["shared-model"],
+    },
   });
   api.listSessions.mockResolvedValue({
     active_session_id: "s1",
@@ -173,6 +179,7 @@ it("creates a persistent entity with explicit start and selected cluster", async
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
   await w.find("select").setValue("c1");
+  await w.find('[data-testid="model-config"]').setValue("shared-model");
   await w.find('input[value="send_message"]').setValue(true);
   api.create.mockResolvedValue({ success: false, error: "name already exists" });
   await w.find("form").trigger("submit");
@@ -182,6 +189,7 @@ it("creates a persistent entity with explicit start and selected cluster", async
       project_id: "p1",
       cluster_id: "c1",
       name: "new-agent",
+      agent_config_name: "shared-model",
       start: false,
       ability_types: ["send_message"],
     }),
@@ -249,10 +257,21 @@ it("opens the created identity after a successful creation receipt", async () =>
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
   await w.find("select").setValue("c1");
+  await w.find('[data-testid="model-config"]').setValue("shared-model");
   await w.find('input[value="send_message"]').setValue(true);
   api.create.mockResolvedValue({ success: true, data: snapshot() });
   await w.find("form").trigger("submit");
   await flushPromises();
   expect(w.emitted("created")).toEqual([["a1"]]);
+  w.unmount();
+});
+
+it("saves a model binding independently from the entity name", async () => {
+  const w = render();
+  await flushPromises();
+  await w.find('[data-testid="model-config"]').setValue("shared-model");
+  await button(w, "Save model binding").trigger("click");
+  await flushPromises();
+  expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5);
   w.unmount();
 });

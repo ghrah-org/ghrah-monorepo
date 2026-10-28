@@ -114,6 +114,14 @@ class EntityAbilityConfigureOperation(EntityModel):
     expected_revision: int = Field(ge=1)
 
 
+class EntityModelConfigureOperation(EntityModel):
+    """停止后修改模型配置引用，配置正文仍由 agentconf 管理。"""
+
+    type: Literal["model.configure"]
+    agent_config_name: Identifier
+    expected_revision: int = Field(ge=1)
+
+
 AgentEntityOperation = Annotated[
     EntityReadOperation
     | EntityLifecycleOperation
@@ -123,7 +131,8 @@ AgentEntityOperation = Annotated[
     | EntityMailboxListOperation
     | EntityMessageOperation
     | EntityDeliveryOperation
-    | EntityAbilityConfigureOperation,
+    | EntityAbilityConfigureOperation
+    | EntityModelConfigureOperation,
     Field(discriminator="type"),
 ]
 
@@ -141,6 +150,7 @@ class AgentEntityCreatePayload(EntityModel):
     name: Identifier
     cluster_id: Identifier
     start: bool
+    agent_config_name: Identifier | None = None
     manifest_ref: str = ""
     system_prompt: str = ""
     ability_types: list[Identifier] | None = Field(default=None, min_length=1)

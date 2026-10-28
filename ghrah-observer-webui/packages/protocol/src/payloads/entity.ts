@@ -26,6 +26,13 @@ export const AgentSnapshotSchema = z
   })
   .strict();
 export const AgentEntityOperationSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("model.configure"),
+      agent_config_name: identifier,
+      expected_revision: z.number().int().min(1),
+    })
+    .strict(),
   z.object({ type: z.enum(["snapshot", "context.list_sessions", "abilities.list"]) }).strict(),
   z
     .object({
@@ -76,6 +83,7 @@ export const AgentEntityCreatePayloadSchema = z
     name: identifier,
     cluster_id: identifier,
     start: z.boolean(),
+    agent_config_name: identifier.nullable().optional().default(null),
     manifest_ref: z.string().optional().default(""),
     system_prompt: z.string().optional().default(""),
     ability_types: z.array(identifier).min(1).nullable().optional().default(null),

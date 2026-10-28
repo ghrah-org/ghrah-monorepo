@@ -25,6 +25,7 @@ export const WritableWorkspaceSpecSchema = z.object({
 });
 
 export const AgentSpecSchema = z.object({
+  agent_config_name: z.string().nullable().optional(),
   agent_id: z.string().optional(),
   name: z.string(),
   cluster_id: z.string(),

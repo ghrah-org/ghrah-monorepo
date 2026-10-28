@@ -18,6 +18,22 @@ from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
 
 
+@pytest.fixture(autouse=True)
+def model_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """实体验收使用独立配置库，避免依赖用户的模型配置。"""
+    from agentconf import AgentsConfig
+
+    monkeypatch.setattr(AgentsConfig, "DEFAULT_DB_PATH", str(tmp_path / "models.db"))
+    with AgentsConfig() as config:
+        config.create_provider(
+            name="test", provider_type="openai", base_url="http://localhost:1/v1", api_key="test"
+        )
+        config.create_model(provider_name="test", name="test", model_name="test", model_type="llm")
+        for name in ("entity", "second", "worker", "a", "b", "one", "two"):
+            config.create_agent(name=name, model_name="test")
+    yield
+
+
 async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) -> None:
     config = _config(tmp_path)
     async with Context() as ctx:
@@ -315,3 +331,107 @@ async def test_failed_start_is_queryable_and_can_be_retried(
         monkeypatch.setattr(handle, "spawn_agent", original_spawn)
         assert (await agent.start())["runtime"]["availability"] == "online"
         assert (await agent.snapshot()).specification.runtime_error == ""
+
+
+async def test_model_binding_preflight_and_room_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """真实实体和 Room/MM 链路：缺配置拒绝启动，绑定后能生成并投影回复。"""
+    from ghrah.agents.builder import LLMFactory
+    from test_project_message_manager import EchoLLM
+
+    resolved_names = []
+
+    def create_llm(resolved):
+        resolved_names.append(resolved.agent_name)
+        return EchoLLM()
+
+    monkeypatch.setattr(LLMFactory, "create", create_llm)
+    async with Context() as ctx:
+        await assemble_subject(ctx, _config(tmp_path), profile="full")
+        project = _data(await bridge_command(ctx, "project_create", {"name": "binding"}))["project"]
+        pid = project["project_id"]
+        entity = await ctx.get("project_manager").agents.create(
+            AgentEntityCreatePayload(
+                project_id=pid,
+                cluster_id=project["cluster_ids"][0],
+                name="display-name",
+                start=False,
+                ability_types=["conversation"],
+            )
+        )
+        with pytest.raises(StableError, match="model_configuration_invalid"):
+            await entity.start()
+        assert (await entity.snapshot()).runtime.availability == "offline"
+        await entity.stop()
+        revision = (await entity.snapshot()).specification_revision
+        with pytest.raises(StableError, match="model_configuration_invalid"):
+            await entity.configure_model("missing", expected_revision=revision)
+        await entity.configure_model("worker", expected_revision=revision)
+        await entity.start()
+        with pytest.raises(StableError, match="agent_must_be_stopped"):
+            await entity.configure_model(
+                "entity", expected_revision=(await entity.snapshot()).specification_revision
+            )
+        room = _data(await bridge_command(ctx, "room_create", {"project_id": pid, "name": "chat"}))[
+            "room"
+        ]
+        rid = room["room_id"]
+        _data(
+            await bridge_command(
+                ctx,
+                "room_join",
+                {"room_id": rid, "subject": entity.identity.agent_id, "subject_type": "agent"},
+            )
+        )
+        _data(
+            await bridge_command(
+                ctx,
+                "room_send",
+                {
+                    "room_id": rid,
+                    "author": "user",
+                    "author_type": "human",
+                    "data": {
+                        "message": "What is civil law?",
+                        "targets": [entity.identity.agent_id],
+                    },
+                },
+            )
+        )
+        mm = ctx.get("core_cluster_registry").get_message_manager(pid)
+        await mm.dispatch_pending()
+        await mm.recover_room_projections()
+        logs = _data(await bridge_command(ctx, "room_get_log", {"room_id": rid}))["entries"]
+        assert [e["data"]["message"] for e in logs] == ["What is civil law?", "ready"]
+        assert logs[0]["data"]["deliveries"][0]["state"] == "completed"
+        assert resolved_names == ["worker"]
+
+        async def fail_generate(self, messages, tools=None):
+            raise RuntimeError("provider temporarily unavailable")
+
+        monkeypatch.setattr(EchoLLM, "generate", fail_generate)
+        _data(
+            await bridge_command(
+                ctx,
+                "room_send",
+                {
+                    "room_id": rid,
+                    "author": "user",
+                    "author_type": "human",
+                    "data": {"message": "second question", "targets": [entity.identity.agent_id]},
+                },
+            )
+        )
+        await mm.dispatch_pending()
+        logs = _data(await bridge_command(ctx, "room_get_log", {"room_id": rid}))["entries"]
+        failed = next(e for e in logs if e["data"].get("message") == "second question")
+        assert failed["data"]["deliveries"][0]["state"] == "failed"
+        assert "provider temporarily unavailable" in failed["data"]["deliveries"][0]["error"]
+        stored = await ctx.get("room_store").get_log(rid)
+        assert all("deliveries" not in e.data for e in stored)
+        identity = entity.identity
+        await entity.stop()
+        await entity.start()
+        assert entity.identity == identity
+        assert (await entity.snapshot()).specification.agent_config_name == "worker"

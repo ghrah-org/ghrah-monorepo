@@ -232,6 +232,7 @@ class ProjectManager:
             {
                 "items": await self.agents.list(request.project_id),
                 "available_ability_types": self.agents.available_ability_types(),
+                **self.agents.model_catalog(),
             }
         )
 
@@ -699,7 +700,9 @@ class ProjectManager:
                 }
             )
 
-    async def _handle_add_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_add_agent(
+        self, payload: dict[str, Any], *, validate_model: bool = False
+    ) -> dict[str, Any]:
         p = ProjectAddAgentPayload.model_validate(payload)
         existing, error = await self._get_active_project(p.project_id)
         if error is not None:
@@ -718,6 +721,7 @@ class ProjectManager:
                     / f"{p.agent.name}.yaml"
                 )
             ),
+            agent_config_name=p.agent.agent_config_name,
             system_prompt=p.agent.system_prompt,
             abilities=p.agent.abilities,
             desired_state=p.agent.desired_state,
@@ -737,7 +741,10 @@ class ProjectManager:
         runtime_error: str | None = None
         if updated.status == ProjectStatus.ACTIVE and agent.desired_state == "running":
             runtime_error = await self._ensure_agent_spawned(
-                agent, updated.project_id, updated.project_root_locator
+                agent,
+                updated.project_id,
+                updated.project_root_locator,
+                validate_model=validate_model,
             )
         # 运行诊断持久化（pending→running/error）：失败不改变命令结果，
         # 只影响重启后的可诊断性，best-effort。
@@ -838,7 +845,12 @@ class ProjectManager:
             return mode, spawn_error
 
     async def _ensure_agent_spawned(
-        self, agent: AgentSpec, project_id: str, project_root_locator: str
+        self,
+        agent: AgentSpec,
+        project_id: str,
+        project_root_locator: str,
+        *,
+        validate_model: bool = False,
     ) -> str | None:
         """启动 desired Agent；失败保留定义并返回可诊断 pending 原因。"""
         try:
@@ -850,18 +862,22 @@ class ProjectManager:
         except Exception as exc:  # noqa: BLE001
             logger.warning("add_agent: ensure_cluster %s failed: %s", agent.cluster_id, exc)
             return str(exc)
-        _, error = await self._spawn_agent_spec(handle, agent, project_id)
+        _, error = await self._spawn_agent_spec(
+            handle, agent, project_id, validate_model=validate_model
+        )
         return error
 
     async def _spawn_agent_spec(
-        self, handle: Any, agent: AgentSpec, project_id: str
+        self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
     ) -> tuple[str | None, str | None]:
         spawn_payload = SpawnAgentPayload(
+            validate_model=validate_model or bool(agent.agent_config_name),
             project_id=project_id,
             cluster_id=agent.cluster_id,
             config=AgentConfigPayload(
                 name=agent.name,
                 agent_id=agent.agent_id,
+                agent_config_name=agent.agent_config_name,
                 system_prompt=agent.system_prompt or "",
             ),
             abilities=(

@@ -36,6 +36,7 @@ class SpawnAgentPayload(BaseModel):
     project_id: str
     cluster_id: str = ""
     config: AgentConfigPayload
+    validate_model: bool = False
     abilities: list[AbilityDefinitionPayload] | None = None
     manifest_ref: str | None = None
 

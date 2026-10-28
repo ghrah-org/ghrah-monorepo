@@ -1,5 +1,15 @@
 export default {
   agentEntity: {
+    modelConfig: "模型配置",
+    noModelConfigs: "暂无模型配置。请先在 agentconf 中创建 Agent 配置，再刷新。",
+    modelHint:
+      "实体名称与模型配置独立。停止 Agent 后可修改绑定。启动时校验配置引用；供应商鉴权在首次请求时验证。",
+    modelManifest: "模型配置由 manifest 管理。",
+    legacyModel: "旧配置按名称查找",
+    saveModel: "保存模型绑定",
+    deliveryRefresh: "刷新投递状态",
+    deliveryHint: "待处理消息每 3 秒刷新投递状态。需要恢复时，请打开接收实体的「消息」页。",
+
     backendUpdate: "当前运行的后端尚不支持 Agent 实体接口。请更新并重启后端后刷新页面。",
     manage: "管理实体",
     create: "创建 Agent 实体",

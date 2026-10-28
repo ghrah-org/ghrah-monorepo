@@ -56,6 +56,13 @@ export class AgentEntity {
       }),
     );
   }
+  configureModel(agentConfigName: string, expectedRevision: number) {
+    return this.call({
+      type: "model.configure",
+      agent_config_name: agentConfigName,
+      expected_revision: expectedRevision,
+    });
+  }
   readonly context = {
     listSessions: () => this.call({ type: "context.list_sessions" }),
     getHistory: (sessionId: string, branchId: string, limit = 100) =>
