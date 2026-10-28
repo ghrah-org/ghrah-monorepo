@@ -127,6 +127,11 @@ from ghrah.protocol.payloads import (
     WorkspaceSnapshotPayload,
     WorkspaceStatusPayload,
 )
+from ghrah.protocol.payloads.entity import (
+    AgentEntityCreatePayload,
+    AgentEntityListPayload,
+    AgentEntityPayload,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -276,6 +281,9 @@ COMMAND_PAYLOAD_MAP: dict[CommandType, type[BaseModel]] = {
     CommandType.PROJECT_RESTORE: ProjectLifecyclePayload,
     CommandType.PROJECT_DELETE: ProjectDeletePayload,
     CommandType.PROJECT_ADD_AGENT: ProjectAddAgentPayload,
+    CommandType.AGENT_ENTITY: AgentEntityPayload,
+    CommandType.AGENT_ENTITY_CREATE: AgentEntityCreatePayload,
+    CommandType.AGENT_ENTITY_LIST: AgentEntityListPayload,
     CommandType.PROJECT_REMOVE_AGENT: ProjectRemoveAgentPayload,
     CommandType.PROJECT_LINK_TASK: ProjectLinkTaskPayload,
     CommandType.PROJECT_UNLINK_TASK: ProjectUnlinkTaskPayload,

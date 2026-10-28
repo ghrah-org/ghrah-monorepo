@@ -33,6 +33,22 @@ class FakeProjectMgr:
         self.adopt_called = False
         self.runtime_marks: list[tuple[str, str, str | None]] = []
 
+    async def restore_agent_if_desired(self, project_id: str, agent_id: str, agent_name: str):
+        project = next(p for p in self._projects if p.project_id == project_id)
+        agent = next(a for a in project.agents if a.name == agent_name)
+        if agent.desired_state == "stopped":
+            return "skipped", None
+        from ghrah.protocol.types import AgentConfigPayload, SpawnAgentPayload
+
+        result = await self.transport._handle.spawn_agent(
+            SpawnAgentPayload(
+                project_id=project_id,
+                cluster_id=agent.cluster_id,
+                config=AgentConfigPayload(name=agent.name, agent_id=agent.agent_id),
+            )
+        )
+        return ("spawned", None) if result["success"] else (None, result["error"])
+
     async def mark_agent_runtime(
         self, project_id: str, agent_id: str, runtime_error: str | None
     ) -> None:
@@ -165,6 +181,7 @@ def _make_service(
         projects=authoritative_projects, bootstrap_project=bootstrap_project, agents=agents
     )
     cluster_transport = FakeClusterTransport(FakeClusterHandle(existing_agents))
+    project_mgr.transport = cluster_transport
     workspace_mgr = FakeWorkspaceMgr(workspace_records)
     task_store = FakeTaskStore()
     svc = ReconciliationService(

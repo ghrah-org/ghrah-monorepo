@@ -34,11 +34,10 @@ if TYPE_CHECKING:
     from ghrah.subject.manifest_store.store import ManifestStore
     from ghrah.subject.project.models import AgentSpec, ProjectRecord
     from ghrah.subject.runtime.service_keys import (
-        ClusterHandle,
-        ProjectManagerService,
+        CoreClusterRegistryService as ClusterRegistryProtocol,
     )
     from ghrah.subject.runtime.service_keys import (
-        CoreClusterRegistryService as ClusterRegistryProtocol,
+        ProjectManagerService,
     )
     from ghrah.subject.sandbox.workspace import WorkspaceManager
     from ghrah.subject.task.store import TaskStore
@@ -313,7 +312,7 @@ class ReconciliationService:
                 )
                 continue
             for agent in project.agents:
-                if agent.cluster_id != cluster_id:
+                if agent.cluster_id != cluster_id or agent.desired_state == "stopped":
                     continue
                 if not agent.agent_id and agent.name in ambiguous_legacy:
                     report.agents_failed += 1
@@ -347,9 +346,9 @@ class ReconciliationService:
                     not agent.agent_id and agent.name in existing_names
                 ):
                     continue
-                recovery_mode, spawn_error = await self._spawn_agent(
-                    handle, project.project_id, agent
-                )
+                recovery_mode, spawn_error = await self._spawn_agent(project.project_id, agent)
+                if recovery_mode == "skipped":
+                    continue
                 if recovery_mode is not None:
                     report.agents_spawned += 1
                     if recovery_mode == "restored":
@@ -364,9 +363,6 @@ class ReconciliationService:
                             "agent_name": agent.name,
                             "outcome": recovery_mode,
                         }
-                    )
-                    await self._project_mgr.mark_agent_runtime(
-                        project.project_id, agent.agent_id, None
                     )
                 else:
                     report.agents_failed += 1
@@ -385,43 +381,18 @@ class ReconciliationService:
                             "error": spawn_error or "spawn failed",
                         }
                     )
-                    await self._project_mgr.mark_agent_runtime(
-                        project.project_id,
-                        agent.agent_id,
-                        spawn_error or "spawn failed",
-                    )
 
     async def _spawn_agent(
-        self, handle: ClusterHandle, project_id: str, agent: AgentSpec
+        self, project_id: str, agent: AgentSpec
     ) -> tuple[str | None, str | None]:
         """spawn 单个 agent；返回 ``(outcome, error)``。"""
-        from ghrah.protocol.types import AgentConfigPayload, SpawnAgentPayload
-
-        payload = SpawnAgentPayload(
-            project_id=project_id,
-            cluster_id=agent.cluster_id,
-            config=AgentConfigPayload(
-                name=agent.name,
-                agent_id=agent.agent_id,
-                system_prompt=agent.system_prompt or "",
-            ),
-            abilities=None,
-            manifest_ref=agent.manifest_ref or None,
-        )
         try:
-            result = await handle.spawn_agent(payload)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("reconcile: spawn_agent %s failed: %s", agent.name, exc)
-            return None, str(exc)
-        if not result.get("success"):
-            logger.warning(
-                "reconcile: spawn_agent %s rejected: %s",
-                agent.name,
-                result.get("error"),
+            return await self._project_mgr.restore_agent_if_desired(
+                project_id, agent.agent_id, agent.name
             )
-            return None, str(result.get("error") or "spawn rejected")
-        data = result.get("data") or {}
-        return str(data.get("recovery_mode") or "spawned"), None
+        except Exception as exc:
+            logger.warning("reconcile: restore %s failed: %s", agent.name, exc)
+            return None, str(exc)
 
     # ─── 事件 ───
 

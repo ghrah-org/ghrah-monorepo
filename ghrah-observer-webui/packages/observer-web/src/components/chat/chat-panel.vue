@@ -8,7 +8,7 @@ import {
   useRoomsStore,
 } from "@ghrah/observer-core";
 import type { ContentBlock } from "@ghrah/protocol";
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMarkdown } from "@/composables/useMarkdown";
 import { useObserver } from "@/composables/useObserver";
@@ -25,7 +25,39 @@ const chat = useChatStore();
 const agents = useAgentsStore();
 const rooms = useRoomsStore();
 const connection = useConnectionStore();
-const { roomSend } = useObserver();
+const { roomSend, getRoomLog } = useObserver();
+const refreshing = ref(false);
+const deliveryError = ref("");
+async function refreshDeliveries() {
+  if (refreshing.value || connection.state !== "connected") return;
+  refreshing.value = true;
+  deliveryError.value = "";
+  try {
+    const result = await getRoomLog(props.roomId);
+    if (result && !result.success) deliveryError.value = result.error ?? t("agentEntity.failed");
+  } catch (error) {
+    deliveryError.value = String(error);
+  } finally {
+    refreshing.value = false;
+  }
+}
+const deliveryTimer = setInterval(() => {
+  if (
+    roomEntries.value.some((e) =>
+      e.deliveries?.some((d) => ["pending", "processing"].includes(d.state)),
+    )
+  )
+    void refreshDeliveries();
+}, 3000);
+onScopeDispose(() => clearInterval(deliveryTimer));
+const deliveryStates = new Set([
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "interrupted",
+  "blocked",
+]);
 const { render: renderMarkdown } = useMarkdown();
 const { t } = useI18n();
 const memberLabel = useRoomMemberLabel();
@@ -76,6 +108,9 @@ async function handleSend(targets: string[], content: string) {
   roomSend(roomId, content, targets)
     .then((r) => {
       if (r === null) chat.markPendingError(target, content, t("chat.sendFailedDisconnected"));
+      else if (!r.success)
+        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"));
+      else void refreshDeliveries();
     })
     .catch((e) =>
       chat.markPendingError(target, content, t("chat.sendFailed", { msg: String(e ?? "") })),
@@ -191,6 +226,17 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 
 <template>
   <div class="flex flex-col h-full">
+    <div class="px-3 py-2">
+      <button
+        class="btn-secondary"
+        :disabled="refreshing || connection.state !== 'connected'"
+        @click="refreshDeliveries"
+      >
+        {{ t("agentEntity.deliveryRefresh") }}
+      </button>
+      <p class="text-xs">{{ t("agentEntity.deliveryHint") }}</p>
+      <p v-if="deliveryError" role="alert">{{ deliveryError }}</p>
+    </div>
     <div
       class="px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex items-center justify-between"
     >
@@ -226,6 +272,22 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       >
         <div class="entry-header">{{ entryHeader(entry) }}</div>
 
+        <div
+          v-for="delivery in entry.deliveries ?? []"
+          :key="delivery.delivery_id"
+          class="text-xs"
+          role="status"
+        >
+          {{ displayName(delivery.recipient_id) }} ·
+          {{
+            t(
+              `agentEntity.deliveryStates.${deliveryStates.has(delivery.state) ? delivery.state : "unknown"}`,
+            )
+          }}
+          <p v-if="delivery.error || delivery.blocked_reason" role="alert">
+            {{ delivery.blocked_reason || delivery.error }}
+          </p>
+        </div>
         <div v-if="entry.error" class="block-error">
           <span class="text-sm text-red-600 dark:text-red-400">{{ entry.error }}</span>
         </div>

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from ghrah.plugin.assembly import PluginAssembly
@@ -136,10 +136,12 @@ class AgentSpec(BaseModel):
     name: str
     cluster_id: str
     agent_id: str = ""
+    agent_config_name: str | None = None
     manifest_ref: str = ""
     instance_manifest_path: str = ""
     system_prompt: str = ""
     abilities: list[str] | None = None
+    desired_state: Literal["running", "stopped"] = "running"
     path_grants: list[PathGrant] = Field(default_factory=list)
     # 运行诊断（desired-state 的一部分，随定义持久化，重启后可读）：
     # pending = 定义已写入、runtime 尚未确认；running = 已在 cluster 上启动；

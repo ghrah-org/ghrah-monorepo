@@ -73,3 +73,5 @@ export { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./stores/rooms.js";
 export { type SessionProjection, useSessionsStore } from "./stores/sessions.js";
 export { useTasksStore } from "./stores/tasks.js";
 export { getVisibleNodes } from "./visible-nodes.js";
+
+export { AgentEntity } from "./agent-entity.js";
