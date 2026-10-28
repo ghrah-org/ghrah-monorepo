@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0",
     "ghrah-protocol>=0.2.0a0",
     "pydantic>=2.0",
+    "mcp>=2.3.0",
 ]
 authors = [
   {name = "chenxya", email = "chenxya@ghrah.org"}
