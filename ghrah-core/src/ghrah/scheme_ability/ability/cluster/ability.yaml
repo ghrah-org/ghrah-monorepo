@@ -1,0 +1,353 @@
+# 集群协作能力容器 / Cluster ability container
+#
+# 本文件是定义面（AbilityDefinition）：容器身份、成员契约与提供者槽要求。
+# 运行时声明（permissions / hooks）不在定义内——它们随实现脚本落在
+# operations/*.py 的模块级常量里，切换时由加载器合并回旧 manifest 形态。
+#
+# 由 ghrah-core/src/ghrah/manifest/builtins/ghrah.cluster.*.yaml 归并而来，
+# 另含 registry-only 的 send（无 manifest 声明，见该成员注释）。
+format: ghrah.ability-definition
+schema_version: 0.1-draft
+identity:
+  namespace: ghrah
+  name: cluster
+  version: 0.1.0
+title: Cluster
+description: Peer discovery, messaging, room delivery, and agent lifecycle inside the cluster.
+provider_requirements:
+  cluster_backend:
+    contract: ghrah.cluster.v1
+    # contract_digest 由发布路径从唯一规范计算并填入，作者不自签
+    required_capabilities: [request]
+operations:
+  query_agents:
+    title: Query Agents
+    description: >-
+      Query registered agents in the cluster. Returns a list of agent names and
+      descriptions. Optionally filter by a substring match on agent name.
+    input_schema:
+      type: object
+      properties:
+        filter:
+          type: string
+          description: Optional substring to filter agent names
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        agents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        count:
+          type: integer
+      required: [agents, count]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: query_agents}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  send_message:
+    title: Send Message
+    description: >-
+      Prepare a persistent request to another agent. Delivery starts after
+      commit. By default replies arrive through the persistent mailbox;
+      fire_and_forget=false waits after a durable checkpoint.
+    input_schema:
+      type: object
+      properties:
+        target:
+          type: string
+          description: Target agent name to send the message to
+        content:
+          type: string
+          description: Message content to send
+        fire_and_forget:
+          type: boolean
+          description: >-
+            If true (default), prepare asynchronous delivery; if false, commit a
+            durable wait checkpoint and return the reply in this tool call.
+          default: true
+      required: [target, content]
+      additionalProperties: false
+    output_schema:
+      # prepare_message 的回执字段由 Supervisor 决定，此处只钉住已知键。
+      type: object
+      properties:
+        message_id:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        target:
+          type: string
+        mode:
+          type: string
+        await_reply:
+          type: object
+      required: [message_id, target]
+      additionalProperties: true
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: send_message}
+    effects: [cluster:message]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  broadcast_message:
+    title: Broadcast Message
+    description: >-
+      Broadcast a message to all agents in the cluster (excluding the sender)
+      after a durable wait checkpoint and collect their replies. Use this for
+      cluster-wide announcements or queries.
+    input_schema:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Message content to broadcast to all agents
+      required: [content]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        message_id:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        responses:
+          type: array
+          items:
+            type: object
+        agent_count:
+          type: integer
+        await_reply:
+          type: object
+      required: [recipients, agent_count]
+      additionalProperties: true
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: broadcast_message}
+    effects: [cluster:message]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  spawn_agent:
+    title: Spawn Agent
+    description: >-
+      Spawn a new peer agent in the cluster by instantiating an agent manifest.
+      The new agent's abilities are frozen by the manifest (use query_manifests
+      to inspect available manifests). Optional name/description/system_prompt
+      override the manifest persona.
+    input_schema:
+      type: object
+      properties:
+        manifest_ref:
+          type: string
+          description: Manifest reference of the agent template to instantiate
+        name:
+          type: string
+          description: >-
+            Optional runtime name override for the new agent (defaults to the
+            manifest-defined name)
+        description:
+          type: string
+          description: Optional description override for the new agent
+        system_prompt:
+          type: string
+          description: Optional system prompt override for the new agent
+      required: [manifest_ref]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        agent_name:
+          type: string
+        status:
+          type: string
+        manifest_ref:
+          type: string
+      required: [agent_name, status, manifest_ref]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: spawn_agent}
+    effects: [cluster:lifecycle]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  terminate_agent:
+    title: Terminate Agent
+    description: >-
+      Terminate an agent in the cluster. The agent will be removed and cannot
+      receive further messages. Only use this when you are certain the agent is
+      no longer needed. Persistent agents can receive follow-up messages without
+      re-initialization.
+    input_schema:
+      type: object
+      properties:
+        agent_name:
+          type: string
+          description: Name of the agent to terminate
+      required: [agent_name]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        agent_name:
+          type: string
+        status:
+          type: string
+      required: [agent_name, status]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: terminate_agent}
+    effects: [cluster:lifecycle]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  query_manifests:
+    title: Query Manifests
+    description: >-
+      Read-only query of available agent manifests. Without manifest_ref, lists
+      all manifests; with manifest_ref, returns the full definition including
+      its frozen ability list. Use before spawn_agent to pick the right
+      manifest.
+    input_schema:
+      type: object
+      properties:
+        manifest_ref:
+          type: string
+          description: >-
+            Optional full name of a single agent manifest to inspect (e.g.
+            'ghrah.designer'). Omit to list all available manifests.
+      additionalProperties: false
+    output_schema:
+      oneOf:
+        - type: object
+          properties:
+            manifests:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+            count:
+              type: integer
+          required: [manifests, count]
+          additionalProperties: false
+        - type: object
+          properties:
+            full_name:
+              type: string
+            description:
+              type: string
+            system_prompt:
+              type: string
+            abilities:
+              type: array
+              items:
+                type: object
+            truncated:
+              type: boolean
+          required: [full_name, description, system_prompt, abilities, truncated]
+          additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: query_manifests}
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+
+  send:
+    # registry-only：当前部署里已注册但无 manifest 声明，权限与 HITL 事实
+    # 只存在于部署配置。归入本容器是候选，落点待定。
+    # 故不进模型工具面（运行时也不为它投影 manifest）——此声明只作契约记录。
+    expose: false
+    title: Send
+    description: >-
+      Send a message to rooms. Recipients are all agent members of the given
+      rooms plus optional direct targets. The message is appended to each room's
+      log and delivered via the supervisor.
+    input_schema:
+      type: object
+      properties:
+        room_ids:
+          type: array
+          description: Room ids to send the message to (members are resolved as recipients)
+          minItems: 1
+          items:
+            type: string
+        message:
+          type: string
+          description: Message content to send
+          minLength: 1
+        targets:
+          type: [array, "null"]
+          description: Optional extra direct targets (agent names) in addition to the room members
+          items:
+            type: string
+      required: [room_ids, message]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        message_id:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        delivered_to:
+          type: array
+          items:
+            type: string
+        rooms:
+          type: array
+          items:
+            type: string
+      required: [recipients, delivered_to, rooms]
+      additionalProperties: true
+    errors: {}
+    implementation: {provider_slot: cluster_backend, operation: send}
+    effects: [cluster:message]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+skills: {}
+assets: {}
