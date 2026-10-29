@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ghrah.scheme.execution.base import Ability
 from pydantic import BaseModel, Field
 
 from ghrah.mcp.errors import (
@@ -32,7 +33,6 @@ from ghrah.mcp.errors import (
     McpToolMissingError,
 )
 from ghrah.mcp.identity import format_unknown_tool_message
-from ghrah.scheme.execution.base import Ability
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:

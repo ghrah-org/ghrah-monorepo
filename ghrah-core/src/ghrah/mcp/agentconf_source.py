@@ -204,9 +204,7 @@ class AgentconfMcpSource:
     def _resolve(self, name: str) -> ResolvedMCPServer:
         config = self._ensure_config()
         if config is None:
-            raise McpConfigError(
-                f"agentconf 数据库不可用，读不到 MCP 服务器 {name!r}"
-            )
+            raise McpConfigError(f"agentconf 数据库不可用，读不到 MCP 服务器 {name!r}")
         try:
             return config.resolve_mcp_server(name)
         except AgentsConfigError as exc:
@@ -306,9 +304,7 @@ class AgentconfMcpSource:
         connection = record.connection
 
         if isinstance(connection, StdioConnection):
-            raise McpConfigError(
-                f"MCP 服务器 {name!r} 使用 stdio 传输；本包只支持 streamable-http"
-            )
+            raise McpConfigError(f"MCP 服务器 {name!r} 使用 stdio 传输；本包只支持 streamable-http")
         if isinstance(connection, GenericMCPConnection):
             raise McpConfigError(
                 f"MCP 服务器 {name!r} 的 transport={record.transport!r} 没有内置适配"
@@ -335,9 +331,7 @@ class AgentconfMcpSource:
             max_pages=max_pages,
         )
 
-    def spec_and_credential(
-        self, name: str, **kwargs: object
-    ) -> tuple[McpServerSpec, str | None]:
+    def spec_and_credential(self, name: str, **kwargs: object) -> tuple[McpServerSpec, str | None]:
         """一次拿到 spec 与它需要的密钥（``spec`` 已含 ``credential`` 逻辑）。"""
         credential = self.credential_for(name)
         spec = self.spec(name, credential=credential, **kwargs)  # type: ignore[arg-type]
