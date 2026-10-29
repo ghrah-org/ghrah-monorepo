@@ -1,4 +1,4 @@
----
+--
 title: scheme 模块清点与冗余排查
 description: 逐一说明 ghrah/scheme 下每个文件现在的职责与真实消费方，并按死代码、纯别名、可合并、过渡兼容层四类列出冗余模块与处置建议
 tags: [清点, 能力系统, Scheme]

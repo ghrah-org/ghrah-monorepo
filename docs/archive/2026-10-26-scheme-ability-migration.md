@@ -1,4 +1,4 @@
----
+--
 title: Ability 与 Manifest 一体化迁移记录
 description: 把 abilities 实现层与 manifest 声明层合成一套迁入 ghrah/scheme/，20 份随包 yaml 并入 4 份容器定义；第二轮扁平化后 manifest 十模块合并为五，scheme 下除 ability/ 外无子目录
 tags: [迁移, 能力系统, Scheme]

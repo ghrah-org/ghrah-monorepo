@@ -1,4 +1,4 @@
----
+--
 title: Ability scheme 初步定义
 description: 为新版 Ability 容器定义局部地址、成员契约、提供者绑定、授权记录、访问入口和引用失效规则，作为首个原型的讨论基线
 tags: [设计, 能力系统, Scheme]
