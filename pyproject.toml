@@ -13,6 +13,8 @@ dependencies = [
     "ghrah-taskstore",
     "aiohttp>=3.13.5",
     "agentconf>=0.3.0,<0.4",
+    "openai>=3.6.0",
+    "mcp>=2.3.0",
 ]
 
 [tool.uv.workspace]
