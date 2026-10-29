@@ -1,4 +1,4 @@
---
+---
 title: scheme 包文件级功能与调用关系
 description: 逐个文件说明 ghrah/scheme 下每个模块的职责、依赖与消费者，并给出关键调用链；调用链停在文件粒度
 tags: [清点, 能力系统, Scheme, 调用链]
@@ -9,6 +9,8 @@ status: done
 ---
 
 # scheme 包文件级功能与调用关系
+
+> **⚠ 已归档（2026-10-29）**：本文记录 `ghrah/scheme/` 迁移过程中的中间态，已被 2026-10-28 的重构（`1938ffa` 退役 `abilities/`+`manifest/`、`fc032df` subject 改指 `ghrah.scheme`）整体推翻。现役口径：[ghrah-06-code-map.md](../ghrah-06-code-map.md)（逐文件职责 + 一次调用的七步链）。**不要照着本文写代码**；本文内部的相对链接多为失效的历史链接。
 
 > 配套文档：[模块清点与冗余排查](2026-10-26-scheme-module-inventory.md)（讲冗余怎么判）、[Ability 与 Manifest 一体化迁移记录](2026-10-26-scheme-ability-migration.md)（讲改动是怎么搬过来的）。
 >

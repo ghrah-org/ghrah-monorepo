@@ -1,4 +1,4 @@
---
+---
 title: Ability 与 Manifest 一体化迁移记录
 description: 把 abilities 实现层与 manifest 声明层合成一套迁入 ghrah/scheme/，20 份随包 yaml 并入 4 份容器定义；第二轮扁平化后 manifest 十模块合并为五，scheme 下除 ability/ 外无子目录
 tags: [迁移, 能力系统, Scheme]
@@ -9,6 +9,8 @@ status: done
 ---
 
 # Ability 与 Manifest 一体化迁移记录
+
+> **⚠ 已归档（2026-10-29）**：本文记录 `ghrah/scheme/` 迁移过程中的中间态，已被 2026-10-28 的重构（`1938ffa` 退役 `abilities/`+`manifest/`、`fc032df` subject 改指 `ghrah.scheme`）整体推翻。现役口径：[ghrah-01](../ghrah-01-ability-design-and-implementation.md) §5.3（容器清单，已是 5 个而非文中 4 个）、[ghrah-06](../ghrah-06-code-map.md)。**不要照着本文写代码**；本文内部的相对链接多为失效的历史链接。
 
 > 本文记录一次已完成的结构迁移：`ghrah/abilities/`（实现层）与 `ghrah/manifest/`（声明解析层）合并为一套，全部落在 `ghrah/scheme/` 下；随包 20 份 ability yaml 并入 4 份容器定义。
 >

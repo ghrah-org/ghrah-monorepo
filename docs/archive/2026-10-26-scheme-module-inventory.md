@@ -1,4 +1,4 @@
---
+---
 title: scheme 模块清点与冗余排查
 description: 逐一说明 ghrah/scheme 下每个文件现在的职责与真实消费方，并按死代码、纯别名、可合并、过渡兼容层四类列出冗余模块与处置建议
 tags: [清点, 能力系统, Scheme]
@@ -9,6 +9,8 @@ status: done
 ---
 
 # scheme 模块清点与冗余排查
+
+> **⚠ 已归档（2026-10-29）**：本文记录 `ghrah/scheme/` 迁移过程中的中间态，已被 2026-10-28 的重构（`1938ffa` 退役 `abilities/`+`manifest/`、`fc032df` subject 改指 `ghrah.scheme`）整体推翻。仍在生效的只有 §7 的双 schema 实测，已并入 [ghrah-01](../ghrah-01-ability-design-and-implementation.md) §8.4。**不要照着本文写代码**；本文内部的相对链接多为失效的历史链接。
 
 > 配套文档：[Ability 与 Manifest 一体化迁移记录](2026-10-26-scheme-ability-migration.md)（讲怎么搬的），本文讲**搬完之后每个文件是干什么的、哪些是冗余的**。
 >

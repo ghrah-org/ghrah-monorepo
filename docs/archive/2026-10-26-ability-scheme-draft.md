@@ -1,4 +1,4 @@
---
+---
 title: Ability scheme 初步定义
 description: 为新版 Ability 容器定义局部地址、成员契约、提供者绑定、授权记录、访问入口和引用失效规则，作为首个原型的讨论基线
 tags: [设计, 能力系统, Scheme]
@@ -9,6 +9,8 @@ status: draft
 ---
 
 # Ability scheme 初步定义
+
+> **⚠ 已归档（2026-10-29）**：本文记录 `ghrah/scheme/` 迁移过程中的中间态，已被 2026-10-28 的重构（`1938ffa` 退役 `abilities/`+`manifest/`、`fc032df` subject 改指 `ghrah.scheme`）整体推翻。契约部分已落地：[ghrah-01](../ghrah-01-ability-design-and-implementation.md) §4（定义面字段）与 §11（权限）；未实施项见 [ghrah-07](../ghrah-07-history-and-decisions.md) §2.1。**不要照着本文写代码**；本文内部的相对链接多为失效的历史链接。
 
 > 本文把 [Scheme 与 Ability 容器模型](../10-Scheme与Ability容器模型.md) 的方向推进为第一份可以逐项讨论、制作原型的定义。这里的 scheme 指一种服务资源域，包含寻址、绑定、访问和生命周期规则；schema 指承载这些规则的数据结构，二者分别说明。
 >
