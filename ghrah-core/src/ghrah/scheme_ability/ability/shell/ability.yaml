@@ -1,0 +1,70 @@
+# 命令执行能力容器 / Shell ability container
+#
+# 本文件是定义面（AbilityDefinition）：容器身份、成员契约与提供者槽要求。
+# 运行时声明（permissions / hooks）不在定义内——它们随实现脚本落在
+# operations/*.py 的模块级常量里，切换时由加载器合并回旧 manifest 形态。
+#
+# 由 ghrah-core/src/ghrah/manifest/builtins/ghrah.shell.execute_command.yaml 归并而来。
+format: ghrah.ability-definition
+schema_version: 0.1-draft
+identity:
+  namespace: ghrah
+  name: shell
+  version: 0.1.0
+title: Shell
+description: Run shell commands through the delegated command runner, under the command safety classifier.
+provider_requirements:
+  shell_backend:
+    contract: ghrah.shell.v1
+    # contract_digest 由发布路径从唯一规范计算并填入，作者不自签
+    required_capabilities: [request]
+operations:
+  execute_command:
+    title: Execute Command
+    description: >-
+      Execute a shell command and return its output. Use for running tests,
+      linters, build commands, and other development tasks. Read-only commands
+      are auto-approved. Dangerous commands are blocked. Other commands require
+      human approval.
+    input_schema:
+      type: object
+      properties:
+        command:
+          type: string
+          description: The shell command to execute
+        working_dir:
+          type: string
+          description: Working directory for the command
+      required: [command]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+        stdout:
+          type: string
+        stderr:
+          type: string
+        timed_out:
+          type: boolean
+        command:
+          type: string
+        working_dir:
+          type: string
+      required: [exit_code, stdout, stderr, timed_out, command, working_dir]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: shell_backend, operation: execute_command}
+    # 副作用由被测命令本身决定，静态分类无法穷举。
+    effects: [process:spawn]
+    resources: {}
+    execution:
+      mode: request
+      # 与 ExecuteCommandAbility 的默认超时一致（300s）。
+      timeout_ms: 300000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+skills: {}
+assets: {}
