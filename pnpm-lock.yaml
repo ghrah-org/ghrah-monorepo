@@ -116,6 +116,9 @@ importers:
         specifier: ^3.24.0
         version: 3.24.0
     devDependencies:
+      '@ghrah/mock-server':
+        specifier: workspace:*
+        version: link:../mock-server
       '@types/markdown-it':
         specifier: ^14.1.2
         version: 14.2.0

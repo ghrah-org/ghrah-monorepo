@@ -1,3 +1,8 @@
+export {
+  createAbilityTreeClient,
+  type AbilityTreeClient,
+  type AbilityTreeTransport,
+} from "./ability-tree.js";
 export { type ConnectStoresOptions, connectStores } from "./bind.js";
 export { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 export {

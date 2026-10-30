@@ -11,8 +11,10 @@ from ghrah.protocol.scheme import (
 )
 
 from ghrah.scheme.authority import Authority, DenyAuthority
+from ghrah.scheme.codec import ActionCodec, JsonSchemaCodec, PydanticCodec
 from ghrah.scheme.contracts import (
     ActionSpec,
+    CodecArguments,
     Provider,
     ProviderCall,
     ProviderLifecycle,
@@ -27,8 +29,11 @@ from ghrah.scheme.models import (
     AdmissionState,
     AgentScope,
     Authorization,
+    BindingScope,
     CancelDisposition,
     CancellationState,
+    ControlPrincipal,
+    ControlScope,
     DrainReport,
     EffectState,
     InvocationRef,
@@ -42,6 +47,7 @@ from ghrah.scheme.models import (
     Principal,
     ProviderState,
     ReleaseReport,
+    Requester,
     ResourceRef,
     RuntimeLimits,
     Target,
@@ -49,6 +55,14 @@ from ghrah.scheme.models import (
 from ghrah.scheme.runtime import RuntimeManager, SchemeRuntime, Session
 
 __all__ = [
+    "ActionCodec",
+    "JsonSchemaCodec",
+    "PydanticCodec",
+    "CodecArguments",
+    "BindingScope",
+    "ControlPrincipal",
+    "ControlScope",
+    "Requester",
     "ActionDescriptor",
     "ContractDescriptor",
     "CatalogSnapshot",

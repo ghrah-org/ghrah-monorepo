@@ -14,13 +14,15 @@
 | --- | --- | --- |
 | 1.0 | 2026-10-29 | 首版。16 份旧文档重写为 7 份权威文档（外加本索引）；本仓 `docs/` 原有的 4 份 `2026-10-26-*` 移入 `archive/` |
 | 2.0 | 2026-10-29 | 迁入 `ghrah-monorepo/docs/`；`ARCHITECTURE.md` §6.2/§6.6/§6.7/§6.8 按定义面口径改写并回链本套文档；`docs/2026-10-26-*` 四份迁入 `archive/` |
+| 2.1 | 2026-10-29 | 接入 `ghrah-scheme` 第一代包文档：系统模型、资源与权限、运行时 API、Ability API、开发方法和实现状态；新增文档以 `acf06fe` 与当日工作区单独校准 |
 
 ## 1. 这个目录是什么
 
-`docs/` 是**本仓技术文档的唯一权威位置**，分两层：
+`docs/` 是本仓技术文档的总入口，平台与能力子系统说明集中于此；包级手册可由本索引链接到包内文档。当前分三层：
 
 - **平台层**：[ARCHITECTURE.md](ARCHITECTURE.md)——13 章 + 3 个附录，讲 6 个 Python 包、TS 侧、协议、上下文、插件、HITL、部署全景。**它是全仓的事实基线。**
 - **能力子系统层**：本索引 + `ghrah-01` ~ `ghrah-07` 共 8 份——把 ARCHITECTURE §6 那一章展开到"改得动代码"的粒度：逐字段契约、开发手册、排障、历史判决。
+- **Scheme 包文档层**：[ghrah-scheme](../ghrah-scheme/README.md) 及其六篇基础技术文档和文件资源切片指南——说明资源树、权限关系、当前控制平面 API，以及逻辑／Scheme／UI 并行开发方法。目标模型与现状明确分开，不将新设计冒充已完成迁移。
 
 三条硬约定：
 
@@ -51,6 +53,16 @@
 | GHRAH-ADR-007 | [ghrah-07-history-and-decisions.md](ghrah-07-history-and-decisions.md) | 旧件逐份判决、8 条关键决策（D-1~D-8）、5 条教训、未处理的文档债务 | 想知道"某概念为什么没了"；评审新设计前避免重走弯路 |
 
 依赖关系：`02` 与 `04` 都以 `01` 的契约为前提；`06` 是 `01`/`03`/`04`/`05` 的坐标索引；`07` 与其余正交（只解释历史）。平台层与子系统层是**引用关系而非重复**：ARCHITECTURE §6 给骨架与口径，更细的 `file:line` 在子系统文档里；两者冲突时以子系统文档为准并回改 §6。
+
+### 2.3 Scheme 包文档层
+
+[ghrah-scheme 第一代技术文档](../ghrah-scheme/README.md#第一代技术文档)以 `acf06fe` 与 2026-10-29 工作区为基线，由六篇基础文档和一篇文件切片指南组成。它解释目标产品树与已实现机制，当前支持情况统一查阅[实现状态与代码地图](../ghrah-scheme/docs/2026-10-29-implementation-status.md)。
+
+- [文件 Ability 资源切片：权威关系、Scheme 接入与面板](../ghrah-scheme/docs/2026-10-29-ability-resource-slice.md) — 已实现切片的 API、完整示例和独立 UI。
+
+使用 `ghrah.scheme` 的当前 Python API 读[运行时 API](../ghrah-scheme/docs/2026-10-29-runtime-api.md)；理解全局树和局部映射读[系统模型](../ghrah-scheme/docs/2026-10-29-system-model.md)；新增接入或面板读[二次开发指南](../ghrah-scheme/docs/2026-10-29-development-guide.md)。Ability 容器实质仍在 Core，新包文档没有将其执行算法复制到机制包。
+
+旧能力文档中以 `ghrah.scheme.loading` 等路径描述 Core 能力模块的段落带有历史路径，当前模块边界按新文档的代码链接与实际源码核对。本文此次增加入口，不表示旧文档其他章节已完成重新校准。
 
 ## 3. 按角色选读
 
@@ -86,6 +98,7 @@
 | 技能扫描 / lock / 注入 | `ghrah-04` §4–§9、`ARCHITECTURE.md` §6.8 |
 | 启动脚本、端口、日志路径 | `ghrah-05` §1–§5 |
 | 新增顶层包或改依赖方向 | `ghrah-06` §2、§7、`ARCHITECTURE.md` §2 |
+| `ghrah.scheme` API、生命周期或 Scheme 产品树语义 | [包文档入口](../ghrah-scheme/README.md)所列的相应专题及实现状态；跨语言描述格式仍同步 Python／TS |
 | 推翻了某条既有决策 | `ghrah-07` §3 追加 `D-n` 并标"已否决"，**不要**直接删旧条目 |
 
 ## 6. 归档
@@ -101,5 +114,5 @@
 - `ARCHITECTURE.md` 只有 §6 做过 10-28 重构后的逐行校准；§1–§5、§7–§13 仍是 2026-10-27 的状态，引用具体行号前回源码核对。`ARCHITECTURE.html` 更旧。
 - `scheme/loading/ability_catalog.py:20` 的 docstring 提到不存在的 `load_all_builtin_manifests.cache_clear()`，与同文件 `:405`「无缓存」自相矛盾。
 - 技能侧**两套实现并存**：`ghrah-core/src/ghrah/skills/` 与 `ghrah.scheme.loading` 各一套，`ghrah-subject` 的 `SkillUnit` 仍用旧的那套（写 schema=1 lock，Core 读 schema=2 时不认）。见 `ghrah-04` §3、§12。
-- `ghrah-observer-webui` **没有**能力面板；任何"在 UI 里看能力列表"的说法都不成立。
+- `ghrah-observer-webui` 已有可注入的 Scheme 能力面板和契约替身，但尚未挂载到生产页面或接通认证传输；不能据此声称现有产品 UI 已能查看和操作能力树。
 - `ghrah-core/tests/` 下的 `abilities/`、`manifest/`、`scheme/`、`skills/` 四个目录名是遗留；前三者内容已改指 `ghrah.scheme`，`skills/` 仍在测旧的 `ghrah.skills` 包。

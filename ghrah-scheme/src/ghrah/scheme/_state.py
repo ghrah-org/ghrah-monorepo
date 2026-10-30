@@ -17,8 +17,8 @@ from ghrah.scheme.models import (
     JsonObject,
     OwnerRef,
     OwnerState,
-    Principal,
     ProviderState,
+    Requester,
     ResourceRef,
     Target,
 )
@@ -35,7 +35,7 @@ class Binding:
 
 @dataclass
 class SessionState:
-    principal: Principal
+    principal: Requester
     active: bool = True
     observers: int = 0
 
@@ -64,7 +64,7 @@ class ResourceEntry:
 class Invocation:
     invocation_id: str
     holder: str
-    principal: Principal
+    principal: Requester
     entry: ResourceEntry
     registration: Registration
     action: ActionSpec

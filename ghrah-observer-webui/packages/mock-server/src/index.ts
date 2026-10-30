@@ -1,3 +1,4 @@
+export { createAbilityTreeFixture } from "./ability-tree-fixture.js";
 export {
   demoScenario,
   getScenario,

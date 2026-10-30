@@ -159,7 +159,9 @@ class SkillAbilityProvider:
     def get_fingerprint(self, full_name: str) -> SkillFingerprint:
         """按 ``full_name`` 查询单个技能的指纹状态。
 
-        扫描已经读出了指纹，这里只做查表——不需要再读一次盘。
+        本方法经 ``get_skill()`` 发起一次新的目录池扫描，再复用该次扫描
+        已算出的入口指纹；不会额外执行整包 ``verify()``。连续调用
+        ``get_skill()`` 和本方法会扫描两次，并非共享前一次结果。
 
         Args:
             full_name: 技能成员全名。

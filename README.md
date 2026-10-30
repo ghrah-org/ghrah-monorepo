@@ -1,5 +1,7 @@
 # ghrah
 
+参伍以变，错综其数
+
 多智能体运行时（multi-agent runtime）：认知（Core）、效果（Subject）、观察（Observer）三层分离的 agent 基础设施。
 
 ## 这是什么

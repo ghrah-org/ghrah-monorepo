@@ -113,3 +113,7 @@ uv run ruff check src/ tests/
 ## License
 
 Apache 2.0
+
+## 可选 Scheme 资源切片
+
+默认 Core 安装不要求 ghrah-scheme。文件 Ability 的 Scheme 接入属于显式 `scheme` extra，目前使用 workspace 或本地 wheel 组合验证；ghrah-scheme 尚未对外发布。完整示例与边界见[文件 Ability 资源切片](../ghrah-scheme/docs/2026-10-29-ability-resource-slice.md)，现有生产 Agent 通路尚未切换。

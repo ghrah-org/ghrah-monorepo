@@ -29,7 +29,7 @@ from ghrah.manifest.agent import (
 )
 from ghrah.manifest.builtins import load_all_builtin_manifests
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
-from ghrah.manifest.protocols import ManifestStoreProtocol
+from ghrah.manifest.protocols import AbilityCatalogPort, ManifestStoreProtocol
 from ghrah.manifest.types import ImplementationDef, PermissionFlags, ToolSchema
 from ghrah.types.config_types import AgentConfig, ContextConfig, WindowConfig
 
@@ -52,7 +52,11 @@ class ResolvedAbility:
 
     @classmethod
     def from_builtin(
-        cls, ability_type: str, registry: RegistryProtocol | None = None
+        cls,
+        ability_type: str,
+        registry: RegistryProtocol | None = None,
+        *,
+        catalog: AbilityCatalogPort | None = None,
     ) -> ResolvedAbility:
         """从 builtin 类型名构建 ResolvedAbility。
 
@@ -63,33 +67,36 @@ class ResolvedAbility:
         Args:
             ability_type: builtin 能力类型名
             registry: 可选的 RegistryProtocol 实现，None 则 fallback 到 AbilityRegistry
+            catalog: 显式能力来源；提供时不访问旧 registry，且不能同时指定 registry
 
         Raises:
             ManifestValidationError: ability_type 未在 registry 中注册
             ManifestNotFoundError: builtin manifest 不存在
         """
-        if registry is None:
-            from ghrah.abilities.registry import AbilityRegistry
+        if catalog is not None:
+            if registry is not None:
+                raise ValueError("registry and catalog cannot both select the builtin source")
+            manifest = catalog.load_builtin(ability_type)
+        else:
+            if registry is None:
+                from ghrah.abilities.registry import AbilityRegistry
 
-            registry = AbilityRegistry
+                registry = AbilityRegistry
 
-        if not registry.has(ability_type):
-            raise ManifestValidationError(
-                f"Unknown builtin ability type: '{ability_type}'. "
-                f"Available types: {registry.list_types()}"
+            if not registry.has(ability_type):
+                raise ManifestValidationError(
+                    f"Unknown builtin ability type: '{ability_type}'. "
+                    f"Available types: {registry.list_types()}"
+                )
+
+            builtins = load_all_builtin_manifests()
+            manifest = next(
+                (m for m in builtins.values() if m.implementation.handler == ability_type), None
             )
-
-        builtins = load_all_builtin_manifests()
-        manifest = None
-        for m in builtins.values():
-            if m.implementation.handler == ability_type:
-                manifest = m
-                break
-
-        if manifest is None:
-            raise ManifestNotFoundError(
-                f"No builtin manifest found for ability type: '{ability_type}'"
-            )
+            if manifest is None:
+                raise ManifestNotFoundError(
+                    f"No builtin manifest found for ability type: '{ability_type}'"
+                )
 
         return cls(
             ability_name=manifest.full_name,
@@ -112,11 +119,18 @@ class ManifestResolver:
     """Agent Manifest 解析器。
 
     将 AgentManifest 解析为 ResolvedAgent，包含 AgentConfig 和
-    解析后的 ResolvedAbility 列表。
+    解析后的 ResolvedAbility 列表。builtin_catalog 缺省保持既有来源，显式提供后
+    由该来源负责 builtin 查找；来源拒绝不会触发旧注册表回退。
     """
 
-    def __init__(self, ability_store: ManifestStoreProtocol) -> None:
+    def __init__(
+        self,
+        ability_store: ManifestStoreProtocol,
+        *,
+        builtin_catalog: AbilityCatalogPort | None = None,
+    ) -> None:
         self._store = ability_store
+        self._builtin_catalog = builtin_catalog
 
     def resolve(self, manifest: AgentManifest, runtime_name: str | None = None) -> ResolvedAgent:
         """将 AgentManifest 解析为 ResolvedAgent。
@@ -186,7 +200,7 @@ class ManifestResolver:
                     hooks=ability_manifest.hooks,
                 )
             elif ref.type:
-                r = ResolvedAbility.from_builtin(ref.type)
+                r = ResolvedAbility.from_builtin(ref.type, catalog=self._builtin_catalog)
                 if ref.permissions:
                     r = dataclasses.replace(r, permissions=r.permissions.merge(ref.permissions))
             else:

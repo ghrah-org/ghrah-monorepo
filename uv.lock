@@ -485,12 +485,17 @@ dev = [
     { name = "types-pyyaml" },
 ]
 
+scheme = [
+    { name = "ghrah-scheme" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "agentconf", specifier = ">=0.3.0,<0.4" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "anthropic", specifier = ">=0.40" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
+    { name = "ghrah-scheme", marker = "extra == 'scheme'", editable = "ghrah-scheme" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9" },
     { name = "openai", specifier = ">=3.6.0" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -500,7 +505,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "scheme"]
 
 [[package]]
 name = "ghrah-monorepo"

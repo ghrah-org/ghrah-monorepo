@@ -17,8 +17,8 @@
 它们的定义与 skill 成员由 ``ability_scan`` 的目录面读。
 
 ``ghrah.scheme_ability.manifest_builtins`` 只是本模块的旧口径门面。
-视图可随时清空重建（``load_all_builtin_manifests.cache_clear()``），不存在
-第二份可独立修改的档案。
+定义与视图按查询重建，没有 ``cache_clear()`` 入口；Python 实现模块仍按
+``import_module`` 的模块缓存规则复用，不因定义重扫而自动重载。
 """
 
 from __future__ import annotations
@@ -109,9 +109,9 @@ def load_ability_definitions() -> Mapping[str, AbilityDefinition]:
     与目录面的差别只有两条：范围只到内置树，且遇错**直接抛**（内置树是源码，
     坏了就是发布事故，不能降级成一条问题继续跑）。
 
-    **每次调用都重新扫盘**（无缓存）：外部新增/修改能力包在下一次查询即生效，
-    这就是热插拔的全部含义。``yaml`` 走 C loader（``CSafeLoader``）——注意
-    ``yaml.safe_load`` 恒为纯 Python 实现，36KB 定义要 ~75ms，而 C loader 只要 ~10ms。
+    **每次调用都重新扫描内置定义**（无结果缓存），不读取用户目录池。
+    定义更新不等于重载已导入的 Python 实现或替换在用实例；YAML loader
+    由 ``ability_schema`` 统一选择。
 
     Returns:
         ``{容器名: AbilityDefinition}``；容器名即 ``ability/<容器>/`` 的目录名。
@@ -402,7 +402,8 @@ def load_all_builtin_manifests() -> Mapping[str, AbilityManifest]:
     用在「要展示 / 要注入模型工具面」的场景：``list_abilities``、
     manifest store、``catalog.scan_catalog``。工具 schema 就在 view 的 ``tool``。
 
-    **每次调用都重新投影**（无缓存）：能力包改动在下一次查询即生效。
+    **每次调用都重新读取内置定义并投影**（无结果缓存）。已导入的 Python
+    模块仍复用模块缓存，不自动更新已有工具绑定或执行实例。
 
     Returns:
         ``{全名: AbilityManifest}``，键为旧口径全名（``ghrah.fs.read_file``）；
