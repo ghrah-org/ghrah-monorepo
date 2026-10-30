@@ -5,6 +5,7 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
 from ghrah.abilities.builtin.read_file import ReadFileAbility
 from ghrah.abilities.builtin.write_file import WriteFileAbility
@@ -155,7 +156,10 @@ async def test_real_checker_rejects_symlink_escape(tmp_path: Path) -> None:
         notes = Notes(tmp_path / "alice")
         outside = tmp_path / "outside.txt"
         outside.write_text("untouched")
-        (notes.root / "link.txt").symlink_to(outside)
+        try:
+            (notes.root / "link.txt").symlink_to(outside)
+        except (OSError, NotImplementedError) as exc:  # Windows 非开发者模式无此特权
+            pytest.skip(f"本平台不允许创建符号链接：{exc}")
         runtime.manager.publish("alice", NOTES, notes)
         runtime.manager.bind(
             ALICE.scope,
