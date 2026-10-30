@@ -9,7 +9,15 @@ from typing import Protocol
 from ghrah.manifest.ability import AbilityManifest
 from ghrah.manifest.agent import AgentManifest
 
-__all__ = ["ManifestStoreProtocol"]
+__all__ = ["AbilityCatalogPort", "ManifestStoreProtocol"]
+
+
+class AbilityCatalogPort(Protocol):
+    """显式选择的内置能力来源，只返回定义投影，不签发执行许可。"""
+
+    def load_builtin(self, ability_type: str) -> AbilityManifest:
+        """按受支持类型读取能力；缺失或不支持时明确拒绝。"""
+        ...
 
 
 class ManifestStoreProtocol(Protocol):

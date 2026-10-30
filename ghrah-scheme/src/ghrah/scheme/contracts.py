@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from ghrah.protocol.scheme import ActionDescriptor, ContractDescriptor
 from pydantic import BaseModel, ConfigDict
 
+from ghrah.scheme.codec import ActionCodec
 from ghrah.scheme.errors import ErrorCode, SchemeError
-from ghrah.scheme.models import Principal, Target
+from ghrah.scheme.models import JsonObject, Requester, Target
 
 
 class SchemeModel(BaseModel):
@@ -21,25 +22,69 @@ class SchemeModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
+class CodecArguments(SchemeModel):
+    """提供者内部使用的已校验 JSON；value 包装不进入公开参数或结果。"""
+
+    value: dict[str, Any]
+
+
 @dataclass(frozen=True)
 class ActionSpec:
     """声明一个动作，不能据此新增主体权限。"""
 
     name: str
-    input_model: type[SchemeModel]
-    output_model: type[SchemeModel]
+    input_model: type[SchemeModel] | None = None
+    output_model: type[SchemeModel] | None = None
     mutating: bool = False
     cancellable: bool = True
     description: str = ""
+    codec: ActionCodec | None = None
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_.-]*", self.name):
             raise ValueError("动作名格式错误")
+        if self.codec is not None:
+            if self.input_model is not None or self.output_model is not None:
+                raise ValueError("动作只能有一个契约作者")
+            return
         for model in (self.input_model, self.output_model):
-            if not issubclass(model, SchemeModel):
+            if model is None or not issubclass(model, SchemeModel):
                 raise TypeError("动作模型必须继承 SchemeModel")
             if model.model_config.get("extra") != "forbid" or not model.model_config.get("strict"):
                 raise ValueError("动作模型不得放松严格输入约束")
+
+    def decode(self, data: JsonObject) -> SchemeModel:
+        """从唯一作者校验输入。"""
+        if self.codec is not None:
+            return CodecArguments(value=self.codec.decode(data))
+        assert self.input_model is not None
+        return self.input_model.model_validate(data, strict=True)
+
+    def input_data(self, model: SchemeModel) -> JsonObject:
+        """导出规范参数，不暴露内部 codec 包装。"""
+        if self.codec is not None:
+            assert isinstance(model, CodecArguments)
+            return model.value
+        return model.model_dump(mode="json")
+
+    def encode(self, model: SchemeModel) -> JsonObject:
+        """校验提供者结果。"""
+        if self.codec is not None:
+            if not isinstance(model, CodecArguments):
+                raise ValueError("codec 提供者必须返回 CodecArguments")
+            return self.codec.encode(model.value)
+        assert self.output_model is not None
+        return self.output_model.model_validate(
+            model.model_dump(mode="json"), strict=True
+        ).model_dump(mode="json")
+
+    def schema(self, *, output: bool = False) -> dict[str, Any]:
+        """导出该动作唯一作者的 schema。"""
+        if self.codec is not None:
+            return self.codec.output_schema if output else self.codec.input_schema
+        model = self.output_model if output else self.input_model
+        assert model is not None
+        return model.model_json_schema()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -71,8 +116,8 @@ class SchemeSpec:
             actions=[
                 ActionDescriptor(
                     name=action.name,
-                    input_schema=action.input_model.model_json_schema(),
-                    output_schema=action.output_model.model_json_schema(),
+                    input_schema=action.schema(),
+                    output_schema=action.schema(output=True),
                     mutating=action.mutating,
                     cancellable=action.cancellable,
                     description=action.description,
@@ -99,7 +144,7 @@ class SchemeSpec:
 class ProviderCall:
     """提供者收到的隔离输入，不包含运行时或管理端口。"""
 
-    principal: Principal
+    principal: Requester
     target: Target
     action: str
     arguments: SchemeModel

@@ -44,8 +44,10 @@ from ghrah.scheme.models import (
     AdmissionState,
     AgentScope,
     Authorization,
+    BindingScope,
     CancelDisposition,
     CancellationState,
+    ControlScope,
     DrainReport,
     EffectState,
     InvocationRef,
@@ -56,9 +58,9 @@ from ghrah.scheme.models import (
     OwnerRef,
     OwnerSnapshot,
     OwnerState,
-    Principal,
     ProviderState,
     ReleaseReport,
+    Requester,
     ResourceRef,
     RuntimeLimits,
     Target,
@@ -131,13 +133,13 @@ class SchemeRuntime:
         self._sessions: dict[str, SessionState] = {}
         self._providers: dict[str, Registration] = {}
         self._contracts: dict[tuple[str, str], str] = {}
-        self._bindings: dict[tuple[AgentScope, str, str], Binding] = {}
+        self._bindings: dict[tuple[BindingScope, str, str], Binding] = {}
         self._binding_sequence = 0
         self._resources: dict[tuple[str, int], ResourceEntry] = {}
         self._generations: dict[tuple[str, int], int] = {}
         self._invocations: OrderedDict[str, Invocation] = OrderedDict()
         self._call_refs: dict[str, tuple[str, str]] = {}
-        self._keys: dict[tuple[AgentScope, str], tuple[str, str]] = {}
+        self._keys: dict[tuple[BindingScope, str], tuple[str, str]] = {}
         self._controls: dict[str, asyncio.Task[Authorization]] = {}
         self._inflight = 0
         self._discoveries = 0
@@ -359,9 +361,9 @@ class SchemeRuntime:
         raw = arguments.model_dump(mode="json") if isinstance(arguments, SchemeModel) else arguments
         data = _json_object(raw, self._limits.max_input_bytes, ErrorCode.INVALID_INPUT)
         try:
-            model = spec.input_model.model_validate(data, strict=True)
+            model = spec.decode(data)
             data = _json_object(
-                model.model_dump(mode="json"), self._limits.max_input_bytes, ErrorCode.INVALID_INPUT
+                spec.input_data(model), self._limits.max_input_bytes, ErrorCode.INVALID_INPUT
             )
         except (ValidationError, ValueError) as error:
             raise SchemeError(ErrorCode.INVALID_INPUT) from error
@@ -491,11 +493,8 @@ class SchemeRuntime:
                 finally:
                     _chain.reset(chain_token)
                 try:
-                    output = record.action.output_model.model_validate(
-                        result.model_dump(mode="json"), strict=True
-                    )
                     record.result = _json_object(
-                        output.model_dump(mode="json"),
+                        record.action.encode(result),
                         self._limits.max_result_bytes,
                         ErrorCode.INVALID_RESULT,
                     )
@@ -711,7 +710,7 @@ class SchemeRuntime:
         self._discoveries += 1
         try:
             candidates: list[
-                tuple[DiscoveredResource, tuple[AgentScope, str, str], Binding, Registration]
+                tuple[DiscoveredResource, tuple[BindingScope, str, str], Binding, Registration]
             ] = []
             # 单次目录读取有总期限，不因项目较多按条目累加无限等待。
             async with asyncio.timeout(self._limits.default_timeout):
@@ -889,7 +888,7 @@ class RuntimeManager:
     def __init__(self, runtime: SchemeRuntime) -> None:
         self._runtime = runtime
 
-    def create_session(self, principal: Principal) -> Session:
+    def create_session(self, principal: Requester) -> Session:
         """接收已核定身份；不自行认证或授予许可。"""
         runtime = self._runtime
         runtime._guard(writable=True)
@@ -968,7 +967,7 @@ class RuntimeManager:
 
     def bind(
         self,
-        scope: AgentScope,
+        scope: BindingScope,
         kind: str,
         alias: str,
         provider_id: str,
@@ -980,7 +979,9 @@ class RuntimeManager:
         """安装确定 Agent 运行的绑定，核对提供者契约，不签发 grant。"""
         runtime = self._runtime
         runtime._guard(writable=True)
-        if not isinstance(scope, AgentScope) or not re.fullmatch(r"[a-z][a-z0-9_-]*", alias):
+        if not isinstance(scope, (AgentScope, ControlScope)) or not re.fullmatch(
+            r"[a-z][a-z0-9_-]*", alias
+        ):
             raise SchemeError(ErrorCode.INVALID_ARGUMENT)
         registration = runtime._providers.get(provider_id)
         if registration is None:
@@ -1003,11 +1004,11 @@ class RuntimeManager:
         )
         return revision
 
-    def unbind(self, scope: AgentScope, kind: str, alias: str) -> None:
+    def unbind(self, scope: BindingScope, kind: str, alias: str) -> None:
         """撤去确定 Agent 运行的局部绑定，不影响其他 Agent 或运行。"""
         runtime = self._runtime
         runtime._guard(writable=True)
-        if not isinstance(scope, AgentScope):
+        if not isinstance(scope, (AgentScope, ControlScope)):
             raise SchemeError(ErrorCode.INVALID_ARGUMENT)
         runtime._bindings.pop((scope, kind, alias), None)
 

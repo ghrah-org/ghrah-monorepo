@@ -11,14 +11,14 @@ from ghrah.scheme.models import (
     AccessRequest,
     AccessStage,
     Authorization,
-    Principal,
     ProviderState,
+    Requester,
     Target,
 )
 
 
 async def project_resource(
-    principal: Principal,
+    principal: Requester,
     target: Target,
     registration: Registration,
     authorize: Callable[[AccessRequest], Awaitable[Authorization]],

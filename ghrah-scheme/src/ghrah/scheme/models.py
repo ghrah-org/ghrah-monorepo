@@ -51,10 +51,45 @@ class Principal:
 
 
 @dataclass(frozen=True)
+class ControlScope:
+    """由受信宿主建立的操作员访问范围，不伪造 Agent 身份。"""
+
+    project_id: str
+    subject_id: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.project_id, self.subject_id, self.session_id):
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                raise ValueError("管理作用域字段必须为非空且无首尾空白的字符串")
+
+
+@dataclass(frozen=True)
+class ControlPrincipal:
+    """宿主已认证的操作员；其项目管理资格仍由领域核定。"""
+
+    project_id: str
+    subject_id: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        self.scope
+
+    @property
+    def scope(self) -> ControlScope:
+        """管理连接的明确解析与去重范围。"""
+        return ControlScope(self.project_id, self.subject_id, self.session_id)
+
+
+Requester: TypeAlias = Principal | ControlPrincipal
+BindingScope: TypeAlias = AgentScope | ControlScope
+
+
+@dataclass(frozen=True)
 class Target:
     """固定 Agent 运行作用域、契约、绑定和提供者实例的解析结果。"""
 
-    scope: AgentScope
+    scope: BindingScope
     kind: str
     alias: str
     resource: tuple[str, ...]
@@ -81,7 +116,7 @@ class AccessStage(StrEnum):
 class AccessRequest:
     """交给领域权威的受限核定输入；参数为隔离副本。"""
 
-    principal: Principal
+    principal: Requester
     target: Target
     actions: frozenset[str]
     stage: AccessStage

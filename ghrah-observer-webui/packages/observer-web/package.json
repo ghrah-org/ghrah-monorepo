@@ -28,6 +28,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@ghrah/mock-server": "workspace:*",
     "@types/markdown-it": "^14.1.2",
     "@unocss/reset": "^66.0.0",
     "@vitejs/plugin-vue": "^6.0.8",

@@ -4,7 +4,7 @@
 
 ## 仓库结构
 
-- `ghrah-core/` — Python 核心包（PyPI: ghrah-core）
+- `ghrah-core/` — Python 核心包（PyPI: ghrah-core）；文件 Scheme 切片为显式 `scheme` extra，默认安装不依赖尚未发布的 ghrah-scheme，当前只在 workspace／本地 wheel 组合验证。
 - `ghrah-plugin/` — Python 插件基础设施包（plugin spec 契约/发现/注册/协商/离线验证；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-protocol/` — Python 协议包（PyPI: ghrah-protocol）
 - `ghrah-subject/` — Python subject 包（PyPI: ghrah-subject）

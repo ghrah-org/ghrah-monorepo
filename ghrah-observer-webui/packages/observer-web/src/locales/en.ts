@@ -1,4 +1,29 @@
 export default {
+  schemeAbilities: {
+    title: "Granted abilities and tools",
+    scope: "Agent: {agent}",
+    refresh: "Refresh",
+    loading: "Loading abilities…",
+    revision: "Revision {revision} · Run {run}",
+    operation: "Granted operation",
+    choose: "Choose an operation",
+    toolName: "Tool name",
+    bind: "Bind tool",
+    unbind: "Unbind",
+    bound: "Selected tools",
+    noTools: "No tools selected",
+    empty: "No granted operations",
+    unavailable: "Some operations are unavailable. Their grants are retained.",
+    failed: "Could not load this agent's abilities. Refresh to try again.",
+    uncertain: "The result is uncertain. Refresh and verify before another change.",
+    errors: {
+      not_found: "The requested relation no longer exists. Refresh to verify.",
+      access_denied: "This change is not permitted by the current grants.",
+      conflict: "The relationships changed. Refresh before another change.",
+      invalid_change: "The requested change is invalid.",
+      unavailable: "The operation is unavailable. Refresh to verify its state.",
+    },
+  },
   agentEntity: {
     modelConfig: "Model endpoint",
     noModelConfigs:

@@ -108,6 +108,8 @@ def _validate_model(data: dict[str, Any], model_cls: type[BaseModel]) -> tuple[b
     try:
         model_cls.model_validate(data)
         return True, []
+    except ManifestVersionError as exc:
+        return False, [str(exc)]
     except PydanticValidationError as exc:
         errors = [f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in exc.errors()]
         return False, errors

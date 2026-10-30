@@ -7,3 +7,5 @@ playwright-report/
 pnpm-lock.yaml
 *.vsix
 *.tsbuildinfo
+# Python 导出的可复现契约样例，由 export_ability_tree_fixture.py --check 核对。
+packages/protocol/src/__fixtures__/ability-tree.json
