@@ -80,8 +80,9 @@ class TestFSPermissionChecker:
         allowed, status = checker.check_read_path("/etc/passwd")
         assert allowed is False
         assert "allowed roots:" in (status or "")
-        assert "/tmp/data" in (status or "")
-        assert "/home/user/docs" in (status or "")
+        # 授权根按 Path 归一化后展示（Windows 下 /tmp/data 会补盘符），断言跟随平台解析结果
+        assert str(Path("/tmp/data")) in (status or "")
+        assert str(Path("/home/user/docs")) in (status or "")
         assert "(workspace)" in (status or "")  # workspace_root 一并告知
 
     def test_denied_error_truncates_many_roots(self) -> None:
