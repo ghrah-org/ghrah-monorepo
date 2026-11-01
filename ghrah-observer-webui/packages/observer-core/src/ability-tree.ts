@@ -1,5 +1,8 @@
 import {
   AbilityTreeIdSchema,
+  ContentReadRequestSchema,
+  ContentReadResultSchema,
+  type ContentReadResult,
   AbilityTreeViewSchema,
   BindToolRequestSchema,
   TreeChangeResultSchema,
@@ -16,7 +19,7 @@ export interface AbilityTreeTransport {
   read(path: string): Promise<unknown>;
   submit(
     path: string,
-    action: "bind_tool" | "unbind_tool",
+    action: "bind_tool" | "unbind_tool" | "read",
     arguments_: unknown,
     requestKey: string,
   ): Promise<unknown>;
@@ -24,6 +27,13 @@ export interface AbilityTreeTransport {
 
 export interface AbilityTreeClient {
   read(agentId: string): Promise<AbilityTreeView>;
+  readContent(
+    agentId: string,
+    alias: string,
+    member: string,
+    version: string,
+    offset?: number,
+  ): Promise<ContentReadResult>;
   bindTool(agentId: string, request: BindToolRequest): Promise<TreeChangeResult>;
   unbindTool(agentId: string, request: UnbindToolRequest): Promise<TreeChangeResult>;
 }
@@ -53,6 +63,29 @@ export function createAbilityTreeClient(
     async read(agentId) {
       const target = AbilityTreeIdSchema.parse(agentId);
       return view(await transport.read(`/scheme/view/${target}`), target);
+    },
+    async readContent(agentId, alias, member, version, offset = 0) {
+      const target = AbilityTreeIdSchema.parse(agentId);
+      if (
+        !/^[a-z][a-z0-9_-]{0,63}$/.test(alias) ||
+        !/^skill\/[a-z][a-z0-9_-]{0,63}(\/(assets|references)\/[a-z][a-z0-9_-]{0,63})?$/.test(
+          member,
+        )
+      ) {
+        throw new Error("Invalid content member");
+      }
+      const result = ContentReadResultSchema.parse(
+        await transport.submit(
+          `/scheme/agent/${target}/ability/${alias}/${member}`,
+          "read",
+          ContentReadRequestSchema.parse({ offset }),
+          generateRequestId(),
+        ),
+      );
+      if (result.member !== member || result.version_digest !== version) {
+        throw new Error("Content target mismatch");
+      }
+      return result;
     },
     bindTool: (agentId, request) =>
       change(agentId, "bind_tool", BindToolRequestSchema.parse(request)),

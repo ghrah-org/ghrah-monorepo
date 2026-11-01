@@ -2,13 +2,11 @@
 
 参伍以变，错综其数
 
-多智能体运行时（multi-agent runtime）：认知（Core）、效果（Subject）、观察（Observer）三层分离的 agent 基础设施。
+九夏/ghrah 是一个多智能体运行时（multi-agent System）
 
-## 这是什么
+为持久化、可观察、受权限治理的多 agent 协作提供运行时：
 
-ghrah 为持久化、可观察、受权限治理的多 agent 协作提供运行时：
-
-- **Core**（`ghrah-core`）— agent 认知半区：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
+- **Core**（`ghrah-core`）— agent 认知：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
 - **Subject**（`ghrah-subject`）— agent 效果半区（effect host）：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
 - **Protocol**（`ghrah-protocol`）— 跨进程协议真相源：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
 - **Observer WebUI**（`ghrah-observer-webui`）— CQRS 读模型：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
@@ -28,17 +26,25 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 
 ## 快速开始
 
-```sh
-# 0) 依赖（仓库根执行）
-uv sync --all-packages            # Python 全量（单一 uv.lock 在根）
-pnpm install                      # TS 全量（单一 pnpm-lock.yaml 在根）
+推荐借助九夏的工具链完成安装与部署，需要先安装uv:
 
-# 1) 一键启动全栈（根目录）
-python3 scripts/start_all.py      # Subject :4112 + WebUI dev server :5173
-# 常用变体：
-#   --no-webui            仅后端
-#   --no-webui --open     后端 + 自动开浏览器
-#   --webui-port 5273     换端口
+1. 安装工具链并安装九夏
+```sh
+git clone https://github.com/ghrah-org/ghrah-toolchain
+cd ghrah-toolchain
+uv tool install . --editable
+ghrah install https://github.com/ghrah-org/ghrah-monorepo
+```
+
+2. 启动九夏
+
+```sh
+ghrah start
+```
+
+3. 查看状态
+```sh
+ghrah status
 ```
 
 启动后访问 `http://localhost:5173`（WebUI）。Ctrl+C 一键退出（进程组整组终止，退出时清理注入的 env 文件）。

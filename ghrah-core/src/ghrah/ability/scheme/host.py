@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import re
 from collections.abc import Callable
@@ -47,8 +49,10 @@ from ghrah.scheme import (
 from pydantic import TypeAdapter, ValidationError
 
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, MemberFence
+from ghrah.ability.content import ContentDescription, ContentReadRequest, ContentReadResult
 from ghrah.ability.contracts import operation_result_schema
 from ghrah.ability.file_backend import FileBackend
+from ghrah.ability.file_members import supports_file_operation
 from ghrah.ability.versions import loaded_file_implementation
 
 _REQUESTS = {
@@ -95,11 +99,13 @@ def _instance_alias(instance: str) -> str:
 
 def _fence(target: Target, instance: str) -> MemberFence:
     parts = target.resource
-    if len(parts) != 2 or parts[0] != "member-v1":
+    if len(parts) != 2 or parts[0] != "member-v2":
         raise AccessError("access_denied")
     try:
-        fence = TypeAdapter(MemberFence).validate_json(parts[1], strict=True)
-    except ValidationError as error:
+        fence = TypeAdapter(MemberFence).validate_json(
+            base64.b64decode(parts[1], altchars=b"-_", validate=True), strict=True
+        )
+    except (ValidationError, binascii.Error, ValueError) as error:
         raise AccessError("access_denied") from error
     if fence.instance_id != instance:
         raise AccessError("access_denied")
@@ -184,6 +190,41 @@ class _FileProvider:
         )
 
 
+_CONTENT_SPEC = SchemeSpec(
+    kind="ability",
+    contract="ghrah.ability.content",
+    version="1",
+    actions=(
+        ActionSpec("read", codec=PydanticCodec(ContentReadRequest, ContentReadResult)),
+        ActionSpec("describe", codec=PydanticCodec(EmptyTreeRequest, ContentDescription)),
+    ),
+)
+
+
+class _ContentProvider:
+    def __init__(self, store: AbilityAccessStore, instance: str) -> None:
+        self.store, self.instance = store, instance
+
+    async def execute(self, call: ProviderCall) -> SchemeModel:
+        assert isinstance(call.arguments, CodecArguments)
+        try:
+            actor = _identity(call.principal)
+            fence = _fence(call.target, self.instance)
+            if call.action == "describe":
+                result = await self.store.describe_content(actor, fence)
+            else:
+                result = (
+                    await self.store.read_chunk(
+                        actor,
+                        fence,
+                        ContentReadRequest.model_validate(call.arguments.value),
+                    )
+                ).to_json_result()
+        except AccessError as error:
+            raise _scheme_error(error) from error
+        return CodecArguments(value=result.model_dump(mode="json"))
+
+
 class AbilitySchemeHost:
     """显式安装导出与访问会话，不修改生产 Agent 装配或启动外部服务。"""
 
@@ -191,6 +232,7 @@ class AbilitySchemeHost:
         self.store = store
         self.runtime = SchemeRuntime(self)
         self._exports: dict[str, _Export] = {}
+        self._contents: dict[str, _Export] = {}
         self._install_lock = asyncio.Lock()
         self.host_id = "host-" + uuid4().hex
         self._routes: dict[tuple[Any, str], _Export] = {}
@@ -221,7 +263,26 @@ class AbilitySchemeHost:
                 update={
                     "availability": "ready"
                     if self._available(node.instance_id, node.instance_revision)
-                    else "unavailable"
+                    else "unavailable",
+                    "operations": [
+                        operation.model_copy(
+                            update={
+                                "availability": "ready"
+                                if self._available(node.instance_id, node.instance_revision)
+                                and any(
+                                    action.name == operation.key
+                                    for action in self._exports[node.instance_id].spec.actions
+                                )
+                                else "unavailable"
+                            }
+                        )
+                        for operation in node.operations
+                    ],
+                    "skill": node.skill.model_copy(update={"availability": "ready"})
+                    if node.skill
+                    and node.instance_id in self._contents
+                    and self._contents[node.instance_id].revision == node.instance_revision
+                    else node.skill,
                 }
             )
             for node in view.abilities
@@ -245,8 +306,24 @@ class AbilitySchemeHost:
         """幂等安装确定代次；旧导出收束后才替换，不重新扫描来源。"""
         async with self._install_lock:
             info = await self.store.instance(instance)
-            if info["implementation_digest"] != loaded_file_implementation():
-                raise ValueError("当前进程不含该实例锁定的后端代码")
+            if info["manifest"]:
+                previous_content = self._contents.get(instance)
+                if previous_content is None or previous_content.revision != info["revision"]:
+                    provider = "content:" + instance
+                    if previous_content is not None:
+                        report = await self.runtime.manager.withdraw(previous_content.provider)
+                        if not report.complete:
+                            raise SchemeError(ErrorCode.BUSY)
+                    self.runtime.manager.publish(
+                        provider, _CONTENT_SPEC, _ContentProvider(self.store, instance)
+                    )
+                    self._contents[instance] = _Export(provider, info["revision"], _CONTENT_SPEC)
+            elif instance in self._contents:
+                report = await self.runtime.manager.withdraw(self._contents[instance].provider)
+                if not report.complete:
+                    raise SchemeError(ErrorCode.BUSY)
+                del self._contents[instance]
+            implementation_ready = info["implementation_digest"] == loaded_file_implementation()
             actions = tuple(
                 ActionSpec(
                     key,
@@ -258,9 +335,17 @@ class AbilitySchemeHost:
                 )
                 for key, value in sorted(info["definition"]["operations"].items())
                 if value["expose"]
+                and supports_file_operation(info["definition"], key)
+                and implementation_ready
             )
             if not actions:
-                raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE)
+                previous = self._exports.pop(instance, None)
+                if previous:
+                    report = await self.runtime.manager.withdraw(previous.provider)
+                    if not report.complete:
+                        self._exports[instance] = previous
+                        raise SchemeError(ErrorCode.BUSY)
+                return
             # 契约版本只随动作契约变化；实例版本和根目录由独立 revision 固定。
             draft = SchemeSpec(
                 kind="ability", contract="ghrah.ability.files", version="schema", actions=actions
@@ -317,13 +402,19 @@ class AbilitySchemeHost:
             if request.target.kind == "ability":
                 instance = next(
                     key
-                    for key, export in self._exports.items()
+                    for key, export in (*self._exports.items(), *self._contents.items())
                     if export.provider == request.target.provider_id
                 )
                 fence = _fence(request.target, instance)
-                if not self._available(instance, fence.instance_revision):
-                    return Authorization(False)
-                if request.actions != frozenset({fence.member}):
+                if fence.member.startswith("skill/"):
+                    export = self._contents.get(instance)
+                    if export is None or export.revision != fence.instance_revision:
+                        return Authorization(False)
+                    if not request.actions or not request.actions <= {"read", "describe"}:
+                        return Authorization(False)
+                elif not self._available(
+                    instance, fence.instance_revision
+                ) or request.actions != frozenset({fence.member}):
                     return Authorization(False)
                 basis = await self.store.authorize(actor, fence)
             else:
@@ -351,7 +442,7 @@ class AbilitySchemeHost:
         if request.target.kind == "ability":
             instance = next(
                 key
-                for key, export in self._exports.items()
+                for key, export in (*self._exports.items(), *self._contents.items())
                 if export.provider == request.target.provider_id
             )
             try:
@@ -399,7 +490,7 @@ class AbilityTreeSession:
         global_instance: bool = False,
     ) -> ResourceRef:
         """将公开节点定位为保留原请求者的运行引用。"""
-        parts = path.split("/")
+        parts = path.rstrip("/").split("/")
         if parts[:2] != ["", "scheme"] or any(
             not re.fullmatch(r"[A-Za-z0-9_-]+", value) for value in parts[2:]
         ):
@@ -419,21 +510,24 @@ class AbilityTreeSession:
                 raise AccessError("not_found")
             tool = selected.name
             pieces = ["ability", selected.alias, "operations", selected.member]
-        if (
-            len(pieces) == 6
-            and pieces[0] == "agent"
-            and pieces[2] == "ability"
-            and pieces[4] == "operations"
-        ):
+        if len(pieces) >= 6 and pieces[0] in {"agent", "view"} and pieces[2] == "ability":
             if isinstance(self.principal, ControlPrincipal) or pieces[1] != actor.subject_id:
                 raise AccessError("access_denied")
-            pieces = ["ability", pieces[3], "operations", pieces[5]]
-        if len(pieces) != 4 or pieces[0] != "ability" or pieces[2] != "operations":
+            pieces = ["ability", pieces[3], *pieces[4:]]
+        if len(pieces) < 4 or pieces[0] != "ability":
+            raise AccessError("not_found")
+        if len(pieces) == 4 and pieces[2] == "operations":
+            member = pieces[3]
+        elif pieces[2] == "skill" and (
+            len(pieces) == 4 or (len(pieces) == 6 and pieces[4] in {"assets", "references"})
+        ):
+            member = "/".join(pieces[2:])
+        else:
             raise AccessError("not_found")
         fence = await self.host.store.resolve(
             actor,
             pieces[1],
-            pieces[3],
+            member,
             tool=tool,
             global_instance=global_instance,
         )
@@ -441,14 +535,23 @@ class AbilityTreeSession:
 
     async def _member_reference(self, fence: MemberFence, actions: frozenset[str]) -> ResourceRef:
         try:
-            export = self.host._exports[fence.instance_id]
+            exports = (
+                self.host._contents if fence.member.startswith("skill/") else self.host._exports
+            )
+            export = exports[fence.instance_id]
         except KeyError as error:
             raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE) from error
-        if not self.host._available(fence.instance_id, fence.instance_revision):
+        if export.revision != fence.instance_revision:
+            raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE)
+        if not fence.member.startswith("skill/") and not self.host._available(
+            fence.instance_id, fence.instance_revision
+        ):
             raise SchemeError(ErrorCode.PROVIDER_UNAVAILABLE)
         provider, spec = export.provider, export.spec
-        alias = _instance_alias(fence.instance_id)
-        route_key = self.principal.scope, fence.instance_id
+        alias = _instance_alias(
+            fence.instance_id + (":content" if fence.member.startswith("skill/") else "")
+        )
+        route_key = self.principal.scope, alias
         if self.host._routes.get(route_key) != export:
             self.host.runtime.manager.bind(
                 self.principal.scope,
@@ -460,9 +563,9 @@ class AbilityTreeSession:
                 contract_digest=spec.digest,
             )
             self.host._routes[route_key] = export
-        resource = TypeAdapter(MemberFence).dump_json(fence).decode()
+        resource = base64.urlsafe_b64encode(TypeAdapter(MemberFence).dump_json(fence)).decode()
         return await self.session.acquire(
-            f"/scheme/ability/{alias}/member-v1/{resource}",
+            f"/scheme/ability/{alias}/member-v2/{resource}",
             actions=actions,
         )
 
@@ -479,6 +582,8 @@ class AbilityTreeSession:
                 if node.availability != "ready":
                     continue
                 member = next(item for item in node.operations if item.key == tool.member)
+                if member.availability != "ready":
+                    continue
                 fence = MemberFence(
                     node.instance_id,
                     node.instance_revision,
@@ -489,6 +594,7 @@ class AbilityTreeSession:
                     tool.grant_revision,
                     tool.name,
                     tool.revision,
+                    node.version_digest,
                 )
                 reference = await self._member_reference(fence, frozenset({member.key}))
                 references[tool.name] = reference, member.key

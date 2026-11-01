@@ -13,6 +13,8 @@ status: active
 
 基准提交为 `acf06fe`，本文新增代码尚未提交。生产 Core／Subject 的 Agent 装配没有切换；以下 API 需要受信宿主显式创建和注入，不会因导入模块自动启用服务。
 
+2026-10-30 更新：本文保留首个文件 Operation 切片的装配示例。当前关系库已升级到 schema 3，树投影为 v2；单 Skill 及附件快照、局部授权／撤销和真实 Context 内容消费见[Ability 容器 API 与 Scheme 接入](2026-10-29-ability-api.md)。旧例中的纯 Operation 请求仍适用，不会产生内容权限。
+
 ## 1. 实际资源形状与职责
 
 本切片使用同一个文件 Ability 定义中的 `read_file` 和 `list_directory` 两个成员。文件读取、枚举和权限检查复用 Core 已有后端。Scheme 适配负责确定调用目标；领域服务负责当前资源关系和接纳；UI 消费同源 View。

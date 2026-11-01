@@ -118,6 +118,7 @@ class ContextManager:
         compact_method: str = "ghrah.builtin",
         estimator: TokenEstimator | None = None,
         skill_provider: Any | None = None,
+        ability_content: Any | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._state_manager = StateManager(initial_state)
@@ -129,6 +130,9 @@ class ContextManager:
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
         # 技能目录摘要：provider 装配期显式注入；digest 仅用于文案口径与变化日志
+        if skill_provider is not None and ability_content is not None:
+            raise ValueError("Skill 来源必须显式选择一个")
+        self._ability_content = ability_content
         self._skill_provider = skill_provider
         self._skill_catalog_digest: str | None = None
         self._pending_messages: list[Any] = []
@@ -1112,7 +1116,17 @@ class ContextManager:
                 self._pending_compaction.extend(records)
 
         # 技能目录摘要：窗口管理之后追加——不被压缩裁掉，且始终位于队列末尾
-        catalog = self._skill_catalog_message()
+        if self._ability_content is not None:
+            text = await self._ability_content.catalog_text()
+            catalog = (
+                self._message_factory.create_message(
+                    role="user", text=text, source="ability:catalog"
+                )
+                if text and self._message_factory is not None
+                else None
+            )
+        else:
+            catalog = self._skill_catalog_message()
         if catalog is not None:
             messages = [*messages, catalog]
 
@@ -1164,6 +1178,11 @@ class ContextManager:
     def skill_provider(self) -> Any | None:
         """SkillAbilityProvider（装配期显式接线；None = 未接线）。"""
         return self._skill_provider
+
+    @property
+    def ability_content(self) -> Any | None:
+        """显式接线的当前 Agent 内容端口；不回退旧 Skill 来源。"""
+        return self._ability_content
 
     def get_cumulative_token_usage(self) -> dict[str, int]:
         """从链历史中累计计算总 token 用量。

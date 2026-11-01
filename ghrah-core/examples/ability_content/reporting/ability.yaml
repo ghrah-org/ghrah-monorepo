@@ -1,0 +1,207 @@
+format: ghrah.ability-definition
+schema_version: '0.2'
+identity:
+  namespace: reporting
+  version: '1'
+title: Filesystem
+description: Read, search, and mutate files and directories inside the delegated workspace.
+provider_requirements:
+  fs_backend:
+    contract: ghrah.fs.v1
+    contract_digest: null
+    required_capabilities:
+    - request
+  script:
+    contract: example.unsupported-script
+operations:
+  list_directory:
+    title: List Directory
+    description: List files and directories at the specified path. Returns entry names,
+      types, and sizes. Use recursive=true to list all nested contents. For large
+      directories, set offset/limit to paginate (0-based entry index); the response
+      then carries total_entries/truncated/offset/limit. Without offset/limit the
+      whole listing is returned.
+    input_schema:
+      additionalProperties: false
+      properties:
+        dir_path:
+          description: Path to the directory to list
+          type: string
+        limit:
+          default: 0
+          description: Max number of entries to return (0 = no limit; pagination active
+            when offset or limit is set)
+          minimum: 0
+          type: integer
+        offset:
+          default: 0
+          description: 0-based entry index to start from (pagination; 0 with limit
+            0 = legacy full listing)
+          minimum: 0
+          type: integer
+        recursive:
+          default: false
+          description: Recursively list nested directories
+          type: boolean
+      required:
+      - dir_path
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        dir_path:
+          type: string
+        entries:
+          items:
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+              path:
+                type: string
+              size:
+                type: integer
+              type:
+                enum:
+                - file
+                - directory
+                type: string
+            required:
+            - name
+            - type
+            - path
+            type: object
+          type: array
+        limit:
+          type: integer
+        next_offset:
+          type:
+          - integer
+          - 'null'
+        offset:
+          type: integer
+        total_entries:
+          type: integer
+        truncated:
+          type: boolean
+      required:
+      - dir_path
+      - total_entries
+      - entries
+      type: object
+    errors: {}
+    implementation:
+      provider_slot: fs_backend
+      operation: list_directory
+    effects: []
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    script: null
+    expose: true
+  read_file:
+    title: Read File
+    description: Read the content of a file at the specified path. With offset/limit,
+      the returned content is paginated and each line is prefixed with its 1-based
+      line number as '  N→text' (line numbers are for locating edits only — do not
+      copy them into edit_file old_str). Without offset/limit the whole file is returned
+      without line numbers.
+    input_schema: &id001
+      additionalProperties: false
+      properties:
+        encoding:
+          default: utf-8
+          description: Text encoding for the file
+          type: string
+        file_path:
+          description: Path to the file to read
+          type: string
+        limit:
+          default: 0
+          description: Max lines to return; 0 = whole file (legacy behavior)
+          minimum: 0
+          type: integer
+        offset:
+          default: 0
+          description: 0-based line number to start from
+          minimum: 0
+          type: integer
+      required:
+      - file_path
+      type: object
+    output_schema: &id002
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+        file_path:
+          type: string
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total_lines:
+          type: integer
+      required:
+      - content
+      - file_path
+      - total_lines
+      type: object
+    errors: &id003 {}
+    implementation:
+      provider_slot: fs_backend
+      operation: read_file
+    effects: &id004 []
+    resources: &id005 {}
+    execution: &id006
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    script: null
+    expose: true
+  render:
+    title: Read File
+    description: Read the content of a file at the specified path. With offset/limit,
+      the returned content is paginated and each line is prefixed with its 1-based
+      line number as '  N→text' (line numbers are for locating edits only — do not
+      copy them into edit_file old_str). Without offset/limit the whole file is returned
+      without line numbers.
+    input_schema: *id001
+    output_schema: *id002
+    errors: *id003
+    implementation:
+      provider_slot: script
+      operation: render
+    effects: *id004
+    resources: *id005
+    execution: *id006
+    script:
+      path: scripts/render.py
+      media_type: text/x-python
+    expose: true
+skills:
+  guide:
+    body:
+      path: SKILL.md
+      media_type: text/markdown
+    assets:
+      template:
+        path: assets/template.txt
+        media_type: text/plain
+      mark:
+        path: assets/mark.bin
+        media_type: application/octet-stream
+    references:
+      style:
+        path: references/style.md
+        media_type: text/markdown
+      mark:
+        path: references/mark.bin
+        media_type: application/octet-stream
+assets: {}

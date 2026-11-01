@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from ghrah.ability.access import AccessIdentity
+from ghrah.ability.execution.context import AbilityExecutionContext
+from ghrah.ability.execution.invocation import AbilityInvocation
 from ghrah.ability.file_members import FILE_OPERATIONS
-from ghrah.scheme_ability.execution.context import AbilityExecutionContext
-from ghrah.scheme_ability.execution.invocation import AbilityInvocation
-from ghrah.scheme_ability.permissions.fs_permissions import FSPermissionChecker
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 

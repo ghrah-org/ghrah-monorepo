@@ -23,6 +23,39 @@ class OperationNode(TreeModel):
     description: str
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
+    availability: Literal["ready", "unavailable", "unknown"] = "unknown"
+
+
+class ContentResourceNode(TreeModel):
+    """已获授 Skill 子资源的确定内容描述。"""
+
+    key: TreeKey
+    member: str
+    path: str
+    media_type: str
+    size: int = Field(ge=0)
+    digest: str
+
+
+class SkillNode(TreeModel):
+    """单 Skill 及其获授附件；正文权限与附件权限分别投影。"""
+
+    key: TreeKey
+    title: str
+    description: str
+    body_allowed: bool
+    assets: list[ContentResourceNode]
+    references: list[ContentResourceNode]
+    availability: Literal["ready", "unavailable", "unknown"] = "unknown"
+
+
+class SkillReadScope(TreeModel):
+    """None 表示选中该类别全部现有资源，空列表表示不授予该类别。"""
+
+    key: TreeKey
+    body: bool = True
+    assets: list[TreeKey] | None = None
+    references: list[TreeKey] | None = None
 
 
 class AbilityNode(TreeModel):
@@ -36,6 +69,7 @@ class AbilityNode(TreeModel):
     revision: int = Field(ge=0)
     allowed_roots: list[str]
     operations: list[OperationNode]
+    skill: SkillNode | None = None
     availability: Literal["ready", "unavailable", "unknown"] = "unknown"
 
     @model_validator(mode="after")
@@ -60,7 +94,10 @@ class RuntimeObservation(TreeModel):
     """本 host 在某一时刻的运行观测，不属于持久授权事实。"""
 
     host_id: TreeId
-    observed_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
+    observed_at: str = Field(
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$",
+        json_schema_extra={"format": "date-time"},
+    )
 
     @model_validator(mode="after")
     def utc_time(self) -> "RuntimeObservation":
@@ -74,7 +111,7 @@ class RuntimeObservation(TreeModel):
 class AbilityTreeView(TreeModel):
     """以同一次读取中的权威关系生成的 Agent 投影。"""
 
-    format: Literal["ghrah.ability-tree.v1"] = "ghrah.ability-tree.v1"
+    format: Literal["ghrah.ability-tree.v2"] = "ghrah.ability-tree.v2"
     project_id: TreeId
     agent_id: TreeId
     run_id: TreeId
@@ -102,8 +139,10 @@ class GrantAbilityRequest(TreeModel):
 
     alias: TreeKey
     instance_id: TreeId
-    members: list[TreeKey] = Field(min_length=1)
-    allowed_roots: list[str] = Field(min_length=1)
+    members: list[TreeKey] = Field(default_factory=list)
+    allowed_roots: list[str] = Field(default_factory=list)
+    skill: SkillReadScope | None = None
+    whole_container: bool = False
     expected_revision: int = Field(ge=0)
 
 
@@ -112,6 +151,7 @@ class RevokeAbilityRequest(TreeModel):
 
     alias: TreeKey
     expected_revision: int = Field(ge=0)
+    members: list[str] | None = None
 
 
 class BindToolRequest(TreeModel):

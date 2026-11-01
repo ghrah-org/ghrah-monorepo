@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 import { createAbilityTreeClient } from "@ghrah/observer-core";
-import { AbilityTreeViewSchema, TreeChangeResultSchema } from "@ghrah/protocol";
+import {
+  AbilityTreeViewSchema,
+  ContentReadResultSchema,
+  TreeChangeResultSchema,
+} from "@ghrah/protocol";
 import { flushPromises, mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { createAbilityTreeFixture } from "@ghrah/mock-server";
@@ -43,7 +47,7 @@ describe("SchemeAbilitiesPanel", () => {
       },
       expect.any(String),
     );
-    expect(wrapper.find("code").text()).toBe("read_report");
+    expect(wrapper.find(".bound-tools code").text()).toBe("read_report");
   });
   it("does not invent state or retry on conflict", async () => {
     const { wrapper, submit } = panel([TreeChangeResultSchema.parse(fixture.conflict)]);
@@ -53,7 +57,7 @@ describe("SchemeAbilitiesPanel", () => {
     await wrapper.find("form").trigger("submit");
     await flushPromises();
     expect(wrapper.find('[role="alert"]').text()).toContain("changed");
-    expect(wrapper.findAll("code")).toHaveLength(0);
+    expect(wrapper.findAll(".bound-tools code")).toHaveLength(0);
     expect(submit).toHaveBeenCalledTimes(1);
   });
   it("shows empty and unavailable projections without enabling an invalid binding", async () => {
@@ -70,7 +74,7 @@ describe("SchemeAbilitiesPanel", () => {
       fixture.selected,
     );
     await flushPromises();
-    await wrapper.find("li button").trigger("click");
+    await wrapper.find(".bound-tools li button").trigger("click");
     await flushPromises();
     expect(submit).toHaveBeenCalledWith(
       "/scheme/agent/alice",
@@ -81,6 +85,39 @@ describe("SchemeAbilitiesPanel", () => {
       },
       expect.any(String),
     );
-    expect(wrapper.findAll("li")).toHaveLength(0);
+    expect(wrapper.findAll(".bound-tools li")).toHaveLength(0);
   });
+});
+
+it("reads granted Skill content through the trusted client and shows binary ranges", async () => {
+  const transport = createAbilityTreeFixture(
+    AbilityTreeViewSchema.parse(fixture.mixed),
+    [],
+    [ContentReadResultSchema.parse(fixture.text), ContentReadResultSchema.parse(fixture.binary)],
+  );
+  const submit = vi.spyOn(transport, "submit");
+  const wrapper = mount(SchemeAbilitiesPanel, {
+    props: {
+      agentId: "alice",
+      client: createAbilityTreeClient("project", transport),
+    },
+  });
+  await flushPromises();
+  expect(wrapper.text()).toContain("reporting-guide");
+  const body = wrapper.findAll("button").find((item) => item.text() === "Read Skill body")!;
+  await body.trigger("click");
+  await flushPromises();
+  expect(wrapper.find("pre").text()).toContain("# 报告编写");
+  expect(submit).toHaveBeenCalledWith(
+    "/scheme/agent/alice/ability/reports/skill/guide",
+    "read",
+    { offset: 0, limit: 65536 },
+    expect.any(String),
+  );
+  const asset = wrapper.findAll("li").find((item) => item.find("code").text() === "assets/mark")!;
+  await asset.find("button").trigger("click");
+  await flushPromises();
+  expect(wrapper.text()).toContain("Binary content");
+  expect(wrapper.find("pre").exists()).toBe(false);
+  expect(wrapper.text()).toContain("Bytes 0 + 4 of 4");
 });

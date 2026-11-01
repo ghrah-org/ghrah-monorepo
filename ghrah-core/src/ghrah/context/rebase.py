@@ -110,6 +110,7 @@ def create_rebased_context(
         compact_keep_recent=source_cm.compact_keep_recent,
         compact_method=source_cm.compact_method,
         skill_provider=source_cm.skill_provider,
+        ability_content=source_cm.ability_content,
     )
 
     return child_cm

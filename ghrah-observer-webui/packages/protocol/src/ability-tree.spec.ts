@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import fixture from "./__fixtures__/ability-tree.json";
 import {
   AbilityTreeViewSchema,
+  ContentReadResultSchema,
+  ContentReadRequestSchema,
   BindToolRequestSchema,
   TreeChangeResultSchema,
 } from "./ability-tree.js";
@@ -42,4 +44,16 @@ it.each(["ability", "tool", "operation"])("rejects duplicate %s nodes", (duplica
     operations.push(operations[0]!);
   }
   expect(AbilityTreeViewSchema.safeParse(value).success).toBe(false);
+});
+
+it("consumes the Python content samples and rejects old tree payloads and unbounded reads", () => {
+  expect(AbilityTreeViewSchema.parse(fixture.mixed)).toEqual(fixture.mixed);
+  expect(ContentReadResultSchema.parse(fixture.text)).toEqual(fixture.text);
+  expect(ContentReadResultSchema.parse(fixture.binary)).toEqual(fixture.binary);
+  expect(ContentReadRequestSchema.safeParse({ limit: 65537 }).success).toBe(false);
+  expect(ContentReadRequestSchema.safeParse({ offset: true }).success).toBe(false);
+  expect(
+    AbilityTreeViewSchema.safeParse({ ...fixture.initial, format: "ghrah.ability-tree.v1" })
+      .success,
+  ).toBe(false);
 });

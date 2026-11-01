@@ -1,5 +1,15 @@
 export default {
   schemeAbilities: {
+    content: "获授 Skill 内容",
+    version: "版本：{version}",
+    readBody: "读取 Skill 正文",
+    readContent: "读取资源",
+    contentFailed: "内容读取失败，请刷新核对权限与版本。",
+    range: "字节 {offset} + {count}，总计 {total}",
+    binary: "二进制内容，可下载本次字节范围查看。",
+    downloadChunk: "下载本次字节范围",
+    nextChunk: "读取下一段",
+
     title: "获授能力与工具",
     scope: "Agent：{agent}",
     refresh: "刷新",

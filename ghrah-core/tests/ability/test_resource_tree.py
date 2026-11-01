@@ -20,10 +20,10 @@ from ghrah.scheme import (
 )
 
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
+from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.scheme import AbilitySchemeHost
 from ghrah.ability.versions import capture_file_version
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
-from ghrah.scheme_ability.loading.ability_roots import builtin_root
 
 ADMIN = AccessIdentity("project", "admin", "control", True)
 ALICE = AccessIdentity("project", "alice", "alice-run")

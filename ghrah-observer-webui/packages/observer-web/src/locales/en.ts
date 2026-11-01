@@ -1,5 +1,15 @@
 export default {
   schemeAbilities: {
+    content: "Granted Skill content",
+    version: "Version: {version}",
+    readBody: "Read Skill body",
+    readContent: "Read resource",
+    contentFailed: "Could not read this content. Refresh to verify access and version.",
+    range: "Bytes {offset} + {count} of {total}",
+    binary: "Binary content. Download this byte range to inspect it.",
+    downloadChunk: "Download this byte range",
+    nextChunk: "Read next range",
+
     title: "Granted abilities and tools",
     scope: "Agent: {agent}",
     refresh: "Refresh",
