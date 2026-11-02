@@ -38,7 +38,6 @@ PERMISSIONS = {
     # 调用外部 MCP 服务器：网络访问是它的实质，必须在权限面上显式声明。
     "net_access": True,
 }
-HOOKS: dict[str, list[dict[str, object]]] = {}
 SUMMARY = (
     "Call a tool on an MCP server. The tools available to you are listed in the MCP "
     "catalog of the skill you loaded; 'server' and 'tool' are case-sensitive."

@@ -7,7 +7,7 @@
 权威关系（单向，可重建）：
 
     ability/<容器>/ability.yaml     定义面（契约事实）
-    ability/<容器>/operations/*.py  实现面（实现 + PERMISSIONS/HOOKS/SUMMARY/TAGS）
+    ability/<容器>/operations/*.py  实现面（实现 + PERMISSIONS/SUMMARY/TAGS）
               │
               ▼
     AbilityManifest                 运行时 view：由上面两者投影而来，不被写回
@@ -41,9 +41,8 @@ from ghrah.ability.loading.ability_schema import (
     OperationDefinition,
     load_yaml,
 )
-from ghrah.ability.loading.ability_view import AbilityHooks, AbilityManifest, AbilityMetadata
+from ghrah.ability.loading.ability_view import AbilityManifest, AbilityMetadata
 from ghrah.ability.loading.manifest_fields import (
-    HookDef,
     ImplementationDef,
     ManifestValidationError,
     PermissionFlags,
@@ -298,51 +297,17 @@ def build_tool_schema(operation_key: str, operation: OperationDefinition) -> Too
     return _build_tool(operation_key, operation, enabled=operation.expose)
 
 
-def _build_hooks(raw: Mapping[str, Any]) -> AbilityHooks:
-    """把实现脚本的 ``HOOKS`` 声明转成运行时 hook 定义。
-
-    用在投影：hook 编排随实现脚本走，不从定义面读。
-
-    Args:
-        raw: 实现脚本的模块级 ``HOOKS`` 映射（键为钩子点）。
-
-    Returns:
-        :class:`AbilityHooks`（``pre_execute`` / ``post_execute`` / ``on_error``）。
-
-    Raises:
-        ManifestValidationError: 某个钩子点的声明不符合 :class:`HookDef` 契约。
-    """
-
-    def convert(point: str) -> list[HookDef]:
-        """取某个钩子点的声明列表并逐条校验。
-
-        Args:
-            point: 钩子点名（``pre_execute`` / ``post_execute`` / ``on_error``）。
-
-        Returns:
-            该钩子点的 :class:`HookDef` 列表；未声明时为空列表。
-        """
-        entries = raw.get(point) or []
-        return [HookDef.model_validate(entry) for entry in entries]
-
-    try:
-        return AbilityHooks(
-            pre_execute=convert("pre_execute"),
-            post_execute=convert("post_execute"),
-            on_error=convert("on_error"),
-        )
-    except ValidationError as exc:
-        raise ManifestValidationError(f"hooks 声明非法：{exc}") from exc
-
-
 def _project(
     definition: AbilityDefinition, operation_key: str, operation: OperationDefinition
 ) -> AbilityManifest:
     """定义面 + 实现面 → 运行时 view（本模块的投影核心）。
 
     做三件事：按约定 import 实现脚本并校验「恰好一个实现类」；从脚本读取
-    ``PERMISSIONS`` / ``HOOKS`` / ``SUMMARY`` / ``TAGS`` 声明；把定义面的
-    in/out schema 与实现面的声明合成 :class:`AbilityManifest`。
+    ``PERMISSIONS`` / ``SUMMARY`` / ``TAGS`` 声明；把定义面的 in/out schema
+    与实现面的声明合成 :class:`AbilityManifest`。
+
+    挂载面不携带 hook 引用：``AbilityManifest.hooks`` 仅供读取旧 manifest，
+    内置树投影不填充（安全语义由 ``PERMISSIONS`` 声明、内核固定实现）。
 
     Args:
         definition: 该成员所属容器的定义。
@@ -363,9 +328,6 @@ def _project(
     permissions_raw = getattr(module, "PERMISSIONS", None)
     if not isinstance(permissions_raw, dict):
         raise ManifestValidationError(f"{module.__name__}: 缺少模块级 PERMISSIONS 声明")
-    hooks_raw = getattr(module, "HOOKS", None)
-    if not isinstance(hooks_raw, dict):
-        raise ManifestValidationError(f"{module.__name__}: 缺少模块级 HOOKS 声明")
     summary = getattr(module, "SUMMARY", None)
     if not isinstance(summary, str):
         raise ManifestValidationError(f"{module.__name__}: 缺少模块级 SUMMARY 声明")
@@ -392,7 +354,6 @@ def _project(
         ),
         tool=_build_tool(operation_key, operation, enabled=operation.expose),
         implementation=ImplementationDef(type="builtin", handler=operation_key),
-        hooks=_build_hooks(hooks_raw),
     )
 
 
