@@ -1,0 +1,78 @@
+# MCP 调用能力容器 / MCP ability container
+#
+# 本文件是定义面（AbilityDefinition）：容器身份、成员契约与提供者槽要求。
+# 运行时声明（permissions / hooks）不在定义内——它们随实现脚本落在
+# operations/*.py 的模块级常量里，切换时由加载器合并回旧 manifest 形态。
+#
+# 由 ghrah-core/src/ghrah/abilities/builtin/mcp_call.py 升格而来：此前它只在进程内
+# 注册表里存在（registry-only），没有定义面；现在它是一个正式成员，走扫盘解析。
+format: ghrah.ability-definition
+schema_version: 0.1-draft
+identity:
+  namespace: ghrah
+  name: mcp
+  version: 0.1.0
+title: MCP
+description: Invoke a tool on an MCP server declared by a loaded skill.
+provider_requirements:
+  mcp_runtime:
+    contract: ghrah.mcp.v1
+    # contract_digest 由发布路径从唯一规范计算并填入，作者不自签
+    required_capabilities: [request]
+operations:
+  mcp_call:
+    title: MCP Call
+    description: >-
+      Call a tool on an MCP server. The tools available to you are listed in the MCP
+      catalog of the skill you loaded. Both 'server' and 'tool' are case-sensitive and
+      must be copied verbatim. If a tool's arguments are unclear, call load_skill again
+      with server= and tool= to read its input schema.
+    input_schema:
+      type: object
+      properties:
+        server:
+          type: string
+          description: >-
+            MCP server name exactly as listed in the skill's MCP catalog. Case-sensitive;
+            copy it verbatim.
+        tool:
+          type: string
+          description: >-
+            Tool name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it
+            verbatim.
+        arguments:
+          type: object
+          description: >-
+            Tool arguments matching the tool's input schema. Call load_skill with server=
+            and tool= to read the exact schema before guessing.
+        skill:
+          type: string
+          description: >-
+            Optional. The skill full name that declares this server. Only needed when
+            several loaded skills could own the same server name.
+      required: [server, tool]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        content:
+          type: string
+        server:
+          type: string
+        tool:
+          type: string
+      required: [content, server, tool]
+      additionalProperties: false
+    errors: {}
+    implementation: {provider_slot: mcp_runtime, operation: mcp_call}
+    # 外部服务器状态的改变由被调用的工具本身决定，静态分类无法穷举。
+    effects: [net:request]
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 300000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+skills: {}
+assets: {}

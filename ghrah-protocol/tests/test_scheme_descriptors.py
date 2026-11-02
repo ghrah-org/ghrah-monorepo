@@ -71,7 +71,7 @@ def sample() -> dict:
 
 
 def test_python_generated_snapshot_is_current() -> None:
-    assert json.loads(FIXTURE.read_text()) == sample()
+    assert json.loads(FIXTURE.read_text(encoding="utf-8")) == sample()
 
 
 def test_complete_descriptor_rejects_duplicates_and_unknown_fields() -> None:
