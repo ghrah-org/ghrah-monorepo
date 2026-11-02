@@ -418,3 +418,17 @@ class TestFromEnv:
         """delenv 后断言生产默认值（from_env 显式传字面量，不受 conftest 覆写影响）。"""
         monkeypatch.delenv("GHRAH_SUBJECT_SKILL_ROOT", raising=False)
         assert SubjectConfig.from_env().skill.root == os.path.expanduser("~/.ghrah/skill-ability")
+
+    def test_ability_source_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """未选择时保持现有运行方式（legacy）。"""
+        monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_SOURCE", raising=False)
+        assert SubjectConfig.from_env().ability_source == "legacy"
+
+    def test_from_env_ability_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_SOURCE", "BUILTIN")
+        assert SubjectConfig.from_env().ability_source == "builtin"
+
+    def test_invalid_ability_source_rejected(self) -> None:
+        """拼错的模式在装配前报错，不悄悄跑回 legacy。"""
+        with pytest.raises(ValueError, match="unknown ability source mode"):
+            SubjectConfig(ability_source="new")

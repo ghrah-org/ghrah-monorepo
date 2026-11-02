@@ -3671,6 +3671,7 @@ uv run ghrah-subject-server
 | `GHRAH_SUBJECT_TASKSTORE_ENABLED` | `true` | 任务归因内核 Unit 挂载开关 |
 | `GHRAH_SUBJECT_TASKSTORE_DB` | `~/.ghrah/taskstore.sqlite3` | 内核三表库路径 |
 | `GHRAH_SUBJECT_SKILL_ROOT` | `~/.ghrah/skill-ability` | Skill 存储根（装配期自举 + 补 lock） |
+| `GHRAH_SUBJECT_ABILITY_SOURCE` | `legacy` | 能力来源装配模式（`legacy` \| `builtin`）；一个选择同时决定声明目录、工具实例与 Skill 读取服务，`builtin` 不读旧 Skill 根 |
 | `GHRAH_SUBJECT_ROOM_FILTER_ENABLED` | `true` | Room Filter Unit 挂载开关 |
 | `GHRAH_SUBJECT_ROOM_FILTER_ABILITIES` | `conversation,end_task` | 落 RoomLog 的能力白名单 |
 

@@ -5,6 +5,11 @@ Operation 是现有单动作执行接口的公开名称。扫描、读取或实�
 运行时访问由独立 ghrah.scheme 与 Core 的受信接入层核定。
 """
 
+from ghrah.ability.assembly import (
+    AbilityAssembly,
+    AbilityAssemblyError,
+    AbilitySourceMode,
+)
 from ghrah.ability.execution.base import Ability as Operation
 from ghrah.ability.loading.ability_roots import AbilityRoot, default_pool
 from ghrah.ability.loading.ability_scan import (
@@ -28,6 +33,8 @@ from ghrah.ability.loading.skill_provider import SkillAbilityProvider
 from ghrah.ability.source import BuiltinAbilitySource
 
 __all__ = [
+    "AbilityAssembly",
+    "AbilityAssemblyError",
     "AbilityAsset",
     "AbilityContainer",
     "AbilityDefinition",
@@ -36,6 +43,7 @@ __all__ = [
     "AbilityRoot",
     "AbilityScanResult",
     "AbilitySkill",
+    "AbilitySourceMode",
     "BuiltinAbilitySource",
     "CatalogReport",
     "ExecutionSpec",

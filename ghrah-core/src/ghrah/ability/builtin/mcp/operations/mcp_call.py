@@ -25,14 +25,6 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
-from ghrah.mcp.errors import (
-    McpCredentialMissingError,
-    McpError,
-    McpNotActivatedError,
-    McpRequestError,
-    McpToolMissingError,
-)
-from ghrah.mcp.identity import format_unknown_tool_message
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
@@ -196,6 +188,29 @@ class McpCallAbility(Ability):
 
         raw_arguments = tool_args.get("arguments")
         arguments = raw_arguments if isinstance(raw_arguments, dict) else {}
+
+        # 导入推迟到这里：本模块随能力树在装配期被 import，而 ``ghrah.mcp``
+        # 的包入口会载入 SDK。关闭 MCP 的部署（未装 SDK）应当仍能完成装配，
+        # 只在真正调用时明确报缺依赖，而不是让整个新模式起不来。
+        try:
+            from ghrah.mcp.errors import (
+                McpCredentialMissingError,
+                McpError,
+                McpNotActivatedError,
+                McpRequestError,
+                McpToolMissingError,
+            )
+            from ghrah.mcp.identity import format_unknown_tool_message
+        except ImportError as exc:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={
+                    "error": (
+                        f"MCP client SDK is not installed ({exc}) — enable the MCP "
+                        "dependency for this deployment before calling mcp_call"
+                    )
+                },
+            )
 
         try:
             outcome = await runtime.call(

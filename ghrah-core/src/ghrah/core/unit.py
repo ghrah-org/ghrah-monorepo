@@ -66,6 +66,10 @@ from ghrah.protocol.types import (
 )
 
 from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.assembly import (
+    AbilityAssembly,
+    AbilitySourceMode,
+)
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.core.ability_protocol import AbilityProtocol
@@ -164,6 +168,11 @@ class CoreUnitConfig:
         skill_root: skill-ability 根目录（绝对路径字符串）。None = 不接线：
             skill 目录不被扫描、上下文不注入技能目录摘要；对应消费方显式
             说明缺席（零隐式）。Subject 挂载模式下注入 ``SkillConfig.root``。
+            选择 ``ability_source="builtin"`` 时该根**不被读取**（旧读取器不
+            构造），只记警告——同一 Agent 不允许一边用新来源一边读旧目录。
+        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。未选择时
+            保持现有运行方式；选择新模式后能力声明、工具实例与 Skill 读取
+            服务同源，解析失败直接报错，不回退旧注册表或旧 Skill 读取器。
         default_abilities: spawn 未显式传 abilities 时注入的能力名列表
             （透传 SupervisorActor.default_abilities——部署方显式声明，
             非隐式兜底；None = 未配置，spawn(None) raise）。
@@ -198,6 +207,9 @@ class CoreUnitConfig:
     # skill-ability 根目录（装配期显式注入的字符串路径）。None = 不接线：
     # skill 目录不被扫描、上下文不注入技能目录摘要（消费方显式说明缺席）。
     skill_root: str | None = None
+    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器；builtin = 新版
+    # ghrah.ability 来源）。装配点显式选择，未选择保持现有运行方式。
+    ability_source: str = "legacy"
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
 
@@ -639,6 +651,8 @@ class CoreUnit:
         self._emit: Callable[[str, dict[str, Any]], None] | None = None
         self._stopped = False
         self._hitl_promises = HITLPromiseRegistry()
+        # 装配模式在 init(ctx) 时确定（需要 manifest_store 等装配期输入）。
+        self._assembly: AbilityAssembly | None = None
 
         self._handlers: dict[str, _CommandHandler] = {
             CommandType.SPAWN_AGENT.value: self._handle_spawn_agent,
@@ -677,6 +691,22 @@ class CoreUnit:
         """内部 SupervisorActor（init 前为 None）。"""
         return self._supervisor
 
+    @property
+    def ability_source(self) -> str:
+        """能力来源装配模式（``legacy`` / ``builtin``）。
+
+        供观察与诊断读取，不参与选择；模式值非法时同样在此报错（不猜测）。
+        """
+        if self._assembly is not None:
+            return self._assembly.mode.value
+        return AbilitySourceMode.parse(self._config.ability_source).value
+
+    def _require_assembly(self) -> AbilityAssembly:
+        """取已确定的装配模式，未 init 时抛错。"""
+        if self._assembly is None:
+            raise RuntimeError("CoreUnit not initialized (init(ctx) first)")
+        return self._assembly
+
     # ----------------------------------------------------------------
     # 生命周期
     # ----------------------------------------------------------------
@@ -713,13 +743,30 @@ class CoreUnit:
             and self._config.message_manager.project_id != self._config.project_id
         ):
             raise ValueError("MessageManager project does not match CoreUnit")
-        # skill-ability 接线：显式注入根目录才构造 provider；未注入即不接线
-        # （skill 面缺席由消费方显式说明，零隐式）。
-        skill_provider: Any = None
-        if self._config.skill_root:
-            from ghrah.skills import SkillAbilityProvider
-
-            skill_provider = SkillAbilityProvider.from_root(self._config.skill_root)
+        # 装配模式：一次选择同时决定能力目录、工具实例与 Skill 读取服务。
+        # 未选择（legacy）保持原有接线；选择 builtin 后不回退旧注册表或旧
+        # Skill 读取器，只属于旧模式的可写入口在各自 handler 里显式拒绝。
+        assembly = AbilityAssembly.select(
+            self._config.ability_source, agent_store=self._config.manifest_store
+        )
+        self._assembly = assembly
+        if assembly.is_builtin:
+            # 旧模式的目录与默认能力集在新模式下不生效：显式告警而不是
+            # 静默沿用（沿用就是新旧混装，静默忽略就是让工具面无声缺口）。
+            if self._config.skill_root:
+                logger.warning(
+                    "CoreUnit: ability_source=builtin ignores skill_root=%r — the granted "
+                    "content reader is not wired yet, so skill content stays unavailable",
+                    self._config.skill_root,
+                )
+            if self._config.default_abilities is not None:
+                logger.warning(
+                    "CoreUnit: ability_source=builtin ignores default_abilities=%r — "
+                    "spawn an agent through a manifest_ref instead",
+                    self._config.default_abilities,
+                )
+        # skill-ability 接线：按模式构造读取服务（builtin 模式显式无读取器）。
+        skill_provider: Any = assembly.skill_provider(self._config.skill_root)
 
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
@@ -728,7 +775,7 @@ class CoreUnit:
             room_bridge=room_bridge,
             default_abilities=(
                 list(self._config.default_abilities)
-                if self._config.default_abilities is not None
+                if self._config.default_abilities is not None and not assembly.is_builtin
                 else None
             ),
             max_cluster_members=self._config.max_cluster_members,
@@ -978,13 +1025,15 @@ class CoreUnit:
     async def _handle_spawn_agent(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         """spawn_agent — 接收 SpawnAgentPayload。
 
-        manifest_ref 路径：CoreUnit 内解析 manifest 并直接构造 Ability
+        manifest_ref 路径：CoreUnit 内按装配模式解析 manifest 并直接构造工具
         （对齐独立库 ``examples/agents_manifest/runner`` 范式，不经 wire
         DTO 往返）；无 manifest_ref 时消费 Observer 直传的
         ``AbilityDefinitionPayload`` 列表（真跨 WS 路径，wire DTO 合理存在）。
+
+        装配模式为 ``builtin`` 时，直传定义与「不传能力」两条旧入口都显式拒绝：
+        它们只由旧注册表服务，混用会让同一 Agent 的工具实例来自两套来源。
         """
-        from ghrah.manifest.materialize import instantiate_resolved_abilities
-        from ghrah.manifest.resolver import ManifestResolver
+        assembly = self._require_assembly()
 
         supervisor = self._require_supervisor()
         sp = SpawnAgentPayload.model_validate(payload)
@@ -998,8 +1047,8 @@ class CoreUnit:
             if self._config.manifest_store is None:
                 return self._err("manifest_store not available (standalone)")
             try:
-                manifest = self._config.manifest_store.load_agent(sp.manifest_ref)
-                resolved = ManifestResolver(self._config.manifest_store).resolve(
+                manifest = assembly.load_agent(sp.manifest_ref)
+                resolved = assembly.manifest_resolver().resolve(
                     manifest, runtime_name=sp.config.name or None
                 )
             except Exception as e:
@@ -1007,7 +1056,7 @@ class CoreUnit:
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
                 self._validate_model_config(resolved.config.endpoint_name)
-            ability_instances: list[AbilityProtocol] | None = instantiate_resolved_abilities(
+            ability_instances: list[AbilityProtocol] | None = assembly.instantiate(
                 resolved.abilities,
                 workspace_root=self._config.workspace_root,
                 auto_approve_abilities=self._config.auto_approve_abilities,
@@ -1071,6 +1120,23 @@ class CoreUnit:
         # None → default_abilities（CoreUnitConfig 显式配置）；未配置 → raise。
         # 空 abilities 列表在 wire 上不可能出现（AbilityDefinitionPayload
         # 非 None 即非空），防御性映射为明确报错而非隐式注入。
+        if assembly.is_builtin:
+            # 两条旧入口都只由旧注册表服务：直传定义经 AbilityRegistry 实例化，
+            # 省略 abilities 走 default_abilities（同样经旧注册表）。新模式没有
+            # 等价物，因此显式拒绝，而不是降级或静默补默认。
+            if sp.abilities:
+                assembly.refuse(
+                    "direct-abilities spawn",
+                    "explicit wire ability definitions are instantiated by the legacy "
+                    "registry; declare abilities in a version 2 agent manifest and spawn "
+                    "with manifest_ref",
+                )
+            assembly.refuse(
+                "default-abilities spawn",
+                "spawning without explicit abilities would fall back to the legacy default "
+                "ability set; declare abilities in a version 2 agent manifest and spawn "
+                "with manifest_ref",
+            )
         core_config = AgentConfig(
             name=sp.config.name,
             agent_id=sp.config.agent_id,
@@ -1271,6 +1337,16 @@ class CoreUnit:
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
+        assembly = self._require_assembly()
+        if assembly.is_builtin:
+            # 运行期注册会另立一套可写工具权威：谁被授予、哪些成员进工具表
+            # 由能力关系库决定，而不是由一条命令追加实例。新模式没有等价
+            # 语义，明确拒绝而不是把它接到旧注册表上。
+            assembly.refuse(
+                "register_ability",
+                "a running agent's tool set is projected from the ability access store; "
+                "there is no writable registration authority under the builtin source",
+            )
         rp = RegisterAbilityPayload.model_validate(payload)
         self._validate_agent(rp.project_id, rp.agent_id, rp.agent_name)
         if rp.ability.ability_type == "command_proxy":
@@ -1294,6 +1370,13 @@ class CoreUnit:
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
+        assembly = self._require_assembly()
+        if assembly.is_builtin:
+            assembly.refuse(
+                "unregister_ability",
+                "tool removal under the builtin source follows the ability access store "
+                "(revoke / unbind), not a runtime registration command",
+            )
         up = UnregisterAbilityPayload.model_validate(payload)
         self._validate_agent(up.project_id, up.agent_id, up.agent_name)
         agent_handle = await supervisor.get_agent_handle(up.agent_name)
