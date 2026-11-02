@@ -383,7 +383,7 @@ describe("ObserverClient", () => {
           },
           request_id: parsed.request_id,
         }),
-      } as MessageEvent);
+      });
       const result = await resetPromise;
       expect(result?.success).toBe(true);
     });
@@ -408,7 +408,7 @@ describe("ObserverClient", () => {
           payload: { request_id: parsed.request_id, success: true, data: { resolved: true } },
           request_id: parsed.request_id,
         }),
-      } as MessageEvent);
+      });
       const result = await responsePromise;
       expect(result?.success).toBe(true);
     });
