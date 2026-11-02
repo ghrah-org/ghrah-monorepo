@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, cast
 
 __all__ = [
     "COT_CONTENT",
@@ -21,11 +21,9 @@ __all__ = [
     "TOOL_ARGS",
 ]
 
-T = TypeVar("T")
-
 
 @dataclass(frozen=True)
-class DataKey(Generic[T]):
+class DataKey[T]:
     """Typed key for values stored in ExecutionData."""
 
     name: str
@@ -49,12 +47,12 @@ class ExecutionData:
 
         return self._raw
 
-    def get(self, key: DataKey[T], default: T | None = None) -> T | None:
+    def get[T](self, key: DataKey[T], default: T | None = None) -> T | None:
         """Read a value by typed key."""
 
         return cast(T | None, self._raw.get(key.name, default))
 
-    def set(self, key: DataKey[T], value: T) -> None:
+    def set[T](self, key: DataKey[T], value: T) -> None:
         """Set a value by typed key."""
 
         self._raw[key.name] = value

@@ -243,7 +243,7 @@ class AnthropicFormat(ChatFormat):
                 elif isinstance(input_data, str):
                     try:
                         arguments = json.loads(input_data)
-                    except (json.JSONDecodeError, TypeError):
+                    except json.JSONDecodeError, TypeError:
                         arguments = {}
 
                 content_blocks.append(

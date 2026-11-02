@@ -2,14 +2,14 @@
 
 参伍以变，错综其数
 
-九夏/ghrah 是一个多智能体运行时（multi-agent System）
+九夏/ghrah 是一个多智能体运行时（Multi-Agent System）
 
 为持久化、可观察、受权限治理的多 agent 协作提供运行时：
 
-- **Core**（`ghrah-core`）— agent 认知：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
-- **Subject**（`ghrah-subject`）— agent 效果半区（effect host）：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
-- **Protocol**（`ghrah-protocol`）— 跨进程协议真相源：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
-- **Observer WebUI**（`ghrah-observer-webui`）— CQRS 读模型：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
+- **Core**（`ghrah-core`）— agent 运行时：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
+- **Subject**（`ghrah-subject`）— agent 服务：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
+- **Protocol**（`ghrah-protocol`）— 跨进程协议：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
+- **Observer WebUI**（`ghrah-observer-webui`）— 前端与CQRS读取区：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
 
 ```
 Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUnit)
@@ -18,9 +18,9 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 
 ## 现状
 
-- 版本 `0.2.0a0`（快速成型期，接口可能破坏性变更）；Core Unit 化与单进程化已完成，Room/Project/Task 域已落地，恢复（reconcile）体系在建。
-- Python ≥ 3.11 + [uv](https://docs.astral.sh/uv/)；Node.js ≥ 22 + pnpm ≥ 9（pnpm 11 需要 Node ≥ 22 的 `node:sqlite`）。
-- 许可 Apache-2.0（REUSE 标注补全进行中）。
+- 版本 `0.2.0a0`（快速成型期，接口可能破坏性变更）
+- Python ≥ 3.15.1 + [uv](https://docs.astral.sh/uv/)；Node.js ≥ 22 + pnpm ≥ 11
+- 许可 Apache-2.0
 
 模型连接通过 agentconf 0.3 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
 

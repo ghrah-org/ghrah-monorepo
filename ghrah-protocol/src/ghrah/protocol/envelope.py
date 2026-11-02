@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -132,9 +132,6 @@ from ghrah.protocol.payloads.entity import (
     AgentEntityListPayload,
     AgentEntityPayload,
 )
-
-T = TypeVar("T", bound=BaseModel)
-
 
 # ─── 信封模型 ───
 
@@ -428,7 +425,7 @@ def envelope_from_dict(data: dict[str, Any]) -> Envelope:
     )
 
 
-def expect_payload(msg: Envelope, cls: type[T]) -> T:
+def expect_payload[T: BaseModel](msg: Envelope, cls: type[T]) -> T:
     """在 handler 边界把 payload 断言为具体类型。
 
     若 payload 已是该类型（经 envelope_from_dict 收窄）直接返回；

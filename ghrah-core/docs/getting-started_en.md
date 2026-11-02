@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python >= 3.11
+- Python >= 3.15
 - [uv](https://docs.astral.sh/uv/) package manager
 - [agentconf](https://github.com/ghrah/agentconf) CLI (for LLM configuration management)
 

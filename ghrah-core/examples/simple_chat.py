@@ -44,7 +44,7 @@ async def main() -> None:
     while True:
         try:
             user_input = input("\n你: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             break
 
         if not user_input:

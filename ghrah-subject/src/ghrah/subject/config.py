@@ -47,7 +47,7 @@ def _parse_sub_commands(value: str) -> dict[str, list[str]]:
 def _safe_float(value: str, default: float, name: str) -> float:
     try:
         return float(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         logger.warning("Invalid float for %s=%r, using default %s", name, value, default)
         return default
 
@@ -57,7 +57,7 @@ def _safe_int(value: str | None, default: int | None, name: str) -> int | None:
         return default
     try:
         return int(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         logger.warning("Invalid int for %s=%r, using default %s", name, value, default)
         return default
 

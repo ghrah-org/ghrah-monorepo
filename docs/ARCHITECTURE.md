@@ -186,7 +186,7 @@ graph LR
 要点：
 - **观察端端口** `4112`（`ObserverServerConfig.port`，注释明确"区别于 Core 的 4111"，`ghrah-subject/ghrah/subject/server/config.py:23`）。
 - `GHRAH_SUBJECT_CORE_URL` 默认 `ws://localhost:4111/ws` 是**遗留配置项**（`CoreTransportConfig`），当前单进程形态下 CoreUnit 由 Ouroboros Context 直接在进程内挂载，不经过该 WS。
-- 前端 dev server 端口 `5173`，后端地址经 `packages/observer-web/.env.local` 的 `VITE_GHRAH_SUBJECT_WS_URL` 注入（`scripts/start_all.py:213-218`）。
+- 前端 dev server 端口 `5173`，后端地址经 `packages/observer-web/.env.local` 的 `VITE_GHRAH_SUBJECT_WS_URL` 注入（`ghrah dev run` / `ghrah start`）。
 
 ### 2.3 仓库结构与包依赖
 
@@ -241,10 +241,10 @@ graph TB
 
 | 面 | 技术 |
 |---|---|
-| Python | ≥ 3.11；`uv` 管理（单一 `uv.lock` 在根）；pydantic v2；aiosqlite；ruff（`E,F,I,N,W,UP`，行宽 100）；pytest（`asyncio_mode = "auto"`） |
+| Python | ≥ 3.15；`uv` 管理（单一 `uv.lock` 在根）；pydantic v2；aiosqlite；ruff（`E,F,I,N,W,UP`，行宽 100）；pytest（`asyncio_mode = "auto"`） |
 | Unit 内核 | [Ouroboros](https://pypi.org/project/cordis-ouroboros/)（`Context` / `plugin` / `Fiber` / `FiberState`） |
 | Web 服务 | FastAPI + uvicorn（WebSocket + `/health` + `/`） |
-| TS | Node ≥ 22.12（pnpm 11 依赖 `node:sqlite`）、pnpm workspace、Vue 3 + Vite、Pinia、zod、vitest、tsup |
+| TS | Node ≥ 26（pnpm 11 依赖 `node:sqlite`）、pnpm workspace、Vue 3 + Vite、Pinia、zod、vitest、tsup |
 | Lint（TS） | oxlint → eslint → prettier → i18n/ui-token 门禁 |
 | 许可 | Apache-2.0（REUSE 标注补全进行中） |
 
@@ -537,7 +537,7 @@ Unit 契约（`ghrah-subject/ghrah/subject/unit/base.py`）：
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SA as scripts/start_all.py
+    participant SA as ghrah dev run
     participant Proc as ghrah-subject-server 进程
     participant App as app.serve()
     participant Asm as assemble_subject()
@@ -547,7 +547,7 @@ sequenceDiagram
     participant Uvicorn as uvicorn
     participant Vite as vite dev server
 
-    SA->>SA: 检查 uv / pnpm / node>=22、端口占用
+    SA->>SA: 检查 uv / pnpm、端口占用
     SA->>Proc: spawn(uv run ghrah-subject-server, env GHRAH_SUBJECT_SERVER_PORT)
     Proc->>App: asyncio.run(serve())
     App->>Proc: SubjectConfig.from_env() + configure_logging
@@ -3391,7 +3391,7 @@ monorepo 根 package.json  →  pnpm --dir ghrah-observer-webui <script>（纯�
 webui 根：
   dev            → ./scripts/dev.sh
       --mock        → mock-server(:4113) + observer-web(:5173)，后台 + trap 清理
-      （默认）      → exec python3 <monorepo>/scripts/start_all.py
+      （默认）      → exec ghrah dev run（ghrah-toolchain 本地 dev 会话）
   dev:extension  → 构建 4 包 → 起 Core(:4111) → 轮询 /health 30s → 起 Subject → webui dev → extension watch
   build          → ./scripts/build.sh
       protocol → plugin-registry → observer-core → observer-web → vscode-extension → vsce package
@@ -3606,11 +3606,9 @@ flowchart TD
 uv sync --all-packages      # Python 全量（单一 uv.lock 在根）
 pnpm install                # TS 全量（单一 pnpm-lock.yaml 在根）
 
-# 一键全栈
-python3 scripts/start_all.py            # Subject :4112 + WebUI dev :5173
-python3 scripts/start_all.py --no-webui  # 仅后端
-python3 scripts/start_all.py --no-webui --open
-python3 scripts/start_all.py --webui-port 5273
+# 一键全栈（ghrah-toolchain）
+ghrah dev run               # 工作树增量构建 + 本地前台起服；Ctrl+C 退出
+ghrah start                 # 已安装实例后台启动
 
 # 仅前端 demo（无需后端，协议级 mock）
 cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo

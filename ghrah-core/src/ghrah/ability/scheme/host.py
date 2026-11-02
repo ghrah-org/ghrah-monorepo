@@ -431,7 +431,7 @@ class AbilitySchemeHost:
                     return Authorization(False)
                 basis = f"agent:{agent}:{snapshot.run_id}:{snapshot.revision}"
             return Authorization(True, basis)
-        except (AccessError, ValueError, StopIteration):
+        except AccessError, ValueError, StopIteration:
             return Authorization(False)
 
     async def admit(self, request: AccessRequest) -> Admission:

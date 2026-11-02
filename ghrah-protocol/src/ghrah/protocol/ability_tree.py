@@ -73,7 +73,7 @@ class AbilityNode(TreeModel):
     availability: Literal["ready", "unavailable", "unknown"] = "unknown"
 
     @model_validator(mode="after")
-    def unique_operations(self) -> "AbilityNode":
+    def unique_operations(self) -> AbilityNode:
         """同一实例下的成员键不能含糊地指向多个描述。"""
         if len({item.key for item in self.operations}) != len(self.operations):
             raise ValueError("Operation key 重复")
@@ -100,7 +100,7 @@ class RuntimeObservation(TreeModel):
     )
 
     @model_validator(mode="after")
-    def utc_time(self) -> "RuntimeObservation":
+    def utc_time(self) -> RuntimeObservation:
         """观测时间明确使用 UTC，便于跨 host 区分。"""
         parsed = datetime.fromisoformat(self.observed_at.replace("Z", "+00:00"))
         if not self.observed_at.endswith("Z") or parsed.tzinfo is None:
@@ -121,7 +121,7 @@ class AbilityTreeView(TreeModel):
     runtime: RuntimeObservation | None = None
 
     @model_validator(mode="after")
-    def unique_nodes(self) -> "AbilityTreeView":
+    def unique_nodes(self) -> AbilityTreeView:
         """树中一个 alias 或工具名只能定位一个节点。"""
         if len({item.alias for item in self.abilities}) != len(self.abilities):
             raise ValueError("Ability alias 重复")
@@ -180,7 +180,7 @@ class TreeChangeResult(TreeModel):
     error: TreeErrorCode | None = None
 
     @model_validator(mode="after")
-    def one_result(self) -> "TreeChangeResult":
+    def one_result(self) -> TreeChangeResult:
         """结果与错误必须且只能有一项。"""
         if (self.view is None) == (self.error is None):
             raise ValueError("必须返回投影或错误之一")

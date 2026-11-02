@@ -409,7 +409,7 @@ def _python_search(
                                     "text": line.rstrip("\n"),
                                 }
                             )
-        except (OSError, PermissionError):
+        except OSError, PermissionError:
             continue
 
     return ActionResult(
