@@ -255,7 +255,7 @@ create_app requires an assembled Context with the websocket_observer_endpoint un
 | --- | --- | --- |
 | 端口占用 | `` f"{name} 端口 {port} 已被占用——多半是上一次的进程还活着（可用 `ss -ltnp | grep {port}` 找到后停止，或换 --subject-port/--webui-port）。" `` | `:109-115` |
 | 缺工具 | `` f"`{name}` 不在 PATH 上；{hint}" ``（hint：uv `"Python 侧经 uv 运行（https://docs.astral.sh/uv/）。"` `:241`；pnpm `"webui 需要 pnpm >= 9（https://pnpm.io/installation）。"` `:243`） | `:118-123` |
-| Node 过旧 | `` f"node {out} 过旧：pnpm 11 需要 node >= 22（node:sqlite），请 `nvm use 24` 后重试" `` | `:126-139` |
+| Node 过旧 | `` f"node {out} 过旧：pnpm 11 需要 node >= 26（node:sqlite），请 `nvm use 26` 后重试" `` | `:126-139` |
 | Node 版本不可解析 | `f"无法解析 node 版本号：{out!r}"` | `:126-139` |
 | 前端包缺失 | `f"observer-web 包不存在：{WEBUI_PACKAGE_DIR}"` | `:245-246` |
 | Subject 早退 | `f"Subject 进程提前退出（code={subject.returncode}），请查看上方日志。"` | `:269-272` |
@@ -310,7 +310,7 @@ start_all 通过写 `.env.local` 注入 `VITE_GHRAH_SUBJECT_WS_URL`，退出时�
 | 现象 | 首查 | 处置 |
 | --- | --- | --- |
 | `端口 4112 已被占用` | 上一次进程未退出 | 按消息里的 `ss -ltnp \| grep 4112` 找到并停止；或 `--subject-port` 换端口 |
-| `node … 过旧` | Node < 22 | `nvm use 24`；pnpm 11 依赖 `node:sqlite` |
+| `node … 过旧` | Node < 26 | `nvm use 26`；pnpm 11 依赖 `node:sqlite` |
 | `observer-web 包不存在` | 仓库结构损坏/在错误目录运行 | 确认 `ghrah-observer-webui/packages/observer-web` 存在 |
 | `Subject 进程提前退出（code=1）` | 看 Subject 自身日志（start_all 只转发） | 常见根因：schema 不兼容（§6.2）、端口竞争、`.ghrah` 权限 |
 | 启动卡住 ~10s 后失败 | `aiosqlite` DEBUG 洪水 | `GHRAH_SUBJECT_LOG_LEVELS="ghrah=DEBUG,aiosqlite=WARNING"` |
