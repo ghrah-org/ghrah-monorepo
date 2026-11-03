@@ -12,6 +12,10 @@
               ▼
     AbilityManifest                 运行时 view：由上面两者投影而来，不被写回
 
+两面的成员必须双向一一对应：声明了却没有 ``operations/<键>.py``、或有脚本却
+没在定义面声明，都在装载时直接失败（:func:`load_ability_definitions`），
+不静默忽略、也不拖到第一次调用才暴露。
+
 扫描根由 ``ability_roots`` 的目录池给出；本模块只用**内置树**那一项
 （``ability_roots.builtin_pool()``）——外部包没有实现脚本，落不进实现面，
 它们的定义与 skill 成员由 ``ability_scan`` 的目录面读。
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from importlib import import_module
+from importlib.resources.abc import Traversable
 from types import ModuleType
 from typing import Any
 
@@ -33,7 +38,7 @@ from pydantic import ValidationError
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.loading import ability_roots as roots
 from ghrah.ability.loading.ability_roots import AbilityRoot
-from ghrah.ability.loading.ability_scan import scan_ability_definitions
+from ghrah.ability.loading.ability_scan import AbilityScanResult, scan_ability_definitions
 from ghrah.ability.loading.ability_schema import (
     DEFINITION_FILE_NAME,
     SCHEMA_VERSION,
@@ -85,6 +90,16 @@ REGISTRY_ONLY_OPERATIONS: frozenset[str] = frozenset({"send"})
 它仍是 ``cluster/ability.yaml`` 里的正式成员，只是不产出运行时 view。
 """
 
+OPERATIONS_DIR_NAME = "operations"
+"""成员实现脚本所在目录名（相对容器目录）。
+
+约定：``operations/<成员键>.py`` 与 ``ability.yaml`` 的 ``operations`` 键一一对应，
+脚本名就是成员键。唯一例外是包标记 ``__init__.py``，它不承载成员。
+"""
+
+_IGNORED_OPERATION_MODULES: frozenset[str] = frozenset({"__init__"})
+"""``operations/`` 下不承载成员的模块名（包标记）。"""
+
 
 def builtin_pool() -> tuple[AbilityRoot, ...]:
     """实现面的目录池：只有内置树。
@@ -98,6 +113,71 @@ def builtin_pool() -> tuple[AbilityRoot, ...]:
     return roots.builtin_pool()
 
 
+def _implemented_member_keys(container_locator: Traversable) -> frozenset[str]:
+    """读出容器 ``operations/`` 下的成员键（不含包标记 ``__init__``）。
+
+    脚本名即成员键，因此这里只做文件名到键的收敛，不 import、不解析脚本内容
+    ——存在性校验要在投影之前完成。
+
+    Args:
+        container_locator: 容器目录句柄（内置树里的 ``ability/<容器>/``）。
+
+    Returns:
+        成员键集合；``operations/`` 不存在时为空集。
+    """
+    operations_dir = container_locator.joinpath(OPERATIONS_DIR_NAME)
+    if not operations_dir.is_dir():
+        return frozenset()
+    keys: set[str] = set()
+    for item in operations_dir.iterdir():
+        if not item.is_file() or not item.name.endswith(".py"):
+            continue
+        key = item.name.removesuffix(".py")
+        if key in _IGNORED_OPERATION_MODULES:
+            continue
+        keys.add(key)
+    return frozenset(keys)
+
+
+def _verify_member_existence(result: AbilityScanResult) -> None:
+    """校验定义面成员与 ``operations/*.py`` 双向一一对应。
+
+    两个方向都是定义面与实现面失去对应，必须在装配期直接失败：
+
+    - **声明了但没有实现脚本**：此前只在投影 import 时才报，错误信息落在
+      「无法装载实现脚本」上，看不出是缺文件还是脚本本身坏了；
+    - **有实现脚本但没有声明**：此前完全静默——脚本不会被任何投影引用，
+      看起来"没影响"，实则是一份不会被加载、也不会被发现的能力实现。
+
+    Args:
+        result: 内置树的一轮扫描结果（每个条目带容器目录句柄）。
+
+    Raises:
+        ManifestValidationError: 任一容器的两个方向存在差集；一次报全部容器，
+            便于在同一轮装配里把缺口看全。
+    """
+    problems: list[str] = []
+    for entry in result.entries:
+        declared = set(entry.definition.operations)
+        implemented = set(_implemented_member_keys(entry.locator))
+        missing = sorted(declared - implemented)
+        undeclared = sorted(implemented - declared)
+        if not missing and not undeclared:
+            continue
+        lines = [f"ability 容器 {entry.container!r} 的成员声明与实现脚本不一致："]
+        if missing:
+            lines.append(f"  声明了但没有实现脚本：{', '.join(missing)}")
+        if undeclared:
+            lines.append(f"  有实现脚本但没有声明：{', '.join(undeclared)}")
+        lines.append(
+            f"  约定：{OPERATIONS_DIR_NAME}/<成员键>.py 与 ability.yaml 的 "
+            "operations 键必须一一对应（包标记 __init__.py 除外）。"
+        )
+        problems.append("\n".join(lines))
+    if problems:
+        raise ManifestValidationError("\n".join(problems))
+
+
 def load_ability_definitions() -> Mapping[str, AbilityDefinition]:
     """扫描内置树并解析全部容器定义（实现面的严格读数）。
 
@@ -108,6 +188,10 @@ def load_ability_definitions() -> Mapping[str, AbilityDefinition]:
     与目录面的差别只有两条：范围只到内置树，且遇错**直接抛**（内置树是源码，
     坏了就是发布事故，不能降级成一条问题继续跑）。
 
+    解析成功后还会做一次成员存在性校验：``operations/<成员键>.py`` 与定义面的
+    ``operations`` 键必须双向一一对应，缺脚本或脚本未声明都在这里失败，
+    不拖到投影 import 才暴露、也不静默忽略。
+
     **每次调用都重新扫描内置定义**（无结果缓存），不读取用户目录池。
     定义更新不等于重载已导入的 Python 实现或替换在用实例；YAML loader
     由 ``ability_schema`` 统一选择。
@@ -116,13 +200,14 @@ def load_ability_definitions() -> Mapping[str, AbilityDefinition]:
         ``{容器名: AbilityDefinition}``；容器名即 ``ability/<容器>/`` 的目录名。
 
     Raises:
-        ManifestValidationError: 定义缺失/非法、schema_version 不受支持，
-            或容器名与目录名不一致。
+        ManifestValidationError: 定义缺失/非法、schema_version 不受支持、
+            容器名与目录名不一致，或成员声明与实现脚本不一一对应。
     """
     result = scan_ability_definitions(builtin_pool())
     if result.issues:
         issue = result.issues[0]
         raise ManifestValidationError(str(issue))
+    _verify_member_existence(result)
     return result.definitions
 
 
