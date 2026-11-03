@@ -106,7 +106,7 @@ _operation_class -> type[Ability]（约定：一个脚本恰好一个实现类�
 from ghrah.ability import scan_abilities
 
 for container in scan_abilities():
-    print(container)                       # reporting (package:...) operations=2 skills=1
+    print(container)  # reporting (package:...) operations=2 skills=1
     for op in container.operations:
         print("  ", op.key, "|", op.title, "|", op.effects)
     for skill in container.skills:
@@ -131,9 +131,9 @@ from ghrah.ability import load_skill_catalog
 
 catalog = load_skill_catalog()
 print(catalog.names, catalog.digest)
-print(catalog.render())                    # <system-reminder> ... </system-reminder>
+print(catalog.render())  # <system-reminder> ... </system-reminder>
 
-doc = catalog.read("reporting")            # 目录名 / 成员键 / 容器名都能用
+doc = catalog.read("reporting")  # 目录名 / 成员键 / 容器名都能用
 print(doc.path, doc.media_type, doc.content[:200])
 ```
 
@@ -147,7 +147,7 @@ print(doc.path, doc.media_type, doc.content[:200])
 from ghrah.ability import SkillAbilityProvider
 
 provider = SkillAbilityProvider.from_root("/path/to/skills")
-provider.initialize()                      # 补生成区 + 补 lock（见第 7 节）
+provider.initialize()  # 补生成区 + 补 lock（见第 7 节）
 ```
 
 ## 3. 实现面：工具清单与实例
@@ -162,7 +162,7 @@ for full_name, manifest in load_all_builtin_manifests().items():
     print(full_name, "|", manifest.metadata.description)
     if tool is not None:
         print("   ", tool.name, sorted(tool.parameters))
-        print("   ", tool.to_openai_tool())     # 直接塞进 tools=[...]
+        print("   ", tool.to_openai_tool())  # 直接塞进 tools=[...]
 ```
 
 辅助说明：
@@ -178,8 +178,8 @@ for full_name, manifest in load_all_builtin_manifests().items():
 from ghrah.ability import create_ability, ability_class
 
 handler = "read_file"
-print(ability_class(handler))              # <class '...fs.operations.read_file.ReadFileAbility'>
-ability = create_ability(handler)          # 参数按实现构造函数给
+print(ability_class(handler))  # <class '...fs.operations.read_file.ReadFileAbility'>
+ability = create_ability(handler)  # 参数按实现构造函数给
 print(ability.name, ability.bind_tool()["function"]["name"])
 ```
 
@@ -215,8 +215,8 @@ print(version.definition().identity.full_name)
 ```python
 from ghrah.ability.versions import capture_file_version
 
-version = capture_file_version()           # 不给 raw 时取内置 fs 包
-print(version.definition().operations.keys())   # dict_keys(['list_directory', 'read_file'])
+version = capture_file_version()  # 不给 raw 时取内置 fs 包
+print(version.definition().operations.keys())  # dict_keys(['list_directory', 'read_file'])
 ```
 
 辅助说明：
@@ -232,12 +232,13 @@ print(version.definition().operations.keys())   # dict_keys(['list_directory', '
 from ghrah.ability.access import AbilityAccessStore, AccessIdentity
 
 store = await AbilityAccessStore.open(
-    "project.db", "project",
+    "project.db",
+    "project",
     operators=frozenset({"admin"}),
     runs=lambda agent: "run-1" if agent == "alice" else None,
 )
 admin = AccessIdentity("project", "admin", "control", operator=True)
-await store.commit_version(admin, version)                 # 幂等：相同版本不重复写
+await store.commit_version(admin, version)  # 幂等：相同版本不重复写
 await store.register_agent(admin, "alice")
 await store.select_instance(admin, "reporting", version.digest, root)
 ```
@@ -246,10 +247,15 @@ await store.select_instance(admin, "reporting", version.digest, root)
 from ghrah.protocol.ability_tree import GrantAbilityRequest
 
 view = await store.grant(
-    admin, "alice",
-    GrantAbilityRequest(alias="reports", instance_id="reporting",
-                        whole_container=True, allowed_roots=[str(root)],
-                        expected_revision=0),
+    admin,
+    "alice",
+    GrantAbilityRequest(
+        alias="reports",
+        instance_id="reporting",
+        whole_container=True,
+        allowed_roots=[str(root)],
+        expected_revision=0,
+    ),
 )
 print([a.alias for a in view.abilities])
 ```
@@ -278,8 +284,8 @@ client = host.session(Principal("project", "alice", "run-1"))
 from ghrah.ability.consumer import GrantedContentProvider
 
 content = GrantedContentProvider(client, "alice")
-print(await content.catalog_text())                       # 模型可见的技能目录
-doc = await content.read("reports", "skill/guide")         # 分块读正文
+print(await content.catalog_text())  # 模型可见的技能目录
+doc = await content.read("reports", "skill/guide")  # 分块读正文
 ref = await content.read_relative("reports", "guide", "references/style.md")
 await content.load_into_context(context_manager, "reports", "skill/guide")
 ```
@@ -297,8 +303,8 @@ await content.load_into_context(context_manager, "reports", "skill/guide")
 ```python
 from ghrah.ability.build import scan_members, write_members
 
-print(scan_members("path/to/reporting"))        # 只看这次会写什么
-result = write_members("path/to/reporting")     # 写回 ability.yaml
+print(scan_members("path/to/reporting"))  # 只看这次会写什么
+result = write_members("path/to/reporting")  # 写回 ability.yaml
 print(result.changed, result.path)
 ```
 

@@ -122,11 +122,12 @@ SkillAbilityProvider.from_root("path/to/skills").initialize()
 from ghrah.ability import Operation
 from ghrah.types.results import ActionResult, ActionOutcome
 
-SUMMARY = "检查数据源是否可用"      # 目录里的一行说明（必填）
-TAGS = ["reporting", "read"]        # 发现/过滤用（必填）
+SUMMARY = "检查数据源是否可用"  # 目录里的一行说明（必填）
+TAGS = ["reporting", "read"]  # 发现/过滤用（必填）
 PERMISSIONS = {"fs_read_only": True}  # 安全声明（必填）
-TITLE = "Inspect"                   # 可选，缺省由成员键生成
-EFFECTS = []                        # 可选，副作用标签（如 filesystem:write）
+TITLE = "Inspect"  # 可选，缺省由成员键生成
+EFFECTS = []  # 可选，副作用标签（如 filesystem:write）
+
 
 class InspectAbility(Operation):
     @property
