@@ -1,207 +1,36 @@
 format: ghrah.ability-definition
-schema_version: '0.2'
-identity:
-  namespace: reporting
-  version: '1'
+schema_version: '1'
+identity: {namespace: reporting, version: '1'}
 title: Filesystem
 description: Read, search, and mutate files and directories inside the delegated workspace.
 provider_requirements:
-  fs_backend:
-    contract: ghrah.fs.v1
-    contract_digest: null
-    required_capabilities:
-    - request
-  script:
-    contract: example.unsupported-script
-operations:
-  list_directory:
-    title: List Directory
-    description: List files and directories at the specified path. Returns entry names,
-      types, and sizes. Use recursive=true to list all nested contents. For large
-      directories, set offset/limit to paginate (0-based entry index); the response
-      then carries total_entries/truncated/offset/limit. Without offset/limit the
-      whole listing is returned.
-    input_schema:
-      additionalProperties: false
-      properties:
-        dir_path:
-          description: Path to the directory to list
-          type: string
-        limit:
-          default: 0
-          description: Max number of entries to return (0 = no limit; pagination active
-            when offset or limit is set)
-          minimum: 0
-          type: integer
-        offset:
-          default: 0
-          description: 0-based entry index to start from (pagination; 0 with limit
-            0 = legacy full listing)
-          minimum: 0
-          type: integer
-        recursive:
-          default: false
-          description: Recursively list nested directories
-          type: boolean
-      required:
-      - dir_path
-      type: object
-    output_schema:
-      additionalProperties: false
-      properties:
-        dir_path:
-          type: string
-        entries:
-          items:
-            additionalProperties: false
-            properties:
-              name:
-                type: string
-              path:
-                type: string
-              size:
-                type: integer
-              type:
-                enum:
-                - file
-                - directory
-                type: string
-            required:
-            - name
-            - type
-            - path
-            type: object
-          type: array
-        limit:
-          type: integer
-        next_offset:
-          type:
-          - integer
-          - 'null'
-        offset:
-          type: integer
-        total_entries:
-          type: integer
-        truncated:
-          type: boolean
-      required:
-      - dir_path
-      - total_entries
-      - entries
-      type: object
-    errors: {}
-    implementation:
-      provider_slot: fs_backend
-      operation: list_directory
-    effects: []
-    resources: {}
-    execution:
-      mode: request
-      timeout_ms: 60000
-      cancellation: unsupported
-      on_revoke: drain
-      retry: never
-    script: null
-    expose: true
-  read_file:
-    title: Read File
-    description: Read the content of a file at the specified path. With offset/limit,
-      the returned content is paginated and each line is prefixed with its 1-based
-      line number as '  N→text' (line numbers are for locating edits only — do not
-      copy them into edit_file old_str). Without offset/limit the whole file is returned
-      without line numbers.
-    input_schema: &id001
-      additionalProperties: false
-      properties:
-        encoding:
-          default: utf-8
-          description: Text encoding for the file
-          type: string
-        file_path:
-          description: Path to the file to read
-          type: string
-        limit:
-          default: 0
-          description: Max lines to return; 0 = whole file (legacy behavior)
-          minimum: 0
-          type: integer
-        offset:
-          default: 0
-          description: 0-based line number to start from
-          minimum: 0
-          type: integer
-      required:
-      - file_path
-      type: object
-    output_schema: &id002
-      additionalProperties: false
-      properties:
-        content:
-          type: string
-        file_path:
-          type: string
-        limit:
-          type: integer
-        offset:
-          type: integer
-        total_lines:
-          type: integer
-      required:
-      - content
-      - file_path
-      - total_lines
-      type: object
-    errors: &id003 {}
-    implementation:
-      provider_slot: fs_backend
-      operation: read_file
-    effects: &id004 []
-    resources: &id005 {}
-    execution: &id006
-      mode: request
-      timeout_ms: 60000
-      cancellation: unsupported
-      on_revoke: drain
-      retry: never
-    script: null
-    expose: true
-  render:
-    title: Read File
-    description: Read the content of a file at the specified path. With offset/limit,
-      the returned content is paginated and each line is prefixed with its 1-based
-      line number as '  N→text' (line numbers are for locating edits only — do not
-      copy them into edit_file old_str). Without offset/limit the whole file is returned
-      without line numbers.
-    input_schema: *id001
-    output_schema: *id002
-    errors: *id003
-    implementation:
-      provider_slot: script
-      operation: render
-    effects: *id004
-    resources: *id005
-    execution: *id006
-    script:
-      path: scripts/render.py
-      media_type: text/x-python
-    expose: true
-skills:
-  guide:
-    body:
-      path: SKILL.md
-      media_type: text/markdown
-    assets:
-      template:
-        path: assets/template.txt
-        media_type: text/plain
-      mark:
-        path: assets/mark.bin
-        media_type: application/octet-stream
-    references:
-      style:
-        path: references/style.md
-        media_type: text/markdown
-      mark:
-        path: references/mark.bin
-        media_type: application/octet-stream
-assets: {}
+  fs_backend: {contract: ghrah.fs.v1, required_capabilities: [request]}
+  script: {contract: example.unsupported-script}
+
+# ── 以下由 `ghrah ability build` 生成，勿手改 ──
+members:
+  operations:
+    list_directory:
+      title: List Directory
+      description: List files and directories at the specified path. Returns entry names, types, and sizes.
+        Use recursive=true to list all nested contents.
+      provider: fs_backend
+      effects: []
+    read_file:
+      title: Read File
+      description: Read the content of a file at the specified path. With offset/limit, the returned content
+        is paginated and each line is prefixed with its 1-based line number.
+      provider: fs_backend
+      effects: []
+    render:
+      title: Render
+      description: 按模板渲染报告（脚本后端尚未接入，成员可用性为 unavailable）。
+      entry: scripts/render.py
+      effects: []
+  skill: {body: skill/SKILL.md, media_type: text/markdown, key: guide}
+  references:
+  - {path: skill/references/mark.bin, media_type: application/octet-stream, digest: 'sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c'}
+  - {path: skill/references/style.md, media_type: text/markdown, digest: 'sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673'}
+  assets:
+  - {path: skill/assets/mark.bin, media_type: application/octet-stream, digest: 'sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b'}
+  - {path: skill/assets/template.txt, media_type: text/plain, digest: 'sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c'}
