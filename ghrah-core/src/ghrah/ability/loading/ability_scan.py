@@ -21,37 +21,48 @@
 - ``ability_catalog`` = 实现面：只读内置树、严格抛错、按点分路径 import 实现
   脚本投影运行时 view。外部包没有实现脚本，落不进这一面。
 
-skill 成员（``ability.yaml`` 的 ``skills`` 表）**在这里只是声明面读数**：给身份、
-标题、说明、正文路径与来源，不读正文、不算指纹、不写 lock——正文读取与整树
-校验是 ``skill_provider`` 的职责（``SkillAbilityProvider``）。一个文件只被解析一次
+skill 成员（``ability.yaml`` 的 ``skills`` 表 / v1 的 ``members.skill``）**在这里
+只是声明面读数**：给身份、正文路径与来源；名字与说明的作者是正文 frontmatter
+（:mod:`ghrah.ability.loading.skill_frontmatter`），扫描时读一次，缺席才回退到
+定义面。不读整篇正文、不算整树指纹、不写 lock——整树校验是 ``skill_provider`` 的
+职责（``SkillAbilityProvider``）。一个文件只被解析一次
 （:func:`ghrah.ability.loading.ability_schema.parse_definition`），两面读同一份结果。
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources.abc import Traversable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+import yaml
 
 from ghrah.ability.loading import ability_roots as roots
 from ghrah.ability.loading.ability_roots import AbilityRoot
 from ghrah.ability.loading.ability_schema import (
     DEFINITION_FILE_NAME,
     LOCK_FILE_NAME,
+    SKILL_BODY_DIRS,
+    SKILL_FILE_NAME,
+    V1_SCHEMA_VERSION,
     AbilityDefinition,
     OperationDefinition,
+    SkillBody,
     SkillDefinition,
     parse_definition,
 )
 from ghrah.ability.loading.manifest_fields import ManifestValidationError
+from ghrah.ability.loading.member_index import scan_members
 from ghrah.ability.loading.skill_errors import SkillLockError, SkillParseError
 from ghrah.ability.loading.skill_fingerprint import (
     build_manifest,
     diff_manifests,
     fingerprint_entry,
 )
+from ghrah.ability.loading.skill_frontmatter import SkillFrontmatter, parse_skill_frontmatter
 from ghrah.ability.loading.skill_lock import (
     build_lock,
     create_lock,
@@ -74,6 +85,7 @@ __all__ = [
     "AbilityScanIssue",
     "AbilityScanResult",
     "AbilitySkill",
+    "ensure_locks",
     "ensure_locks",
     "load_ability_skills",
     "relock_skill",
@@ -98,6 +110,13 @@ class AbilityEntry:
 
     locator: Traversable
     """容器目录句柄：正文、实现脚本都相对它定位。"""
+
+    synthesized: bool = False
+    """定义面是否由目录与 ``SKILL.md`` 合成（``ability.yaml`` 缺失或不受支持）。
+
+    目录面以磁盘为准：包有 ``SKILL.md`` / ``operations/*.py`` 就应被看见；定义面
+    缺失或还是旧格式时不静默丢包，而是合成一份只读视图并在该包 ``issues`` 里记一条。
+    """
 
 
 @dataclass(frozen=True)
@@ -296,10 +315,17 @@ class AbilityContainer:
     """asset 成员，按成员键升序。"""
 
     issues: tuple[AbilityScanIssue, ...] = ()
-    """归属于本容器的问题（同名副本被忽略、正文缺失…）。
+    """归属于本容器的问题（同名副本被忽略、正文缺失、定义面被合成…）。
 
     根级问题（某个扫描根不存在）不属于任何容器，见
     :attr:`AbilityScanResult.issues`。
+    """
+
+    synthesized: bool = False
+    """定义面是否由目录与 ``SKILL.md`` 合成（``ability.yaml`` 缺失或不受支持）。
+
+    为 True 时成员来自磁盘实况、其余字段是推导值；补齐定义走
+    ``write_members`` / ``SkillAbilityProvider.initialize()``。
     """
 
     @property
@@ -474,8 +500,231 @@ def _skill_body_problem(
     return None
 
 
+def _skill_frontmatter(container_locator: Traversable, body_path: str) -> SkillFrontmatter | None:
+    """读正文头部的 frontmatter：技能的名字与说明由正文自己声明。
+
+    读不出来或格式不合法时返回 None，而不是记问题、更不是把技能踢出清单——
+    这里只取**展示元数据**，正文合法性由捕获路径
+    （:func:`ghrah.ability.content.capture_content`）裁决。历史包把这两个字段写在
+    定义面，正文没有 frontmatter 是合法状态，因此 None 会让调用方回退到定义面。
+
+    Args:
+        container_locator: 容器目录句柄。
+        body_path: 定义面声明的正文路径。
+
+    Returns:
+        :class:`SkillFrontmatter`；正文缺席 frontmatter 或不可读时为 None。
+    """
+    locator = _skill_body_locator(container_locator, body_path)
+    if locator is None:
+        return None
+    try:
+        raw = locator.read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+        return None
+    try:
+        return parse_skill_frontmatter(raw, source=str(locator))
+    except SkillParseError:
+        return None
+
+
+def _brief(text: str, limit: int = 160) -> str:
+    """把解析错误压成一行（问题列表要能一眼读完，完整堆栈在异常里）。
+
+    pydantic 的首行只是 ``N validation errors for X``，真正说明字段问题的在下面；
+    跳过表头，取前两行有效内容。
+
+    Args:
+        text: 原始错误文本。
+        limit: 最大字符数。
+
+    Returns:
+        单行、去重前缀、必要时截断的说明。
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and re.match(r"^\d+ validation errors? for ", lines[0]):
+        lines = lines[1:]
+    line = " ".join(" ".join(lines[:2]).split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _skill_body_relpath(entry: Traversable) -> str | None:
+    """按约定位置找技能正文：``skill/SKILL.md`` → ``skills/SKILL.md`` → 根 ``SKILL.md``。
+
+    技能面的发现口径是**正文文件**，不是定义面声明：作者把 ``SKILL.md`` 放进包
+    却忘了重建 ``members`` 时，模型侧仍然要看得见这个技能。
+
+    Args:
+        entry: 包目录。
+
+    Returns:
+        相对包根的 POSIX 路径；没有正文时 None。
+    """
+    candidates = [entry.joinpath(name, SKILL_FILE_NAME) for name in (*SKILL_BODY_DIRS, "")]
+    for name, body in zip((*SKILL_BODY_DIRS, ""), candidates, strict=True):
+        if body.is_file():
+            return f"{name}/{SKILL_FILE_NAME}" if name else SKILL_FILE_NAME
+    return None
+
+
+def _align_skill_with_disk(
+    entry: Traversable, definition: AbilityDefinition, label: str
+) -> tuple[AbilityDefinition, AbilityScanIssue | None]:
+    """让定义面的技能成员与磁盘上的 ``SKILL.md`` 对齐（磁盘优先）。
+
+    三种情况：声明的正文存在 → 信定义面；定义面没声明但盘上有 → 补一个成员；
+    声明的正文不存在但盘上有另一份 → 用盘上那份，并记一条问题说明原来的声明坏了。
+
+    Args:
+        entry: 包目录。
+        definition: 已解析的定义。
+        label: 问题里用的位置标签。
+
+    Returns:
+        ``(对齐后的定义, 问题或 None)``。
+    """
+    if not isinstance(entry, Path):
+        return definition, None
+    discovered = _skill_body_relpath(entry)
+    if discovered is None:
+        return definition, None
+    if not definition.skills:
+        skill = SkillDefinition(
+            body=SkillBody(path=discovered, media_type="text/markdown"),
+        )
+        aligned = definition.model_copy(update={"skills": {definition.container_name: skill}})
+        return aligned, AbilityScanIssue(
+            path=label,
+            reason=(f"定义面未声明技能，已按磁盘 {discovered} 补出成员（重建生成区可消除此提示）"),
+            container=definition.container_name,
+        )
+    ((key, declared),) = tuple(definition.skills.items())
+    declared_path = entry.joinpath(*PurePosixPath(declared.body.path).parts)
+    if declared_path.is_file() or declared.body.path == discovered:
+        return definition, None
+    skill = declared.model_copy(
+        update={"body": declared.body.model_copy(update={"path": discovered})}
+    )
+    aligned = definition.model_copy(update={"skills": {key: skill}})
+    return aligned, AbilityScanIssue(
+        path=label,
+        reason=(
+            f"声明的正文 {declared.body.path} 不存在，已按磁盘 {discovered} 修正"
+            "（重建生成区可消除此提示）"
+        ),
+        container=definition.container_name,
+    )
+
+
+def _looks_like_package(entry: Traversable) -> bool:
+    """目录里有没有能力包的最小特征：技能正文或实现脚本。
+
+    目录面以磁盘为准：只有 ``ability.yaml`` 才算包会把"还没写定义、或定义还是旧格式"
+    的包整个丢掉。这里只判断**有没有东西可给模型看**，不判断定义是否合法。
+
+    Args:
+        entry: 候选包目录。
+
+    Returns:
+        存在 ``SKILL.md``（``skill/``、``skills/`` 或目录根）或 ``operations/*.py``。
+    """
+    for name in (*SKILL_BODY_DIRS, ""):
+        candidate = (
+            entry.joinpath(name, SKILL_FILE_NAME) if name else entry.joinpath(SKILL_FILE_NAME)
+        )
+        if candidate.is_file():
+            return True
+    operations = entry.joinpath("operations")
+    if not operations.is_dir():
+        return False
+    return any(
+        item.name.endswith(".py") and not item.name.startswith("_") for item in operations.iterdir()
+    )
+
+
+def _legacy_metadata(entry: Traversable) -> tuple[str | None, str | None]:
+    """从旧格式定义里读标题与说明（只取展示用字段，不做任何校验）。
+
+    旧包（``0.1-draft``/``0.2``）的说明写在定义面而不是正文 frontmatter，合成视图
+    时带上它，技能目录才不会出现一堆空说明。
+
+    Args:
+        entry: 包目录。
+
+    Returns:
+        ``(title, description)``；读不出来时为 ``(None, None)``。
+    """
+    try:
+        data = yaml.safe_load(entry.joinpath(DEFINITION_FILE_NAME).read_text(encoding="utf-8"))
+    except OSError, UnicodeDecodeError, yaml.YAMLError:
+        return (None, None)
+    if not isinstance(data, dict):
+        return (None, None)
+    title = data.get("title") if isinstance(data.get("title"), str) else None
+    description = data.get("description") if isinstance(data.get("description"), str) else None
+    members = data.get("skills")
+    if isinstance(members, dict):
+        for member in members.values():
+            if not isinstance(member, dict):
+                continue
+            if title is None and isinstance(member.get("title"), str):
+                title = member["title"]
+            if description is None and isinstance(member.get("description"), str):
+                description = member["description"]
+    return (title, description)
+
+
+def _synthesized_definition(entry: Traversable) -> AbilityDefinition | None:
+    """按目录与 ``SKILL.md`` 合成一份只读定义（定义面缺失或不可用时）。
+
+    合成只做可推导的事：容器名取目录名，标题/说明取正文 frontmatter，成员由目录
+    扫出来。它不替作者写 ``ability.yaml``——那是安装期 ``ensure_members`` 的事。
+
+    Args:
+        entry: 包目录。
+
+    Returns:
+        合成后的定义；目录里没有任何可展示成员时返回 None。
+    """
+    try:
+        members = scan_members(entry)
+    except ManifestValidationError, OSError, UnicodeDecodeError:
+        return None
+    if not members:
+        return None
+    title = entry.name
+    description = title
+    skill = members.get("skill")
+    if isinstance(skill, dict):
+        frontmatter = _skill_frontmatter(entry, str(skill["body"]))
+        if frontmatter is not None:
+            title = frontmatter.name
+            description = frontmatter.description or title
+    if title == entry.name and description == title:
+        # 正文没有 frontmatter：旧格式的说明写在定义面，取来当展示文案。
+        legacy_title, legacy_description = _legacy_metadata(entry)
+        title = legacy_title or title
+        description = legacy_description or title
+    raw = {
+        "format": "ghrah.ability-definition",
+        "schema_version": V1_SCHEMA_VERSION,
+        "identity": {"namespace": entry.name, "version": "0"},
+        "title": title,
+        "description": description,
+        "members": members,
+    }
+    try:
+        return parse_definition(yaml.safe_dump(raw, allow_unicode=True), source=entry.name)
+    except ManifestValidationError:
+        return None
+
+
 def _scan_root(root: AbilityRoot) -> tuple[list[AbilityEntry], list[AbilityScanIssue]]:
-    """扫单个根：枚举第一层包目录、解析定义、校验容器名与正文。
+    """扫单个根：枚举第一层包目录、解析（或合成）定义、校验容器名与正文。
+
+    发现口径是**磁盘**：目录里有 ``SKILL.md`` 或 ``operations/*.py`` 就算能力包。
+    定义面缺失或不受支持时不丢包——合成只读视图并记一条问题，让模型侧仍能看到
+    成员；补齐 ``ability.yaml`` 由安装期 ``ensure_members`` 负责。
 
     Args:
         root: 单个扫描根。
@@ -492,16 +741,37 @@ def _scan_root(root: AbilityRoot) -> tuple[list[AbilityEntry], list[AbilityScanI
         if not entry.is_dir() or entry.name.startswith(("_", ".")):
             continue
         definition_path = entry.joinpath(DEFINITION_FILE_NAME)
-        if not definition_path.is_file():
+        if not definition_path.is_file() and not _looks_like_package(entry):
             # 普通子目录（operations/ 之类）：不是能力包，跳过。
             continue
         label = f"{root.label}/{entry.name}"
-        try:
-            raw = definition_path.read_text(encoding="utf-8")
-            definition = parse_definition(raw, source=label)
-        except (ManifestValidationError, OSError, UnicodeDecodeError) as exc:
-            issues.append(AbilityScanIssue(path=label, reason=str(exc), container=entry.name))
-            continue
+        synthesized = False
+        reason: str | None = None
+        if definition_path.is_file():
+            try:
+                raw = definition_path.read_text(encoding="utf-8")
+                definition = parse_definition(raw, source=label)
+            except (ManifestValidationError, OSError, UnicodeDecodeError) as exc:
+                reason = _brief(str(exc).removeprefix(label).lstrip(": "))
+        if reason is not None or not definition_path.is_file():
+            definition = _synthesized_definition(entry)
+            if definition is None:
+                if reason is not None:
+                    issues.append(AbilityScanIssue(path=label, reason=reason, container=entry.name))
+                continue
+            synthesized = True
+            hint = f"补定义用 `python -m ghrah.ability.build {label}`"
+            issues.append(
+                AbilityScanIssue(
+                    path=label,
+                    reason=(
+                        f"{reason}；已按目录与 SKILL.md 合成只读视图，{hint}"
+                        if reason
+                        else f"缺少 ability.yaml；已按目录与 SKILL.md 合成只读视图，{hint}"
+                    ),
+                    container=entry.name,
+                )
+            )
         if definition.container_name != entry.name:
             issues.append(
                 AbilityScanIssue(
@@ -514,6 +784,9 @@ def _scan_root(root: AbilityRoot) -> tuple[list[AbilityEntry], list[AbilityScanI
                 )
             )
             continue
+        definition, alignment_issue = _align_skill_with_disk(entry, definition, label)
+        if alignment_issue is not None:
+            issues.append(alignment_issue)
         for key, skill in definition.skills.items():
             problem = _skill_body_problem(entry, key, skill)
             if problem is not None:
@@ -524,6 +797,7 @@ def _scan_root(root: AbilityRoot) -> tuple[list[AbilityEntry], list[AbilityScanI
                 definition=definition,
                 root=root,
                 locator=entry,
+                synthesized=synthesized,
             )
         )
     return entries, issues
@@ -621,6 +895,8 @@ def _skill_member(entry: AbilityEntry, key: str, skill: SkillDefinition) -> Abil
     """
     definition = entry.definition
     body_path = skill.body.path
+    # 名字与说明的作者是正文 frontmatter；正文没有时退回定义面（历史格式）。
+    frontmatter = _skill_frontmatter(entry.locator, body_path)
     # 成员键与容器同名时，全名收敛为容器名：多数技能包是「一个包一个技能」，
     # 叫 ``research.research`` 既不自然，也和加载入口的常见写法（包名）不一致。
     full_name = entry.container if key == entry.container else definition.full_name_of(key)
@@ -632,8 +908,12 @@ def _skill_member(entry: AbilityEntry, key: str, skill: SkillDefinition) -> Abil
         container=entry.container,
         key=key,
         full_name=full_name,
-        title=skill.title,
-        description=skill.description,
+        title=frontmatter.name if frontmatter is not None else (skill.title or definition.title),
+        description=(
+            frontmatter.description
+            if frontmatter is not None
+            else (skill.description or definition.description)
+        ),
         media_type=skill.body.media_type,
         body_path=body_path,
         body_locator=(_skill_body_locator(entry.locator, body_path) or entry.locator),
@@ -748,6 +1028,7 @@ def _build_container(
             for key, asset in sorted(definition.assets.items())
         ),
         issues=tuple(issues),
+        synthesized=entry.synthesized,
     )
 
 

@@ -25,12 +25,12 @@ from ghrah.ability.loading.ability_scan import scan_abilities, scan_ability_defi
 
 
 def _operation(key: str, *, operation: str | None = None, timeout_ms: int = 1000) -> dict:
-    """造一个 operation 成员声明。
+    """造一个 operation 成员声明（v1 只声明入口与展示字段）。
 
     Args:
-        key: ``operations`` 表里的键。
-        operation: 槽内实现动作名；None 与键相同（最常见的一一对应）。
-        timeout_ms: 执行约束里的超时上限。
+        key: 成员键。
+        operation: 历史参数（槽内动作名）；v1 由 ``entry`` 表达实现位置，忽略。
+        timeout_ms: 历史参数（执行约束）；v1 不声明执行约束，忽略。
 
     Returns:
         可直接 ``yaml.safe_dump`` 的成员映射。
@@ -38,16 +38,8 @@ def _operation(key: str, *, operation: str | None = None, timeout_ms: int = 1000
     return {
         "title": f"{key} 标题",
         "description": f"{key} 说明。",
-        "input_schema": {"type": "object", "properties": {}},
-        "output_schema": {"type": "object", "properties": {}},
-        "implementation": {"provider_slot": "backend", "operation": operation or key},
-        "execution": {
-            "mode": "request",
-            "timeout_ms": timeout_ms,
-            "cancellation": "unsupported",
-            "on_revoke": "drain",
-            "retry": "never",
-        },
+        "entry": f"operations/{key}.py",
+        "effects": [],
     }
 
 
@@ -55,16 +47,15 @@ def _skill(key: str, *, body_path: str = "skills/SKILL.md") -> dict:
     """造一个 skill 成员声明。
 
     Args:
-        key: ``skills`` 表里的键。
+        key: 技能名；v1 没有成员键，展示名由正文 frontmatter 给出。
         body_path: 正文相对路径。
 
     Returns:
         成员映射。
     """
     return {
-        "title": f"{key} 标题",
-        "description": f"{key} 技能说明。",
-        "body": {"path": body_path, "media_type": "text/markdown"},
+        "body": body_path,
+        "media_type": "text/markdown",
     }
 
 
@@ -95,21 +86,20 @@ def _definition(
     identity: dict[str, object] = {"namespace": namespace or name, "version": "0.1.0"}
     if identity_name is not None:
         identity["name"] = identity_name
-    payload: dict[str, object] = {
+    members: dict[str, object] = {}
+    if operations is not None:
+        members["operations"] = operations
+    if skills:
+        # v1 只有一个技能成员：键由容器名隐含。
+        members["skill"] = next(iter(skills.values()))
+    return {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": identity,
         "title": title or name,
         "description": f"{name} 容器的说明。",
+        "members": members,
     }
-    if operations is not None:
-        payload["provider_requirements"] = {"backend": {"contract": "ghrah.test.v1"}}
-        payload["operations"] = operations
-    if skills is not None:
-        payload["skills"] = skills
-    if assets is not None:
-        payload["assets"] = assets
-    return payload
 
 
 def _write(root: Path, name: str, payload: dict, *, body: bool = True) -> Path:
@@ -190,10 +180,11 @@ class TestMembers:
         read = container.operations[0]
         assert read.full_name == "ghrah.fs.read_file"
         assert read.handler == "read_file"
-        assert read.provider_slot == "backend"
-        assert read.timeout_ms == 1000
+        # v1 不声明槽位与执行约束：归一化后成员固定落在 script 槽，超时取默认值。
+        assert read.provider_slot == "script"
+        assert read.timeout_ms == 60000
         assert read.title == "read_file 标题"
-        assert container.operations[1].timeout_ms == 5000
+        assert container.operations[1].timeout_ms == 60000
 
     def test_skill_member_is_declaration_only(self, tmp_path: Path) -> None:
         """skill 成员只给声明面读数：有正文路径与媒体类型，正文由 ghrah.skills 读。"""
@@ -218,20 +209,18 @@ class TestMembers:
             "mixed",
             operations={"ping": _operation("ping")},
             skills={"guide": _skill("guide")},
-            assets={"readme": {"path": "README.md"}},
         )
         _write(tmp_path, "mixed", payload)
 
         (container,) = scan_abilities((roots.path_root(tmp_path),))
 
-        assert container.kinds == ("operations", "skills", "assets")
+        assert container.kinds == ("operations", "skills")
         assert container.operation_count == 1
         assert container.skill_count == 1
-        assert container.asset_count == 1
-        assert container.member_count == 3
+        assert container.asset_count == 0
+        assert container.member_count == 2
         assert container.is_operation_only is False
         assert container.is_skill_only is False
-        assert container.assets[0].full_name == "mixed.readme"
 
     def test_skill_only_container_flags(self, tmp_path: Path) -> None:
         """只有 skills 的包（用户装进来的技能包）走 skill_only 分支。"""

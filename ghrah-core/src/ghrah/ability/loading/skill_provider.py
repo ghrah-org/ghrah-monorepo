@@ -186,22 +186,33 @@ class SkillAbilityProvider:
         return ensure_roots(self._pool)
 
     def initialize(self, *, ensure_dirs: bool = True) -> SkillInitResult:
-        """装配期初始化：确保目录 → 扫描 → 补齐缺失的 lock（幂等、不覆盖既有）。
+        """装配期初始化：确保目录 → 扫描 → 补生成区 → 补齐缺失的 lock（幂等）。
 
-        整个流程只扫一次盘：``ensure_locks`` 直接复用扫描结果判断"哪些成员缺
-        lock"，只有真正要写的成员才会再走一次整树摘要。
+        生成区（``ability.yaml`` 的 ``members``）与 lock 在同一个生命周期点补齐，
+        落点也一致（包目录内）；写回后再扫一次，让本次结果反映生成后的读数。
+        两者都不覆盖既有内容：生成区只重算工具扫得出的部分，lock 只补缺失的。
 
         Args:
             ensure_dirs: 是否先创建缺失的用户目录（False 时只扫描与补登记）。
 
         Returns:
-            :class:`SkillInitResult`：扫描结果 + 每个成员的登记处置 + 登记期问题。
+            :class:`SkillInitResult`：扫描结果 + 每个成员的登记处置 + 生成 / 登记期问题。
         """
         if ensure_dirs:
             ensure_roots(self._pool)
+        # 惰性 import：写入属于构建层，装配路径不应为了扫描把它拉进来。
+        from ghrah.ability.build import ensure_members
+
         scan = scan_ability_definitions(self._pool)
+        written, member_issues = ensure_members(scan)
+        if written:
+            scan = scan_ability_definitions(self._pool)
         locks, lock_issues = ensure_locks(scan)
-        return SkillInitResult(scan=scan, locks=locks, lock_issues=lock_issues)
+        return SkillInitResult(
+            scan=scan,
+            locks=locks,
+            lock_issues=member_issues + lock_issues,
+        )
 
     def verify(self, full_name: str) -> BundleVerification:
         """**整树校验**单个技能：内容维度与快照维度分开裁决。

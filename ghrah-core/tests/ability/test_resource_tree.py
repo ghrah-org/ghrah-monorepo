@@ -660,7 +660,7 @@ async def test_hidden_operation_cannot_be_granted_published_or_selected(slice_en
 
     store, host, base = slice_env
     raw = yaml.safe_load(builtin_root().locator.joinpath("fs", "ability.yaml").read_text())
-    raw["operations"]["read_file"]["expose"] = False
+    raw["members"]["operations"]["read_file"]["expose"] = False
     version = capture_file_version(yaml.safe_dump(raw))
     await store.commit_version(ADMIN, version)
     await store.select_instance(

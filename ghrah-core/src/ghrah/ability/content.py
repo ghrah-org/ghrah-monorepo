@@ -17,7 +17,12 @@ from urllib.parse import unquote, urlsplit
 from ghrah.protocol.ability_tree import TreeModel
 from pydantic import Field
 
-from ghrah.ability.loading.ability_schema import AbilityDefinition, load_yaml
+from ghrah.ability.loading.ability_schema import (
+    V1_SCHEMA_VERSION,
+    AbilityDefinition,
+)
+from ghrah.ability.loading.skill_errors import SkillParseError
+from ghrah.ability.loading.skill_frontmatter import parse_skill_frontmatter
 
 
 def canonical(value: Any) -> str:
@@ -60,8 +65,27 @@ class CaptureLimits:
 
 
 def capture_bytes(root: Path, path: str, limit: int) -> bytes:
-    """逐级使用目录描述符和 NOFOLLOW，替换源路径不能跳出包根。"""
+    """逐级使用描述符和 NOFOLLOW 捕获字节；路径替换不能跳出包根。
+
+    两个实现按平台能力选择，**判定口径一致**（必须是包内普通文件、不在捕获期间
+    变化、不超过上限）：
+
+    - 有 ``os.O_DIRECTORY`` 的平台：全程 ``dir_fd`` 相对打开，父目录逐级 NOFOLLOW，
+      路径替换与符号链接都被内核挡在包外；
+    - 没有该标志的平台（Windows）：先解析并校验目标仍在包根内，再用 ``lstat``
+      要求目标本身是普通文件且不是链接，最后按解析后的路径打开并复核 size/mtime。
+
+    后者少了"父目录在两次系统调用之间被换掉"的内核保证，换取可移植性；包内容来自
+    作者自己的目录，这个窗口与既有读取路径同风险级。
+    """
     relative_path(path)
+    if hasattr(os, "O_DIRECTORY"):
+        return _capture_bytes_posix(root, path, limit)
+    return _capture_bytes_portable(root, path, limit)
+
+
+def _capture_bytes_posix(root: Path, path: str, limit: int) -> bytes:
+    """POSIX 实现：目录描述符 + NOFOLLOW，逐级前进。"""
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for part in path.split("/")[:-1]:
@@ -72,19 +96,38 @@ def capture_bytes(root: Path, path: str, limit: int) -> bytes:
             path.split("/")[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
         )
         with os.fdopen(file_fd, "rb") as stream:
-            before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
-                raise ValueError(f"非普通文件或文件超限: {path}")
-            data = stream.read(limit + 1)
-            after = os.fstat(stream.fileno())
-            if len(data) > limit or (before.st_size, before.st_mtime_ns) != (
-                after.st_size,
-                after.st_mtime_ns,
-            ):
-                raise ValueError(f"捕获期间文件变化或超限: {path}")
-            return data
+            return _read_checked(stream, path, limit)
     finally:
         os.close(fd)
+
+
+def _capture_bytes_portable(root: Path, path: str, limit: int) -> bytes:
+    """可移植实现：解析后校验仍在包根内，拒绝链接，再按真实路径读。"""
+    base = root.resolve()
+    target = (base / path).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(f"包内路径越界: {path}")
+    before = os.lstat(target)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"非普通文件: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOINHERIT", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(target, flags), "rb") as stream:
+        return _read_checked(stream, path, limit)
+
+
+def _read_checked(stream: Any, path: str, limit: int) -> bytes:
+    """有界读取并复核：超限、或捕获期间文件变化，都失败。"""
+    before = os.fstat(stream.fileno())
+    if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        raise ValueError(f"非普通文件或文件超限: {path}")
+    data = stream.read(limit + 1)
+    after = os.fstat(stream.fileno())
+    if len(data) > limit or (before.st_size, before.st_mtime_ns) != (
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise ValueError(f"捕获期间文件变化或超限: {path}")
+    return data
 
 
 def capture_content(
@@ -122,19 +165,15 @@ def capture_content(
     for key, skill in definition.skills.items():
         member = f"skill/{key}"
         raw = add(member, skill.body.path, skill.body.media_type).decode("utf-8")
-        if raw.startswith("---\n"):
-            parts = raw.split("---\n", 2)
-            if len(parts) != 3:
-                raise ValueError("SKILL.md frontmatter 未闭合")
-            metadata = load_yaml(parts[1])
-            if not isinstance(metadata, dict) or not all(
-                isinstance(metadata.get(name), str) and metadata[name].strip()
-                for name in ("name", "description")
-            ):
-                raise ValueError("SKILL.md 必须包含 name 和 description")
-            skill.title = metadata["name"]
-            skill.description = metadata["description"]
-        elif definition.schema_version == "0.2":
+        try:
+            frontmatter = parse_skill_frontmatter(raw, source=skill.body.path)
+        except SkillParseError as exc:
+            raise ValueError(str(exc)) from exc
+        if frontmatter is not None:
+            # 正文是名字与说明的作者：捕获时把它们抄进密封定义，后续读取不再回盘。
+            skill.title = frontmatter.name
+            skill.description = frontmatter.description
+        elif definition.schema_version in {"0.2", V1_SCHEMA_VERSION}:
             raise ValueError("标准 SKILL.md 缺少 frontmatter")
         if isinstance(skill.references, list):
             if skill.references:

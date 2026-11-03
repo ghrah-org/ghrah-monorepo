@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -24,25 +25,18 @@ from ghrah.ability.loading import ability_roots as ability_roots
 
 DEFINITION = {
     "format": "ghrah.ability-definition",
-    "schema_version": "0.1-draft",
+    "schema_version": "1",
     "identity": {"namespace": "ghrah", "name": "{name}", "version": "0.1.0"},
     "title": "{name}",
     "description": "{name} 容器。",
-    "provider_requirements": {"{name}_backend": {"contract": "ghrah.test.v1"}},
-    "operations": {
-        "{name}_op": {
-            "title": "Op",
-            "description": "一个测试成员。",
-            "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "output_schema": {"type": "object", "properties": {}},
-            "implementation": {"provider_slot": "{name}_backend", "operation": "{name}_op"},
-            "execution": {
-                "mode": "request",
-                "timeout_ms": 1000,
-                "cancellation": "unsupported",
-                "on_revoke": "drain",
-                "retry": "never",
-            },
+    "members": {
+        "operations": {
+            "{name}_op": {
+                "title": "Op",
+                "description": "一个测试成员。",
+                "entry": "operations/{name}_op.py",
+                "effects": [],
+            }
         }
     },
 }
@@ -152,10 +146,14 @@ class TestHotPlug:
         assert catalog.load_ability_definitions()["alpha"].description == "改过的说明。"
 
     def test_removed_container_disappears(self, temp_package: Path) -> None:
-        """删掉定义面后，该容器的成员从 handler 名单消失。"""
+        """删掉整个包目录后，该容器的成员从 handler 名单消失。
+
+        只删 ``ability.yaml`` 不再等于"包没了"：目录面以磁盘为准，包里有
+        ``operations/*.py`` 就仍会被合成出只读视图（并在 issues 里说明）。
+        """
         assert "alpha_op" in catalog.builtin_handlers()
 
-        (temp_package / "alpha" / "ability.yaml").unlink()
+        shutil.rmtree(temp_package / "alpha")
 
         assert catalog.builtin_handlers() == ()
 

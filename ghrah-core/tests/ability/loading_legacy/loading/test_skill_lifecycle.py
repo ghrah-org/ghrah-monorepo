@@ -30,6 +30,15 @@ from ghrah.ability.loading.skill_lock import LOCK_FILE_NAME, LOCK_SCHEMA_VERSION
 from ghrah.ability.loading.skill_provider import SkillAbilityProvider
 
 BODY = "# 步骤\n\n1. 先看 schema。\n"
+DEFAULT_DESCRIPTION = "对关系型数据库执行只读查询。"
+
+
+def _head(name: str, description: str = DEFAULT_DESCRIPTION) -> str:
+    """正文 frontmatter：名字与说明的作者是正文自己。"""
+    block = yaml.safe_dump(
+        {"name": name, "description": description}, allow_unicode=True, sort_keys=False
+    )
+    return f"---\n{block}---\n\n"
 
 
 def _package(
@@ -41,38 +50,30 @@ def _package(
     description: str = "对关系型数据库执行只读查询。",
     body_path: str = "skills/SKILL.md",
 ) -> Path:
-    """造一个新格式能力包（``ability.yaml`` + 声明的正文文件）。
+    """造一个技能能力包（``ability.yaml`` + 声明的正文文件）。
 
     Args:
         root: 目录池根。
-        name: 包目录名，同时作为 ``identity.namespace``（故成员全名为 ``<name>.<key>``）。
-        key: 技能成员键；None 取包名（"一个包至多一个技能"的约定）。
+        name: 包目录名，同时作为 ``identity.namespace`` 与技能成员键。
+        key: 历史参数（成员键）；v1 的键由容器名隐含，非 None 时忽略。
         body: 正文内容；None 表示故意不写正文文件（用于测缺正文）。
-        description: 技能描述。
-        body_path: 定义面声明的正文相对路径（默认本版约定的 ``skills/SKILL.md``）。
+        description: 技能描述（写进正文 frontmatter——名字与说明的作者是正文）。
+        body_path: 定义面声明的正文相对路径（默认 ``skills/SKILL.md``）。
 
     Returns:
         新建的包目录。
     """
-    member = name if key is None else key
     package = root / name
     (package / "skills").mkdir(parents=True, exist_ok=True)
     payload = {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": {"namespace": name, "version": "0.1.0"},
         "title": name,
         "description": "测试用能力包。",
-        "provider_requirements": {},
-        "operations": {},
-        "skills": {
-            member: {
-                "title": name,
-                "description": description,
-                "body": {"path": body_path, "media_type": "text/markdown"},
-            }
+        "members": {
+            "skill": {"body": body_path, "media_type": "text/markdown"},
         },
-        "assets": {},
     }
     (package / "ability.yaml").write_text(
         yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
@@ -80,7 +81,7 @@ def _package(
     if body is not None:
         target = package.joinpath(*body_path.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(body, encoding="utf-8")
+        target.write_text(_head(name, description) + body, encoding="utf-8")
     return package
 
 
@@ -175,7 +176,7 @@ class TestScanAndLookup:
 
         assert len(skills) == 1
         assert skills[0].rank == 1
-        assert provider.read_skill("db-query").content == "# 高优先级\n"
+        assert provider.read_skill("db-query").content == _head("db-query") + "# 高优先级\n"
 
     def test_hot_plug_without_cache(self, tmp_path: Path) -> None:
         provider = _provider(tmp_path)
@@ -197,7 +198,7 @@ class TestReadSkill:
         assert document.full_name == "db-query"
         assert document.skill_dir == package
         assert document.path == package / "skills" / "SKILL.md"
-        assert document.content == BODY
+        assert document.content == _head("db-query") + BODY
 
     def test_declared_body_path_is_used_not_the_default(self, tmp_path: Path) -> None:
         """读正文只认声明：正文叫 ``skills/GUIDE.md`` 时就去读那个文件。"""
@@ -207,7 +208,7 @@ class TestReadSkill:
 
         assert document.path == package / "skills" / "GUIDE.md"
         assert document.body_path == "skills/GUIDE.md"
-        assert document.content == BODY
+        assert document.content == _head("db-query") + BODY
 
     def test_unknown_full_name_raises_not_found(self, tmp_path: Path) -> None:
         _package(tmp_path, "db-query")

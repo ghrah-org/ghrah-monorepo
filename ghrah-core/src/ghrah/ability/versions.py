@@ -8,11 +8,19 @@ import inspect
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ghrah.ability.content import CaptureLimits, canonical, capture_content, digest_bytes
-from ghrah.ability.file_members import FILE_OPERATIONS
+from ghrah.ability.file_members import FILE_OPERATIONS, closed_schema
 from ghrah.ability.loading.ability_roots import builtin_root
-from ghrah.ability.loading.ability_schema import AbilityDefinition, parse_definition
+from ghrah.ability.loading.ability_schema import (
+    V1_SCHEMA_VERSION,
+    AbilityDefinition,
+    OperationDefinition,
+    OperationImplementation,
+    ProviderRequirement,
+    parse_definition,
+)
 from ghrah.ability.permissions import fs_permissions
 
 FILE_MEMBERS = frozenset(FILE_OPERATIONS)
@@ -79,8 +87,33 @@ def capture_file_version(raw: str | None = None) -> AbilityVersion:
     operations = {key: item for key, item in definition.operations.items() if key in FILE_MEMBERS}
     if set(operations) != FILE_MEMBERS:
         raise ValueError("文件能力必须包含两个确定成员")
+    # 文件切片由 FileBackend 直接复用仓库内的实现类，不执行快照脚本：因此在这里
+    # 显式把成员重新绑到 ``fs_backend`` 契约上（定义格式只声明入口文件，不声明槽位）。
+    # 输入契约取实现自己的 ``bind_tool()``；成功数据契约由 ``FileMember`` 提供。
+    # 这个标记只属于「选择了文件后端」的这一条路径，不进通用解析。
+    stamped: dict[str, Any] = {}
+    for key, item in operations.items():
+        stamped[key] = _stamp_file_member(key, item).model_copy(
+            update={
+                "implementation": OperationImplementation(
+                    provider_slot="fs_backend",
+                    operation=key,
+                ),
+                "script": None,
+            }
+        )
     definition = definition.model_copy(
-        update={"operations": operations, "skills": {}, "assets": {}}
+        update={
+            "operations": stamped,
+            "provider_requirements": {
+                "fs_backend": ProviderRequirement(
+                    contract="ghrah.fs.v1",
+                    required_capabilities=["request"],
+                )
+            },
+            "skills": {},
+            "assets": {},
+        }
     )
     data = definition.model_dump(mode="json")
     encoded = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -88,11 +121,56 @@ def capture_file_version(raw: str | None = None) -> AbilityVersion:
     return AbilityVersion(digest, encoded, implementation)
 
 
+def _stamp_file_member(key: str, item: OperationDefinition) -> OperationDefinition:
+    """把文件切片的成员契约盖章进定义：输入取实现，成功数据取 ``FileMember``。
+
+    定义格式只索引实现位置，不承载参数 schema；文件切片的后端适配层知道这两个
+    成员各自的实现类，因此在捕获时补齐。只影响 ``fs_backend`` 上的已知成员，
+    其余成员的 schema 保持定义面的空占位（脚本后端尚未接线，成员本就不执行）。
+
+    Args:
+        key: 成员键（必须已在 :data:`FILE_OPERATIONS` 登记）。
+        item: 解析出来的成员定义。
+
+    Returns:
+        补齐 ``input_schema`` / ``output_schema`` 的成员定义。
+    """
+    member = FILE_OPERATIONS[key]
+    tool = member.operation().bind_tool() or {}
+    parameters = tool.get("function", {}).get("parameters", {})
+    return item.model_copy(
+        update={
+            "input_schema": closed_schema(parameters),
+            "output_schema": dict(member.output_schema),
+        }
+    )
+
+
+def _stamp_known_backends(definition: AbilityDefinition) -> AbilityDefinition:
+    """给声明在已知后端上的成员补 schema（内容包里也可能带这类成员）。
+
+    Args:
+        definition: 解析后的定义。
+
+    Returns:
+        补齐已知后端成员 schema 的定义；没有命中时原样返回。
+    """
+    updates = {
+        key: _stamp_file_member(key, item)
+        for key, item in definition.operations.items()
+        if item.implementation.provider_slot == "fs_backend" and key in FILE_OPERATIONS
+    }
+    if not updates:
+        return definition
+    operations = {**definition.operations, **updates}
+    return definition.model_copy(update={"operations": operations})
+
+
 def capture_ability_version(
     raw: str, *, root: Path, limits: CaptureLimits = CaptureLimits()
 ) -> AbilityVersion:
     """显式捕获完整容器；未知 Operation 后端保留声明并报告不可执行。"""
-    definition = parse_definition(raw, source=str(root))
+    definition = _stamp_known_backends(parse_definition(raw, source=str(root)))
     definition, manifest, blobs = capture_content(definition, root, limits)
     encoded = canonical(definition.model_dump(mode="json"))
     implementation = loaded_file_implementation() if definition.operations else "content-only:v1"
@@ -113,17 +191,34 @@ def import_skill_package(
     raw = canonical(
         {
             "format": "ghrah.ability-definition",
-            "schema_version": "0.2",
+            "schema_version": V1_SCHEMA_VERSION,
             "identity": identity,
             "title": identity["namespace"],
             "description": "Skill content",
-            "skills": {
-                key: {
-                    "body": {"path": "SKILL.md", "media_type": "text/markdown"},
-                    "assets": assets,
-                    "references": references,
-                }
+            "members": {
+                "skill": {"key": key, "body": "SKILL.md", "media_type": "text/markdown"},
+                "assets": _member_resources(assets),
+                "references": _member_resources(references),
             },
         }
     )
     return capture_ability_version(raw, root=root, limits=limits)
+
+
+def _member_resources(items: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+    """把具名内容清单摊成生成区的列表形状（``{path, media_type, digest?}``）。
+
+    Args:
+        items: ``{名字: {path, media_type, expected_digest?}}``（导入接口的历史入参）。
+
+    Returns:
+        按名字排序的成员列表；摘要键统一改名 ``digest``。
+    """
+    resources: list[dict[str, str]] = []
+    for _, entry in sorted(items.items()):
+        resource = {"path": entry["path"], "media_type": entry["media_type"]}
+        digest = entry.get("expected_digest")
+        if digest:
+            resource["digest"] = digest
+        resources.append(resource)
+    return resources

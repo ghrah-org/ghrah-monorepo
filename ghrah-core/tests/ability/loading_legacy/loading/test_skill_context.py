@@ -38,26 +38,14 @@ def _operation(key: str) -> dict:
     return {
         "title": f"{key} 标题",
         "description": f"{key} 说明。",
-        "input_schema": {"type": "object", "properties": {}},
-        "output_schema": {"type": "object", "properties": {}},
-        "implementation": {"provider_slot": "backend", "operation": key},
-        "execution": {
-            "mode": "request",
-            "timeout_ms": 1000,
-            "cancellation": "unsupported",
-            "on_revoke": "drain",
-            "retry": "never",
-        },
+        "entry": f"operations/{key}.py",
+        "effects": [],
     }
 
 
-def _skill(key: str, *, description: str | None = None) -> dict:
-    """造一个 skill 成员声明。"""
-    return {
-        "title": f"{key} 标题",
-        "description": description or f"{key} 技能说明。",
-        "body": {"path": "skills/SKILL.md", "media_type": "text/markdown"},
-    }
+def _skill(key: str) -> dict:
+    """造一个 skill 成员声明（v1 只声明正文位置与媒体类型）。"""
+    return {"body": "skills/SKILL.md", "media_type": "text/markdown"}
 
 
 def _definition(
@@ -67,22 +55,37 @@ def _definition(
     skills: dict[str, dict] | None = None,
 ) -> dict:
     """造一份合法的 ``ability.yaml`` 内容。"""
-    payload: dict[str, object] = {
+    members: dict[str, object] = {}
+    if operations is not None:
+        members["operations"] = operations
+    if skills:
+        # v1 只有一个技能成员：键由容器名隐含。
+        members["skill"] = next(iter(skills.values()))
+    return {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": {"namespace": name, "version": "0.1.0"},
         "title": name,
         "description": f"{name} 容器的说明。",
+        "members": members,
     }
-    if operations is not None:
-        payload["provider_requirements"] = {"backend": {"contract": "ghrah.test.v1"}}
-        payload["operations"] = operations
-    if skills is not None:
-        payload["skills"] = skills
-    return payload
 
 
-def _write(root: Path, name: str, payload: dict, *, body: str | None = "# body\n") -> Path:
+def _frontmatter(name: str, description: str | None = None) -> str:
+    """正文头部：名字与说明的作者是正文自己（用 YAML 转义，避免多行值破坏结构）。"""
+    text = description or f"{name} 技能说明。"
+    block = yaml.safe_dump({"name": name, "description": text}, allow_unicode=True, sort_keys=False)
+    return f"---\n{block}---\n\n"
+
+
+def _write(
+    root: Path,
+    name: str,
+    payload: dict,
+    *,
+    body: str | None = "# body\n",
+    description: str | None = None,
+) -> Path:
     """在池根目录下落一个能力包。"""
     package = root / name
     package.mkdir(parents=True, exist_ok=True)
@@ -94,7 +97,8 @@ def _write(root: Path, name: str, payload: dict, *, body: str | None = "# body\n
     if body is not None:
         skill_dir = package / "skills"
         skill_dir.mkdir(exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(body, encoding="utf-8", newline="\n")
+        text = body if body.startswith("---") else _frontmatter(name, description) + body
+        (skill_dir / "SKILL.md").write_text(text, encoding="utf-8", newline="\n")
     return package
 
 
@@ -120,8 +124,13 @@ class TestSkillCatalogShape:
         assert skill.container == "research"
 
     def test_operations_only_package_stays_out(self, tmp_path: Path) -> None:
-        """纯 operations 包不贡献技能。"""
-        _write(tmp_path, "fs", _definition("fs", operations={"read_file": _operation("read_file")}))
+        """纯 operations 包（盘上也没有 SKILL.md）不贡献技能。"""
+        _write(
+            tmp_path,
+            "fs",
+            _definition("fs", operations={"read_file": _operation("read_file")}),
+            body=None,
+        )
 
         catalog = load_skill_catalog(_pool(tmp_path))
 
@@ -136,10 +145,10 @@ class TestSkillCatalogShape:
 
         catalog = load_skill_catalog(_pool(tmp_path))
 
-        assert catalog.names == ("learn", "tool")
+        assert catalog.names == ("alpha", "zeta")
         assert [skill.full_name for skill in catalog.skills] == [
-            "alpha.learn",
-            "zeta.tool",
+            "alpha",
+            "zeta",
         ]
 
     def test_user_root_wins_on_duplicate_member(self, tmp_path: Path) -> None:
@@ -159,7 +168,7 @@ class TestSkillCatalogShape:
         skill = catalog.get("research")
         assert skill is not None
         assert skill.source == "builtin"
-        assert catalog.read("research").content == "# 内置\n"
+        assert catalog.read("research").content == _frontmatter("research") + "# 内置\n"
 
 
 class TestSkillDigest:
@@ -184,7 +193,10 @@ class TestSkillDigest:
         )
         before = load_skill_catalog(_pool(tmp_path)).digest
 
-        (package / "skills" / "SKILL.md").write_text("# 二\n", encoding="utf-8", newline="\n")
+        # 只改正文、保留 frontmatter：名字与说明没变，目录摘要就不该动。
+        (package / "skills" / "SKILL.md").write_text(
+            _frontmatter("research") + "# 二\n", encoding="utf-8", newline="\n"
+        )
 
         assert load_skill_catalog(_pool(tmp_path)).digest == before
 
@@ -198,10 +210,8 @@ class TestSkillDigest:
         _write(
             tmp_path,
             "research",
-            _definition(
-                "research",
-                skills={"research": _skill("research", description="换了说明。")},
-            ),
+            _definition("research", skills={"research": _skill("research")}),
+            description="换了说明。",
         )
 
         assert load_skill_catalog(_pool(tmp_path)).digest != before
@@ -252,10 +262,8 @@ class TestSkillRender:
         _write(
             tmp_path,
             "research",
-            _definition(
-                "research",
-                skills={"research": _skill("research", description="第一行\n第二行 <b>x</b>")},
-            ),
+            _definition("research", skills={"research": _skill("research")}),
+            description="第一行\n第二行 <b>x</b>",
         )
 
         text = load_skill_catalog(_pool(tmp_path)).render()
@@ -300,7 +308,7 @@ class TestSkillDescription:
 
 class TestSkillRead:
     def test_read_returns_verbatim_body(self, tmp_path: Path) -> None:
-        """正文逐字返回，附带定义面归属与来源根。"""
+        """正文逐字返回（含 frontmatter），附带定义面归属与来源根。"""
         body = "# 研究\n\n- 步骤一\n- 步骤二\n"
         _write(
             tmp_path,
@@ -312,7 +320,7 @@ class TestSkillRead:
 
         document = catalog.read("research")
 
-        assert document.content == body
+        assert document.content == _frontmatter("research") + body
         assert document.name == "research"
         assert document.key == "research"
         assert document.container == "research"

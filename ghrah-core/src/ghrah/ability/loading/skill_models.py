@@ -184,9 +184,9 @@ class SkillDocument:
     """单个能力包的正文读取结果：正文原文 + 路径。
 
     ``content`` 是正文文件的**完整原文**，逐字返回——不裁剪、不解释。
-    新格式的正文位置由定义面声明（本版为 ``skills/SKILL.md``），其中**不再有
-    frontmatter**（``name`` / ``description`` 已迁到 ``ability.yaml``）；旧格式
-    仍含 frontmatter 块。
+    正文位置由定义面声明；正文头部的 frontmatter 仍是 ``name`` / ``description``
+    的作者（见 :mod:`ghrah.ability.loading.skill_frontmatter`），所以这里原样
+    返回全文，不在读取阶段剥掉它。
 
     正文路径有三种落点，全部由本对象如实表达：容器在磁盘上时 ``path`` 是真实
     路径；容器来自包资源（装成 wheel 的内置容器）时 ``path`` 为 None，正文靠

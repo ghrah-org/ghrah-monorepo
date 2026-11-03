@@ -186,7 +186,7 @@ async def test_scope_clipping_revoke_and_old_references(container):
 async def test_snapshot_survives_source_deletion_and_host_restore(container):
     store, host, client, version, source, runs = container
     before = await client.call("/scheme/ability/reports/skill/guide", "read", {})
-    (source / "SKILL.md").write_text("uncommitted")
+    (source / "skill" / "SKILL.md").write_text("uncommitted")
     assert await client.call("/scheme/ability/reports/skill/guide", "read", {}) == before
     shutil.rmtree(source)
     other = AbilitySchemeHost(store)
@@ -207,8 +207,11 @@ async def test_snapshot_survives_source_deletion_and_host_restore(container):
 async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(container, tmp_path):
     store, host, client, version, source, runs = container
     data = yaml.safe_load((source / "ability.yaml").read_text())
-    data["operations"] = {}
+    data["members"]["operations"] = {}
     data["provider_requirements"] = {}
+    # 这个用例故意改内容：先摘掉生成区里登记过的摘要，否则捕获会按"声明不符"失败。
+    for item in data["members"].get("assets", []):
+        item.pop("digest", None)
     raw = yaml.safe_dump(data)
     content = capture_ability_version(raw, root=source)
     await store.commit_version(ADMIN, content)
@@ -222,7 +225,7 @@ async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(c
     )
     await host.install("content-only")
     before = await client.call("/scheme/ability/guide/skill/guide", "read", {})
-    (source / "assets/template.txt").write_text("new template")
+    (source / "skill" / "assets/template.txt").write_text("new template")
     updated = capture_ability_version(raw, root=source)
     await store.commit_version(ADMIN, updated)
     assert await client.call("/scheme/ability/guide/skill/guide", "read", {}) == before
@@ -334,26 +337,25 @@ def test_import_rejects_invalid_content(tmp_path, mutation):
     data = yaml.safe_load((source / "ability.yaml").read_text())
     limits = CaptureLimits()
     if mutation == "second-skill":
-        data["skills"]["other"] = data["skills"]["guide"]
+        data["members"]["skill"] = [data["members"]["skill"], data["members"]["skill"]]
     elif mutation in {"absolute", "parent"}:
-        data["skills"]["guide"]["body"]["path"] = (
-            "/etc/passwd" if mutation == "absolute" else "../outside"
-        )
+        data["members"]["skill"]["body"] = "/etc/passwd" if mutation == "absolute" else "../outside"
     elif mutation == "symlink":
-        (source / "assets/template.txt").unlink()
-        (source / "assets/template.txt").symlink_to("/etc/passwd")
+        (source / "skill" / "assets/template.txt").unlink()
+        (source / "skill" / "assets/template.txt").symlink_to("/etc/passwd")
     elif mutation == "dangling":
-        (source / "SKILL.md").write_text(
-            (source / "SKILL.md").read_text() + "\n[missing](references/missing.md)\n"
-        )
+        body = source / "skill" / "SKILL.md"
+        body.write_text(body.read_text() + "\n[missing](references/missing.md)\n")
     elif mutation == "top-asset":
         data["assets"] = {"orphan": {"path": "assets/template.txt"}}
     elif mutation == "unknown":
-        data["skills"]["guide"]["mystery"] = True
+        data["members"]["skill"]["mystery"] = True
     elif mutation == "oversize":
         limits = CaptureLimits(file_bytes=1)
     elif mutation == "bad-digest":
-        data["skills"]["guide"]["assets"]["template"]["expected_digest"] = "sha256:wrong"
+        for item in data["members"]["assets"]:
+            if item["path"].endswith("template.txt"):
+                item["digest"] = "sha256:wrong"
     with pytest.raises((ValueError, OSError, ManifestValidationError)):
         capture_ability_version(yaml.safe_dump(data), root=source, limits=limits)
 
@@ -411,8 +413,8 @@ def test_capture_handles_path_replacement_without_following_symlink(tmp_path, mo
         nonlocal swapped
         if path == "template.txt" and not swapped:
             swapped = True
-            (source / "assets/template.txt").unlink()
-            (source / "assets/template.txt").symlink_to("/etc/passwd")
+            (source / "skill" / "assets/template.txt").unlink()
+            (source / "skill" / "assets/template.txt").symlink_to("/etc/passwd")
         return original(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(content.os, "open", replace_before_open)
@@ -427,19 +429,28 @@ def test_standard_import_uses_body_metadata_and_rejects_duplicate_yaml(tmp_path)
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
     data = yaml.safe_load((source / "ability.yaml").read_text())
-    skill = data["skills"]["guide"]
+
+    def local(item: dict) -> dict:
+        """生成区里的路径相对包根；导入接口的根是技能目录，去掉 `skill/` 前缀。"""
+        return {
+            "path": Path(item["path"]).relative_to("skill").as_posix(),
+            "media_type": item["media_type"],
+        }
+
+    assets = {Path(item["path"]).stem: local(item) for item in data["members"]["assets"]}
+    references = {Path(item["path"]).stem: local(item) for item in data["members"]["references"]}
     version = import_skill_package(
-        source,
+        source / "skill",
         key="guide",
         identity={"namespace": "reports", "version": "1"},
-        assets=skill["assets"],
-        references=skill["references"],
+        assets=assets,
+        references=references,
     )
     assert not version.definition().operations
     assert version.definition().skills["guide"].title == "reporting-guide"
     with pytest.raises(ManifestValidationError, match="重复键"):
         capture_ability_version(
-            (source / "ability.yaml").read_text() + "\nskills: {}\n", root=source
+            (source / "ability.yaml").read_text() + "\ntitle: 重复\n", root=source
         )
 
 
@@ -525,7 +536,7 @@ async def test_schema_two_migrates_only_operation_grants(tmp_path):
 async def test_same_operation_key_does_not_select_an_unsupported_backend(container):
     store, host, client, version, source, runs = container
     data = yaml.safe_load((source / "ability.yaml").read_text())
-    data["operations"]["read_file"]["implementation"]["provider_slot"] = "script"
+    data["members"]["operations"]["read_file"]["provider"] = "script"
     replacement = capture_ability_version(yaml.safe_dump(data), root=source)
     await store.commit_version(ADMIN, replacement)
     await store.select_instance(

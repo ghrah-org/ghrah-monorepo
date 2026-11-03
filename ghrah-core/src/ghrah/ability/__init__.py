@@ -11,6 +11,11 @@ from ghrah.ability.assembly import (
     AbilitySourceMode,
 )
 from ghrah.ability.execution.base import Ability as Operation
+from ghrah.ability.loading.ability_catalog import (
+    ability_class,
+    create_ability,
+    load_all_builtin_manifests,
+)
 from ghrah.ability.loading.ability_roots import AbilityRoot, default_pool
 from ghrah.ability.loading.ability_scan import (
     AbilityAsset,
@@ -29,6 +34,7 @@ from ghrah.ability.loading.ability_schema import (
     SkillDefinition,
 )
 from ghrah.ability.loading.catalog import CatalogReport, scan_catalog
+from ghrah.ability.loading.skill_context import SkillCatalog, load_skill_catalog
 from ghrah.ability.loading.skill_provider import SkillAbilityProvider
 from ghrah.ability.source import BuiltinAbilitySource
 
@@ -51,8 +57,13 @@ __all__ = [
     "OperationDefinition",
     "ProviderRequirement",
     "SkillAbilityProvider",
+    "SkillCatalog",
     "SkillDefinition",
+    "ability_class",
+    "create_ability",
     "default_pool",
+    "load_all_builtin_manifests",
+    "load_skill_catalog",
     "scan_abilities",
     "scan_catalog",
 ]

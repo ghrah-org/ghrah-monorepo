@@ -51,34 +51,27 @@ def _definition(
     identity: dict[str, object] = {"namespace": namespace or name, "version": "0.1.0"}
     if identity_name is not None:
         identity["name"] = identity_name
-    payload: dict[str, object] = {
-        "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
-        "identity": identity,
-        "title": name,
-        "description": f"{name} 容器。",
-    }
-    if skills is not None:
-        payload["skills"] = skills
+    members: dict[str, object] = {}
+    if skills:
+        # v1 只有一个技能成员：键由容器名隐含，测试给出的键不再参与解析。
+        members["skill"] = next(iter(skills.values()))
     if operations:
-        payload["provider_requirements"] = {"backend": {"contract": "ghrah.test.v1"}}
-        payload["operations"] = {
+        members["operations"] = {
             f"{name}_op": {
                 "title": "Op",
                 "description": "一个测试成员。",
-                "input_schema": {"type": "object", "properties": {}},
-                "output_schema": {"type": "object", "properties": {}},
-                "implementation": {"provider_slot": "backend", "operation": f"{name}_op"},
-                "execution": {
-                    "mode": "request",
-                    "timeout_ms": 1000,
-                    "cancellation": "unsupported",
-                    "on_revoke": "drain",
-                    "retry": "never",
-                },
+                "entry": f"operations/{name}_op.py",
+                "effects": [],
             }
         }
-    return payload
+    return {
+        "format": "ghrah.ability-definition",
+        "schema_version": "1",
+        "identity": identity,
+        "title": name,
+        "description": f"{name} 容器。",
+        "members": members,
+    }
 
 
 def _skill_member(name: str, *, body_path: str = "skills/SKILL.md") -> dict[str, object]:
@@ -92,9 +85,8 @@ def _skill_member(name: str, *, body_path: str = "skills/SKILL.md") -> dict[str,
         ``skills`` 表里的一项。
     """
     return {
-        "title": name,
-        "description": f"{name} 技能。",
-        "body": {"path": body_path, "media_type": "text/markdown"},
+        "body": body_path,
+        "media_type": "text/markdown",
     }
 
 
@@ -127,7 +119,8 @@ def _write_package(
     if body:
         skill_dir = package / "skills"
         skill_dir.mkdir(exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8", newline="\n")
+        head = f"---\nname: {name}\ndescription: {name} 技能。\n---\n\n"
+        (skill_dir / "SKILL.md").write_text(head + f"# {name}\n", encoding="utf-8", newline="\n")
     return package
 
 
@@ -205,7 +198,7 @@ class TestCollection:
 
         assert [entry.container for entry in result.entries] == ["alpha"]
         assert result.entries[0].root.source == "builtin"
-        assert [skill.key for skill in result.skills] == ["a"]
+        assert [skill.key for skill in result.skills] == ["alpha"]
         assert len(result.issues) == 1
         assert "重复的容器名" in result.issues[0].reason
         assert "builtin" in result.issues[0].reason
@@ -316,8 +309,8 @@ class TestSkills:
         assert [skill.full_name for skill in skills] == ["research"]
 
     def test_definition_without_skills_yields_none(self, tmp_path: Path) -> None:
-        """纯操作包不产出 skill 成员。"""
-        _write_package(tmp_path, "alpha", payload=_definition("alpha", operations=True))
+        """盘上没有正文、定义面也没声明 → 不产出 skill 成员。"""
+        _write_package(tmp_path, "alpha", payload=_definition("alpha", operations=True), body=False)
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
@@ -343,19 +336,21 @@ class TestSkills:
         assert result.issues == ()
 
     def test_second_skill_member_is_rejected(self, tmp_path: Path) -> None:
-        """一个能力包只支持一个 skill 成员：声明两个时整份定义非法。
+        """一个能力包只支持一个 skill 成员：契约层用单数字段表达，写第二个即非法。
 
-        容器与技能一一对应（技能是容器的插件包），多条声明没有可表达的落点，
-        因此在契约层 fail-closed——扫描把它记成问题，而不是只收其中一条。
+        容器与技能一一对应（技能是容器的插件包），因此 v1 的 ``members.skill`` 是
+        **单数**：想装第二个技能请独立成包——多写一个技能没有任何可表达的落点，
+        契约层直接拒绝（``extra="forbid"`` / 类型不匹配）。
         """
-        payload = _definition(
-            "multi",
-            skills={"a": _skill_member("a"), "b": _skill_member("b")},
-        )
+        payload = _definition("multi", skills={"a": _skill_member("a")})
+        payload["members"]["skill"] = [
+            _skill_member("a"),
+            _skill_member("b"),
+        ]
         _write_package(tmp_path, "multi", payload=payload, body=False)
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
         assert result.entries == ()
         assert result.skills == ()
-        assert "只支持一个 skill 成员" in result.issues[0].reason
+        assert "skill" in result.issues[0].reason

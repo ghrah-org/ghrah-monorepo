@@ -122,7 +122,7 @@ DEGRADE_UNSAFE_PATH: str = "unsafe_path"
 _UNSAFE_PATH_CHARS: tuple[str, ...] = ("\t", "\n", "\r")
 
 ENTRY_BODY_RELPATH: str = f"{SKILL_BODY_DIR}/{SKILL_FILE_NAME}"
-"""新格式正文相对路径：``skills/SKILL.md``。"""
+"""新格式正文相对路径：``skill/SKILL.md``。"""
 
 
 @dataclass(frozen=True)

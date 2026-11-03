@@ -58,7 +58,6 @@ __all__ = [
     "builtin_full_names",
     "builtin_handlers",
     "builtin_pool",
-    "build_tool_schema",
     "create_ability",
     "has_handler",
     "load_all_builtin_manifests",
@@ -224,18 +223,50 @@ def _json_type(raw: Any) -> str:
     return str(raw)
 
 
+def _unwrap_nullable(prop: Mapping[str, Any]) -> Mapping[str, Any]:
+    """把 pydantic 生成的 ``anyOf[T, null]`` 收成 ``T`` 分支（工具面只表达可空性）。
+
+    ``bind_tool()`` 的参数 schema 由 pydantic 模型生成，可选字段会写成
+    ``{"anyOf": [{"type": "integer", ...}, {"type": "null"}]}``；工具面只支持单一
+    类型，这里取唯一的非 null 分支，其余键（description / default）保留外层值。
+
+    Args:
+        prop: 单条属性 schema。
+
+    Returns:
+        收平后的属性 schema；本来就有 ``type`` 时原样返回。
+
+    Raises:
+        ManifestValidationError: 联合类型里非 null 分支不止一个——工具面无法表达。
+    """
+    if prop.get("type") is not None:
+        return prop
+    branches = prop.get("anyOf")
+    if not isinstance(branches, list):
+        return prop
+    primitives = [
+        item for item in branches if isinstance(item, dict) and item.get("type") != "null"
+    ]
+    if len(primitives) != 1:
+        raise ManifestValidationError(f"不支持的联合类型：{prop!r}")
+    merged = {**prop, **primitives[0]}
+    merged.pop("anyOf", None)
+    return merged
+
+
 def _to_tool_parameter(prop: Mapping[str, Any], *, required: bool) -> ToolParameter:
     """把 JSON Schema 的一条属性转成工具参数模型（``items`` 递归转换）。
 
-    用在 :func:`_build_tool` 组装入参表。
+    用在 :func:`_bound_tool` 把 ``bind_tool()`` 的参数 schema 摊成工具面。
 
     Args:
-        prop: 单条属性 schema（来自 ``input_schema.properties.<名>``）。
-        required: 该属性是否列在 ``input_schema.required`` 里。
+        prop: 单条属性 schema（来自 ``parameters.properties.<名>``）。
+        required: 该属性是否列在 ``parameters.required`` 里。
 
     Returns:
         对应的 :class:`ToolParameter`；``items`` 是对象时递归转换。
     """
+    prop = _unwrap_nullable(prop)
     items_raw = prop.get("items")
     return ToolParameter(
         type=_json_type(prop.get("type")),
@@ -252,24 +283,38 @@ def _to_tool_parameter(prop: Mapping[str, Any], *, required: bool) -> ToolParame
     )
 
 
-def _build_tool(
-    operation_key: str, operation: OperationDefinition, *, enabled: bool
+def _bound_tool(
+    implementation: type[Ability], operation_key: str, operation: OperationDefinition
 ) -> ToolSchema | None:
-    """由成员的 ``input_schema`` 组装模型工具面的 schema。
+    """从实现自己的 ``bind_tool()`` 取工具面（参数 schema 的唯一作者）。
 
-    工具名取成员键（不是全名）：模型看到的就是 ``read_file`` 这类短名。
+    一个成员进不进工具面、有哪些参数，全看实现返回什么：``None`` 表示该成员不
+    接受模型调用（如 ``conversation``）。定义面只索引实现位置，不再承载 schema，
+    也不再有独立开关。
 
     Args:
+        implementation: 实现脚本里的唯一 Ability 子类。
         operation_key: 成员键，用作工具名。
-        operation: 该成员的定义（取 ``description`` 与 ``input_schema``）。
-        enabled: 是否进工具面（取自定义面的 ``expose``）。
+        operation: 该成员的定义（只取 ``description`` 作兜底文案）。
 
     Returns:
-        :class:`ToolSchema`；``enabled`` 为 False 时返回 None。
+        :class:`ToolSchema`；实现不绑定工具时为 None。
+
+    Raises:
+        ManifestValidationError: 实现类无法零参构造，拿不到 ``bind_tool()``。
     """
-    if not enabled:
+    try:
+        binding = implementation().bind_tool()
+    except TypeError as exc:
+        raise ManifestValidationError(
+            f"{implementation.__module__}: 无法零参构造以读取 bind_tool()：{exc}"
+        ) from exc
+    if not isinstance(binding, dict):
         return None
-    schema = operation.input_schema
+    function = binding.get("function")
+    if not isinstance(function, dict):
+        return None
+    schema = function.get("parameters") or {}
     properties = schema.get("properties") or {}
     required_names = set(schema.get("required") or [])
     parameters = {
@@ -277,24 +322,11 @@ def _build_tool(
         for name, prop in properties.items()
         if isinstance(prop, dict)
     }
-    return ToolSchema(name=operation_key, description=operation.description, parameters=parameters)
-
-
-def build_tool_schema(operation_key: str, operation: OperationDefinition) -> ToolSchema | None:
-    """按定义面组装模型工具 schema（公开入口）。
-
-    用在「只要工具面、不要运行时 view」的场景：外部列举工具、注入模型上下文、
-    与 ``list_abilities`` 的展示对齐。与 :func:`_project` 共用同一个转换，
-    因此工具面只有一个形状，不会出现两套参数契约。
-
-    Args:
-        operation_key: 成员键，用作工具名。
-        operation: 该成员的定义（取 ``description`` / ``input_schema`` / ``expose``）。
-
-    Returns:
-        :class:`ToolSchema`；``operation.expose`` 为 False 时返回 None。
-    """
-    return _build_tool(operation_key, operation, enabled=operation.expose)
+    return ToolSchema(
+        name=operation_key,
+        description=str(function.get("description") or operation.description),
+        parameters=parameters,
+    )
 
 
 def _project(
@@ -303,8 +335,11 @@ def _project(
     """定义面 + 实现面 → 运行时 view（本模块的投影核心）。
 
     做三件事：按约定 import 实现脚本并校验「恰好一个实现类」；从脚本读取
-    ``PERMISSIONS`` / ``SUMMARY`` / ``TAGS`` 声明；把定义面的 in/out schema
-    与实现面的声明合成 :class:`AbilityManifest`。
+    ``PERMISSIONS`` / ``SUMMARY`` / ``TAGS`` 声明；调实现自己的 ``bind_tool()``
+    取工具面，与实现面的声明合成 :class:`AbilityManifest`。
+
+    工具参数的唯一作者是实现（``bind_tool()``）：定义面只索引实现位置，不承载
+    schema；成员进不进工具面同样由实现返回 ``None`` 与否决定。
 
     挂载面不携带 hook 引用：``AbilityManifest.hooks`` 仅供读取旧 manifest，
     内置树投影不填充（安全语义由 ``PERMISSIONS`` 声明、内核固定实现）。
@@ -323,7 +358,7 @@ def _project(
     """
     module = _operation_module(definition.container_name, operation_key)
     # 约定校验：一个脚本恰好定义一个有且只有一个 Ability 实现类。
-    _operation_class(module)
+    implementation = _operation_class(module)
 
     permissions_raw = getattr(module, "PERMISSIONS", None)
     if not isinstance(permissions_raw, dict):
@@ -352,7 +387,7 @@ def _project(
             tags=[str(tag) for tag in tags],
             permissions=permissions,
         ),
-        tool=_build_tool(operation_key, operation, enabled=operation.expose),
+        tool=_bound_tool(implementation, operation_key, operation),
         implementation=ImplementationDef(type="builtin", handler=operation_key),
     )
 

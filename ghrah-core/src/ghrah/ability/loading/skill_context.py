@@ -37,6 +37,7 @@ from typing import Protocol, runtime_checkable
 from ghrah.ability.loading.ability_roots import AbilityRoot, default_pool
 from ghrah.ability.loading.ability_scan import (
     AbilityScanIssue,
+    AbilityScanResult,
     AbilitySkill,
     scan_ability_definitions,
 )
@@ -253,7 +254,28 @@ class SkillCatalog:
     """全部技能成员，按全名升序。"""
 
     issues: tuple[AbilityScanIssue, ...]
-    """扫描期问题（根缺失、定义非法、正文不存在…），收集式。"""
+    """扫描期问题（根缺失、定义非法、正文不存在、lock 漂移…），收集式。
+
+    与 ``scan_ability_definitions`` 的两个问题清单合并（``issues + lock_issues``）：
+    目录面是模型实际读到的东西，登记面的漂移同样影响"这份正文是不是我批准的那份"，
+    因此一并暴露，不留在 provider 内部。
+    """
+
+    @classmethod
+    def from_scan(cls, scan: AbilityScanResult) -> SkillCatalog:
+        """由一次扫描结果构造目录（与 provider 同源同口径）。
+
+        Args:
+            scan: :func:`~ghrah.ability.loading.ability_scan.scan_ability_definitions` 的结果。
+
+        Returns:
+            :class:`SkillCatalog`，问题清单已合并登记面问题。
+        """
+        return cls(
+            roots=scan.roots,
+            skills=scan.skills,
+            issues=scan.issues + scan.lock_issues,
+        )
 
     @property
     def digest(self) -> str:
@@ -322,8 +344,7 @@ def load_skill_catalog(pool: Sequence[AbilityRoot] | None = None) -> SkillCatalo
     （如 ``fs``）不会出现在技能面里。
     """
     roots = tuple(pool) if pool is not None else default_pool()
-    scan = scan_ability_definitions(roots)
-    return SkillCatalog(roots=roots, skills=scan.skills, issues=scan.issues)
+    return SkillCatalog.from_scan(scan_ability_definitions(roots))
 
 
 def _escape_text(text: str) -> str:
