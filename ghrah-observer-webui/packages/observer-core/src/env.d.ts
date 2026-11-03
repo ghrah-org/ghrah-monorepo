@@ -9,7 +9,7 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
-// Global WS URL injected by the bootloader static serve (index.html script tag
+// Global WS URL injected by the ghrah-toolchain static serve (index.html script tag
 // preceding the first module script). Declared for DOM-lib consumers; the store
 // reads it defensively via a globalThis cast (no DOM lib dependency here).
 interface Window {

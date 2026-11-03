@@ -85,6 +85,23 @@ function chainTarget(name: string): ChainTarget {
   return { ...target(name), sessionId: `${name}-session`, branchId: `${name}-branch` };
 }
 
+/** 画布视口横向夹具（happy-dom 无布局）：scrollWidth 可变，scrollLeft 赋值带钳制。 */
+function mockViewportScroll(
+  el: HTMLElement,
+  metrics: { scrollWidth: number; clientWidth: number },
+): void {
+  let left = 0;
+  Object.defineProperty(el, "scrollWidth", { configurable: true, get: () => metrics.scrollWidth });
+  Object.defineProperty(el, "clientWidth", { configurable: true, get: () => metrics.clientWidth });
+  Object.defineProperty(el, "scrollLeft", {
+    configurable: true,
+    get: () => left,
+    set: (v: number) => {
+      left = Math.max(0, Math.min(v, metrics.scrollWidth - metrics.clientWidth));
+    },
+  });
+}
+
 function setActiveChain(name: string, overrides: Partial<ActionNode>[]) {
   const nodes = chainNodes(name, overrides);
   const agent = target(name);
@@ -1109,5 +1126,110 @@ describe("ActionChainPanel", () => {
     await wrapper.get<HTMLSelectElement>(".chain-branch-select").setValue("alpha-branch");
     await wrapper.vm.$nextTick();
     expect(transformOf()).toEqual(branch1Transforms);
+  });
+
+  // ── 画布横向视口：链自左向右生长，默认停在 Head 端 ──
+
+  it("opens at the rightmost head so the latest node is visible", async () => {
+    const agents = useAgentsStore();
+    agents.onAgentSpawned(spawn("alpha"));
+    setActiveChain("alpha", [
+      { id: "a1", parent_id: null, timestamp: "t1" },
+      { id: "a2", parent_id: "a1", timestamp: "t2" },
+    ]);
+    const wrapper = mount(ActionChainPanel, { props: { agent: target("alpha") } });
+    const viewport = wrapper.find(".ac-canvas-viewport").element as HTMLElement;
+    mockViewportScroll(viewport, { scrollWidth: 1000, clientWidth: 200 });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(800); // 1000 - 200：Head 可见
+    wrapper.unmount();
+  });
+
+  it("follows appended nodes while at the right end but not after scrolling back", async () => {
+    const agents = useAgentsStore();
+    agents.onAgentSpawned(spawn("alpha"));
+    setActiveChain("alpha", [
+      { id: "a1", parent_id: null, timestamp: "t1" },
+      { id: "a2", parent_id: "a1", timestamp: "t2" },
+    ]);
+    const wrapper = mount(ActionChainPanel, { props: { agent: target("alpha") } });
+    const viewport = wrapper.find(".ac-canvas-viewport").element as HTMLElement;
+    const metrics = { scrollWidth: 1000, clientWidth: 200 };
+    mockViewportScroll(viewport, metrics);
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(800);
+
+    // 贴右时新节点到达（Head 前移）：继续跟随 Head
+    metrics.scrollWidth = 1200;
+    setActiveChain("alpha", [
+      { id: "a1", parent_id: null, timestamp: "t1" },
+      { id: "a2", parent_id: "a1", timestamp: "t2" },
+      { id: "a3", parent_id: "a2", timestamp: "t3" },
+    ]);
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(1000);
+
+    // 用户左翻查看历史：新节点不得把视口拽回右端
+    viewport.scrollLeft = 300;
+    viewport.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+    metrics.scrollWidth = 1600;
+    setActiveChain("alpha", [
+      { id: "a1", parent_id: null, timestamp: "t1" },
+      { id: "a2", parent_id: "a1", timestamp: "t2" },
+      { id: "a3", parent_id: "a2", timestamp: "t3" },
+      { id: "a4", parent_id: "a3", timestamp: "t4" },
+    ]);
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(300);
+    wrapper.unmount();
+  });
+
+  it("returns to the rightmost end when switching the viewed session", async () => {
+    const agents = useAgentsStore();
+    const sessions = useSessionsStore();
+    agents.onAgentSpawned(spawn("alpha"));
+    const agent = target("alpha");
+    setActiveChain("alpha", [
+      { id: "a1", parent_id: null, timestamp: "t1" },
+      { id: "a2", parent_id: "a1", timestamp: "t2" },
+    ]);
+    sessions.replaceAgentSessions(agent, [
+      SessionInfoPayloadSchema.parse({
+        session_id: "alpha-session",
+        agent_name: "alpha",
+        root_node_id: "a1",
+        active_branch_id: "alpha-branch",
+      }),
+      SessionInfoPayloadSchema.parse({
+        session_id: "alpha-session-2",
+        agent_name: "alpha",
+        root_node_id: "z1",
+        active_branch_id: "alpha-branch",
+      }),
+    ]);
+    sessions.setActiveSession(agent, "alpha-session");
+    chains_setup2();
+
+    const wrapper = mount(ActionChainPanel, { props: { agent: target("alpha") } });
+    const viewport = wrapper.find(".ac-canvas-viewport").element as HTMLElement;
+    mockViewportScroll(viewport, { scrollWidth: 1000, clientWidth: 200 });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(800);
+
+    viewport.scrollLeft = 300; // 在第一条链上左翻
+    viewport.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+
+    // 切换 viewed Session = 打开另一条链：回到 Head 端
+    await wrapper.get<HTMLSelectElement>(".chain-session-select").setValue("alpha-session-2");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(viewport.scrollLeft).toBe(800);
   });
 });
