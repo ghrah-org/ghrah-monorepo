@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -68,10 +68,12 @@ __all__ = ["EditFileAbility", "EditFileInput"]
 class EditFileInput(BaseModel):
     """EditFile 工具的输入参数。"""
 
-    file_path: str
-    old_str: str
-    new_str: str
-    encoding: str = "utf-8"
+    file_path: str = Field(description="Path to the file to edit")
+    old_str: str = Field(
+        description="The exact string to find and replace (must be unique in the file)"
+    )
+    new_str: str = Field(description="The replacement string")
+    encoding: str = Field(default="utf-8", description="Text encoding for the file")
 
 
 class EditFileAbility(Ability):

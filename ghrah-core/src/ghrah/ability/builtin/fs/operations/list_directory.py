@@ -24,7 +24,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -67,10 +67,21 @@ __all__ = ["ListDirectoryAbility", "ListDirectoryInput"]
 class ListDirectoryInput(BaseModel):
     """ListDirectory 工具的输入参数。"""
 
-    dir_path: str
-    recursive: bool = False
-    offset: int = 0
-    limit: int = 0
+    dir_path: str = Field(description="Path to the directory to list")
+    recursive: bool = Field(default=False, description="Recursively list nested directories")
+    offset: int = Field(
+        default=0,
+        description=(
+            "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)"
+        ),
+    )
+    limit: int = Field(
+        default=0,
+        description=(
+            "Max number of entries to return "
+            "(0 = no limit; pagination active when offset or limit is set)"
+        ),
+    )
 
 
 class ListDirectoryAbility(Ability):

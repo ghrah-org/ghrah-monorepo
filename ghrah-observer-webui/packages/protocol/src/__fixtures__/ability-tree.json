@@ -11,7 +11,7 @@
     "offset": 0,
     "path": "assets/mark.bin",
     "total_bytes": 4,
-    "version_digest": "sha256:2e68488ca73f6d621d75db0cd0233c899f0345e36e931a8946929a3be2b61cc5"
+    "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
   },
   "bound": {
     "error": null,
@@ -304,7 +304,7 @@
           ],
           "revision": 1,
           "skill": null,
-          "version_digest": "sha256:cd311b976de535ba5d35fc8838c9a7fb49d7b2cc0a50d65b3abc4bc1d566c0d9"
+          "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
         }
       ],
       "agent_id": "alice",
@@ -620,7 +620,7 @@
         ],
         "revision": 1,
         "skill": null,
-        "version_digest": "sha256:cd311b976de535ba5d35fc8838c9a7fb49d7b2cc0a50d65b3abc4bc1d566c0d9"
+        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
       }
     ],
     "agent_id": "alice",
@@ -965,7 +965,7 @@
           ],
           "title": "reporting-guide"
         },
-        "version_digest": "sha256:2e68488ca73f6d621d75db0cd0233c899f0345e36e931a8946929a3be2b61cc5"
+        "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
       }
     ],
     "agent_id": "alice",
@@ -1281,7 +1281,7 @@
         ],
         "revision": 1,
         "skill": null,
-        "version_digest": "sha256:cd311b976de535ba5d35fc8838c9a7fb49d7b2cc0a50d65b3abc4bc1d566c0d9"
+        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
       }
     ],
     "agent_id": "alice",
@@ -1315,7 +1315,7 @@
     "offset": 0,
     "path": "SKILL.md",
     "total_bytes": 203,
-    "version_digest": "sha256:2e68488ca73f6d621d75db0cd0233c899f0345e36e931a8946929a3be2b61cc5"
+    "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
   },
   "unavailable": {
     "abilities": [
@@ -1606,7 +1606,7 @@
         ],
         "revision": 1,
         "skill": null,
-        "version_digest": "sha256:cd311b976de535ba5d35fc8838c9a7fb49d7b2cc0a50d65b3abc4bc1d566c0d9"
+        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
       }
     ],
     "agent_id": "alice",

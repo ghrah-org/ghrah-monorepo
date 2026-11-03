@@ -27,7 +27,7 @@ import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.command_safety import (
@@ -83,8 +83,8 @@ _FOLD_TAIL_LINES = 40
 
 
 class ExecuteCommandInput(BaseModel):
-    command: str
-    working_dir: str | None = None
+    command: str = Field(description="The shell command to execute")
+    working_dir: str | None = Field(default=None, description="Working directory for the command")
 
 
 @dataclass

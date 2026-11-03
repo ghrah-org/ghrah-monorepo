@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -72,10 +72,15 @@ __all__ = ["MoveFileAbility", "MoveFileInput"]
 class MoveFileInput(BaseModel):
     """MoveFile 工具的输入参数。"""
 
-    source_path: str
-    destination_path: str
-    create_dirs: bool = True
-    overwrite: bool = False
+    source_path: str = Field(description="Path to the source file")
+    destination_path: str = Field(description="Path to the destination")
+    create_dirs: bool = Field(
+        default=True,
+        description="Create parent directories of the destination if they do not exist",
+    )
+    overwrite: bool = Field(
+        default=False, description="Overwrite the destination file if it already exists"
+    )
 
 
 class MoveFileAbility(Ability):

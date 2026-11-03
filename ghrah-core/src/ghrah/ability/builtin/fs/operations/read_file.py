@@ -64,8 +64,8 @@ __all__ = ["ReadFileAbility", "ReadFileInput"]
 class ReadFileInput(BaseModel):
     """ReadFile 工具的输入参数。"""
 
-    file_path: str
-    encoding: str = "utf-8"
+    file_path: str = Field(description="Path to the file to read")
+    encoding: str = Field(default="utf-8", description="Text encoding for the file")
     offset: int = Field(default=0, ge=0, description="0-based line number to start from")
     limit: int = Field(
         default=0, ge=0, description="Max lines to return; 0 = whole file (legacy behavior)"
