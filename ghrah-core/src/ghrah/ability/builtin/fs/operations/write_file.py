@@ -23,7 +23,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -67,10 +67,12 @@ __all__ = ["WriteFileAbility", "WriteFileInput"]
 class WriteFileInput(BaseModel):
     """WriteFile 工具的输入参数。"""
 
-    file_path: str
-    content: str
-    create_dirs: bool = True
-    encoding: str = "utf-8"
+    file_path: str = Field(description="Path to the file to write")
+    content: str = Field(description="Content to write to the file")
+    create_dirs: bool = Field(
+        default=True, description="Create parent directories if they do not exist"
+    )
+    encoding: str = Field(default="utf-8", description="Text encoding for the file")
 
 
 class WriteFileAbility(Ability):

@@ -2450,7 +2450,16 @@ button:focus-visible,
 .ac-canvas {
   display: grid;
   grid-template-rows: auto 1fr;
+  /* 详情未打开时画布可用满高度；多泳道自然高度超出则在视口内纵向滚动 */
+  flex: 0 1 auto;
+  max-height: 100%;
   min-height: 0;
+}
+
+/* 详情打开时最多占 60%，其余留给详情区 */
+.ac-canvas--detail-open {
+  flex: 0 0 auto;
+  max-height: 60%;
 }
 
 .ac-legend {
@@ -2588,9 +2597,16 @@ button:focus-visible,
 
 /* 详情容器（S3）：详情 + 操作行（重试入口） */
 .ac-detail-wrap {
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  /* 吃掉画布之外的全部剩余高度：详情区随可用空间伸展，而不是被固定上限截断 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 未选中节点时详情只有占位行：不参与收缩，避免被画布挤到容器外 */
+.ac-detail-wrap--empty {
+  flex-shrink: 0;
 }
 
 .ac-detail-actions {
@@ -2601,13 +2617,13 @@ button:focus-visible,
   border-top: 1px solid var(--ac-node-border);
 }
 
-/* 详情面板：画布下方固定高度独立滚动（不与画布视口争用滚动） */
+/* 详情面板：占满详情区，仅当内容超出可用高度时才内部滚动（不与画布视口争用滚动） */
 .ac-detail {
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  max-height: 16rem;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--ac-node-border);
@@ -2615,6 +2631,7 @@ button:focus-visible,
 }
 
 .ac-detail--empty {
+  flex: 0 0 auto;
   justify-content: center;
 }
 

@@ -23,7 +23,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -65,7 +65,7 @@ __all__ = ["DeleteFileAbility", "DeleteFileInput"]
 class DeleteFileInput(BaseModel):
     """DeleteFile 工具的输入参数。"""
 
-    file_path: str
+    file_path: str = Field(description="Path to the file to delete")
 
 
 class DeleteFileAbility(Ability):
