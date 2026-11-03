@@ -15,6 +15,11 @@
 * **执行入口**：持有连接、执行调用。工具信息不在此处二次持有——它属于技能模块
   的本地配置，这里拿到的只是「能调哪些工具名」这一份授权集合。
 
+为核对这份本地快照，另外提供一个**显式调用**的远端查询：:func:`list_endpoint_tools`
+（已知地址即可，不依赖配置）与 :func:`list_tools` / :func:`list_tool_names`（已持有
+连接时用）。它们只把服务器自报的清单当次返回，不落库、不进授权集合，因而不构成
+第二份真源。
+
 设计上的两个关键取舍：
 
 **工具信息全部来自本地配置。** 读取一个技能声明的 MCP 能力全程离线，不依赖任何
@@ -31,8 +36,11 @@ from __future__ import annotations
 
 from ghrah.mcp.agentconf_source import AgentconfMcpSource, load_spec
 from ghrah.mcp.client import (
+    RemoteTool,
     call_tool_once,
+    list_endpoint_tools,
     list_tool_names,
+    list_tools,
     open_client,
     read_only_hint,
     resolve_headers,
@@ -114,6 +122,7 @@ __all__ = [
     "McpToolMissingError",
     "McpToolSpec",
     "ProtocolPreference",
+    "RemoteTool",
     "SchemaRender",
     "StaticCredentials",
     "ToolOutcome",
@@ -125,7 +134,9 @@ __all__ = [
     "explain_status",
     "format_unknown_tool_message",
     "is_session_terminated",
+    "list_endpoint_tools",
     "list_tool_names",
+    "list_tools",
     "load_spec",
     "no_credentials",
     "open_client",
