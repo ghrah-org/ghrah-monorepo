@@ -5,6 +5,7 @@
 ## 仓库结构
 
 - `ghrah-core/` — Python 核心包（PyPI: ghrah-core）；文件 Scheme 切片为显式 `scheme` extra，默认安装不依赖尚未发布的 ghrah-scheme，当前只在 workspace／本地 wheel 组合验证。
+- `ghrah-kernel/` — Python 应用微内核包（14 个基础入口、跨进程句柄／调用事实、结构化消息 SDK、期望状态监督者；机制基线迁入，真实 Provider 未接入；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-plugin/` — Python 插件基础设施包（plugin spec 契约/发现/注册/协商/离线验证；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-protocol/` — Python 协议包（PyPI: ghrah-protocol）
 - `ghrah-subject/` — Python subject 包（PyPI: ghrah-subject）
@@ -75,8 +76,8 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 ## 测试与验收
 
 ```sh
-# Python 六包（根目录执行；成员目录跑测试须 env -u PYTHONPATH uv run pytest -q）
-uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme
+# Python 七包（根目录执行；成员目录跑测试须 env -u PYTHONPATH uv run pytest -q）
+uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel
 
 # strict 类型门禁（两个包各自执行）
 cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol

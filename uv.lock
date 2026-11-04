@@ -5,6 +5,7 @@ requires-python = ">=3.15.1"
 [manifest]
 members = [
     "ghrah-core",
+    "ghrah-kernel",
     "ghrah-monorepo",
     "ghrah-plugin",
     "ghrah-protocol",
@@ -219,6 +220,30 @@ wheels = [
 ]
 
 [[package]]
+name = "cbor2"
+version = "6.2.0.post2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/eb/e2ef5f241f15131babf4854032953b97c88b2c2700d7712a0ba8f57cbe81/cbor2-6.2.0.post2.tar.gz", hash = "sha256:3b08ba9f3a556186515000949d478e47e6d55322f9d86bdaef5b4e3d27d48298", size = 101466, upload-time = "2026-11-02T10:44:01.627Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/00/4614784a25072c9fefa91570fc4004775e6843500958b1eb177e82a405e7/cbor2-6.2.0.post2-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:a15c93a015edc5fd7fe451b427d921c07c23a159000bf51b07f1a5a1c265bedf", size = 404564, upload-time = "2026-11-02T10:43:40.127Z" },
+    { url = "https://files.pythonhosted.org/packages/56/ad/f4bb47fed39c25105099e864c242aa05c0ac178e061231fef0dce05ad6e0/cbor2-6.2.0.post2-cp315-cp315-manylinux_2_28_aarch64.whl", hash = "sha256:6a79e7ec2518caa62af31981b53e91200e550779df9db942a21a1aed49ba6100", size = 448077, upload-time = "2026-11-02T10:43:41.39Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/84/cc22f8a136b5b543068243386cbc562dda4cc5ecac8b75b57dcf68352719/cbor2-6.2.0.post2-cp315-cp315-manylinux_2_28_x86_64.whl", hash = "sha256:7f520e4f8373b399e1d269c4c2ff64702515435478aea3cdf557b6e5b29ff04a", size = 462074, upload-time = "2026-11-02T10:43:42.87Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/7d/cb402ef8517a3df9c9eff61dad0c9e84817fb0cd3ffcaf7a8b7027f23eb0/cbor2-6.2.0.post2-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:fbc9fecafcfad9e3804e7dff223a837458c7af421bfd2c66c3b3bf1cfc05ae0b", size = 515252, upload-time = "2026-11-02T10:43:44.212Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/87/e8cb987ea9311e3d8c61a1f7f2ae6443c2aabfa8c069d9bf4c1bf30c1459/cbor2-6.2.0.post2-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:586699c24e8714ad188b0c08c8d028a687edc23b728c85ec1c65a34ba17e8c40", size = 529459, upload-time = "2026-11-02T10:43:45.535Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/af/f3df267828fe32abcbc1f66b03214c501babfb5b67e06ee2b7bd48b8e442/cbor2-6.2.0.post2-cp315-cp315-win32.whl", hash = "sha256:4f22f0f45926896c0cf2e4b4ad174707dbcde0070f6a906f81fe0297d50ec036", size = 284741, upload-time = "2026-11-02T10:43:46.828Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/74/209fcf261ac97fb70b58cd6aab9e36a13005891bd9a354ba3eaa3e4a6e3c/cbor2-6.2.0.post2-cp315-cp315-win_amd64.whl", hash = "sha256:a3bb9b2e1459aa9f2831980fbac432189c93f0dca9fb29d3b0d094a76b18ed96", size = 312633, upload-time = "2026-11-02T10:43:47.979Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/4c/fa19e15ac3e3e1e449626d9a30f9b9d31b249312ebec8b13992b91ad8fda/cbor2-6.2.0.post2-cp315-cp315-win_arm64.whl", hash = "sha256:7f0b842204b57964f30879c79bca919123c1407c46bf035bfae71db25e80d62e", size = 302438, upload-time = "2026-11-02T10:43:49.231Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/3d/0dd56b06bd382db39451a515fadfa2eebcc44cff8bfb8c9b490d1cf002a1/cbor2-6.2.0.post2-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:6d0fba36e7face5a80de4b268086b95c592538d6c70236ee0306254995ea1eec", size = 402278, upload-time = "2026-11-02T10:43:50.395Z" },
+    { url = "https://files.pythonhosted.org/packages/97/84/d40c8fbad03b3ddec6eb289166417fed7591f7cdabbfa98f9f369cee9c4e/cbor2-6.2.0.post2-cp315-cp315t-manylinux_2_28_aarch64.whl", hash = "sha256:f155de6e196fd4e3d3e8b54da633bfd6bb51d625badc69c4a11f6dd82f7fc0a9", size = 444147, upload-time = "2026-11-02T10:43:51.641Z" },
+    { url = "https://files.pythonhosted.org/packages/18/eb/d8bd66920e36813988445387de020aa329c6d6b443c7e5e42bee42f9c24a/cbor2-6.2.0.post2-cp315-cp315t-manylinux_2_28_x86_64.whl", hash = "sha256:996963a9fed7bb74e0227088b8577995631973cf1d24261087dacde6bbd8c056", size = 462334, upload-time = "2026-11-02T10:43:52.928Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/c5/c93f310dde8269906831512e66f25f4277a609dd1d95c690dbf685821555/cbor2-6.2.0.post2-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:5bc8dac797a8899ca2786ec66696a97bb1da3ef1ab801965f06481453f258706", size = 510572, upload-time = "2026-11-02T10:43:54.262Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/de/f6d1842a74667feefb770194e455eff124fb7de7fa55424f6c0f8f0b99e2/cbor2-6.2.0.post2-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:07fdecf13d4d9f6c11dba89401605d2610bc537f6857250f854f5d1ab0d37fad", size = 529310, upload-time = "2026-11-02T10:43:55.514Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/28/2e272ae7a530acc8a08eaa81b63983a9fc4d611685f20cbee78d00ffd104/cbor2-6.2.0.post2-cp315-cp315t-win32.whl", hash = "sha256:c558e3c5b38833ae70631ac117d2bf90a5b5c1800c69c8a57f3be95c92fc8305", size = 282672, upload-time = "2026-11-02T10:43:56.822Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/b3/51a240e4044a1183a46aecdd91f330d8a82414af5a32eac0e7e4618fbd1b/cbor2-6.2.0.post2-cp315-cp315t-win_amd64.whl", hash = "sha256:2dddcf534c0aa3c34da45319fdf2161ac4715887fa607dc38e45d25630973f21", size = 314412, upload-time = "2026-11-02T10:43:58.152Z" },
+    { url = "https://files.pythonhosted.org/packages/62/1d/f0de8093b461f714b01c6f98ba29b8f891164de02bdb43b4d8cc5c3b923d/cbor2-6.2.0.post2-cp315-cp315t-win_arm64.whl", hash = "sha256:75a14e8edfd83fc82509c75aa9c57b3cd8b6387181dce8106aaa61b3a692ff2c", size = 302946, upload-time = "2026-11-02T10:44:00.247Z" },
+]
+
+[[package]]
 name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -413,6 +438,17 @@ requires-dist = [
 provides-extras = ["scheme", "dev"]
 
 [[package]]
+name = "ghrah-kernel"
+version = "0.1.0a0"
+source = { editable = "ghrah-kernel" }
+dependencies = [
+    { name = "cbor2" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "cbor2", specifier = ">=5.6" }]
+
+[[package]]
 name = "ghrah-monorepo"
 version = "0.2.0a0"
 source = { virtual = "." }
@@ -420,6 +456,7 @@ dependencies = [
     { name = "agentconf" },
     { name = "aiohttp" },
     { name = "ghrah-core" },
+    { name = "ghrah-kernel" },
     { name = "ghrah-plugin" },
     { name = "ghrah-protocol" },
     { name = "ghrah-scheme" },
@@ -442,6 +479,7 @@ requires-dist = [
     { name = "agentconf", specifier = ">=0.3.0,<0.4" },
     { name = "aiohttp", specifier = ">=3.13.5" },
     { name = "ghrah-core", editable = "ghrah-core" },
+    { name = "ghrah-kernel", editable = "ghrah-kernel" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "ghrah-scheme", editable = "ghrah-scheme" },

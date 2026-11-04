@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.15.1"
 dependencies = [
     "ghrah-core",
+    "ghrah-kernel",
     "ghrah-plugin",
     "ghrah-protocol",
     "ghrah-scheme",
@@ -20,6 +21,7 @@ dependencies = [
 [tool.uv.workspace]
 members = [
     "ghrah-core",
+    "ghrah-kernel",
     "ghrah-plugin",
     "ghrah-protocol",
     "ghrah-scheme",
@@ -29,6 +31,7 @@ members = [
 
 [tool.uv.sources]
 ghrah-core = { workspace = true }
+ghrah-kernel = { workspace = true }
 ghrah-plugin = { workspace = true }
 ghrah-protocol = { workspace = true }
 ghrah-scheme = { workspace = true }
@@ -52,6 +55,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.mypy]
 python_version = "3.15"

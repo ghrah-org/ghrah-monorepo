@@ -12,7 +12,7 @@ import {
   useRoomsStore,
   useSessionsStore,
 } from "@ghrah/observer-core";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import ActionChainPanel from "@/components/action-chain/action-chain-panel.vue";
 import AgentList from "@/components/agent-list.vue";
@@ -26,7 +26,9 @@ import RoomSelector from "@/components/nav/room-selector.vue";
 import ProjectChangesPanel from "@/components/project-changes-panel.vue";
 import ProjectSettingsPanel from "@/components/project-settings-panel.vue";
 import RoomAdminPanel from "@/components/room-admin-panel.vue";
+import SidebarToggle from "@/components/ui/sidebar-toggle.vue";
 import { useObserver } from "@/composables/useObserver";
+import { useSidebarLayout } from "@/composables/useSidebarLayout";
 
 type RoomTab = {
   id: string;
@@ -59,8 +61,41 @@ const sessions = useSessionsStore();
 const branches = useBranchesStore();
 const { t } = useI18n();
 const { switchRoom, switchProject, selectAgent } = useObserver();
+const { roomSidebarCollapsed, contextSidebarCollapsed, toggleRoomSidebar, toggleContextSidebar } =
+  useSidebarLayout();
 const tabs = ref<WorkspaceTab[]>([]);
 const activeTabId = ref<string | null>(null);
+const roomScroll = ref<HTMLElement | null>(null);
+const contextScroll = ref<HTMLElement | null>(null);
+const roomScrollTop = ref(0);
+const contextScrollTop = ref(0);
+
+const roomToggleLabel = computed(() =>
+  roomSidebarCollapsed.value ? t("dashboard.expandRooms") : t("dashboard.collapseRooms"),
+);
+const contextToggleLabel = computed(() =>
+  contextSidebarCollapsed.value ? t("dashboard.expandContext") : t("dashboard.collapseContext"),
+);
+
+async function onToggleRoomSidebar() {
+  if (!roomSidebarCollapsed.value) roomScrollTop.value = roomScroll.value?.scrollTop ?? 0;
+  toggleRoomSidebar();
+  await nextTick();
+  if (!roomSidebarCollapsed.value && roomScroll.value) {
+    roomScroll.value.scrollTop = roomScrollTop.value;
+  }
+}
+
+async function onToggleContextSidebar() {
+  if (!contextSidebarCollapsed.value) {
+    contextScrollTop.value = contextScroll.value?.scrollTop ?? 0;
+  }
+  toggleContextSidebar();
+  await nextTick();
+  if (!contextSidebarCollapsed.value && contextScroll.value) {
+    contextScroll.value.scrollTop = contextScrollTop.value;
+  }
+}
 
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
 
@@ -256,16 +291,33 @@ watch(
 </script>
 
 <template>
-  <div class="workspace-shell">
+  <div
+    class="workspace-shell"
+    :class="{
+      'room-sidebar-collapsed': roomSidebarCollapsed,
+      'context-sidebar-collapsed': contextSidebarCollapsed,
+    }"
+  >
     <aside class="project-rail workspace-column" :aria-label="t('dashboard.projects')">
       <ProjectSelector />
     </aside>
     <aside class="room-sidebar workspace-column" :aria-label="t('dashboard.rooms')">
-      <div class="room-sidebar-scroll">
-        <RoomSelector @open-room="openRoom" @room-invalidated="invalidateRoom" />
+      <div class="sidebar-head">
+        <SidebarToggle
+          side="left"
+          :collapsed="roomSidebarCollapsed"
+          controls="room-sidebar-panel"
+          :label="roomToggleLabel"
+          @toggle="onToggleRoomSidebar"
+        />
       </div>
-      <ProjectFixedNav @open-project-view="openProjectView" />
-      <InstanceProfileControl @open-settings="emit('openSettings', 'general')" />
+      <div v-show="!roomSidebarCollapsed" id="room-sidebar-panel" class="room-sidebar-panel">
+        <div ref="roomScroll" class="room-sidebar-scroll">
+          <RoomSelector @open-room="openRoom" @room-invalidated="invalidateRoom" />
+        </div>
+        <ProjectFixedNav @open-project-view="openProjectView" />
+        <InstanceProfileControl @open-settings="emit('openSettings', 'general')" />
+      </div>
     </aside>
     <section class="workspace-main" :aria-label="t('dashboard.workspaceTabs')">
       <div class="workspace-tabs" role="tablist" :aria-label="t('dashboard.openViews')">
@@ -337,12 +389,28 @@ watch(
       <footer class="hitl-dock"><HitlInbox /></footer>
     </section>
     <aside class="right-sidebar workspace-column" :aria-label="t('dashboard.contextSidebar')">
-      <section class="room-admin-region" :aria-label="t('roomAdmin.title')">
-        <RoomAdminPanel @room-invalidated="invalidateRoom" />
-      </section>
-      <section class="agent-region" :aria-label="t('dashboard.agents')">
-        <AgentList @open-agent="openAgent" @open-settings="emit('openSettings', $event)" />
-      </section>
+      <div class="sidebar-head">
+        <SidebarToggle
+          side="right"
+          :collapsed="contextSidebarCollapsed"
+          controls="context-sidebar-panel"
+          :label="contextToggleLabel"
+          @toggle="onToggleContextSidebar"
+        />
+      </div>
+      <div
+        v-show="!contextSidebarCollapsed"
+        id="context-sidebar-panel"
+        ref="contextScroll"
+        class="right-sidebar-panel"
+      >
+        <section class="room-admin-region" :aria-label="t('roomAdmin.title')">
+          <RoomAdminPanel @room-invalidated="invalidateRoom" />
+        </section>
+        <section class="agent-region" :aria-label="t('dashboard.agents')">
+          <AgentList @open-agent="openAgent" @open-settings="emit('openSettings', $event)" />
+        </section>
+      </div>
     </aside>
   </div>
 </template>

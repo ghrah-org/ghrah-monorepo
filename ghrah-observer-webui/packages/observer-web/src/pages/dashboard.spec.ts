@@ -8,9 +8,9 @@ import {
   useSessionsStore,
 } from "@ghrah/observer-core";
 import type { ProjectInfoPayload, RoomInfoPayload } from "@ghrah/protocol";
-import { mount } from "@vue/test-utils";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 
 const switchProjectMock = vi.fn();
@@ -60,7 +60,10 @@ vi.mock("@/components/agents-overview-panel.vue", () => ({
   default: { emits: ["openAgent"], template: "<div>agents panel</div>" },
 }));
 
+import { useSidebarLayout } from "@/composables/useSidebarLayout";
 import Dashboard from "./dashboard.vue";
+
+enableAutoUnmount(afterEach);
 
 const RoomSelectorStub = {
   emits: ["openRoom"],
@@ -145,6 +148,13 @@ describe("Dashboard workspace tabs", () => {
     switchProjectMock.mockReset();
     switchRoomMock.mockReset();
     selectAgentMock.mockReset();
+
+    // 侧边栏状态是模块级单例；每个用例前恢复为展开，避免相互污染。
+    localStorage.clear();
+    const sidebarLayout = useSidebarLayout();
+    if (sidebarLayout.roomSidebarCollapsed.value) sidebarLayout.toggleRoomSidebar();
+    if (sidebarLayout.contextSidebarCollapsed.value) sidebarLayout.toggleContextSidebar();
+    localStorage.clear();
 
     const projects = useProjectsStore();
     projects.setProjectsFromList([project("p1", "Project One"), project("p2", "Project Two")]);
@@ -323,5 +333,84 @@ describe("Dashboard workspace tabs", () => {
     expect(switchProjectMock).toHaveBeenCalledTimes(1);
     expect(switchProjectMock).toHaveBeenCalledWith("p1");
     expect(switchRoomMock).not.toHaveBeenCalled();
+  });
+
+  it("collapses the room sidebar into a rail and persists the state", async () => {
+    const wrapper = mountDashboard();
+    const toggle = wrapper.get('[aria-controls="room-sidebar-panel"]');
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(toggle.attributes("aria-label")).toBe("Collapse rooms sidebar");
+
+    await toggle.trigger("click");
+    await nextTick();
+
+    expect(wrapper.get(".workspace-shell").classes()).toContain("room-sidebar-collapsed");
+    expect(wrapper.get("#room-sidebar-panel").attributes("style")).toContain("display: none");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(toggle.attributes("aria-label")).toBe("Expand rooms sidebar");
+    expect(localStorage.getItem("ghrah.workspace.room-sidebar.collapsed")).toBe("1");
+
+    await toggle.trigger("click");
+    await nextTick();
+
+    expect(wrapper.get(".workspace-shell").classes()).not.toContain("room-sidebar-collapsed");
+    expect(wrapper.get("#room-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(localStorage.getItem("ghrah.workspace.room-sidebar.collapsed")).toBe("0");
+  });
+
+  it("collapses the context sidebar independently from the room sidebar", async () => {
+    const wrapper = mountDashboard();
+    const contextToggle = wrapper.get('[aria-controls="context-sidebar-panel"]');
+
+    await contextToggle.trigger("click");
+    await nextTick();
+
+    expect(wrapper.get(".workspace-shell").classes()).toContain("context-sidebar-collapsed");
+    expect(wrapper.get(".workspace-shell").classes()).not.toContain("room-sidebar-collapsed");
+    expect(wrapper.get("#context-sidebar-panel").attributes("style")).toContain("display: none");
+    expect(wrapper.get("#room-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBe("1");
+    expect(localStorage.getItem("ghrah.workspace.room-sidebar.collapsed")).toBeNull();
+  });
+
+  it("restores each sidebar scroll position after re-expanding", async () => {
+    // happy-dom 不会在 display:none 后把 scrollTop 归零；真实浏览器会。故在面板
+    // 变为不可见后手动归零，模拟该行为：没有展开后的回填，下面两条断言必失败。
+    let contextPanel: HTMLElement | null = null;
+    const hideScrollTop = (el: HTMLElement) => {
+      if (el.style.display === "none" && el.scrollTop !== 0) el.scrollTop = 0;
+    };
+
+    const wrapper = mountDashboard();
+    const roomPanel = wrapper.get(".room-sidebar-scroll").element as HTMLElement;
+    contextPanel = wrapper.get("#context-sidebar-panel").element as HTMLElement;
+    const contextObserver = new MutationObserver(() => hideScrollTop(contextPanel as HTMLElement));
+    contextObserver.observe(contextPanel, { attributes: true, attributeFilter: ["style"] });
+
+    roomPanel.scrollTop = 120;
+    contextPanel.scrollTop = 64;
+
+    const roomToggle = wrapper.get('[aria-controls="room-sidebar-panel"]');
+    const contextToggle = wrapper.get('[aria-controls="context-sidebar-panel"]');
+
+    await roomToggle.trigger("click");
+    await contextToggle.trigger("click");
+    await nextTick();
+    // 左侧容器随面板一同 display:none，这里同样归零，以检验其回填路径。
+    if (roomPanel.scrollTop !== 0) roomPanel.scrollTop = 0;
+
+    expect(contextPanel.scrollTop).toBe(0);
+
+    await roomToggle.trigger("click");
+    await contextToggle.trigger("click");
+    await nextTick();
+
+    expect(roomPanel.scrollTop).toBe(120);
+    expect(contextPanel.scrollTop).toBe(64);
+    contextObserver.disconnect();
   });
 });
