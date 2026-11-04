@@ -18,14 +18,13 @@ import ActionChainPanel from "@/components/action-chain/action-chain-panel.vue";
 import AgentList from "@/components/agent-list.vue";
 import AgentsOverviewPanel from "@/components/agents-overview-panel.vue";
 import ChatPanel from "@/components/chat/chat-panel.vue";
-import HitlInbox from "@/components/hitl/hitl-inbox.vue";
+import HitlBar from "@/components/hitl/hitl-bar.vue";
 import InstanceProfileControl from "@/components/instance-profile-control.vue";
 import ProjectFixedNav from "@/components/nav/project-fixed-nav.vue";
 import ProjectSelector from "@/components/nav/project-selector.vue";
 import RoomSelector from "@/components/nav/room-selector.vue";
 import ProjectChangesPanel from "@/components/project-changes-panel.vue";
 import ProjectSettingsPanel from "@/components/project-settings-panel.vue";
-import RoomAdminPanel from "@/components/room-admin-panel.vue";
 import SidebarToggle from "@/components/ui/sidebar-toggle.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useSidebarLayout } from "@/composables/useSidebarLayout";
@@ -353,6 +352,7 @@ watch(
             :key="activeTab.id"
             :project-id="activeTab.target.projectId"
             :room-id="activeTab.target.roomId"
+            @room-invalidated="invalidateRoom"
           />
           <ActionChainPanel
             v-else-if="activeTab?.kind === 'agent'"
@@ -386,7 +386,7 @@ watch(
           </div>
         </div>
       </div>
-      <footer class="hitl-dock"><HitlInbox /></footer>
+      <HitlBar />
     </section>
     <aside class="right-sidebar workspace-column" :aria-label="t('dashboard.contextSidebar')">
       <div class="sidebar-head">
@@ -404,9 +404,6 @@ watch(
         ref="contextScroll"
         class="right-sidebar-panel"
       >
-        <section class="room-admin-region" :aria-label="t('roomAdmin.title')">
-          <RoomAdminPanel @room-invalidated="invalidateRoom" />
-        </section>
         <section class="agent-region" :aria-label="t('dashboard.agents')">
           <AgentList @open-agent="openAgent" @open-settings="emit('openSettings', $event)" />
         </section>

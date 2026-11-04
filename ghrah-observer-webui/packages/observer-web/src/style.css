@@ -170,7 +170,7 @@
 
   .right-sidebar-panel {
     display: grid;
-    grid-template-rows: minmax(13rem, 0.95fr) minmax(11rem, 1.05fr);
+    grid-template-rows: minmax(0, 1fr);
     overflow: hidden auto;
   }
 
@@ -209,13 +209,9 @@
     border-left: 1px solid #dfe3ea;
   }
 
-  .room-admin-region,
   .agent-region {
     min-height: 0;
     overflow: hidden auto;
-  }
-  .agent-region {
-    border-top: 1px solid #dfe3ea;
   }
 
   .room-admin-panel {
@@ -995,13 +991,6 @@
     font-family: inherit;
   }
 
-  .hitl-dock {
-    max-height: 8.125rem;
-    overflow-y: auto;
-    border-top: 1px solid #e2e5eb;
-    background: #fbfcfd;
-  }
-
   @media (max-width: 73.75rem) {
     .workspace-shell {
       --project-rail-width: 4.875rem;
@@ -1034,8 +1023,7 @@
   }
 
   :root.dark .workspace-column,
-  :root.dark .workspace-tabs,
-  :root.dark .hitl-dock {
+  :root.dark .workspace-tabs {
     border-color: #303541;
     background: #151920;
   }
@@ -1111,8 +1099,7 @@
   }
 
   :root.dark .workspace-tab,
-  :root.dark .workspace-tabs,
-  :root.dark .hitl-dock {
+  :root.dark .workspace-tabs {
     border-color: #303541;
   }
 

@@ -33,6 +33,13 @@
     --ac-node-subtext: #767e8e;
     --ac-badge-head: #147653;
     --ac-badge-fork: #4f5fc7;
+
+    /* 迁移期结构色（刀 1：room 会话页 IA 重排引入的抽屉/面板），阶段 1 并入语义层 */
+    --ui-panel: #ffffff;
+    --ui-panel-border: #e2e5eb;
+    --ui-panel-muted: #6b7280;
+    --ui-overlay: rgba(15, 23, 42, 0.32);
+    --ui-panel-shadow: 0 0.75rem 2rem rgba(15, 23, 42, 0.18);
   }
 
   :root.dark {
@@ -48,5 +55,12 @@
     --ac-node-subtext: #8f97a6;
     --ac-badge-head: #34d399;
     --ac-badge-fork: #93a5ff;
+
+    /* 迁移期结构色（刀 1），与亮色同名同义 */
+    --ui-panel: #1d222b;
+    --ui-panel-border: #343a47;
+    --ui-panel-muted: #9aa3b2;
+    --ui-overlay: rgba(0, 0, 0, 0.55);
+    --ui-panel-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.45);
   }
 }

@@ -38,7 +38,7 @@ vi.mock("@/components/chat/chat-panel.vue", () => ({
     template: '<div class="chat-panel-stub">{{ projectId }}/{{ roomId }}</div>',
   },
 }));
-vi.mock("@/components/hitl/hitl-inbox.vue", () => ({
+vi.mock("@/components/hitl/hitl-bar.vue", () => ({
   default: { template: "<div />" },
 }));
 vi.mock("@/components/instance-profile-control.vue", () => ({
@@ -46,9 +46,6 @@ vi.mock("@/components/instance-profile-control.vue", () => ({
 }));
 vi.mock("@/components/nav/project-selector.vue", () => ({
   default: { template: "<div />" },
-}));
-vi.mock("@/components/room-admin-panel.vue", () => ({
-  default: { emits: ["roomInvalidated"], template: "<div />" },
 }));
 vi.mock("@/components/project-changes-panel.vue", () => ({
   default: { template: "<div>changes panel</div>" },

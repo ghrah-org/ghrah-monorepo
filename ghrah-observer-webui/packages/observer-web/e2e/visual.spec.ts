@@ -44,8 +44,8 @@ async function openProject(page: Page) {
   await project.click();
   await expect(page.locator(".room-list-row")).toHaveCount(4);
   await expect(page.locator(".agent-list li")).toHaveCount(4);
-  // demo 场景的 HITL 在启动后约 12.6s 才产生；等它出现，避免截图卡在“部分事件已到”的中间态。
-  await expect(page.locator(".hitl-dock li")).toHaveCount(1);
+  // demo 场景的 HITL 在启动后约 12.6s 才产生；摘要条出现即视为事件已到，避免截图卡在中间态。
+  await expect(page.locator(".hitl-bar")).toBeVisible();
 }
 
 async function shot(page: Page, name: string) {
