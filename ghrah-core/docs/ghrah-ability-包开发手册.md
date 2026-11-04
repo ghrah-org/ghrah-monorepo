@@ -329,7 +329,8 @@ print(version.digest, sorted(__import__("json").loads(version.manifest_json)))
 
 - 当前格式：`schema_version: '1'`（`members` 两段式，多技能）。**新包一律用它。**
 - 旧格式（`0.1-draft` / `0.2`）仍被兼容解析：`skills` 在顶层、正文固定 `skills/SKILL.md`、只允许一个技能。兼容是为了让存量包继续工作，不是新写法。
-- 存量包迁移：`uv run python scripts/migrate_skill_pool_v1.py <技能池> --apply`（默认 dry-run；动盘前整池备份到 `.backup-v1-<时间戳>/`）。脚本会搬正文到 `skills/<name>/SKILL.md`、补 frontmatter、重写 `ability.yaml`，并删除过期的 `ability.lock.yaml`。
+- 存量包按 v1 重写；**不提供迁移脚本**（旧脚本 `scripts/migrate_skill_pool_v1.py` 已删除：自动改写无法保证字段语义等价，与规范"无 `--migrate` 旁路"的裁定一致）。
+- v1 的 `identity.version` 必须是 SemVer core 三段（`MAJOR.MINOR.PATCH`，每段 1-9 位十进制、无前导零、不带预发布/构建元数据）；`members.operations.<键>` 不接受 `errors` 字段（错误表不进 v1）；`members.skills` 只接受映射（无列表简写）。
 - `ability.lock.yaml` 由框架维护（整树指纹 + 入口哨兵），**源码包里不手写**；要承认新内容用 `SkillAbilityProvider.relock(name)`。
 - 还没有 `ghrah ability build` 生成器：`members` 目前手写。生成器落地后，规则是"只重算扫得出来的部分，保留作者意图（`provider` 成员、`expose: false`、别名正文路径）"。
 

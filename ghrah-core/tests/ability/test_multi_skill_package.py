@@ -196,6 +196,44 @@ def test_unknown_member_field_is_rejected() -> None:
         parse_definition(raw, source="demo")
 
 
+def test_v1_operation_errors_field_is_rejected() -> None:
+    """``errors`` 不进 v1，声明即拒绝（解析端缺省 ``{}``）。"""
+    raw = V1_YAML.replace(
+        "      tags: [probe]\n", "      tags: [probe]\n      errors: {timeout: {code: 1}}\n"
+    )
+
+    with pytest.raises(ManifestValidationError, match="errors"):
+        parse_definition(raw, source="demo")
+
+
+def test_v1_skills_list_shorthand_is_rejected() -> None:
+    """``members.skills`` 只接受映射；列表简写（每项自带 name）是旁路，收口拒绝。"""
+    data = yaml.safe_load(V1_YAML)
+    data["members"]["skills"] = [
+        {"name": "alpha", **data["members"]["skills"]["alpha"]},
+    ]
+    raw = yaml.safe_dump(data, allow_unicode=True)
+
+    with pytest.raises(ManifestValidationError, match="members.skills 必须是映射"):
+        parse_definition(raw, source="demo")
+
+
+def test_v1_identity_version_must_be_semver_core() -> None:
+    """v1 ``identity.version`` 必须是 SemVer core 三段；前缀/预发布/元数据都拒绝。"""
+    for bad in ("v1.0.0", "1.0.0-rc.1", "1.0.0+build", "1.0", "01.0.0", "1.0.0.0"):
+        raw = V1_YAML.replace("  version: '1.0.0'", f"  version: '{bad}'")
+        with pytest.raises(ManifestValidationError, match="SemVer"):
+            parse_definition(raw, source="demo")
+
+
+def test_v1_identity_version_semver_edge_lengths_pass() -> None:
+    """每段 9 位、含零段（``0.0.0``）与九位数都合法；边界不是隐式拒绝。"""
+    for good in ("0.0.0", "0.1.1", "123456789.0.999999999"):
+        raw = V1_YAML.replace("  version: '1.0.0'", f"  version: '{good}'")
+        definition = parse_definition(raw, source="demo")
+        assert definition.identity.version == good
+
+
 async def test_grant_view_carries_every_skill(tmp_path: Path) -> None:
     """授权视图给出完整 skills 清单；单技能快捷字段只是第一个。"""
     from ghrah.protocol.ability_tree import GrantAbilityRequest, SkillReadScope

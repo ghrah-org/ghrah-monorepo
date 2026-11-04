@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 import yaml
@@ -43,6 +44,7 @@ __all__ = [
     "SKILL_BODY_DIR",
     "SKILL_FILE_NAME",
     "V1_SCHEMA_VERSION",
+    "V1_SEMVER_PATTERN",
     "AbilityDefinition",
     "AbilityIdentity",
     "ExecutionSpec",
@@ -60,6 +62,13 @@ SCHEMA_VERSION = "0.1-draft"
 
 V1_SCHEMA_VERSION = "1"
 """现行定义格式版本：两段式，成员写在 ``members`` 下（可多个 skill）。"""
+
+V1_SEMVER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$")
+"""v1 ``identity.version`` 的 SemVer core 三段；每段最多 9 位，无前导零。
+
+它同时是安装路径段，因此不允许前缀、预发布（``-rc.1``）与构建元数据
+（``+build``）；需要时以 ``schema_version`` 变更引入。
+"""
 
 SCRIPT_PROVIDER_SLOT = "script"
 """包内脚本成员的提供者槽名。"""
@@ -143,7 +152,6 @@ _V1_OPERATION_KEYS = frozenset(
         "provider",
         "input_schema",
         "output_schema",
-        "errors",
         "effects",
         "resources",
         "execution",
@@ -171,7 +179,9 @@ def _from_members(data: dict[str, Any]) -> dict[str, Any]:
         运行时形状的映射（``operations`` / ``skills`` 顶层表）。
 
     Raises:
-        ManifestValidationError: ``members`` 或某个成员不是映射、技能缺 ``body``。
+        ManifestValidationError: ``members`` 或某个成员不是映射、技能缺 ``body``、
+            ``members.skills`` 不是映射（不接受列表简写）、v1 operation 声明
+            ``errors``（冻结裁决：错误表不进 v1）。
     """
     members = data.get("members") or {}
     if not isinstance(members, dict):
@@ -196,7 +206,6 @@ def _from_members(data: dict[str, Any]) -> dict[str, Any]:
             "description": raw.get("description") or raw.get("title") or key,
             "input_schema": raw.get("input_schema") or dict(EMPTY_SCHEMA),
             "output_schema": raw.get("output_schema") or dict(EMPTY_SCHEMA),
-            "errors": raw.get("errors") or {},
             "implementation": {"provider_slot": slot, "operation": key},
             "effects": raw.get("effects") or [],
             "resources": raw.get("resources") or {},
@@ -213,14 +222,9 @@ def _from_members(data: dict[str, Any]) -> dict[str, Any]:
 
     skills: dict[str, Any] = {}
     raw_skills = members.get("skills") or {}
-    if isinstance(raw_skills, dict):
-        items = raw_skills.items()
-    elif isinstance(raw_skills, list):
-        # 兼容简写：列表里每项自带 name。
-        items = [(item.get("name"), item) for item in raw_skills if isinstance(item, dict)]
-    else:
-        raise ManifestValidationError("members.skills 必须是映射或列表")
-    for key, raw in items:
+    if not isinstance(raw_skills, dict):
+        raise ManifestValidationError("members.skills 必须是映射")
+    for key, raw in raw_skills.items():
         if not isinstance(raw, dict) or not isinstance(key, str):
             raise ManifestValidationError("members.skills 的每项必须是有键的映射")
         unknown = set(raw) - _V1_SKILL_KEYS
@@ -251,9 +255,10 @@ def _from_members(data: dict[str, Any]) -> dict[str, Any]:
 def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
     """把 ``ability.yaml`` 文本解析并校验成定义模型。
 
-    除契约（pydantic）外还做四条跨字段校验：``schema_version`` 受支持、
+    除契约（pydantic）外还做跨字段校验：``schema_version`` 受支持、
     ``implementation.operation`` 必须等于成员键、``provider_slot`` 必须在
-    ``provider_requirements`` 里声明过、``skills`` 至多一个成员。
+    ``provider_requirements`` 里声明过；v1 额外校验 ``identity.version``
+    为 SemVer core 三段。
 
     用在扫描期的单个包解析：扫描器只负责定位与收集问题，契约判定全在这里。
 
@@ -282,6 +287,13 @@ def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
             f"{source}: 不支持的 schema_version {definition.schema_version!r}，"
             f"期望 {SCHEMA_VERSION!r} / '0.2' / {V1_SCHEMA_VERSION!r}"
         )
+    if definition.schema_version == V1_SCHEMA_VERSION:
+        if not V1_SEMVER_PATTERN.fullmatch(definition.identity.version):
+            raise ManifestValidationError(
+                f"{source}: v1 的 identity.version 必须是 SemVer core 三段"
+                f"（MAJOR.MINOR.PATCH，每段 1-9 位十进制、无前导零、"
+                f"不带预发布/构建元数据），当前是 {definition.identity.version!r}"
+            )
     for key, operation in definition.operations.items():
         if operation.implementation.operation != key:
             raise ManifestValidationError(
