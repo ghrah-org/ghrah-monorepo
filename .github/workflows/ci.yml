@@ -42,9 +42,14 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages --frozen
       # 路径、编码、换行与大小写语义的聚焦回归。
-      - run: uv run pytest ghrah-core/tests/ability/package -q
+      - run: uv run pytest ghrah-core/tests/ability/package ghrah-core/tests/ability/surface -q
       - name: 内置包索引检查
         run: uv run python -m ghrah.ability.tools.build ghrah-core/src/ghrah/ability/builtin/ability-builder --builtin --check
+      - name: fixture 索引检查
+        run: |
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/reporting --check
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/multi-skill --check
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/builder --check
 
   web:
     runs-on: ubuntu-latest

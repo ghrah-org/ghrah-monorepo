@@ -61,6 +61,21 @@ class HookDef(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class SurfaceConfig(BaseModel):
+    """工具表面的 per-Agent 覆盖配置。
+
+    只承载配置形状，不读取授权库、不做投影；缺省时由 CoreUnitConfig
+    的表面阈值决定。``static`` 里的名字必须是完整成员全名，``mode`` 为
+    ``static`` 时全部授权成员常驻，``progressive`` 时强制渐进。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["auto", "static", "progressive"] = "auto"
+    static: list[str] = Field(default_factory=list)
+    max_static: int | None = Field(default=None, ge=1)
+
+
 class ToolParameter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
