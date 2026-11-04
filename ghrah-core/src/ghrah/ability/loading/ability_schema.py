@@ -11,7 +11,8 @@
 - **不含**授权结果（``permissions``）与 Hook 编排（``hooks``）——前者属授权
   记录，后者随实现。二者暂存于 ``operations/<key>.py`` 的模块级常量。
 
-``schema_version`` 为 ``0.1-draft``；未知版本拒绝。
+``schema_version`` 支持旧版 ``0.1-draft`` / ``0.2`` 与 v1 ``'1'``；未知版本拒绝。
+v1 为两段式（``members``），旧格式仍兼容读取，最终退役另立任务。
 
 解析入口（:func:`load_yaml` / :func:`parse_definition`）也在这里：契约与它的
 解析器是同一件事，放在一起才不会出现"两处各解析一次、规则悄悄分叉"。上层
@@ -107,7 +108,14 @@ LOCK_FILE_NAME: str = "ability.lock.yaml"
 
 
 class _UniqueLoader(_SafeLoader):
-    """定义与 frontmatter 均拒绝重复键，避免后一项覆盖身份。"""
+    """定义与 frontmatter 均拒绝重复键与 ``<<`` merge key，避免后一项覆盖身份。"""
+
+    def flatten_mapping(self, node: Any) -> None:
+        """拒绝 merge key；锚点/别名仍可解析，生成物由生成器展开。"""
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise ManifestValidationError("YAML merge key '<<' 不支持")
+        super().flatten_mapping(node)
 
 
 def _unique_mapping(loader: Any, node: Any, deep: bool = False) -> dict:
@@ -121,6 +129,14 @@ def _unique_mapping(loader: Any, node: Any, deep: bool = False) -> dict:
 
 
 _UniqueLoader.add_constructor("tag:yaml.org,2002:map", _unique_mapping)
+
+
+def _reject_merge(loader: Any, node: Any) -> None:
+    """拒绝 ``<<`` merge key；错误类型与重复键保持一致。"""
+    raise ManifestValidationError("YAML merge key '<<' 不支持")
+
+
+_UniqueLoader.add_constructor("tag:yaml.org,2002:merge", _reject_merge)
 
 
 def load_yaml(raw: str) -> Any:
@@ -406,7 +422,7 @@ class SkillBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1)
-    """相对能力包根目录的路径。本版约定为 ``skills/SKILL.md``。
+    """相对能力包根目录的路径。v1 约定为 ``skills/<name>/SKILL.md``。
 
     读取一律以本字段为准（见 :func:`ghrah.ability.loading.ability_scan.AbilitySkill.body`），
     因此框架侧不再第二次拼路径。**越界判定不在这里**：路径是否落在容器内由扫描期
@@ -431,12 +447,19 @@ class SkillBody(BaseModel):
 
 
 class ContentResource(BaseModel):
-    """Skill 内显式声明的静态文件；摘要和大小由捕获方计算。"""
+    """Skill 内显式声明的静态文件；大小与摘要由生成器/捕获方写入。"""
 
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
     media_type: str = Field(min_length=1)
+    size: int | None = Field(default=None)
+    """字节数（生成期写入）；旧格式声明不携带，捕获期现算覆盖。"""
+
+    digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    """内容摘要（生成期写入，``sha256:<hex>``）；旧格式不携带。"""
+
     expected_digest: str | None = None
+    """旧格式的期望摘要；v1 用 :attr:`digest`，解析后不再使用。"""
 
 
 class SkillDefinition(BaseModel):

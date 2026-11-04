@@ -214,9 +214,12 @@ def capture_content(
                 for name in ("name", "description")
             ):
                 raise ValueError("SKILL.md 必须包含 name 和 description")
-            skill.title = metadata.get("title") or metadata["name"]
+            meta_block = metadata.get("metadata") or {}
+            if not isinstance(meta_block, dict):
+                raise ValueError("SKILL.md metadata 必须是映射")
+            skill.title = meta_block.get("title") or metadata.get("title") or metadata["name"]
             skill.description = metadata["description"]
-            tags = metadata.get("tags")
+            tags = meta_block.get("tags", metadata.get("tags"))
             if isinstance(tags, list) and all(isinstance(item, str) for item in tags):
                 skill.tags = sorted(set(tags))
         elif definition.schema_version in {"0.2", "1"}:

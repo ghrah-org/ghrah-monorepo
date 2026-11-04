@@ -8,6 +8,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# 例外：ghrah.ability.tools.build 是源码包，不是构建产物
+!ghrah-core/src/ghrah/ability/tools/build/
 
 # Node
 node_modules/
