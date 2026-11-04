@@ -561,7 +561,6 @@
     width: 1px;
     height: 1px;
     overflow: hidden;
-    clip: rect(0 0 0 0);
     clip-path: inset(50%);
     white-space: nowrap;
   }
@@ -849,11 +848,10 @@
     display: flex;
     min-width: 0;
     flex: 1;
-    overflow-x: auto;
     /* overflow-x 设为 auto 后 overflow-y 计算值变为 auto（非 visible），
      active tab 的 ::after 指示条（bottom: -1px, height: 0.125rem）向下探出 1px
      会被当作可滚动内容 → 出现 1px 高度的纵向滚动条。纵向应裁剪而非滚动。 */
-    overflow-y: hidden;
+    overflow: auto hidden;
     scrollbar-width: thin;
   }
 

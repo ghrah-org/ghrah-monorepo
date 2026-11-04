@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
     "test": "vitest run",
-    "lint": "oxlint src/ && eslint src/ && prettier --check src/ && pnpm lint:i18n && pnpm lint:ui-tokens",
+    "lint": "oxlint src/ && eslint src/ && pnpm lint:css && prettier --check src/ && pnpm lint:i18n && pnpm lint:ui-tokens",
+    "lint:css": "stylelint \"src/**/*.{css,vue}\"",
     "lint:i18n": "node scripts/check-i18n.mjs",
     "lint:ui-tokens": "node scripts/check-ui-tokens.mjs"
   },
