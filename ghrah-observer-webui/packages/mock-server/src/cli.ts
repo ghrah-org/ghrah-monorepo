@@ -8,10 +8,17 @@ interface CliOptions {
   scenario: string;
   hitlTimeoutMs: number;
   chains: boolean;
+  replayOnConnect: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = { port: 4113, scenario: "demo", hitlTimeoutMs: 30_000, chains: true };
+  const opts: CliOptions = {
+    port: 4113,
+    scenario: "demo",
+    hitlTimeoutMs: 30_000,
+    chains: true,
+    replayOnConnect: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -28,11 +35,16 @@ function parseArgs(argv: string[]): CliOptions {
       case "--no-chains":
         opts.chains = false;
         break;
+      case "--replay-on-connect":
+        opts.replayOnConnect = true;
+        break;
       case "--help":
       case "-h":
         console.log(
           [
-            "Usage: ghrah-mock-server [--port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains]",
+            "Usage: ghrah-mock-server [--port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains] [--replay-on-connect]",
+            "",
+            "--replay-on-connect: 新连接也回放已缓冲事件（演示/视觉测试用；默认只回放带 last_seq_id 的增量）",
             "",
             `Available scenarios: ${listScenarios()
               .map((s) => s.name)
@@ -66,6 +78,7 @@ async function main(): Promise<void> {
   const server = new MockServer({
     port: opts.port,
     state,
+    replayOnConnect: opts.replayOnConnect,
     logger: (l) => console.log(`[mock] ${l}`),
   });
   await server.start();

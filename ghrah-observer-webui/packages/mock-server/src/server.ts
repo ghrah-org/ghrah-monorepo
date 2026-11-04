@@ -24,6 +24,11 @@ export interface MockServerOptions {
   host?: string;
   /** 事件 ring buffer 容量，供重连 last_seq_id 回放。默认 1000。 */
   replayBufferSize?: number;
+  /**
+   * 新客户端（未带 last_seq_id）连接时也回放 ring buffer 里的全部事件。
+   * 默认关闭：真实语义下新连接只收新事件；演示与视觉测试需要“晚连也能看到完整状态”。
+   */
+  replayOnConnect?: boolean;
   /** 外部注入的 state（默认内部新建）。 */
   state?: MockState;
   logger?: (line: string) => void;
@@ -80,6 +85,7 @@ export class MockServer {
       port: options.port,
       path: options.path ?? "/ws",
       replayBufferSize: options.replayBufferSize ?? 1000,
+      replayOnConnect: options.replayOnConnect ?? false,
       host: options.host,
       logger: options.logger,
     };
@@ -174,13 +180,22 @@ export class MockServer {
       this._connections.delete(conn);
     });
 
-    // 重连 resume：回放 ring buffer 内 > last_seq_id 的事件（不重复）
+    // 回放 ring buffer 内 seq > last_seq_id 的事件：
+    // - 带 last_seq_id 的重连只收增量（不重复）；
+    // - 未带的“新连接”默认不回放，除非显式开启 replayOnConnect（演示/视觉测试）。
     const lastSeqId = Number(query.get("last_seq_id") ?? "0");
-    if (Number.isFinite(lastSeqId) && lastSeqId > 0) {
+    const shouldReplay =
+      Number.isFinite(lastSeqId) &&
+      (lastSeqId > 0 || (this._options.replayOnConnect && lastSeqId === 0));
+    if (shouldReplay) {
+      let replayed = 0;
       for (const entry of this._ring) {
-        if (entry.seqId > lastSeqId) socket.send(entry.raw);
+        if (entry.seqId > lastSeqId) {
+          socket.send(entry.raw);
+          replayed += 1;
+        }
       }
-      this._log(`resumed ${conn.clientId} from seq_id=${lastSeqId}`);
+      this._log(`replayed ${replayed} event(s) to ${conn.clientId} from seq_id=${lastSeqId}`);
     }
   }
 

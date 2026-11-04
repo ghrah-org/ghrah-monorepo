@@ -358,6 +358,27 @@ describe("mock-server 协议层", () => {
     expect(entries.map((e) => (e.data as { message: string }).message)).toEqual(["m3", "m4"]);
   }, 10_000);
 
+  it("replayOnConnect：新连接回放已缓冲事件（演示/视觉测试用）", async () => {
+    const replayServer = new MockServer({ port: 0, replayOnConnect: true });
+    await replayServer.start();
+    const replayUrl = `ws://127.0.0.1:${replayServer.port}/ws`;
+    try {
+      const writer = new ServerClient(replayUrl, "observer", { wsFactory });
+      await writer.connect();
+      await request(writer, CommandType.PROJECT_CREATE, { name: "replay-project" });
+      await writer.disconnect();
+
+      // 新客户端没有 last_seq_id，默认不会收到历史；开启 replayOnConnect 后应补发
+      const reader = new ServerClient(replayUrl, "observer", { wsFactory });
+      const created = collect(reader, EventType.PROJECT_CREATED);
+      await reader.connect();
+      await waitUntil(() => created.length >= 1);
+      await reader.disconnect();
+    } finally {
+      await replayServer.close();
+    }
+  }, 10_000);
+
   it("HITL：hitl_request → hitl_response(approved) 成功；未知 promise_id 失败", async () => {
     const client = await makeClient();
     try {
