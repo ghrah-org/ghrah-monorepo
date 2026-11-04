@@ -278,7 +278,8 @@ class AbilitySchemeHost:
                             operation.model_copy(
                                 update={
                                     "availability": "ready"
-                                    if self._available(node.instance_id, node.instance_revision)
+                                    if operation.availability != "unavailable"
+                                    and self._available(node.instance_id, node.instance_revision)
                                     and any(
                                         action.name == operation.key
                                         for action in self._exports[node.instance_id].spec.actions

@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import aiosqlite
 from ghrah.protocol.ability_tree import (
@@ -23,6 +23,7 @@ from ghrah.protocol.ability_tree import (
     OperationNode,
     RevokeAbilityRequest,
     SkillNode,
+    SkillReadScope,
     TreeErrorCode,
     TreeId,
     UnbindToolRequest,
@@ -41,8 +42,8 @@ from ghrah.ability.file_members import FILE_OPERATIONS
 from ghrah.ability.versions import AbilityVersion
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=3));
-INSERT OR IGNORE INTO ability_tree_schema VALUES(3);
+CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=4));
+INSERT OR IGNORE INTO ability_tree_schema VALUES(4);
 CREATE TABLE IF NOT EXISTS ability_versions (
  project TEXT NOT NULL, digest TEXT NOT NULL, definition TEXT NOT NULL,
  implementation TEXT NOT NULL, manifest TEXT NOT NULL DEFAULT '{}',
@@ -59,7 +60,8 @@ CREATE TABLE IF NOT EXISTS ability_agents (
 CREATE TABLE IF NOT EXISTS ability_grants (
  project TEXT NOT NULL, agent TEXT NOT NULL, alias TEXT NOT NULL, instance TEXT NOT NULL,
  members TEXT NOT NULL, roots TEXT NOT NULL, revision INTEGER NOT NULL,
- content TEXT NOT NULL DEFAULT '[]',
+ content TEXT NOT NULL DEFAULT '[]', axes TEXT NOT NULL DEFAULT '{}',
+ source TEXT NOT NULL DEFAULT 'admin',
  PRIMARY KEY(project,agent,alias));
 CREATE TABLE IF NOT EXISTS ability_tools (
  project TEXT NOT NULL, agent TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL,
@@ -68,19 +70,35 @@ CREATE TABLE IF NOT EXISTS ability_tools (
 CREATE TABLE IF NOT EXISTS ability_changes (
  seq INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, agent TEXT NOT NULL,
  revision INTEGER NOT NULL, reason TEXT NOT NULL, actor TEXT,
- before_revision INTEGER, version_digest TEXT);
+ before_revision INTEGER, version_digest TEXT,
+ source TEXT NOT NULL DEFAULT 'admin', policy TEXT);
 CREATE INDEX IF NOT EXISTS idx_ability_changes_project_seq ON ability_changes(project,seq);
 """
 
 
+GrantSource = Literal["admin", "deployment", "agent-default", "migration"]
+"""关系库写入来源：管理员写入、启动核定、Agent 默认集、一次性迁移。"""
+
+_GRANT_SOURCES = frozenset({"admin", "deployment", "agent-default", "migration"})
+
+
 @dataclass(frozen=True)
 class AccessIdentity:
-    """受信调用方提供的身份；operator 资格还须匹配宿主项目配置。"""
+    """受信调用方提供的身份；operator 资格还须匹配宿主项目配置。
+
+    ``source`` 记录这一次写入的来源，进入关系库与变更历史，便于审计区分
+    “管理员明确授予”“启动核定物化”“迁移补齐”与“Agent 默认集”。
+    """
 
     project_id: str
     subject_id: str
     run_id: str
     operator: bool = False
+    source: GrantSource = "admin"
+
+    def __post_init__(self) -> None:
+        if self.source not in _GRANT_SOURCES:
+            raise ValueError(f"未知的授权写入来源：{self.source!r}")
 
 
 @dataclass(frozen=True)
@@ -152,7 +170,7 @@ class AbilityAccessStore:
                 if exists:
                     async with db.execute("SELECT version FROM ability_tree_schema") as cursor:
                         version = await cursor.fetchone()
-                    if version is None or version[0] not in {1, 2, 3}:
+                    if version is None or version[0] not in {1, 2, 3, 4}:
                         raise ValueError("不支持的 Ability 关系数据库版本")
                     if version[0] == 1:
                         await db.execute("ALTER TABLE ability_agents DROP COLUMN run")
@@ -175,6 +193,20 @@ class AbilityAccessStore:
                                     f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
                                     f"NOT NULL DEFAULT '{default}'"
                                 )
+                    if version[0] in {1, 2, 3}:
+                        for table, column, definition in (
+                            ("ability_grants", "axes", "TEXT NOT NULL DEFAULT '{}'"),
+                            ("ability_grants", "source", "TEXT NOT NULL DEFAULT 'admin'"),
+                            ("ability_changes", "source", "TEXT NOT NULL DEFAULT 'admin'"),
+                            ("ability_changes", "policy", "TEXT"),
+                        ):
+                            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                                columns = await cursor.fetchall()
+                            if columns and column not in {row[1] for row in columns}:
+                                await db.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                                )
+                    if version[0] != 4:
                         await db.execute("DROP TABLE ability_tree_schema")
                 for statement in _SCHEMA.split(";"):
                     if statement.strip():
@@ -263,6 +295,7 @@ class AbilityAccessStore:
         expected: int,
         reason: str,
         version_digest: str | None = None,
+        policy: str | None = None,
     ) -> int:
         row = await self._row("ability_agents", "id=?", agent)
         if row is None or row["revision"] != expected:
@@ -274,7 +307,7 @@ class AbilityAccessStore:
         )
         await self._db.execute(
             "INSERT INTO ability_changes(project,agent,revision,reason,actor,"
-            "before_revision,version_digest) VALUES(?,?,?,?,?,?,?)",
+            "before_revision,version_digest,source,policy) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 self.project_id,
                 agent,
@@ -283,6 +316,8 @@ class AbilityAccessStore:
                 json.dumps({"subject": actor.subject_id, "run": actor.run_id}),
                 expected,
                 version_digest,
+                actor.source,
+                policy,
             ),
         )
         return revision
@@ -423,7 +458,12 @@ class AbilityAccessStore:
     async def grant(
         self, actor: AccessIdentity, agent: str, change: GrantAbilityRequest
     ) -> AbilityTreeView:
-        """同一事务提交获授范围和历史；替换关系使旧工具选择失效。"""
+        """同一事务提交获授范围和历史；替换关系使旧工具选择失效。
+
+        授予集合是**授权时刻的快照**：整包授权展开为当时的 Operation、
+        skill 正文与附件、以及脚本可见性；脚本执行不在其中，由 ``axes``
+        显式给出。成员的可见性与可用性一并物化，读取端不再推导。
+        """
         self._require_operator(actor)
         async with self._tx(write=True):
             current = await self._agent(actor, agent)
@@ -440,35 +480,10 @@ class AbilityAccessStore:
             operations = {
                 key: item for key, item in definition["operations"].items() if item["expose"]
             }
-            members = sorted(operations) if change.whole_container else sorted(set(change.members))
+            members = self._grant_members(operations, change)
+            content = self._grant_content(definition, change)
+            axes = self._grant_axes(members, content, change)
             manifest = json.loads(version["manifest"])
-            content = []
-            scopes = list(change.skills)
-            if change.skill is not None:
-                scopes.append(change.skill)
-            if change.whole_container and definition["skills"]:
-                from ghrah.protocol.ability_tree import SkillReadScope
-
-                scopes = [SkillReadScope(key=key) for key in definition["skills"]]
-            seen: set[str] = set()
-            for scope in scopes:
-                if scope.key in seen:
-                    raise AccessError("invalid_change")
-                seen.add(scope.key)
-                skill = definition["skills"].get(scope.key)
-                if skill is None:
-                    raise AccessError("invalid_change")
-                prefix = f"skill/{scope.key}"
-                if scope.body:
-                    content.append(prefix)
-                for role in ("assets", "references"):
-                    resources = skill[role]
-                    selected = getattr(scope, role)
-                    selected = sorted(resources) if selected is None else selected
-                    if not set(selected) <= set(resources):
-                        raise AccessError("invalid_change")
-                    content.extend(f"{prefix}/{role}/{key}" for key in selected)
-            content = sorted(set(content))
             if (
                 not set(members) <= set(operations)
                 or not set(content) <= set(manifest)
@@ -483,14 +498,20 @@ class AbilityAccessStore:
                 and json.loads(previous["members"]) == members
                 and json.loads(previous["content"]) == content
                 and json.loads(previous["roots"]) == roots
+                and json.loads(previous["axes"]) == axes
             ):
                 return await self._view(agent)
             revision = await self._bump(
-                actor, agent, change.expected_revision, "grant", instance["digest"]
+                actor,
+                agent,
+                change.expected_revision,
+                "grant",
+                instance["digest"],
+                change.policy,
             )
             await self._remove_grant(agent, change.alias)
             await self._db.execute(
-                "INSERT INTO ability_grants VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO ability_grants VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     self.project_id,
                     agent,
@@ -500,9 +521,105 @@ class AbilityAccessStore:
                     json.dumps(roots),
                     revision,
                     json.dumps(content),
+                    json.dumps(axes),
+                    actor.source,
                 ),
             )
             return await self._view(agent)
+
+    @staticmethod
+    def _grant_members(operations: dict[str, Any], change: GrantAbilityRequest) -> list[str]:
+        """确定本次授予的 Operation 键；整包取当时全部可暴露成员。
+
+        Args:
+            operations: 版本定义中可暴露的 Operation。
+            change: 获授变更。
+
+        Returns:
+            排序去重后的 Operation 键。
+        """
+        if change.whole_container:
+            return sorted(operations)
+        return sorted(set(change.members))
+
+    @staticmethod
+    def _grant_content(definition: dict[str, Any], change: GrantAbilityRequest) -> list[str]:
+        """确定本次授予的内容成员地址；脚本只进入可见清单。
+
+        Args:
+            definition: 版本的归一化定义。
+            change: 获授变更。
+
+        Returns:
+            排序去重后的内容成员地址（正文、附件、引用与脚本）。
+        """
+        content: list[str] = []
+        scopes = list(change.skills)
+        if change.skill is not None:
+            scopes.append(change.skill)
+        if change.whole_container and definition["skills"]:
+            scopes = [SkillReadScope(key=key) for key in definition["skills"]]
+        seen: set[str] = set()
+        for scope in scopes:
+            if scope.key in seen:
+                raise AccessError("invalid_change")
+            seen.add(scope.key)
+            skill = definition["skills"].get(scope.key)
+            if skill is None:
+                raise AccessError("invalid_change")
+            prefix = f"skill/{scope.key}"
+            if scope.body:
+                content.append(prefix)
+            for role in ("assets", "references", "scripts"):
+                resources = skill.get(role) or {}
+                selected = getattr(scope, role)
+                selected = sorted(resources) if selected is None else selected
+                if not set(selected) <= set(resources):
+                    raise AccessError("invalid_change")
+                content.extend(f"{prefix}/{role}/{key}" for key in selected)
+        return sorted(set(content))
+
+    @staticmethod
+    def _grant_axes(
+        members: list[str],
+        content: list[str],
+        change: GrantAbilityRequest,
+    ) -> dict[str, dict[str, bool]]:
+        """物化每个获授成员的可见性与可用性事实。
+
+        默认值按成员种类决定：Operation 与 skill 正文/附件可见且可用；脚本
+        可见但不可执行，执行权必须由 ``axes`` 显式给出。显式轴只能收紧本次
+        已授予的成员，且不能表达不存在的组合（skill 无可用性轴，不可见成员
+        不能可用）。
+
+        Args:
+            members: 本次授予的 Operation 键。
+            content: 本次授予的内容成员地址。
+            change: 获授变更。
+
+        Returns:
+            以成员地址为键、按地址排序的轴事实。
+        """
+        facts: dict[str, dict[str, bool]] = {}
+        for key in members:
+            facts[f"operations/{key}"] = {"visible": True, "available": True}
+        for address in content:
+            facts[address] = {
+                "visible": True,
+                "available": not address.startswith("skill/") or "/scripts/" not in address,
+            }
+        for entry in change.axes:
+            if entry.member not in facts:
+                raise AccessError("invalid_change")
+            if entry.member.startswith("skill/"):
+                if not entry.visible:
+                    raise AccessError("invalid_change")
+                if "/scripts/" not in entry.member and not entry.available:
+                    raise AccessError("invalid_change")
+            if not entry.visible and entry.available:
+                raise AccessError("invalid_change")
+            facts[entry.member] = {"visible": entry.visible, "available": entry.available}
+        return {address: facts[address] for address in sorted(facts)}
 
     async def revoke(
         self, actor: AccessIdentity, agent: str, change: RevokeAbilityRequest
@@ -537,12 +654,19 @@ class AbilityAccessStore:
             if change.members is None or not (members or content):
                 await self._remove_grant(agent, change.alias)
             else:
+                remaining = set(content) | {f"operations/{key}" for key in members}
+                axes = {
+                    address: facts
+                    for address, facts in json.loads(grant["axes"]).items()
+                    if address in remaining
+                }
                 await self._db.execute(
-                    "UPDATE ability_grants SET members=?,content=?,revision=? "
+                    "UPDATE ability_grants SET members=?,content=?,axes=?,revision=? "
                     "WHERE project=? AND agent=? AND alias=?",
                     (
                         json.dumps(members),
                         json.dumps(content),
+                        json.dumps(axes),
                         revision,
                         self.project_id,
                         agent,
@@ -641,9 +765,9 @@ class AbilityAccessStore:
             version = await self._row("ability_versions", "digest=?", instance["digest"])
             definition = json.loads(version["definition"])
             members = json.loads(grant["members"])
-            skills = self._skill_nodes(
-                definition, json.loads(version["manifest"]), json.loads(grant["content"])
-            )
+            content = json.loads(grant["content"])
+            axes = json.loads(grant["axes"])
+            skills = self._skill_nodes(definition, json.loads(version["manifest"]), content, axes)
             abilities.append(
                 AbilityNode(
                     alias=grant["alias"],
@@ -664,9 +788,15 @@ class AbilityAccessStore:
                             output_schema=operation_result_schema(
                                 definition["operations"][key]["output_schema"]
                             ),
+                            availability=(
+                                "unavailable"
+                                if not axes.get(f"operations/{key}", {}).get("available", True)
+                                else "unknown"
+                            ),
                         )
                         for key in members
-                        if definition["operations"][key]["expose"]
+                        if axes.get(f"operations/{key}", {}).get("visible", True)
+                        and definition["operations"][key]["expose"]
                     ],
                 )
             )
@@ -697,7 +827,10 @@ class AbilityAccessStore:
 
     @staticmethod
     def _skill_nodes(
-        definition: dict[str, Any], manifest: dict[str, Any], content: list[str]
+        definition: dict[str, Any],
+        manifest: dict[str, Any],
+        content: list[str],
+        axes: dict[str, dict[str, bool]] | None = None,
     ) -> list[SkillNode]:
         """按内容清单投影全部获授技能（一个包可以有多个技能）。
 
@@ -705,12 +838,15 @@ class AbilityAccessStore:
             definition: 版本的归一化定义。
             manifest: 版本的内容清单。
             content: 本次授予覆盖的成员地址。
+            axes: 成员的可见性与可用性事实；缺省时按“可见、脚本不可执行”
+                推断，只供样例导出等不带关系库的调用方使用。
 
         Returns:
             按定义面键序排列的技能节点；没有任何获授内容时为空。
         """
         if not content:
             return []
+        facts = axes or {}
         nodes: list[SkillNode] = []
         for key, skill in definition["skills"].items():
             prefix = f"skill/{key}"
@@ -718,9 +854,20 @@ class AbilityAccessStore:
             if not related:
                 continue
 
+            def available(path: str) -> bool:
+                fact = facts.get(path)
+                if fact is not None:
+                    return bool(fact.get("available", True))
+                return "/scripts/" not in path
+
             def children(role: str, prefix: str = prefix) -> list[ContentResourceNode]:
                 return [
-                    ContentResourceNode(key=path.rsplit("/", 1)[-1], member=path, **manifest[path])
+                    ContentResourceNode(
+                        key=path.rsplit("/", 1)[-1],
+                        member=path,
+                        available=available(path),
+                        **manifest[path],
+                    )
                     for path in related
                     if path.startswith(f"{prefix}/{role}/")
                 ]
@@ -733,6 +880,7 @@ class AbilityAccessStore:
                     body_allowed=prefix in content,
                     assets=children("assets"),
                     references=children("references"),
+                    scripts=children("scripts"),
                 )
             )
         return nodes
@@ -830,6 +978,13 @@ class AbilityAccessStore:
             ):
                 raise AccessError("access_denied")
             roots = json.loads(grant["roots"])
+            axes = json.loads(grant["axes"])
+            if not is_content:
+                fact = axes.get(f"operations/{fence.member}", {})
+                if not fact.get("visible", True):
+                    raise AccessError("access_denied")
+                if not fact.get("available", True):
+                    raise AccessError("unavailable")
             if fence.tool_name != "_":
                 tool = await self._row(
                     "ability_tools", "agent=? AND name=?", fence.agent_id, fence.tool_name

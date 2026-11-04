@@ -927,6 +927,7 @@
         "skill": {
           "assets": [
             {
+              "available": true,
               "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
               "key": "mark",
               "media_type": "application/octet-stream",
@@ -935,6 +936,7 @@
               "size": 4
             },
             {
+              "available": true,
               "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c",
               "key": "template",
               "media_type": "text/plain",
@@ -949,6 +951,7 @@
           "key": "guide",
           "references": [
             {
+              "available": true,
               "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c",
               "key": "mark",
               "media_type": "application/octet-stream",
@@ -957,6 +960,7 @@
               "size": 4
             },
             {
+              "available": true,
               "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673",
               "key": "style",
               "media_type": "text/markdown",
@@ -965,12 +969,14 @@
               "size": 34
             }
           ],
+          "scripts": [],
           "title": "reporting-guide"
         },
         "skills": [
           {
             "assets": [
               {
+                "available": true,
                 "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
                 "key": "mark",
                 "media_type": "application/octet-stream",
@@ -979,6 +985,7 @@
                 "size": 4
               },
               {
+                "available": true,
                 "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c",
                 "key": "template",
                 "media_type": "text/plain",
@@ -993,6 +1000,7 @@
             "key": "guide",
             "references": [
               {
+                "available": true,
                 "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c",
                 "key": "mark",
                 "media_type": "application/octet-stream",
@@ -1001,6 +1009,7 @@
                 "size": 4
               },
               {
+                "available": true,
                 "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673",
                 "key": "style",
                 "media_type": "text/markdown",
@@ -1009,6 +1018,7 @@
                 "size": 34
               }
             ],
+            "scripts": [],
             "title": "reporting-guide"
           }
         ],
