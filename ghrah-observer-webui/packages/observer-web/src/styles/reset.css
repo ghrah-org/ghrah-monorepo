@@ -1,0 +1,29 @@
+/*
+ * 最小重置。
+ *
+ * 不直接使用 `@unocss/reset`：它的样式是 unlayered 的，优先级高于任何
+ * `@layer` 内的规则，会压过 base/components 里同特异性的声明。自写一份
+ * 放进 `@layer reset`，层级关系才可控。
+ *
+ * 现阶段刻意保持“最小且视觉中性”，只做两件不会改变既有版式的事：
+ * 1. 统一 border-box 盒模型；2. 关闭移动端文本自动放大。
+ *
+ * 未包含：外边距归零、列表样式、标题字号、表单外观。这些会明显改变
+ * 现有页面观感，需在视觉回归覆盖到位后逐条评估，不在阶段 0 一次性引入。
+ */
+@layer reset {
+  *,
+  ::before,
+  ::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+  }
+}

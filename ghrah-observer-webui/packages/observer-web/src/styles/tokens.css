@@ -1,0 +1,52 @@
+/*
+ * 设计变量（迁移期骨架）。
+ *
+ * 阶段 0 只做“机械搬运”：把原先散落在 style.css 顶部的 :root / :root.dark
+ * 变量块整体移到这里，不改名、不改值、不增减档位。阶段 1 再在文件内部
+ * 整理 primitive → semantic 结构。
+ *
+ * 放在 tokens 层而不是 base 层，是为了让后续 tokens 的声明天然优先于
+ * base/components；否则把变量留在 components 层，将来 tokens 层会被反压。
+ */
+@layer tokens {
+  :root {
+    --font-scale: 1;
+    --spacing-2: 0.5rem;
+    --spacing-3: 0.75rem;
+    --spacing-4: 1rem;
+    --radius-md: 0.375rem;
+    --font-ui-eyebrow: 0.75rem;
+    --font-ui-note: 0.8125rem;
+    --font-ui-code: 0.8125rem;
+    --font-ui-body: 0.875rem;
+
+    /* ActionChain 画布（--ac-*）：能力语义色（写 > 读 > 通信 > 未知）与画布结构色 */
+    --ac-write: #b45309;
+    --ac-read: #2563eb;
+    --ac-converse: #0891b2;
+    --ac-unknown: #64748b;
+    --ac-node-bg: #ffffff;
+    --ac-node-border: #dfe3ea;
+    --ac-lane-guide: #e2e5eb;
+    --ac-edge: #aeb6c6;
+    --ac-node-text: #4b5362;
+    --ac-node-subtext: #767e8e;
+    --ac-badge-head: #147653;
+    --ac-badge-fork: #4f5fc7;
+  }
+
+  :root.dark {
+    --ac-write: #f59e0b;
+    --ac-read: #60a5fa;
+    --ac-converse: #22d3ee;
+    --ac-unknown: #94a3b8;
+    --ac-node-bg: #1d222b;
+    --ac-node-border: #343a47;
+    --ac-lane-guide: #303541;
+    --ac-edge: #4b5568;
+    --ac-node-text: #c7cdd8;
+    --ac-node-subtext: #8f97a6;
+    --ac-badge-head: #34d399;
+    --ac-badge-fork: #93a5ff;
+  }
+}

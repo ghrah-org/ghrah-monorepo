@@ -2,6 +2,19 @@ import { defineConfig, presetIcons, presetUno } from "unocss";
 
 export default defineConfig({
   darkMode: "class",
+  /*
+   * 把 UnoCSS 的内部层输出为 CSS 级联层，与 src/styles/layers.css 的声明对齐：
+   * - preflights（--un-* 变量默认值）归入 base，和元素默认样式同层；
+   * - 图标样式单独保留 icons 层（未在层顺序里声明，按首次出现追加到末尾）；
+   * - 其余工具类统一归入 utilities，确保原子类可以覆盖 components 层。
+   */
+  outputToCssLayers: {
+    cssLayerName: (layer) => {
+      if (layer === "preflights") return "base";
+      if (layer === "icons") return "icons";
+      return "utilities";
+    },
+  },
   presets: [
     presetUno(),
     presetIcons({

@@ -1,0 +1,42 @@
+/*
+ * 元素默认样式。
+ *
+ * 阶段 0 只搬移 style.css 顶部的 html / body / 表单元素 / 焦点环规则；
+ * 变量已迁到 tokens.css。这里只允许出现元素选择器与极少数全局契约，
+ * 组件类名一律留在 style.css（components 层）。
+ */
+@layer base {
+  html {
+    font-size: calc(16px * var(--font-scale));
+    color-scheme: light dark;
+  }
+
+  body {
+    margin: 0;
+    min-width: 45rem;
+    background: #f3f5f8;
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      "PingFang SC",
+      "Hiragino Sans GB",
+      "Microsoft YaHei",
+      "Noto Sans CJK SC",
+      sans-serif;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  button:focus-visible,
+  [tabindex="0"]:focus-visible {
+    outline: 0.125rem solid #5b6ee1;
+    outline-offset: 0.125rem;
+  }
+}

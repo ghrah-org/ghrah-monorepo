@@ -1,0 +1,16 @@
+/*
+ * 层顺序的唯一声明（迁移期）。
+ *
+ * 这里只声明 `@layer` 的先后，不写任何样式。顺序一旦确定，后加载的
+ * 样式表即使物理顺序变化也不会改变优先级：
+ *
+ *   reset      —— 最小重置（盒模型、文本缩放）
+ *   tokens     —— 设计变量（颜色、字号、间距等）
+ *   base       —— 元素默认样式（html/body/按钮焦点等）
+ *   components —— 组件样式（迁移期由 style.css 整体贡献）
+ *   utilities  —— UnoCSS 产物
+ *
+ * 同一份顺序还会内联到 index.html 的 <head>，保证在任何一个 CSS 请求
+ * 之前就完成层排序；两份声明必须保持一致。
+ */
+@layer reset, tokens, base, components, utilities;
