@@ -25,9 +25,10 @@ class GrantedContentProvider:
         """为 Context 当前轮生成获准正文目录，不扫描来源或建立许可。"""
         view = await self.client.read(self.agent_id)
         entries = [
-            f"- `{node.alias}/{node.skill.key}`: {html.escape(node.skill.description)}"
+            f"- `{node.alias}/{skill.key}`: {html.escape(skill.description)}"
             for node in view.abilities
-            if node.skill is not None and node.skill.body_allowed
+            for skill in node.skills
+            if skill.body_allowed
         ]
         return "<available_skills>\n" + "\n".join(entries) + "\n</available_skills>"
 
@@ -53,11 +54,14 @@ class GrantedContentProvider:
         target = str(PurePosixPath(body.path).parent / path)
         view = await self.client.read(self.agent_id)
         for node in view.abilities:
-            if node.alias != alias or node.skill is None or node.skill.key != skill_key:
+            if node.alias != alias:
                 continue
-            for entry in (*node.skill.assets, *node.skill.references):
-                if entry.path == target:
-                    return await self.read(alias, entry.member)
+            for skill in node.skills:
+                if skill.key != skill_key:
+                    continue
+                for entry in (*skill.assets, *skill.references):
+                    if entry.path == target:
+                        return await self.read(alias, entry.member)
         raise SchemeError(ErrorCode.ACCESS_DENIED)
 
     async def load_into_context(

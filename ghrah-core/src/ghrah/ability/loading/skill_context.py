@@ -285,10 +285,17 @@ class SkillCatalog:
         Returns:
             命中的 :class:`AbilitySkill`；未知名字返回 None。
         """
-        for skill in self.skills:
-            if skill.catalog_name == name:
-                return skill
-        return None
+        exact = [skill for skill in self.skills if skill.catalog_name == name]
+        if len(exact) == 1:
+            return exact[0]
+        if exact:
+            # 两个包声明了同一个技能名：二义时宁可让调用方显式限定，也不猜。
+            return None
+        # 兼容三种写法：技能键、包名、点分全名。裸键在多技能包里可能二义。
+        matches = [
+            skill for skill in self.skills if name in {skill.key, skill.container, skill.full_name}
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def read(self, name: str) -> SkillDocument:
         """按目录名读正文。

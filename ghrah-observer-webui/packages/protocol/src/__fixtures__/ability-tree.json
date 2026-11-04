@@ -1,34 +1,1380 @@
 {
-  "binary": {
-    "byte_count": 4,
-    "content": "AP8QgA==",
-    "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
-    "encoding": "base64",
+  "mixed": {
+    "format": "ghrah.ability-tree.v2",
+    "project_id": "project",
+    "agent_id": "alice",
+    "run_id": "alice-run",
+    "revision": 1,
+    "abilities": [
+      {
+        "alias": "reports",
+        "instance_id": "reporting",
+        "instance_revision": 1,
+        "definition_digest": "sha256:a9003331607b7e5929fe9ecaf9d5b5d63d8d81879c6fe5bc349e977d797ec5be",
+        "version_digest": "sha256:a9d6b5b5247a8bdd3fd3f7ed2a61b3cf9ae733ca4cf7755f069b22ca694ac67d",
+        "revision": 1,
+        "allowed_roots": [
+          "/workspace/alice"
+        ],
+        "operations": [
+          {
+            "key": "list_directory",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "dir_path": {
+                  "description": "Path to the directory to list",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "recursive": {
+                  "default": false,
+                  "description": "Recursively list nested directories",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dir_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "dir_path": {
+                          "type": "string"
+                        },
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer"
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "directory"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "type",
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "next_offset": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_entries": {
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "dir_path",
+                        "total_entries",
+                        "entries"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          },
+          {
+            "key": "read_file",
+            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "encoding": {
+                  "default": "utf-8",
+                  "description": "Text encoding for the file",
+                  "type": "string"
+                },
+                "file_path": {
+                  "description": "Path to the file to read",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based line number to start from",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "file_path": {
+                          "type": "string"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_lines": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "content",
+                        "file_path",
+                        "total_lines"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          }
+        ],
+        "skills": [
+          {
+            "key": "guide",
+            "title": "reporting-guide",
+            "description": "使用获准模板和写作指南整理报告。",
+            "body_allowed": true,
+            "assets": [
+              {
+                "key": "mark",
+                "member": "skill/guide/assets/mark",
+                "path": "assets/mark.bin",
+                "media_type": "application/octet-stream",
+                "size": 4,
+                "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b"
+              },
+              {
+                "key": "template",
+                "member": "skill/guide/assets/template",
+                "path": "assets/template.txt",
+                "media_type": "text/plain",
+                "size": 24,
+                "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c"
+              }
+            ],
+            "references": [
+              {
+                "key": "mark",
+                "member": "skill/guide/references/mark",
+                "path": "references/mark.bin",
+                "media_type": "application/octet-stream",
+                "size": 4,
+                "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c"
+              },
+              {
+                "key": "style",
+                "member": "skill/guide/references/style",
+                "path": "references/style.md",
+                "media_type": "text/markdown",
+                "size": 34,
+                "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673"
+              }
+            ],
+            "availability": "unknown"
+          }
+        ],
+        "skill": {
+          "key": "guide",
+          "title": "reporting-guide",
+          "description": "使用获准模板和写作指南整理报告。",
+          "body_allowed": true,
+          "assets": [
+            {
+              "key": "mark",
+              "member": "skill/guide/assets/mark",
+              "path": "assets/mark.bin",
+              "media_type": "application/octet-stream",
+              "size": 4,
+              "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b"
+            },
+            {
+              "key": "template",
+              "member": "skill/guide/assets/template",
+              "path": "assets/template.txt",
+              "media_type": "text/plain",
+              "size": 24,
+              "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c"
+            }
+          ],
+          "references": [
+            {
+              "key": "mark",
+              "member": "skill/guide/references/mark",
+              "path": "references/mark.bin",
+              "media_type": "application/octet-stream",
+              "size": 4,
+              "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c"
+            },
+            {
+              "key": "style",
+              "member": "skill/guide/references/style",
+              "path": "references/style.md",
+              "media_type": "text/markdown",
+              "size": 34,
+              "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673"
+            }
+          ],
+          "availability": "unknown"
+        },
+        "availability": "ready"
+      }
+    ],
+    "bound_tools": [],
+    "runtime": {
+      "host_id": "fixture",
+      "observed_at": "2026-10-29T00:00:00Z"
+    }
+  },
+  "text": {
     "instance_id": "reporting",
-    "media_type": "application/octet-stream",
-    "member": "skill/guide/assets/mark",
-    "next_offset": null,
+    "version_digest": "sha256:a9d6b5b5247a8bdd3fd3f7ed2a61b3cf9ae733ca4cf7755f069b22ca694ac67d",
+    "member": "skill/guide",
+    "path": "SKILL.md",
+    "media_type": "text/markdown",
+    "digest": "sha256:9d3eec7cb91ee33f142861641f48c3855a35652235c386f43a56cfae3d50f7d5",
+    "total_bytes": 203,
     "offset": 0,
+    "byte_count": 203,
+    "next_offset": null,
+    "encoding": "utf-8",
+    "content": "---\nname: reporting-guide\ndescription: 使用获准模板和写作指南整理报告。\n---\n\n# 报告编写\n\n阅读[写作指南](references/style.md)。使用 assets/template.txt 和 assets/mark.bin。\n"
+  },
+  "binary": {
+    "instance_id": "reporting",
+    "version_digest": "sha256:a9d6b5b5247a8bdd3fd3f7ed2a61b3cf9ae733ca4cf7755f069b22ca694ac67d",
+    "member": "skill/guide/assets/mark",
     "path": "assets/mark.bin",
+    "media_type": "application/octet-stream",
+    "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
     "total_bytes": 4,
-    "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
+    "offset": 0,
+    "byte_count": 4,
+    "next_offset": null,
+    "encoding": "base64",
+    "content": "AP8QgA=="
+  },
+  "initial": {
+    "format": "ghrah.ability-tree.v2",
+    "project_id": "project",
+    "agent_id": "alice",
+    "run_id": "alice-run",
+    "revision": 1,
+    "abilities": [
+      {
+        "alias": "files",
+        "instance_id": "files-alice",
+        "instance_revision": 1,
+        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346",
+        "revision": 1,
+        "allowed_roots": [
+          "/workspace/alice"
+        ],
+        "operations": [
+          {
+            "key": "list_directory",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "dir_path": {
+                  "description": "Path to the directory to list",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "recursive": {
+                  "default": false,
+                  "description": "Recursively list nested directories",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dir_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "dir_path": {
+                          "type": "string"
+                        },
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer"
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "directory"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "type",
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "next_offset": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_entries": {
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "dir_path",
+                        "total_entries",
+                        "entries"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          },
+          {
+            "key": "read_file",
+            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "encoding": {
+                  "default": "utf-8",
+                  "description": "Text encoding for the file",
+                  "type": "string"
+                },
+                "file_path": {
+                  "description": "Path to the file to read",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based line number to start from",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "file_path": {
+                          "type": "string"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_lines": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "content",
+                        "file_path",
+                        "total_lines"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          }
+        ],
+        "skills": [],
+        "skill": null,
+        "availability": "ready"
+      }
+    ],
+    "bound_tools": [],
+    "runtime": {
+      "host_id": "fixture",
+      "observed_at": "2026-10-29T00:00:00Z"
+    }
+  },
+  "selected": {
+    "format": "ghrah.ability-tree.v2",
+    "project_id": "project",
+    "agent_id": "alice",
+    "run_id": "alice-run",
+    "revision": 2,
+    "abilities": [
+      {
+        "alias": "files",
+        "instance_id": "files-alice",
+        "instance_revision": 1,
+        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346",
+        "revision": 1,
+        "allowed_roots": [
+          "/workspace/alice"
+        ],
+        "operations": [
+          {
+            "key": "list_directory",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "dir_path": {
+                  "description": "Path to the directory to list",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "recursive": {
+                  "default": false,
+                  "description": "Recursively list nested directories",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dir_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "dir_path": {
+                          "type": "string"
+                        },
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer"
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "directory"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "type",
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "next_offset": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_entries": {
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "dir_path",
+                        "total_entries",
+                        "entries"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          },
+          {
+            "key": "read_file",
+            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "encoding": {
+                  "default": "utf-8",
+                  "description": "Text encoding for the file",
+                  "type": "string"
+                },
+                "file_path": {
+                  "description": "Path to the file to read",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based line number to start from",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "file_path": {
+                          "type": "string"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_lines": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "content",
+                        "file_path",
+                        "total_lines"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          }
+        ],
+        "skills": [],
+        "skill": null,
+        "availability": "ready"
+      }
+    ],
+    "bound_tools": [
+      {
+        "name": "read_report",
+        "alias": "files",
+        "member": "read_file",
+        "grant_revision": 1,
+        "revision": 2
+      }
+    ],
+    "runtime": {
+      "host_id": "fixture",
+      "observed_at": "2026-10-29T00:00:00Z"
+    }
+  },
+  "revoked": {
+    "format": "ghrah.ability-tree.v2",
+    "project_id": "project",
+    "agent_id": "alice",
+    "run_id": "alice-run",
+    "revision": 3,
+    "abilities": [],
+    "bound_tools": [],
+    "runtime": {
+      "host_id": "fixture",
+      "observed_at": "2026-10-29T00:00:00Z"
+    }
+  },
+  "unavailable": {
+    "format": "ghrah.ability-tree.v2",
+    "project_id": "project",
+    "agent_id": "alice",
+    "run_id": "alice-run",
+    "revision": 1,
+    "abilities": [
+      {
+        "alias": "files",
+        "instance_id": "files-alice",
+        "instance_revision": 1,
+        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346",
+        "revision": 1,
+        "allowed_roots": [
+          "/workspace/alice"
+        ],
+        "operations": [
+          {
+            "key": "list_directory",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "dir_path": {
+                  "description": "Path to the directory to list",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "recursive": {
+                  "default": false,
+                  "description": "Recursively list nested directories",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dir_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "dir_path": {
+                          "type": "string"
+                        },
+                        "entries": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer"
+                              },
+                              "type": {
+                                "enum": [
+                                  "file",
+                                  "directory"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "type",
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "next_offset": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_entries": {
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "dir_path",
+                        "total_entries",
+                        "entries"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          },
+          {
+            "key": "read_file",
+            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "encoding": {
+                  "default": "utf-8",
+                  "description": "Text encoding for the file",
+                  "type": "string"
+                },
+                "file_path": {
+                  "description": "Path to the file to read",
+                  "type": "string"
+                },
+                "limit": {
+                  "default": 0,
+                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 0,
+                  "description": "0-based line number to start from",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file_path"
+              ],
+              "type": "object"
+            },
+            "output_schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "file_path": {
+                          "type": "string"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "total_lines": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "content",
+                        "file_path",
+                        "total_lines"
+                      ],
+                      "type": "object"
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "failure"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "next_action_hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "data",
+                    "next_action_hint"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "availability": "unknown"
+          }
+        ],
+        "skills": [],
+        "skill": null,
+        "availability": "unavailable"
+      }
+    ],
+    "bound_tools": [],
+    "runtime": {
+      "host_id": "fixture",
+      "observed_at": "2026-10-29T00:00:00Z"
+    }
+  },
+  "conflict": {
+    "view": null,
+    "error": "conflict"
   },
   "bound": {
-    "error": null,
     "view": {
+      "format": "ghrah.ability-tree.v2",
+      "project_id": "project",
+      "agent_id": "alice",
+      "run_id": "alice-run",
+      "revision": 2,
       "abilities": [
         {
           "alias": "files",
+          "instance_id": "files-alice",
+          "instance_revision": 1,
+          "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+          "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346",
+          "revision": 1,
           "allowed_roots": [
             "/workspace/alice"
           ],
-          "availability": "ready",
-          "definition_digest": "sha256:8fcaca378880f65528fad724f9a5db8415dfbbdc9aa323e5e118f717b6b2cd79",
-          "instance_id": "files-alice",
-          "instance_revision": 1,
           "operations": [
             {
-              "availability": "unknown",
+              "key": "list_directory",
               "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
               "input_schema": {
                 "additionalProperties": false,
@@ -60,12 +1406,15 @@
                 ],
                 "type": "object"
               },
-              "key": "list_directory",
               "output_schema": {
                 "anyOf": [
                   {
-                    "additionalProperties": false,
+                    "type": "object",
                     "properties": {
+                      "outcome": {
+                        "type": "string",
+                        "const": "success"
+                      },
                       "data": {
                         "additionalProperties": false,
                         "properties": {
@@ -133,10 +1482,6 @@
                           "string",
                           "null"
                         ]
-                      },
-                      "outcome": {
-                        "const": "success",
-                        "type": "string"
                       }
                     },
                     "required": [
@@ -144,13 +1489,17 @@
                       "data",
                       "next_action_hint"
                     ],
-                    "type": "object"
+                    "additionalProperties": false
                   },
                   {
-                    "additionalProperties": false,
+                    "type": "object",
                     "properties": {
+                      "outcome": {
+                        "type": "string",
+                        "const": "failure"
+                      },
                       "data": {
-                        "additionalProperties": false,
+                        "type": "object",
                         "properties": {
                           "error": {
                             "type": "string"
@@ -159,17 +1508,13 @@
                         "required": [
                           "error"
                         ],
-                        "type": "object"
+                        "additionalProperties": false
                       },
                       "next_action_hint": {
                         "type": [
                           "string",
                           "null"
                         ]
-                      },
-                      "outcome": {
-                        "const": "failure",
-                        "type": "string"
                       }
                     },
                     "required": [
@@ -177,13 +1522,14 @@
                       "data",
                       "next_action_hint"
                     ],
-                    "type": "object"
+                    "additionalProperties": false
                   }
                 ]
-              }
+              },
+              "availability": "unknown"
             },
             {
-              "availability": "unknown",
+              "key": "read_file",
               "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
               "input_schema": {
                 "additionalProperties": false,
@@ -215,12 +1561,15 @@
                 ],
                 "type": "object"
               },
-              "key": "read_file",
               "output_schema": {
                 "anyOf": [
                   {
-                    "additionalProperties": false,
+                    "type": "object",
                     "properties": {
+                      "outcome": {
+                        "type": "string",
+                        "const": "success"
+                      },
                       "data": {
                         "additionalProperties": false,
                         "properties": {
@@ -252,10 +1601,6 @@
                           "string",
                           "null"
                         ]
-                      },
-                      "outcome": {
-                        "const": "success",
-                        "type": "string"
                       }
                     },
                     "required": [
@@ -263,13 +1608,17 @@
                       "data",
                       "next_action_hint"
                     ],
-                    "type": "object"
+                    "additionalProperties": false
                   },
                   {
-                    "additionalProperties": false,
+                    "type": "object",
                     "properties": {
+                      "outcome": {
+                        "type": "string",
+                        "const": "failure"
+                      },
                       "data": {
-                        "additionalProperties": false,
+                        "type": "object",
                         "properties": {
                           "error": {
                             "type": "string"
@@ -278,17 +1627,13 @@
                         "required": [
                           "error"
                         ],
-                        "type": "object"
+                        "additionalProperties": false
                       },
                       "next_action_hint": {
                         "type": [
                           "string",
                           "null"
                         ]
-                      },
-                      "outcome": {
-                        "const": "failure",
-                        "type": "string"
                       }
                     },
                     "required": [
@@ -296,1328 +1641,32 @@
                       "data",
                       "next_action_hint"
                     ],
-                    "type": "object"
+                    "additionalProperties": false
                   }
                 ]
-              }
+              },
+              "availability": "unknown"
             }
           ],
-          "revision": 1,
+          "skills": [],
           "skill": null,
-          "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
+          "availability": "ready"
         }
       ],
-      "agent_id": "alice",
       "bound_tools": [
         {
-          "alias": "files",
-          "grant_revision": 1,
-          "member": "read_file",
           "name": "read_report",
+          "alias": "files",
+          "member": "read_file",
+          "grant_revision": 1,
           "revision": 2
         }
       ],
-      "format": "ghrah.ability-tree.v2",
-      "project_id": "project",
-      "revision": 2,
-      "run_id": "alice-run",
       "runtime": {
         "host_id": "fixture",
         "observed_at": "2026-10-29T00:00:00Z"
       }
-    }
-  },
-  "conflict": {
-    "error": "conflict",
-    "view": null
-  },
-  "initial": {
-    "abilities": [
-      {
-        "alias": "files",
-        "allowed_roots": [
-          "/workspace/alice"
-        ],
-        "availability": "ready",
-        "definition_digest": "sha256:8fcaca378880f65528fad724f9a5db8415dfbbdc9aa323e5e118f717b6b2cd79",
-        "instance_id": "files-alice",
-        "instance_revision": 1,
-        "operations": [
-          {
-            "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "dir_path": {
-                  "description": "Path to the directory to list",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "recursive": {
-                  "default": false,
-                  "description": "Recursively list nested directories",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "dir_path"
-              ],
-              "type": "object"
-            },
-            "key": "list_directory",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "dir_path": {
-                          "type": "string"
-                        },
-                        "entries": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_entries": {
-                          "type": "integer"
-                        },
-                        "truncated": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "dir_path",
-                        "total_entries",
-                        "entries"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          },
-          {
-            "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "encoding": {
-                  "default": "utf-8",
-                  "description": "Text encoding for the file",
-                  "type": "string"
-                },
-                "file_path": {
-                  "description": "Path to the file to read",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based line number to start from",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "file_path"
-              ],
-              "type": "object"
-            },
-            "key": "read_file",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "content": {
-                          "type": "string"
-                        },
-                        "file_path": {
-                          "type": "string"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_lines": {
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "content",
-                        "file_path",
-                        "total_lines"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          }
-        ],
-        "revision": 1,
-        "skill": null,
-        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
-      }
-    ],
-    "agent_id": "alice",
-    "bound_tools": [],
-    "format": "ghrah.ability-tree.v2",
-    "project_id": "project",
-    "revision": 1,
-    "run_id": "alice-run",
-    "runtime": {
-      "host_id": "fixture",
-      "observed_at": "2026-10-29T00:00:00Z"
-    }
-  },
-  "mixed": {
-    "abilities": [
-      {
-        "alias": "reports",
-        "allowed_roots": [
-          "/workspace/alice"
-        ],
-        "availability": "ready",
-        "definition_digest": "sha256:4ca1ca2066a3496677686970beaf5d8a16f4c5078f6152ffa24466b9b1a57647",
-        "instance_id": "reporting",
-        "instance_revision": 1,
-        "operations": [
-          {
-            "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "dir_path": {
-                  "description": "Path to the directory to list",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "recursive": {
-                  "default": false,
-                  "description": "Recursively list nested directories",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "dir_path"
-              ],
-              "type": "object"
-            },
-            "key": "list_directory",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "dir_path": {
-                          "type": "string"
-                        },
-                        "entries": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_entries": {
-                          "type": "integer"
-                        },
-                        "truncated": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "dir_path",
-                        "total_entries",
-                        "entries"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          },
-          {
-            "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "encoding": {
-                  "default": "utf-8",
-                  "description": "Text encoding for the file",
-                  "type": "string"
-                },
-                "file_path": {
-                  "description": "Path to the file to read",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based line number to start from",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "file_path"
-              ],
-              "type": "object"
-            },
-            "key": "read_file",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "content": {
-                          "type": "string"
-                        },
-                        "file_path": {
-                          "type": "string"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_lines": {
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "content",
-                        "file_path",
-                        "total_lines"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          }
-        ],
-        "revision": 1,
-        "skill": {
-          "assets": [
-            {
-              "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
-              "key": "mark",
-              "media_type": "application/octet-stream",
-              "member": "skill/guide/assets/mark",
-              "path": "assets/mark.bin",
-              "size": 4
-            },
-            {
-              "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c",
-              "key": "template",
-              "media_type": "text/plain",
-              "member": "skill/guide/assets/template",
-              "path": "assets/template.txt",
-              "size": 24
-            }
-          ],
-          "availability": "unknown",
-          "body_allowed": true,
-          "description": "使用获准模板和写作指南整理报告。",
-          "key": "guide",
-          "references": [
-            {
-              "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c",
-              "key": "mark",
-              "media_type": "application/octet-stream",
-              "member": "skill/guide/references/mark",
-              "path": "references/mark.bin",
-              "size": 4
-            },
-            {
-              "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673",
-              "key": "style",
-              "media_type": "text/markdown",
-              "member": "skill/guide/references/style",
-              "path": "references/style.md",
-              "size": 34
-            }
-          ],
-          "title": "reporting-guide"
-        },
-        "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
-      }
-    ],
-    "agent_id": "alice",
-    "bound_tools": [],
-    "format": "ghrah.ability-tree.v2",
-    "project_id": "project",
-    "revision": 1,
-    "run_id": "alice-run",
-    "runtime": {
-      "host_id": "fixture",
-      "observed_at": "2026-10-29T00:00:00Z"
-    }
-  },
-  "revoked": {
-    "abilities": [],
-    "agent_id": "alice",
-    "bound_tools": [],
-    "format": "ghrah.ability-tree.v2",
-    "project_id": "project",
-    "revision": 3,
-    "run_id": "alice-run",
-    "runtime": {
-      "host_id": "fixture",
-      "observed_at": "2026-10-29T00:00:00Z"
-    }
-  },
-  "selected": {
-    "abilities": [
-      {
-        "alias": "files",
-        "allowed_roots": [
-          "/workspace/alice"
-        ],
-        "availability": "ready",
-        "definition_digest": "sha256:8fcaca378880f65528fad724f9a5db8415dfbbdc9aa323e5e118f717b6b2cd79",
-        "instance_id": "files-alice",
-        "instance_revision": 1,
-        "operations": [
-          {
-            "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "dir_path": {
-                  "description": "Path to the directory to list",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "recursive": {
-                  "default": false,
-                  "description": "Recursively list nested directories",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "dir_path"
-              ],
-              "type": "object"
-            },
-            "key": "list_directory",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "dir_path": {
-                          "type": "string"
-                        },
-                        "entries": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_entries": {
-                          "type": "integer"
-                        },
-                        "truncated": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "dir_path",
-                        "total_entries",
-                        "entries"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          },
-          {
-            "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "encoding": {
-                  "default": "utf-8",
-                  "description": "Text encoding for the file",
-                  "type": "string"
-                },
-                "file_path": {
-                  "description": "Path to the file to read",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based line number to start from",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "file_path"
-              ],
-              "type": "object"
-            },
-            "key": "read_file",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "content": {
-                          "type": "string"
-                        },
-                        "file_path": {
-                          "type": "string"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_lines": {
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "content",
-                        "file_path",
-                        "total_lines"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          }
-        ],
-        "revision": 1,
-        "skill": null,
-        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
-      }
-    ],
-    "agent_id": "alice",
-    "bound_tools": [
-      {
-        "alias": "files",
-        "grant_revision": 1,
-        "member": "read_file",
-        "name": "read_report",
-        "revision": 2
-      }
-    ],
-    "format": "ghrah.ability-tree.v2",
-    "project_id": "project",
-    "revision": 2,
-    "run_id": "alice-run",
-    "runtime": {
-      "host_id": "fixture",
-      "observed_at": "2026-10-29T00:00:00Z"
-    }
-  },
-  "text": {
-    "byte_count": 203,
-    "content": "---\nname: reporting-guide\ndescription: 使用获准模板和写作指南整理报告。\n---\n\n# 报告编写\n\n阅读[写作指南](references/style.md)。使用 assets/template.txt 和 assets/mark.bin。\n",
-    "digest": "sha256:9d3eec7cb91ee33f142861641f48c3855a35652235c386f43a56cfae3d50f7d5",
-    "encoding": "utf-8",
-    "instance_id": "reporting",
-    "media_type": "text/markdown",
-    "member": "skill/guide",
-    "next_offset": null,
-    "offset": 0,
-    "path": "SKILL.md",
-    "total_bytes": 203,
-    "version_digest": "sha256:74fabf9a8997dfd7007fe8be3857bf84e79d53fd2c93885f30b98da54aa04bf9"
-  },
-  "unavailable": {
-    "abilities": [
-      {
-        "alias": "files",
-        "allowed_roots": [
-          "/workspace/alice"
-        ],
-        "availability": "unavailable",
-        "definition_digest": "sha256:8fcaca378880f65528fad724f9a5db8415dfbbdc9aa323e5e118f717b6b2cd79",
-        "instance_id": "files-alice",
-        "instance_revision": 1,
-        "operations": [
-          {
-            "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "dir_path": {
-                  "description": "Path to the directory to list",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max number of entries to return (0 = no limit; pagination active when offset or limit is set)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "recursive": {
-                  "default": false,
-                  "description": "Recursively list nested directories",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "dir_path"
-              ],
-              "type": "object"
-            },
-            "key": "list_directory",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "dir_path": {
-                          "type": "string"
-                        },
-                        "entries": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_entries": {
-                          "type": "integer"
-                        },
-                        "truncated": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "dir_path",
-                        "total_entries",
-                        "entries"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          },
-          {
-            "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
-            "input_schema": {
-              "additionalProperties": false,
-              "properties": {
-                "encoding": {
-                  "default": "utf-8",
-                  "description": "Text encoding for the file",
-                  "type": "string"
-                },
-                "file_path": {
-                  "description": "Path to the file to read",
-                  "type": "string"
-                },
-                "limit": {
-                  "default": 0,
-                  "description": "Max lines to return; 0 = whole file (legacy behavior)",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "offset": {
-                  "default": 0,
-                  "description": "0-based line number to start from",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "file_path"
-              ],
-              "type": "object"
-            },
-            "key": "read_file",
-            "output_schema": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "content": {
-                          "type": "string"
-                        },
-                        "file_path": {
-                          "type": "string"
-                        },
-                        "limit": {
-                          "type": "integer"
-                        },
-                        "offset": {
-                          "type": "integer"
-                        },
-                        "total_lines": {
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "content",
-                        "file_path",
-                        "total_lines"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "success",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "error"
-                      ],
-                      "type": "object"
-                    },
-                    "next_action_hint": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "outcome": {
-                      "const": "failure",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "outcome",
-                    "data",
-                    "next_action_hint"
-                  ],
-                  "type": "object"
-                }
-              ]
-            }
-          }
-        ],
-        "revision": 1,
-        "skill": null,
-        "version_digest": "sha256:5d8823862c589c10b5ddab78c4be13c0ebd0e4ce0bffbf5b815fd54f65dd70a0"
-      }
-    ],
-    "agent_id": "alice",
-    "bound_tools": [],
-    "format": "ghrah.ability-tree.v2",
-    "project_id": "project",
-    "revision": 1,
-    "run_id": "alice-run",
-    "runtime": {
-      "host_id": "fixture",
-      "observed_at": "2026-10-29T00:00:00Z"
-    }
+    },
+    "error": null
   }
 }
