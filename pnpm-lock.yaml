@@ -137,9 +137,6 @@ importers:
       '@types/markdown-it':
         specifier: ^14.1.2
         version: 14.2.0
-      '@unocss/reset':
-        specifier: ^66.0.0
-        version: 66.8.1
       '@vitejs/plugin-vue':
         specifier: ^6.0.8
         version: 6.0.8(vite@6.4.3(@types/node@25.9.5)(jiti@2.7.0))(vue@3.5.42(typescript@5.7.2))
@@ -1590,9 +1587,6 @@ packages:
 
   '@unocss/preset-wind@66.8.1':
     resolution: {integrity: sha512-L3CfnB1k2jIMxeSt0C5PT8z8mlsoyE+tbHWlAweGaqYC+v2JfvpN7U1Zs/WGrgemZhS2o/rOnEPQcSsJb+Vb1w==}
-
-  '@unocss/reset@66.8.1':
-    resolution: {integrity: sha512-3YWNFIP3sAAZUhGcHoZHoXwkJzKT8RUgFPsws5/RG9sgUpVmQWEQS2adBTovat1XE6H4Z1aCtOTYUKOOoRfvSQ==}
 
   '@unocss/rule-utils@66.8.1':
     resolution: {integrity: sha512-EQ9bhifqIodIsl7+eOmkCVWXkZ7dnwkmTURFyAosVpUc8j4WYsfnQC+3SjKnJfT44s1rIqHJtoBBaG9X97opdA==}
@@ -4796,8 +4790,6 @@ snapshots:
     dependencies:
       '@unocss/core': 66.8.1
       '@unocss/preset-wind3': 66.8.1
-
-  '@unocss/reset@66.8.1': {}
 
   '@unocss/rule-utils@66.8.1':
     dependencies:

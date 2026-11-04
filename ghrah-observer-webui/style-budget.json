@@ -1,7 +1,7 @@
 {
   "$comment": "CSS 体积基线：超过 baseline × (1 + tolerance) 即失败。重写用 node scripts/check-css-budget.mjs --update。",
   "updated": "2026-11-04",
-  "rawBytes": 73920,
-  "gzipBytes": 13407,
+  "rawBytes": 73887,
+  "gzipBytes": 13395,
   "tolerance": 0.02
 }

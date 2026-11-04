@@ -4,10 +4,10 @@
   "counts": {
     "color-no-hex": 398,
     "px-font-size": 0,
-    "important": 1,
-    "dark-variant": 179,
+    "important": 0,
+    "dark-variant": 178,
     "scoped-root-dark": 12,
     "arbitrary-utility": 0,
-    "palette-utility": 354
+    "palette-utility": 352
   }
 }
