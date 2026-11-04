@@ -1,6 +1,5 @@
 # ability.yaml —— 头段值手写；members 按 v1 规则生成（生成器落地前手工维护，见 SKILL.md §8）
-# 暂存说明：P1 前以 `_` 前缀避开旧版内置扫描（旧加载器只认 0.1-draft / 0.2）；
-# P1 改名为 `ability-builder` 并由 v1 解析器加载。
+# 已由 P1 从 `_ability-builder` 改名并纳入内置扫描（v1 解析器加载）。
 format: ghrah.ability-definition
 schema_version: '1'
 identity:

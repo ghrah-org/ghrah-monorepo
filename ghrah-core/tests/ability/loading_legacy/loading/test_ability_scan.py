@@ -342,20 +342,24 @@ class TestSkills:
         assert skill.body == tmp_path / "research" / "skills" / "GUIDE.md"
         assert result.issues == ()
 
-    def test_second_skill_member_is_rejected(self, tmp_path: Path) -> None:
-        """一个能力包只支持一个 skill 成员：声明两个时整份定义非法。
-
-        容器与技能一一对应（技能是容器的插件包），多条声明没有可表达的落点，
-        因此在契约层 fail-closed——扫描把它记成问题，而不是只收其中一条。
-        """
+    def test_multiple_skill_members_are_supported(self, tmp_path: Path) -> None:
+        """一个能力包可以声明多个 skill：每个技能有独立目录与成员键。"""
         payload = _definition(
             "multi",
-            skills={"a": _skill_member("a"), "b": _skill_member("b")},
+            skills={
+                "a": _skill_member("a", body_path="skills/a/SKILL.md"),
+                "b": _skill_member("b", body_path="skills/b/SKILL.md"),
+            },
         )
-        _write_package(tmp_path, "multi", payload=payload, body=False)
+        package = _write_package(tmp_path, "multi", payload=payload, body=False)
+        for key in ("a", "b"):
+            body = package / "skills" / key / "SKILL.md"
+            body.parent.mkdir(parents=True, exist_ok=True)
+            body.write_text(f"# {key}\n", encoding="utf-8")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
-        assert result.entries == ()
-        assert result.skills == ()
-        assert "只支持一个 skill 成员" in result.issues[0].reason
+        assert [entry.container for entry in result.entries] == ["multi"]
+        assert [skill.key for skill in result.skills] == ["a", "b"]
+        # 多技能包的目录名必须带归属，否则模型无法区分同名技能。
+        assert [skill.catalog_name for skill in result.skills] == ["multi/a", "multi/b"]

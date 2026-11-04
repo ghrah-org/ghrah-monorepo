@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources.abc import Traversable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ghrah.ability.loading import ability_roots as roots
@@ -41,6 +41,7 @@ from ghrah.ability.loading.ability_schema import (
     DEFINITION_FILE_NAME,
     LOCK_FILE_NAME,
     AbilityDefinition,
+    ContentResource,
     OperationDefinition,
     SkillDefinition,
     parse_definition,
@@ -74,6 +75,7 @@ __all__ = [
     "AbilityScanIssue",
     "AbilityScanResult",
     "AbilitySkill",
+    "SkillAttachment",
     "ensure_locks",
     "load_ability_skills",
     "relock_skill",
@@ -98,6 +100,24 @@ class AbilityEntry:
 
     locator: Traversable
     """容器目录句柄：正文、实现脚本都相对它定位。"""
+
+
+@dataclass(frozen=True)
+class SkillAttachment:
+    """技能目录下的一个静态附件声明（``assets`` / ``references`` / ``scripts``）。
+
+    扫描期只取定义面声明的位置与媒体类型，**不读文件、不算摘要**：摘要属于捕获
+    面（内容版本），扫描只回答"这个技能声明了哪些附件"。控制台据此展示分层结构，
+    不需要再回读 YAML。
+    """
+
+    key: str
+    """附件键（定义面里的键，通常等于文件名主干）。"""
+
+    path: str
+    """相对技能目录的 POSIX 路径。"""
+
+    media_type: str
 
 
 @dataclass(frozen=True)
@@ -152,6 +172,18 @@ class AbilitySkill:
     lock_issue: str | None = None
     """lock 读不出来、或登记时降级的说明（「无法裁决」不等于「内容变过」）。"""
 
+    assets: tuple[SkillAttachment, ...] = ()
+    """声明过的素材附件（``assets``），按附件键升序。"""
+
+    references: tuple[SkillAttachment, ...] = ()
+    """声明过的参考材料（``references``），按附件键升序。"""
+
+    scripts: tuple[SkillAttachment, ...] = ()
+    """声明过的委托脚本（``scripts``），按附件键升序。"""
+
+    _catalog_name: str = ""
+    """目录里显示/查找用的名字；空表示退化为技能键（由扫描期填入）。"""
+
     @property
     def body(self) -> Path | None:
         """正文的真实路径（按定义面声明的 ``body_path`` 拼出）；包资源根为 None。
@@ -174,12 +206,13 @@ class AbilitySkill:
 
     @property
     def catalog_name(self) -> str:
-        """模型可见的名字：成员键（与 operation 成员同一口径）。
+        """模型可见的名字：``<容器>/<技能键>``，或容器与技能同名时只用容器名。
 
-        全名（``<容器点分身份>.<成员键>``）只用于去重与问题定位——目录里显示
-        全名会让模型拿一个加载入口不认的名字去调用。
+        一个包可以有多个技能，所以名字必须带归属：``alpha`` 在不同包里是不同技能，
+        模型拿一个二义的名字去调用就等于让加载入口猜。单技能包沿用历史写法
+        （键 = 包名时只显示包名），不制造无谓的路径前缀。
         """
-        return self.key
+        return self._catalog_name or self.key
 
 
 @dataclass(frozen=True)
@@ -644,7 +677,78 @@ def _skill_member(entry: AbilityEntry, key: str, skill: SkillDefinition) -> Abil
         lock_path=(skill_dir / LOCK_FILE_NAME) if skill_dir is not None else None,
         fingerprint=fingerprint,
         lock_issue=(fingerprint.lock_issue if fingerprint is not None else None),
+        assets=_attachments(skill.assets),
+        references=_attachments(skill.references),
+        scripts=_attachments(skill.scripts),
+        _catalog_name=_catalog_name(entry, key),
     )
+
+
+def _catalog_name(entry: AbilityEntry, key: str) -> str:
+    """目录里显示的名字：多技能包用 ``容器/键``，单技能包沿用裸键。
+
+    单技能包的键在历史上就是模型的调用名（``research``），不制造路径前缀；
+    一个包里有多个技能时，裸键无法区分归属，必须带包名。
+
+    Args:
+        entry: 所属容器条目。
+        key: 技能成员键。
+
+    Returns:
+        模型可见且可回查的名字。
+    """
+    if len(entry.definition.skills) > 1:
+        return f"{entry.container}/{key}"
+    return key
+
+
+def _attachments(resources: dict[str, ContentResource] | list[str]) -> tuple[SkillAttachment, ...]:
+    """把定义面的附件表摊成只读成员（列表简写不携带媒体类型，按路径推断）。
+
+    Args:
+        resources: ``assets`` / ``references`` / ``scripts`` 的声明值。
+
+    Returns:
+        按附件键升序的附件元组。
+    """
+    if isinstance(resources, list):
+        return tuple(
+            SkillAttachment(key=PurePosixPath(path).stem, path=path, media_type=_media_type(path))
+            for path in sorted(resources)
+        )
+    return tuple(
+        SkillAttachment(
+            key=key,
+            path=resource.path,
+            media_type=resource.media_type or _media_type(resource.path),
+        )
+        for key, resource in sorted(resources.items())
+    )
+
+
+_MEDIA_TYPES: dict[str, str] = {
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+    ".json": "application/json",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+    ".py": "text/x-python",
+    ".bin": "application/octet-stream",
+}
+
+
+def _media_type(path: str) -> str:
+    """按扩展名推断媒体类型；未知扩展名按二进制处理。
+
+    v1 声明里通常已写 ``media_type``，这里只兜底列表简写与缺省值。
+
+    Args:
+        path: 相对技能目录的路径。
+
+    Returns:
+        媒体类型字符串。
+    """
+    return _MEDIA_TYPES.get(PurePosixPath(path).suffix.lower(), "application/octet-stream")
 
 
 def _member_fingerprint(skill_dir: Path, full_name: str, body_relpath: str) -> SkillFingerprint:

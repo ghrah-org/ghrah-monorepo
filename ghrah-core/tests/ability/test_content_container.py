@@ -4,6 +4,7 @@
 import asyncio
 import base64
 import json
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -317,7 +318,6 @@ async def test_operation_backend_failure_does_not_block_content_and_corruption_f
 @pytest.mark.parametrize(
     "mutation",
     [
-        "second-skill",
         "absolute",
         "parent",
         "symlink",
@@ -333,15 +333,16 @@ def test_import_rejects_invalid_content(tmp_path, mutation):
     shutil.copytree(EXAMPLE, source)
     data = yaml.safe_load((source / "ability.yaml").read_text())
     limits = CaptureLimits()
-    if mutation == "second-skill":
-        data["skills"]["other"] = data["skills"]["guide"]
-    elif mutation in {"absolute", "parent"}:
+    if mutation in {"absolute", "parent"}:
         data["skills"]["guide"]["body"]["path"] = (
             "/etc/passwd" if mutation == "absolute" else "../outside"
         )
     elif mutation == "symlink":
         (source / "assets/template.txt").unlink()
-        (source / "assets/template.txt").symlink_to("/etc/passwd")
+        try:
+            (source / "assets/template.txt").symlink_to("/etc/passwd")
+        except OSError as exc:  # 无符号链接权限的 Windows 环境跳过该变体
+            pytest.skip(f"当前环境不允许创建符号链接: {exc}")
     elif mutation == "dangling":
         (source / "SKILL.md").write_text(
             (source / "SKILL.md").read_text() + "\n[missing](references/missing.md)\n"
@@ -404,12 +405,19 @@ def test_capture_handles_path_replacement_without_following_symlink(tmp_path, mo
 
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(tmp_path / "probe-target")
+    except OSError as exc:  # Windows 未开启开发者模式/无管理员时不允创建符号链接
+        pytest.skip(f"当前环境不允许创建符号链接: {exc}")
+    probe.unlink()
     original = content.os.open
     swapped = False
 
     def replace_before_open(path, flags, *args, **kwargs):
         nonlocal swapped
-        if path == "template.txt" and not swapped:
+        # POSIX 传相对文件名，可移植实现传绝对路径：按主文件名匹配，两种口径都覆盖。
+        if Path(path).name == "template.txt" and not swapped:
             swapped = True
             (source / "assets/template.txt").unlink()
             (source / "assets/template.txt").symlink_to("/etc/passwd")
@@ -552,3 +560,31 @@ async def test_same_operation_key_does_not_select_an_unsupported_backend(contain
         await client.call(
             "/scheme/ability/reports/operations/read_file", "read_file", {"file_path": "SKILL.md"}
         )
+
+
+def test_portable_capture_rejects_file_replaced_between_stat_and_open(tmp_path, monkeypatch):
+    """可移植实现用"打开后复核文件身份"兜住 stat 与 open 之间的替换。"""
+    from ghrah.ability import content
+
+    if hasattr(os, "O_DIRECTORY"):
+        pytest.skip("POSIX 走 dir_fd + NOFOLLOW 实现，本用例只覆盖可移植分支")
+    root = tmp_path / "pkg"
+    (root / "assets").mkdir(parents=True)
+    target = root / "assets" / "template.txt"
+    target.write_text("original", encoding="utf-8")
+    original = content.os.open
+    replaced = False
+
+    def replace_before_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if Path(path).name == "template.txt" and not replaced:
+            replaced = True
+            target.unlink()
+            target.write_text("replaced", encoding="utf-8")
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(content.os, "open", replace_before_open)
+
+    with pytest.raises(OSError, match="打开期间文件被替换"):
+        content._capture_bytes_portable(root, "assets/template.txt", 1024)
+    assert replaced

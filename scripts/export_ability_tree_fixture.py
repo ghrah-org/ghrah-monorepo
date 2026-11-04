@@ -81,11 +81,14 @@ def fixtures() -> dict:
             "instance_id": "reporting",
             "version_digest": content_version.digest,
             "definition_digest": content_version.definition_digest,
-            "skill": AbilityAccessStore._skill_node(
-                content_version.definition().model_dump(mode="json"),
-                manifest,
-                sorted(key for key in manifest if key.startswith("skill/")),
+            "skills": (
+                skills := AbilityAccessStore._skill_nodes(
+                    content_version.definition().model_dump(mode="json"),
+                    manifest,
+                    sorted(key for key in manifest if key.startswith("skill/")),
+                )
             ),
+            "skill": skills[0] if skills else None,
         }
     )
 
