@@ -14,7 +14,7 @@ CAPABILITY_REGISTRY/CLUSTER_TRANSPORT_MANAGER）随旧实现剔除。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Protocol, Required, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, Required, TypedDict
 
 from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.sandbox.executor import SandboxExecutor
@@ -62,11 +62,9 @@ __all__ = [
     "WorkspaceService",
 ]
 
-T = TypeVar("T")
-
 
 @dataclass(frozen=True)
-class SubjectServiceKey(Generic[T]):
+class SubjectServiceKey[T]:
     """Typed key for values stored in the Ouroboros context (name carrier)."""
 
     name: str

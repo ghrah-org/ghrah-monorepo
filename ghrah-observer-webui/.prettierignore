@@ -9,3 +9,6 @@ pnpm-lock.yaml
 *.tsbuildinfo
 # Python 导出的可复现契约样例，由 export_ability_tree_fixture.py --check 核对。
 packages/protocol/src/__fixtures__/ability-tree.json
+
+# Python 作者模型生成，格式与字段由 export_ability_contracts.py --check 核对。
+packages/protocol/src/ability-tree.generated.ts

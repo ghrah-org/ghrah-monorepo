@@ -127,7 +127,7 @@ def blocks_from_dicts(content_blocks: list[dict[str, Any]]) -> list[ContentBlock
     for bd in content_blocks:
         try:
             blocks.append(block_from_dict(bd))  # type: ignore[arg-type]
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             blocks.append(TextBlock(text=str(bd.get("text", bd.get("reasoning", "")))))
     return blocks
 

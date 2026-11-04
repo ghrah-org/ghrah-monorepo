@@ -137,7 +137,7 @@ class ProjectPaths:
             if entries:
                 try:
                     marker = json.loads(self.marker_path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                except OSError, ValueError:
                     marker = {}
                 if marker.get("project_id") == project_id:
                     return ProjectRootInit(False, False, ())

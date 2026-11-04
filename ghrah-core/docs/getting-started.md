@@ -2,7 +2,7 @@
 
 ## 环境要求
 
-- Python >= 3.11
+- Python >= 3.15
 - [uv](https://docs.astral.sh/uv/) 包管理器
 - [agentconf](https://github.com/ghrah/agentconf) CLI（用于 LLM 配置管理）
 

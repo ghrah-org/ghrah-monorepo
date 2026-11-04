@@ -11,9 +11,8 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any
 
-_T = TypeVar("_T")
 _CURRENT: ContextVar[AgentRunner | None] = ContextVar("ghrah_agent_runner", default=None)
 
 
@@ -25,9 +24,9 @@ def detached_runner_context() -> Context:
 
 
 @dataclass
-class _Work(Generic[_T]):
-    operation: Callable[[], Awaitable[_T]]
-    future: asyncio.Future[_T]
+class _Work[T]:
+    operation: Callable[[], Awaitable[T]]
+    future: asyncio.Future[T]
     context: Context
 
 
@@ -48,7 +47,7 @@ class AgentRunner:
         """返回是否存在运行中或等待中的执行。"""
         return self._worker is not None
 
-    async def run(self, operation: Callable[[], Awaitable[_T]]) -> _T:
+    async def run[T](self, operation: Callable[[], Awaitable[T]]) -> T:
         """排队执行，返回该操作自己的结果；取消只影响该操作。"""
         if self._closed:
             raise RuntimeError(f"Agent runner '{self._name}' is closed")
@@ -102,7 +101,7 @@ class AgentRunner:
         seen.add(self)
         return any(runner._reaches(target, seen) for runner in self._waiting)
 
-    async def _invoke(self, work: _Work[_T]) -> _T:
+    async def _invoke[T](self, work: _Work[T]) -> T:
         token = _CURRENT.set(self)
         try:
             return await work.operation()

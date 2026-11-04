@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-MONOREPO_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
 
 # Mock mode: ./scripts/dev.sh --mock [--scenario demo] [--port 4113]
 # Starts only the protocol-level mock server + SPA; the SPA connects to the
@@ -43,8 +42,31 @@ if [[ "${1:-}" == "--mock" ]]; then
   wait
 fi
 
-# Full-stack mode: delegate to the monorepo-root single entrypoint
-# (subject server with embedded Core :4112 + observer-web dev server :5173).
-echo "=== Delegating full-stack startup to monorepo scripts/start_all.py ==="
+# Full-stack mode: the local dev session is owned by ghrah-toolchain.
+# ``ghrah dev run`` 默认打开浏览器；保留本脚本旧语义（默认不打开，--open 才打开）。
+# 端口等实例参数由 ghrah dev 的 distro 配置决定，不再从本脚本透传。
+if ! command -v ghrah >/dev/null 2>&1; then
+  echo "未找到 ghrah CLI：全栈启动已由 ghrah-toolchain 接管。" >&2
+  echo "请先安装 ghrah-toolchain（uv tool install --editable <path>），" >&2
+  echo "或使用 ./scripts/dev.sh --mock 仅起前端 demo。" >&2
+  exit 1
+fi
+
+OPEN_BROWSER=0
+NO_BROWSER=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --open) OPEN_BROWSER=1 ;;
+    --no-browser) NO_BROWSER=1; ARGS+=("$arg") ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+
+echo "=== Delegating full-stack startup to ghrah dev run ==="
 echo "    (use --mock for frontend-only demo mode)"
-exec python3 "$MONOREPO_ROOT/scripts/start_all.py" "$@"
+if [[ "$OPEN_BROWSER" -eq 1 || "$NO_BROWSER" -eq 1 ]]; then
+  exec ghrah dev run ${ARGS[@]+"${ARGS[@]}"}
+else
+  exec ghrah dev run --no-browser ${ARGS[@]+"${ARGS[@]}"}
+fi

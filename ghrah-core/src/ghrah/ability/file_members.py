@@ -4,9 +4,9 @@
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ghrah.scheme_ability.ability.fs.operations.list_directory import ListDirectoryAbility
-from ghrah.scheme_ability.ability.fs.operations.read_file import ReadFileAbility
-from ghrah.scheme_ability.execution.base import Ability
+from ghrah.ability.builtin.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.execution.base import Ability
 
 
 @dataclass(frozen=True)
@@ -23,3 +23,17 @@ FILE_OPERATIONS = MappingProxyType(
         "list_directory": FileMember(ListDirectoryAbility, "dir_path"),
     }
 )
+
+
+def supports_file_operation(definition: dict, key: str) -> bool:
+    """后端按显式槽契约匹配，不能因成员名相同而替未知后端执行。"""
+    operation = definition["operations"].get(key)
+    if key not in FILE_OPERATIONS or operation is None or operation.get("script") is not None:
+        return False
+    route = operation["implementation"]
+    requirement = definition["provider_requirements"].get(route["provider_slot"], {})
+    return (
+        route["operation"] == key
+        and requirement.get("contract") == "ghrah.fs.v1"
+        and set(requirement.get("required_capabilities", [])) <= {"request"}
+    )

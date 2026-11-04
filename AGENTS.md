@@ -11,7 +11,6 @@
 - `ghrah-taskstore/` — Python 任务归因内核包（**可选组件**、首个接入插件系统的插件；tasks/claims/evidence 三表权威 + checker 扩展点宿主；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-scheme/` — Python Scheme 控制平面原型（monorepo 自用；类型化契约、五个控制原语与有界生命周期；既有运行时尚未迁移，未纳入发布白名单）
 - `ghrah-observer-webui/` — TS 观察端（pnpm workspace: packages/* + vscode-extension）
-- `scripts/start_all.py` — 全栈一键启动入口（subject :4112 内嵌 Core + webui dev :5173）
 
 ## 架构原则（SSOT / CQRS）
 
@@ -42,7 +41,7 @@
 
 - Python：uv（单一 `uv.lock` 在根；**成员内禁止 `uv lock`**）
 - Web：pnpm（单一 `pnpm-workspace.yaml` / `pnpm-lock.yaml` 在仓库根）
-- Node 版本：**须 ≥ 22**（pnpm 11 依赖 `node:sqlite`，Node 20 下任何 pnpm 命令直接崩；`nvm use 24`）
+- Node 版本：**须 ≥ 26**（pnpm 11 依赖 `node:sqlite`，Node 20 下任何 pnpm 命令直接崩；`nvm use 26`）
 
 ```sh
 uv sync --all-packages      # Python 全量安装（含 dev 组另加 --group dev）
@@ -53,7 +52,7 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 
 ### Python
 
-- lint/format：`uv run ruff check . && uv run ruff format --check .`（规则 `E,F,I,N,W,UP`，行宽 100，target py311）。提交前必须全绿。
+- lint/format：`uv run ruff check . && uv run ruff format --check .`（规则 `E,F,I,N,W,UP`，行宽 100，target py315）。提交前必须全绿。
 - 类型：现代语法（`str | None`，禁 `Optional`）；公开函数带类型标注与中文 docstring。
 - 测试：pytest（`asyncio_mode = "auto"`）；测试文件与被测模块同构放在 `tests/`。
 - 命令一律 `uv run <cmd>`（解析到根 workspace 环境），勿用系统 python。

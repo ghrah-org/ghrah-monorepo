@@ -40,3 +40,17 @@ describe("AbilityTreeClient", () => {
     expect(transport.submit).toHaveBeenCalledTimes(1);
   });
 });
+
+it("checks content version and member while preserving an explicit read request", async () => {
+  const transport = { read: vi.fn(), submit: vi.fn().mockResolvedValue(fixture.text) };
+  const client = createAbilityTreeClient("project", transport);
+  expect(
+    await client.readContent("alice", "reports", "skill/guide", fixture.text.version_digest),
+  ).toEqual(fixture.text);
+  await expect(
+    client.readContent("alice", "reports", "skill/guide", "old-version"),
+  ).rejects.toThrow("target mismatch");
+  await expect(
+    client.readContent("alice", "reports", "skill/guide/../secret", "x"),
+  ).rejects.toThrow("Invalid content member");
+});

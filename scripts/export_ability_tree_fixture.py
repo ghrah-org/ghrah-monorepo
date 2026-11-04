@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 
+from ghrah.ability.access import AbilityAccessStore
+from ghrah.ability.content import ContentReadResult
 from ghrah.ability.contracts import operation_result_schema
-from ghrah.ability.versions import capture_file_version
+from ghrah.ability.versions import capture_ability_version, capture_file_version
 from ghrah.protocol.ability_tree import (
     AbilityNode,
     AbilityTreeView,
@@ -69,7 +72,46 @@ def fixtures() -> dict:
     unavailable = initial.model_copy(
         update={"abilities": [ability.model_copy(update={"availability": "unavailable"})]}
     )
+    root = Path(__file__).resolve().parents[1] / "ghrah-core/examples/ability_content/reporting"
+    content_version = capture_ability_version((root / "ability.yaml").read_text(), root=root)
+    manifest = json.loads(content_version.manifest_json)
+    mixed = ability.model_copy(
+        update={
+            "alias": "reports",
+            "instance_id": "reporting",
+            "version_digest": content_version.digest,
+            "definition_digest": content_version.definition_digest,
+            "skill": AbilityAccessStore._skill_node(
+                content_version.definition().model_dump(mode="json"),
+                manifest,
+                sorted(key for key in manifest if key.startswith("skill/")),
+            ),
+        }
+    )
+
+    def content_result(member: str) -> dict:
+        entry = manifest[member]
+        data = dict(content_version.blobs)[entry["digest"]]
+        text = entry["media_type"].startswith("text/")
+        return ContentReadResult(
+            instance_id="reporting",
+            version_digest=content_version.digest,
+            member=member,
+            path=entry["path"],
+            media_type=entry["media_type"],
+            digest=entry["digest"],
+            total_bytes=len(data),
+            offset=0,
+            byte_count=len(data),
+            next_offset=None,
+            encoding="utf-8" if text else "base64",
+            content=data.decode() if text else base64.b64encode(data).decode(),
+        ).model_dump(mode="json")
+
     return {
+        "mixed": initial.model_copy(update={"abilities": [mixed]}).model_dump(mode="json"),
+        "text": content_result("skill/guide"),
+        "binary": content_result("skill/guide/assets/mark"),
         "initial": initial.model_dump(mode="json"),
         "selected": selected.model_dump(mode="json"),
         "revoked": revoked.model_dump(mode="json"),

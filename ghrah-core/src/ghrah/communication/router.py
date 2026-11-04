@@ -96,7 +96,7 @@ class MessageRouter:
                 recipient=target,
                 timeout=effective_timeout,
             )
-        except (AgentNotFoundError, CommunicationTimeoutError):
+        except AgentNotFoundError, CommunicationTimeoutError:
             raise
         except Exception as e:
             raise RoutingError(
