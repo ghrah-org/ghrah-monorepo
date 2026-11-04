@@ -23,13 +23,13 @@ from ghrah.protocol.ability_tree import (
     OperationNode,
     RevokeAbilityRequest,
     SkillNode,
-    SkillReadScope,
     TreeErrorCode,
     TreeId,
     UnbindToolRequest,
 )
 from pydantic import ConfigDict, TypeAdapter
 
+from ghrah.ability.access.facts import request_facts, stored_facts
 from ghrah.ability.content import (
     ContentChunk,
     ContentDescription,
@@ -117,6 +117,31 @@ class MemberFence:
     tool_name: str = "_"
     tool_revision: int = 0
     version_digest: str = ""
+
+
+@dataclass(frozen=True)
+class GrantRecord:
+    """关系库里的一行获授事实（启动核定读取的原始形状）。
+
+    Attributes:
+        alias: Agent 内的能力别名。
+        instance_id: 成员所属实例。
+        members: 获授的 Operation 键。
+        content: 获授的内容成员地址。
+        roots: 文件类成员的允许根。
+        axes: 成员地址 → 可见/可用事实。
+        revision: 该行写入时的关系修订。
+        source: 最近一次写入的来源。
+    """
+
+    alias: str
+    instance_id: str
+    members: tuple[str, ...]
+    content: tuple[str, ...]
+    roots: tuple[str, ...]
+    axes: dict[str, dict[str, bool]]
+    revision: int
+    source: str
 
 
 class AccessError(ValueError):
@@ -276,15 +301,16 @@ class AbilityAccessStore:
         return TypeAdapter(TreeId).validate_python(run)
 
     async def _agent(self, actor: AccessIdentity, agent: str) -> Any:
+        """核对目标 Agent 行；操作员不依赖运行实例身份，Agent 自身必须匹配当前 run。"""
         if actor.project_id != self.project_id:
             raise AccessError("access_denied")
         row = await self._row("ability_agents", "id=?", agent)
         if row is None:
             raise AccessError("not_found")
+        if self._operator(actor):
+            return row
         run = self.current_run(agent)
-        if not self._operator(actor) and (
-            actor.operator or actor.subject_id != agent or actor.run_id != run
-        ):
+        if actor.operator or actor.subject_id != agent or actor.run_id != run:
             raise AccessError("access_denied")
         return row
 
@@ -394,6 +420,111 @@ class AbilityAccessStore:
             elif row["revision"] != expected_revision:
                 raise AccessError("conflict")
 
+    async def ensure_agent(self, actor: AccessIdentity, agent: str) -> int:
+        """部署装配在运行实例出现前登记 Agent 行，返回当前关系修订。
+
+        启动核定发生在 Agent 注册之前：授权事实是 Agent 级持久事实，不依赖
+        运行实例已经存在；真正绑定 run 的核对仍由每次读取时的 ``_agent`` 完成。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+
+        Returns:
+            当前关系修订（新行从 0 开始）。
+
+        Raises:
+            AccessError: 调用方不是操作员。
+        """
+        self._require_operator(actor)
+        TypeAdapter(TreeId).validate_python(agent)
+        async with self._tx(write=True):
+            row = await self._row("ability_agents", "id=?", agent)
+            if row is None:
+                await self._db.execute(
+                    "INSERT INTO ability_agents VALUES(?,?,0)", (self.project_id, agent)
+                )
+                return 0
+            return int(row["revision"])
+
+    async def agent_revision(self, actor: AccessIdentity, agent: str) -> int:
+        """读取 Agent 关系修订；操作员专用，不要求运行实例已存在。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+
+        Returns:
+            当前关系修订。
+
+        Raises:
+            AccessError: 调用方不是操作员，或 Agent 行不存在。
+        """
+        self._require_operator(actor)
+        async with self._tx():
+            row = await self._row("ability_agents", "id=?", agent)
+            if row is None:
+                raise AccessError("not_found")
+            return int(row["revision"])
+
+    async def tool_names(self, actor: AccessIdentity, agent: str) -> tuple[str, ...]:
+        """读取已选工具名；操作员专用，启动核定用它清理陈旧选择。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+
+        Returns:
+            已写入的工具名，按名称排序。
+        """
+        self._require_operator(actor)
+        async with self._tx():
+            async with self._db.execute(
+                "SELECT name FROM ability_tools WHERE project=? AND agent=? ORDER BY name",
+                (self.project_id, agent),
+            ) as cursor:
+                return tuple(row[0] for row in await cursor.fetchall())
+
+    async def grants(self, actor: AccessIdentity, agent: str) -> list[GrantRecord]:
+        """读取 Agent 的全部获授事实快照；不要求运行实例已存在。
+
+        启动核定器需要比较“当前事实”与“目标事实”，因此这里返回原始成员集合
+        与轴，而不是经过可见性过滤的投影。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+
+        Returns:
+            按 alias 排序的获授事实。
+
+        Raises:
+            AccessError: 调用方不是操作员，或 Agent 行不存在。
+        """
+        self._require_operator(actor)
+        async with self._tx():
+            row = await self._row("ability_agents", "id=?", agent)
+            if row is None:
+                raise AccessError("not_found")
+            async with self._db.execute(
+                "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
+                (self.project_id, agent),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            return [
+                GrantRecord(
+                    alias=item["alias"],
+                    instance_id=item["instance"],
+                    members=tuple(json.loads(item["members"])),
+                    content=tuple(json.loads(item["content"])),
+                    roots=tuple(json.loads(item["roots"])),
+                    axes=json.loads(item["axes"]),
+                    revision=int(item["revision"]),
+                    source=item["source"],
+                )
+                for item in rows
+            ]
+
     async def select_instance(
         self,
         actor: AccessIdentity,
@@ -458,11 +589,33 @@ class AbilityAccessStore:
     async def grant(
         self, actor: AccessIdentity, agent: str, change: GrantAbilityRequest
     ) -> AbilityTreeView:
-        """同一事务提交获授范围和历史；替换关系使旧工具选择失效。
+        """写入一次获授变更并返回投影。
+
+        写入与投影分两个事务：写入只要求关系的当前修订，投影才要求运行实例
+        身份。启动核定在 Agent 注册前写入授权，因此只调用 :meth:`write_grant`。
+        """
+        await self.write_grant(actor, agent, change)
+        return await self._view(agent)
+
+    async def write_grant(
+        self, actor: AccessIdentity, agent: str, change: GrantAbilityRequest
+    ) -> int:
+        """写入一次获授变更并返回关系修订；相同事实不产生新历史。
 
         授予集合是**授权时刻的快照**：整包授权展开为当时的 Operation、
         skill 正文与附件、以及脚本可见性；脚本执行不在其中，由 ``axes``
         显式给出。成员的可见性与可用性一并物化，读取端不再推导。
+
+        Args:
+            actor: 操作员身份；写入来源取 ``actor.source``。
+            agent: Agent 标识。
+            change: 获授变更请求。
+
+        Returns:
+            写入后的关系修订；无实际变化时返回当前修订。
+
+        Raises:
+            AccessError: 冲突、实例缺失或授予内容非法。
         """
         self._require_operator(actor)
         async with self._tx(write=True):
@@ -474,18 +627,20 @@ class AbilityAccessStore:
                 raise AccessError("not_found")
             version = await self._row("ability_versions", "digest=?", instance["digest"])
             definition = json.loads(version["definition"])
+            try:
+                facts = request_facts(definition, change)
+            except ValueError as error:
+                raise AccessError("invalid_change") from error
             if any(not Path(root).is_absolute() for root in change.allowed_roots):
                 raise AccessError("invalid_change")
             roots = sorted({str(Path(root).resolve()) for root in change.allowed_roots})
-            operations = {
-                key: item for key, item in definition["operations"].items() if item["expose"]
-            }
-            members = self._grant_members(operations, change)
-            content = self._grant_content(definition, change)
-            axes = self._grant_axes(members, content, change)
+            members = sorted(facts.members)
+            content = sorted(facts.content)
+            axes = facts.normalized_axes()
             manifest = json.loads(version["manifest"])
+            operations = {key for key, item in definition["operations"].items() if item["expose"]}
             if (
-                not set(members) <= set(operations)
+                not set(members) <= operations
                 or not set(content) <= set(manifest)
                 or not (members or content)
                 or (set(members) & FILE_OPERATIONS.keys() and (not roots or not instance["root"]))
@@ -500,7 +655,7 @@ class AbilityAccessStore:
                 and json.loads(previous["roots"]) == roots
                 and json.loads(previous["axes"]) == axes
             ):
-                return await self._view(agent)
+                return current["revision"]
             revision = await self._bump(
                 actor,
                 agent,
@@ -525,106 +680,31 @@ class AbilityAccessStore:
                     actor.source,
                 ),
             )
-            return await self._view(agent)
-
-    @staticmethod
-    def _grant_members(operations: dict[str, Any], change: GrantAbilityRequest) -> list[str]:
-        """确定本次授予的 Operation 键；整包取当时全部可暴露成员。
-
-        Args:
-            operations: 版本定义中可暴露的 Operation。
-            change: 获授变更。
-
-        Returns:
-            排序去重后的 Operation 键。
-        """
-        if change.whole_container:
-            return sorted(operations)
-        return sorted(set(change.members))
-
-    @staticmethod
-    def _grant_content(definition: dict[str, Any], change: GrantAbilityRequest) -> list[str]:
-        """确定本次授予的内容成员地址；脚本只进入可见清单。
-
-        Args:
-            definition: 版本的归一化定义。
-            change: 获授变更。
-
-        Returns:
-            排序去重后的内容成员地址（正文、附件、引用与脚本）。
-        """
-        content: list[str] = []
-        scopes = list(change.skills)
-        if change.skill is not None:
-            scopes.append(change.skill)
-        if change.whole_container and definition["skills"]:
-            scopes = [SkillReadScope(key=key) for key in definition["skills"]]
-        seen: set[str] = set()
-        for scope in scopes:
-            if scope.key in seen:
-                raise AccessError("invalid_change")
-            seen.add(scope.key)
-            skill = definition["skills"].get(scope.key)
-            if skill is None:
-                raise AccessError("invalid_change")
-            prefix = f"skill/{scope.key}"
-            if scope.body:
-                content.append(prefix)
-            for role in ("assets", "references", "scripts"):
-                resources = skill.get(role) or {}
-                selected = getattr(scope, role)
-                selected = sorted(resources) if selected is None else selected
-                if not set(selected) <= set(resources):
-                    raise AccessError("invalid_change")
-                content.extend(f"{prefix}/{role}/{key}" for key in selected)
-        return sorted(set(content))
-
-    @staticmethod
-    def _grant_axes(
-        members: list[str],
-        content: list[str],
-        change: GrantAbilityRequest,
-    ) -> dict[str, dict[str, bool]]:
-        """物化每个获授成员的可见性与可用性事实。
-
-        默认值按成员种类决定：Operation 与 skill 正文/附件可见且可用；脚本
-        可见但不可执行，执行权必须由 ``axes`` 显式给出。显式轴只能收紧本次
-        已授予的成员，且不能表达不存在的组合（skill 无可用性轴，不可见成员
-        不能可用）。
-
-        Args:
-            members: 本次授予的 Operation 键。
-            content: 本次授予的内容成员地址。
-            change: 获授变更。
-
-        Returns:
-            以成员地址为键、按地址排序的轴事实。
-        """
-        facts: dict[str, dict[str, bool]] = {}
-        for key in members:
-            facts[f"operations/{key}"] = {"visible": True, "available": True}
-        for address in content:
-            facts[address] = {
-                "visible": True,
-                "available": not address.startswith("skill/") or "/scripts/" not in address,
-            }
-        for entry in change.axes:
-            if entry.member not in facts:
-                raise AccessError("invalid_change")
-            if entry.member.startswith("skill/"):
-                if not entry.visible:
-                    raise AccessError("invalid_change")
-                if "/scripts/" not in entry.member and not entry.available:
-                    raise AccessError("invalid_change")
-            if not entry.visible and entry.available:
-                raise AccessError("invalid_change")
-            facts[entry.member] = {"visible": entry.visible, "available": entry.available}
-        return {address: facts[address] for address in sorted(facts)}
+            return revision
 
     async def revoke(
         self, actor: AccessIdentity, agent: str, change: RevokeAbilityRequest
     ) -> AbilityTreeView:
         """撤销获授及其工具选择，不停止共享实例。"""
+        await self.write_revoke(actor, agent, change)
+        return await self._view(agent)
+
+    async def write_revoke(
+        self, actor: AccessIdentity, agent: str, change: RevokeAbilityRequest
+    ) -> int:
+        """写入一次撤销并返回关系修订；不读取需要运行实例身份的投影。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+            change: 撤销请求；``members`` 为 None 时整条获授关系撤销。
+
+        Returns:
+            写入后的关系修订；无实际变化时返回当前修订。
+
+        Raises:
+            AccessError: 冲突或撤销目标不存在。
+        """
         self._require_operator(actor)
         async with self._tx(write=True):
             current = await self._agent(actor, agent)
@@ -632,41 +712,32 @@ class AbilityAccessStore:
                 raise AccessError("conflict")
             grant = await self._row("ability_grants", "agent=? AND alias=?", agent, change.alias)
             if grant is None:
-                return await self._view(agent)
-            members = json.loads(grant["members"])
-            content = json.loads(grant["content"])
+                return current["revision"]
+            facts = stored_facts(
+                json.loads(grant["members"]),
+                json.loads(grant["content"]),
+                json.loads(grant["axes"]),
+            )
             if change.members is not None:
-                valid = {f"operations/{key}" for key in members} | set(content)
+                valid = facts.addresses()
                 for target in change.members:
                     if target not in valid and not any(
-                        item.startswith(target + "/") for item in content
+                        item.startswith(target + "/") for item in facts.content
                     ):
                         raise AccessError("invalid_change")
-                members = [key for key in members if f"operations/{key}" not in change.members]
-                content = [
-                    item
-                    for item in content
-                    if not any(
-                        item == target or item.startswith(target + "/") for target in change.members
-                    )
-                ]
+                for target in change.members:
+                    facts = facts.without_address(target)
             revision = await self._bump(actor, agent, change.expected_revision, "revoke")
-            if change.members is None or not (members or content):
+            if change.members is None or facts.empty:
                 await self._remove_grant(agent, change.alias)
             else:
-                remaining = set(content) | {f"operations/{key}" for key in members}
-                axes = {
-                    address: facts
-                    for address, facts in json.loads(grant["axes"]).items()
-                    if address in remaining
-                }
                 await self._db.execute(
                     "UPDATE ability_grants SET members=?,content=?,axes=?,revision=? "
                     "WHERE project=? AND agent=? AND alias=?",
                     (
-                        json.dumps(members),
-                        json.dumps(content),
-                        json.dumps(axes),
+                        json.dumps(sorted(facts.members)),
+                        json.dumps(sorted(facts.content)),
+                        json.dumps(facts.normalized_axes()),
                         revision,
                         self.project_id,
                         agent,
@@ -679,7 +750,7 @@ class AbilityAccessStore:
                 ) as cursor:
                     tools = await cursor.fetchall()
                 for tool in tools:
-                    if tool["member"] not in members:
+                    if tool["member"] not in facts.members:
                         await self._db.execute(
                             "DELETE FROM ability_tools WHERE project=? AND agent=? AND name=?",
                             (self.project_id, agent, tool["name"]),
@@ -690,12 +761,31 @@ class AbilityAccessStore:
                             "WHERE project=? AND agent=? AND name=?",
                             (revision, self.project_id, agent, tool["name"]),
                         )
-            return await self._view(agent)
+            return revision
 
     async def bind_tool(
         self, actor: AccessIdentity, agent: str, change: BindToolRequest
     ) -> AbilityTreeView:
         """只从本 Agent 当前获授集合选择工具，不能增加授权。"""
+        await self.write_bind_tool(actor, agent, change)
+        return await self._view(agent)
+
+    async def write_bind_tool(
+        self, actor: AccessIdentity, agent: str, change: BindToolRequest
+    ) -> int:
+        """写入一次工具选择并返回关系修订；相同选择不产生新历史。
+
+        Args:
+            actor: 受信调用方身份；Agent 自身或操作员均可。
+            agent: Agent 标识。
+            change: 工具选择请求。
+
+        Returns:
+            写入后的关系修订；无实际变化时返回当前修订。
+
+        Raises:
+            AccessError: 冲突、未获授或成员不可暴露。
+        """
         async with self._tx(write=True):
             current = await self._agent(actor, agent)
             if current["revision"] != change.expected_revision:
@@ -716,7 +806,7 @@ class AbilityAccessStore:
                 and previous["member"] == change.member
                 and previous["grant_revision"] == grant["revision"]
             ):
-                return await self._view(agent)
+                return current["revision"]
             revision = await self._bump(actor, agent, change.expected_revision, "bind_tool")
             await self._db.execute(
                 "INSERT OR REPLACE INTO ability_tools VALUES(?,?,?,?,?,?,?)",
@@ -730,12 +820,31 @@ class AbilityAccessStore:
                     revision,
                 ),
             )
-            return await self._view(agent)
+            return revision
 
     async def unbind_tool(
         self, actor: AccessIdentity, agent: str, change: UnbindToolRequest
     ) -> AbilityTreeView:
         """删除工具选择，保留获授关系。"""
+        await self.write_unbind_tool(actor, agent, change)
+        return await self._view(agent)
+
+    async def write_unbind_tool(
+        self, actor: AccessIdentity, agent: str, change: UnbindToolRequest
+    ) -> int:
+        """写入一次工具取消并返回关系修订；不存在的选择按无变化处理。
+
+        Args:
+            actor: 受信调用方身份。
+            agent: Agent 标识。
+            change: 工具取消请求。
+
+        Returns:
+            写入后的关系修订；无实际变化时返回当前修订。
+
+        Raises:
+            AccessError: 冲突。
+        """
         async with self._tx(write=True):
             current = await self._agent(actor, agent)
             if current["revision"] != change.expected_revision:
@@ -744,13 +853,13 @@ class AbilityAccessStore:
                 await self._row("ability_tools", "agent=? AND name=?", agent, change.tool_name)
                 is None
             ):
-                return await self._view(agent)
-            await self._bump(actor, agent, change.expected_revision, "unbind_tool")
+                return current["revision"]
+            revision = await self._bump(actor, agent, change.expected_revision, "unbind_tool")
             await self._db.execute(
                 "DELETE FROM ability_tools WHERE project=? AND agent=? AND name=?",
                 (self.project_id, agent, change.tool_name),
             )
-            return await self._view(agent)
+            return revision
 
     async def _view(self, agent: str) -> AbilityTreeView:
         row = await self._row("ability_agents", "id=?", agent)

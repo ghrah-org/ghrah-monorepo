@@ -375,6 +375,7 @@ def default_core_unit_factory(
 
     managers: dict[str, tuple[str, MessageManager, set[str]]] = {}
     memberships: dict[str, str] = {}
+    stores: dict[str, Any] = {}
     manager_lock = asyncio.Lock()
 
     async def prepare(unit: Any, cluster_id: str, project_id: str, locator: str) -> None:
@@ -382,8 +383,8 @@ def default_core_unit_factory(
             existing = managers.get(project_id)
             if existing and existing[0] != locator:
                 raise ValueError("Project message database owner conflict")
+            path = ProjectPaths.from_locator(locator).action_chain_db_path
             if existing is None:
-                path = ProjectPaths.from_locator(locator).action_chain_db_path
                 async with SqliteBackend(path) as backend:
                     await backend.load_checkpoint("bootstrap")
                 manager = MessageManager(
@@ -401,8 +402,37 @@ def default_core_unit_factory(
             existing[2].add(cluster_id)
             memberships[cluster_id] = project_id
             unit._config = replace(unit._config, message_manager=existing[1])
+            # builtin 模式：为本次 spawn 打开启动授权关系库（与 Context 共用
+            # 项目数据库文件）；运行期只读，写入只经启动核定。
+            if unit._config.ability_source == "builtin":
+                from ghrah.ability.access import AbilityAccessStore
+
+                def runs(agent: str) -> str | None:
+                    supervisor = getattr(unit, "supervisor", None)
+                    if supervisor is None:
+                        return None
+                    try:
+                        return supervisor.incarnation_id(agent)
+                    except Exception:
+                        return None
+
+                store = await AbilityAccessStore.open(
+                    path,
+                    project_id,
+                    operators=frozenset({"deployment"}),
+                    runs=runs,
+                )
+                stores[cluster_id] = store
+                unit._config = replace(
+                    unit._config,
+                    ability_store=store,
+                    ability_grant_policy=config.ability_grant_policy,
+                )
 
     async def release(cluster_id: str) -> None:
+        store = stores.pop(cluster_id, None)
+        if store is not None:
+            await store.close()
         async with manager_lock:
             project_id = memberships.pop(cluster_id, None)
             if project_id is None:

@@ -71,6 +71,10 @@ class GrantRule(BaseModel):
             raise ValueError("skill 只有可见性，不支持 available=false")
         if not self.visible and self.available:
             raise ValueError("不可见的成员不能同时可用")
+        if self.member is None and not (self.visible and self.available):
+            raise ValueError("包级规则不表达成员轴；请对 Operation 或脚本单独授予")
+        if self.member is not None and self.member.startswith("skill/") and not self.visible:
+            raise ValueError("内容成员不可见等同于不授予；请改用移除规则")
         if self.effect == "revoke" and not (self.visible and self.available):
             raise ValueError("移除规则不表达可见性；需要保留请改为授予")
         return self

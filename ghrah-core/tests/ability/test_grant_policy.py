@@ -98,6 +98,9 @@ def test_for_agent_keeps_global_rules_and_orders_them() -> None:
             "visible": False,
             "available": False,
         },
+        {"package": "fs", "available": False},
+        {"package": "fs", "visible": False},
+        {"package": "fs", "skill": "guide", "script": "run", "visible": False, "available": False},
     ],
 )
 def test_ambiguous_or_impossible_rules_are_rejected(kwargs) -> None:

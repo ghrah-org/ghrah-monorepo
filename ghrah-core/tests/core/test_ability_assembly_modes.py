@@ -383,3 +383,124 @@ async def test_builtin_operation_runs_through_the_agent_executor(tmp_path: Path)
 
     assert result.outcome is ActionOutcome.SUCCESS
     assert result.data["content"] == "builtin source content"
+
+
+# ----------------------------------------------------------------
+# 启动授权关系库接线：工具表只投影获授成员
+# ----------------------------------------------------------------
+
+
+class TestBuiltinGrantMaterialization:
+    """注入关系库后，builtin 模式的工具表由启动核定决定。"""
+
+    async def test_granted_members_only_reach_the_tool_table(self, tmp_path: Path) -> None:
+        from ghrah.ability.access import (
+            AbilityAccessStore,
+            GrantPolicy,
+            GrantRule,
+        )
+
+        store = await AbilityAccessStore.open(
+            tmp_path / "ability.db",
+            "default",
+            operators=frozenset({"deployment"}),
+            runs=lambda agent: f"{agent}-run",
+        )
+        try:
+            policy = GrantPolicy(
+                rules=(GrantRule(package="ghrah.fs", operation="write_file", effect="revoke"),)
+            )
+            unit = create_core_unit(
+                CoreUnitConfig(
+                    project_id="default",
+                    manifest_store=_consumer_store(),
+                    ability_source="builtin",
+                    workspace_root=str(tmp_path / "workspace"),
+                    ability_store=store,
+                    ability_grant_policy=policy,
+                )
+            )
+
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+
+            assert receipt["success"], receipt.get("error")
+            abilities = await _abilities_of(unit, "consumer")
+            assert abilities["read_file"] == "ghrah.ability.access.startup"
+            assert abilities["mcp_call"] == "ghrah.ability.access.startup"
+            assert "write_file" not in abilities
+        finally:
+            await store.close()
+
+    async def test_unavailable_member_is_bound_but_not_projected(self, tmp_path: Path) -> None:
+        from ghrah.ability.access import (
+            AbilityAccessStore,
+            AccessIdentity,
+            GrantPolicy,
+            GrantRule,
+        )
+
+        store = await AbilityAccessStore.open(
+            tmp_path / "ability.db",
+            "default",
+            operators=frozenset({"deployment"}),
+            runs=lambda agent: f"{agent}-run",
+        )
+        try:
+            policy = GrantPolicy(
+                rules=(
+                    GrantRule(
+                        package="ghrah.fs",
+                        operation="read_file",
+                        available=False,
+                    ),
+                )
+            )
+            unit = create_core_unit(
+                CoreUnitConfig(
+                    project_id="default",
+                    manifest_store=_consumer_store(),
+                    ability_source="builtin",
+                    workspace_root=str(tmp_path / "workspace"),
+                    ability_store=store,
+                    ability_grant_policy=policy,
+                )
+            )
+
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+
+            assert receipt["success"], receipt.get("error")
+            abilities = await _abilities_of(unit, "consumer")
+            assert "read_file" not in abilities
+            deploy = AccessIdentity("default", "deployment", "deployment", True, "deployment")
+            names = await store.tool_names(deploy, "consumer")
+            assert "read_file" in names
+            assert {"read_file", "write_file", "mcp_call"} <= set(names)
+        finally:
+            await store.close()
+
+    async def test_no_policy_means_no_grant(self, tmp_path: Path) -> None:
+        from ghrah.ability.access import AbilityAccessStore
+
+        store = await AbilityAccessStore.open(
+            tmp_path / "ability.db",
+            "default",
+            operators=frozenset({"deployment"}),
+            runs=lambda agent: f"{agent}-run",
+        )
+        try:
+            unit = create_core_unit(
+                CoreUnitConfig(
+                    project_id="default",
+                    manifest_store=_consumer_store(),
+                    ability_source="builtin",
+                    workspace_root=str(tmp_path / "workspace"),
+                    ability_store=store,
+                )
+            )
+
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+
+            assert receipt["success"] is False
+            assert "启动授权为空" in receipt["error"]
+        finally:
+            await store.close()

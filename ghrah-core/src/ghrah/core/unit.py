@@ -232,6 +232,12 @@ class CoreUnitConfig:
     surface_hard_cap: int = DEFAULT_HARD_CAP
     surface_search_limit: int = DEFAULT_SEARCH_LIMIT
     surface_loaded_limit: int = DEFAULT_LOADED_LIMIT
+    # 启动授权关系库（装配方打开/关闭，duck-typed AbilityAccessStore）。
+    # None = 未接线：builtin 模式暂时保留「按模板实例化工具」的过渡退路并记
+    # 警告；注入后启动工具表只认授权事实（模板只决定申请哪些成员）。
+    ability_store: Any = None
+    # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
+    ability_grant_policy: Any = None
 
 
 # ----------------------------------------------------------------
@@ -1076,15 +1082,19 @@ class CoreUnit:
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
                 self._validate_model_config(resolved.config.endpoint_name)
-            ability_instances: list[AbilityProtocol] | None = assembly.instantiate(
-                resolved.abilities,
-                workspace_root=self._config.workspace_root,
-                auto_approve_abilities=self._config.auto_approve_abilities,
-                require_approval_by_default=self._config.require_approval_by_default,
-                command_runner=self._config.command_runner,
-                safe_extra_commands=self._config.safe_extra_commands,
-                safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+            ability_instances = await self._materialize_builtin_abilities(
+                resolved.config.name, resolved
             )
+            if ability_instances is None:
+                ability_instances = assembly.instantiate(
+                    resolved.abilities,
+                    workspace_root=self._config.workspace_root,
+                    auto_approve_abilities=self._config.auto_approve_abilities,
+                    require_approval_by_default=self._config.require_approval_by_default,
+                    command_runner=self._config.command_runner,
+                    safe_extra_commands=self._config.safe_extra_commands,
+                    safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+                )
             if not ability_instances:
                 # fail-closed：manifest 全 non-builtin/解析出 0 能力时明确报错，
                 # 不落入 default_abilities 或任何隐式注入（零隐式）。
@@ -1246,6 +1256,63 @@ class CoreUnit:
                 "incarnation_id": incarnation_id,
             }
         )
+
+    async def _materialize_builtin_abilities(
+        self, agent: str, resolved: Any
+    ) -> list[AbilityProtocol] | None:
+        """builtin 模式：按启动授权关系库物化工具表。
+
+        未注入关系库时返回 None，由调用方保留过渡退路（按模板实例化）并记
+        警告；注入后失败即失败，不回退模板自动授予。legacy 模式不适用。
+
+        Args:
+            agent: 正在启动的 Agent 名称。
+            resolved: 已解析的 Agent 模板。
+
+        Returns:
+            工具实例列表；未接线时返回 None。
+        """
+        assembly = self._require_assembly()
+        if not assembly.is_builtin:
+            return None
+        store = self._config.ability_store
+        if store is None:
+            logger.warning(
+                "builtin spawn 未注入启动授权关系库：仍按模板实例化工具（过渡路径）",
+            )
+            return None
+        if not self._config.project_id:
+            raise ValueError("builtin spawn 需要 project_id 才能写入启动授权")
+        from ghrah.ability.access import AccessIdentity
+        from ghrah.ability.access.startup import StartupGrantMaterializer
+
+        materializer = StartupGrantMaterializer(
+            store=store,
+            source=assembly.source,
+            actor=AccessIdentity(
+                self._config.project_id,
+                "deployment",
+                "deployment",
+                True,
+                "deployment",
+            ),
+            policy=self._config.ability_grant_policy,
+            workspace_root=self._config.workspace_root,
+            auto_approve_abilities=self._config.auto_approve_abilities,
+            require_approval_by_default=self._config.require_approval_by_default,
+            command_runner=self._config.command_runner,
+            safe_extra_commands=self._config.safe_extra_commands,
+            safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+        )
+        materialized = await materializer.materialize(agent=agent, resolved=resolved)
+        logger.info(
+            "builtin spawn 授权核定完成：agent=%s tools=%s granted=%s revoked=%s",
+            agent,
+            [binding.tool_name for binding in materialized.tools],
+            list(materialized.granted),
+            list(materialized.revoked),
+        )
+        return materialized.abilities
 
     def _apply_hitl_timeout(self, agent_name: str) -> None:
         """best-effort 将 config.hitl_timeout 与 promise 注册表应用到 agent 的本地 executor。
