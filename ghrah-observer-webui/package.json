@@ -8,8 +8,10 @@
     "dev:extension": "./scripts/dev-extension.sh",
     "test:extension": "./scripts/test-extension.sh",
     "build": "./scripts/build.sh",
-    "lint": "pnpm --filter @ghrah/observer-web lint:i18n && pnpm --filter @ghrah/observer-web lint:ui-tokens && oxlint . && eslint . && stylelint \"packages/*/src/**/*.{css,vue}\" && prettier --check .",
+    "lint": "pnpm --filter @ghrah/observer-web lint:i18n && pnpm --filter @ghrah/observer-web lint:ui-tokens && oxlint . && eslint . && stylelint \"packages/*/src/**/*.{css,vue}\" && node scripts/check-style-governance.mjs && prettier --check .",
     "lint:fix": "oxlint . && eslint . --fix && stylelint --fix \"packages/*/src/**/*.{css,vue}\" && prettier --write .",
+    "lint:style": "node scripts/check-style-governance.mjs",
+    "lint:css-budget": "node scripts/check-css-budget.mjs",
     "format": "prettier --write .",
     "test": "pnpm -r test",
     "type-check": "pnpm -r type-check"
