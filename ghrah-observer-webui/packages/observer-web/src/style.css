@@ -926,6 +926,7 @@ button:focus-visible,
 }
 
 .workspace-content > :not(.workspace-empty) {
+  box-sizing: border-box;
   height: 100%;
 }
 
