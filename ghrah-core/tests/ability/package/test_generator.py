@@ -269,7 +269,7 @@ def test_generated_index_has_no_host_artifacts(tmp_path: Path) -> None:
 def test_unknown_top_level_file_is_allowed(tmp_path: Path) -> None:
     """包根的非成员文件可以存在，只是不进索引。"""
     root = _minimal(tmp_path)
-    (root / "CHANGELOG.md").write_text("x\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text("x\n", encoding="utf-8", newline="\n")
     build(root)
 
 
@@ -281,12 +281,12 @@ def test_old_layout_entries_are_rejected(name: str, tmp_path: Path) -> None:
     root = _minimal(tmp_path)
     target = root / name
     if name == "ability.lock.yaml":
-        target.write_text("schema: 2\n", encoding="utf-8")
+        target.write_text("schema: 2\n", encoding="utf-8", newline="\n")
     elif name == "SKILL.md":
-        target.write_text("---\n", encoding="utf-8")
+        target.write_text("---\n", encoding="utf-8", newline="\n")
     else:
         target.mkdir()
-        (target / "x.md").write_text("x\n", encoding="utf-8")
+        (target / "x.md").write_text("x\n", encoding="utf-8", newline="\n")
     with pytest.raises(BuildError, match="旧布局|安装记录"):
         build(root)
 
@@ -296,7 +296,9 @@ def test_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     root = _minimal(tmp_path)
     header = (root / "ability.yaml").read_text(encoding="utf-8")
     (root / "ability.yaml").write_text(
-        header.replace("title: Pkg\n", "title: Pkg\ntitle: Other\n"), encoding="utf-8"
+        header.replace("title: Pkg\n", "title: Pkg\ntitle: Other\n"),
+        encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(BuildError, match="重复键"):
         build(root)
@@ -304,7 +306,9 @@ def test_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     root = _minimal(tmp_path, "frontmatter")
     body = root / "skills" / "s1" / "SKILL.md"
     body.write_text(
-        "---\nname: s1\ndescription: a\ndescription: b\n---\n\nbody\n", encoding="utf-8"
+        "---\nname: s1\ndescription: a\ndescription: b\n---\n\nbody\n",
+        encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(BuildError, match="重复键"):
         build(root)
@@ -322,6 +326,7 @@ def test_merge_key_is_rejected(tmp_path: Path) -> None:
         "description: pkg\n"
         "members: {}\n",
         encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(BuildError, match="merge key"):
         build(root)
@@ -334,6 +339,7 @@ def test_origin_and_identity_are_validated(tmp_path: Path) -> None:
     (root / "ability.yaml").write_text(
         header.replace("schema_version: '1'\n", "schema_version: '1'\norigin: bogus\n"),
         encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(BuildError, match="origin"):
         build(root)
@@ -347,6 +353,7 @@ def test_origin_and_identity_are_validated(tmp_path: Path) -> None:
             "identity: {namespace: fixtures, name: pkg, version: 0.1.0, extra: x}",
         ),
         encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(BuildError, match="identity 未知字段"):
         build(root)
@@ -425,8 +432,8 @@ def test_resource_keys_are_sorted(tmp_path: Path) -> None:
     references = root / "skills" / "s1" / "references"
     references.mkdir()
     (references / "a").mkdir()
-    (references / "a-c.md").write_text("x\n", encoding="utf-8")
-    (references / "a" / "b.md").write_text("y\n", encoding="utf-8")
+    (references / "a-c.md").write_text("x\n", encoding="utf-8", newline="\n")
+    (references / "a" / "b.md").write_text("y\n", encoding="utf-8", newline="\n")
     result = build(root)
     data = yaml.safe_load(result.rendered)
     assert list(data["members"]["skills"]["s1"]["references"]) == ["a-b", "a-c"]
@@ -436,7 +443,9 @@ def test_shared_helper_module_is_importable(tmp_path: Path) -> None:
     """``operations/_shared.py`` 可以被同目录成员导入。"""
     root = _minimal(tmp_path)
     (root / "operations" / "_shared.py").write_text(
-        "TITLE_HELPER = '来自 helper'\n", encoding="utf-8"
+        "TITLE_HELPER = '来自 helper'\n",
+        encoding="utf-8",
+        newline="\n",
     )
     (root / "operations" / "plain.py").write_text(
         "from _shared import TITLE_HELPER\n"
@@ -480,8 +489,8 @@ class TestPathRules:
         root = _minimal(tmp_path)
         references = root / "skills" / "s1" / "references"
         references.mkdir()
-        (references / "A.md").write_text("a\n", encoding="utf-8")
-        (references / "a.md").write_text("b\n", encoding="utf-8")
+        (references / "A.md").write_text("a\n", encoding="utf-8", newline="\n")
+        (references / "a.md").write_text("b\n", encoding="utf-8", newline="\n")
         if len(list(references.iterdir())) < 2:
             pytest.skip("文件系统大小写不敏感")
         with pytest.raises(BuildError, match="路径冲突"):
@@ -491,8 +500,12 @@ class TestPathRules:
         root = _minimal(tmp_path)
         references = root / "skills" / "s1" / "references"
         references.mkdir()
-        (references / unicodedata.normalize("NFC", "café.md")).write_text("n\n", encoding="utf-8")
-        (references / unicodedata.normalize("NFD", "café.md")).write_text("d\n", encoding="utf-8")
+        (references / unicodedata.normalize("NFC", "café.md")).write_text(
+            "n\n", encoding="utf-8", newline="\n"
+        )
+        (references / unicodedata.normalize("NFD", "café.md")).write_text(
+            "d\n", encoding="utf-8", newline="\n"
+        )
         if len(list(references.iterdir())) < 2:
             pytest.skip("文件系统会归一 Unicode")
         with pytest.raises(BuildError, match="路径冲突"):
