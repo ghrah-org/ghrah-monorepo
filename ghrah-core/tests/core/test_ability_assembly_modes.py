@@ -185,6 +185,7 @@ async def _authorized_builtin_unit(
     manifest_store: Any,
     policy: Any = None,
     llm_factory: Any = None,
+    install_root: str | None = None,
 ) -> tuple[Any, Any]:
     """构造带授权装配边界的 builtin CoreUnit（关系库 + 策略 + 工作区）。"""
     from ghrah.ability.access import GrantPolicy
@@ -199,9 +200,115 @@ async def _authorized_builtin_unit(
             ability_store=store,
             ability_grant_policy=policy if policy is not None else GrantPolicy(rules=()),
             llm_factory=llm_factory,
+            ability_install_root=install_root,
         )
     )
     return unit, store
+
+
+@pytest.mark.parametrize("child", [False, True])
+async def test_installed_package_executes_in_real_agent_loop_and_disappears_after_uninstall(
+    tmp_path: Path, child: bool
+) -> None:
+    """顶层和子 Agent 共用安装来源；真实工具结果进入下一轮模型输入。"""
+    import shutil
+
+    from _helpers import ToolScriptedLLM
+
+    from ghrah.ability.package.generate import build
+    from ghrah.ability.package.installer import AbilityInstaller
+    from ghrah.chat.content import ToolCallBlock
+    from ghrah.core.message import AgentMessage
+
+    source = tmp_path / "source"
+    fixtures = Path(__file__).parents[1] / "ability/package/fixtures/reporting"
+    shutil.copytree(fixtures, source)
+    operation = source / "operations/render.py"
+    operation.write_text(
+        operation.read_text().replace(
+            "    raise NotImplementedError",
+            "    from pathlib import Path\n"
+            "    from ghrah.types.results import ActionResult, ActionOutcome\n"
+            "    return ActionResult(ActionOutcome.SUCCESS, "
+            "{'rendered': Path(call.arguments['template']).read_text()})",
+        ),
+        encoding="utf-8",
+    )
+    build(source)
+    installer = AbilityInstaller(tmp_path / "installed")
+    installer.install(source)
+    shutil.rmtree(source)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "memo.txt").write_text("installed tool result", encoding="utf-8")
+    manifests = _consumer_store()
+    manifests._agents["w0.external"] = parse_agent_manifest(
+        _AGENT_YAML_FS[: _AGENT_YAML_FS.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: fixtures.reporting.render\n"
+    )
+    scripted = ToolScriptedLLM(
+        [
+            [
+                ToolCallBlock(
+                    id="installed-call",
+                    name="render",
+                    arguments={
+                        "template": "memo.txt",
+                        "rows": ["report"],
+                    },
+                )
+            ]
+        ],
+        final_text="done",
+    )
+    unit, db = await _authorized_builtin_unit(
+        tmp_path,
+        manifest_store=manifests,
+        install_root=str(installer.root),
+        llm_factory=lambda _: scripted,
+    )
+    try:
+        if child:
+            manifests._agents["w0.parent"] = parse_agent_manifest(
+                _AGENT_YAML_FS[: _AGENT_YAML_FS.index("abilities:")]
+                + "abilities:\n  - type: conversation\n  - ref: ghrah.cluster.spawn_agent\n"
+            )
+            receipt = await _spawn(unit, _manifest_payload("parent", "w0.parent"))
+            assert receipt["success"], receipt
+            parent = await unit.supervisor.get_agent_handle("parent")
+            spawn = parent._abilities["spawn_agent"]
+            call, services = parent._build_ability_call(
+                spawn,
+                {"manifest_ref": "w0.external", "name": "consumer"},
+                {},
+                tool_call_id="spawn-installed",
+            )
+            assert (await spawn.execute(call, services)).outcome == ActionOutcome.SUCCESS
+        else:
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.external"))
+            assert receipt["success"], receipt
+        handle = await unit.supervisor.get_agent_handle("consumer")
+        tool = handle._abilities["render"]
+        await handle.receive(AgentMessage(sender="user", recipient="consumer", content="read"))
+        results = [
+            block for message in scripted.calls[1] for block in getattr(message, "tool_results", [])
+        ]
+        assert results[0].tool_call_id == "installed-call"
+        assert "installed tool result" in results[0].content
+        installer.uninstall("fixtures.reporting", "0.1.0")
+        await handle.receive(AgentMessage(sender="user", recipient="consumer", content="again"))
+        assert not any(item["function"]["name"] == "render" for item in scripted.tools)
+        call, services = handle._build_ability_call(
+            tool, {"template": "memo.txt", "rows": ["report"]}, {}, tool_call_id="stale"
+        )
+        assert (await tool.execute(call, services)).outcome == ActionOutcome.FAILURE
+        failed = await unit.handle_command(
+            "spawn_agent", _manifest_payload("after-uninstall", "w0.external"), None
+        )
+        assert not failed["success"]
+    finally:
+        await unit.stop()
+        await db.close()
 
 
 # ----------------------------------------------------------------

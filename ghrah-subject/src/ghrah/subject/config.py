@@ -162,6 +162,17 @@ class ManifestConfig:
 
 
 @dataclass
+class AbilityConfig:
+    """本地能力包来源配置；未来由独立 AbilityProvider 持有。"""
+
+    install_root: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.install_root is not None and not Path(self.install_root).is_absolute():
+            raise ValueError("ability.install_root 必须是绝对路径")
+
+
+@dataclass
 class SkillConfig:
     """skill Unit 配置切片。
 
@@ -337,6 +348,7 @@ class SubjectConfig:
     plugin_trust_slice: InitVar[PluginTrustConfig | None] = None
     taskstore_slice: InitVar[TaskStoreConfig | None] = None
     skill_slice: InitVar[SkillConfig | None] = None
+    ability: AbilityConfig = field(default_factory=AbilityConfig)
 
     # 非 slice 的新字段（有默认值，可直接构造）。
     transport: TransportKindConfig = field(default_factory=TransportKindConfig)
@@ -408,6 +420,8 @@ class SubjectConfig:
         from ghrah.ability.assembly import AbilitySourceMode
 
         self.ability_source = AbilitySourceMode.parse(self.ability_source).value
+        if self.ability.install_root is not None and self.ability_source == "legacy":
+            raise ValueError("ability.install_root 需要 builtin 装配模式")
 
         if self.ability_grant_policy is not None:
             from ghrah.ability.access.policy import GrantPolicy
@@ -703,6 +717,9 @@ class SubjectConfig:
             transport=transport,
             enabled_third_party_units=enabled_third_party_units,
             ability_source=os.environ.get("GHRAH_SUBJECT_ABILITY_SOURCE", "legacy"),
+            ability=AbilityConfig(
+                install_root=os.environ.get("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT")
+            ),
             project_slice=project_slice,
             recovery_slice=recovery_slice,
             room_filter_slice=room_filter_slice,

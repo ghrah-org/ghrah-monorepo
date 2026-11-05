@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""同一项目数据库中的资源关系写者；查询只读取已提交版本。"""
+"""项目资源关系唯一写者；定义读提交快照，来源可用性由宿主显式提供。"""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from ghrah.ability.content import (
     digest_bytes,
 )
 from ghrah.ability.contracts import operation_result_schema
+from ghrah.ability.provider_contracts import PYTHON_CONTRACT
 from ghrah.ability.versions import AbilityVersion
 
 _SCHEMA = """
@@ -178,6 +179,18 @@ class AbilityAccessStore:
             ContextVar("ability_startup", default=None)
         )
         self.read_limit = 65536
+        self._version_availability: Callable[[AbilityVersion], bool] | None = None
+
+    def set_version_availability(self, check: Callable[[AbilityVersion], bool]) -> None:
+        """由受信宿主注入来源可用性；只派生投影，不改写授权事实。"""
+        self._version_availability = check
+
+    def _version_available(self, row: Any) -> bool:
+        if self._version_availability is None:
+            return True
+        return self._version_availability(
+            AbilityVersion(row["digest"], row["definition"], row["implementation"], row["manifest"])
+        )
 
     @classmethod
     async def open(
@@ -647,8 +660,11 @@ class AbilityAccessStore:
         TypeAdapter(TreeId).validate_python(instance)
         resolved = str(root.resolve()) if root is not None else ""
         async with self._tx(write=True):
-            if await self._row("ability_versions", "digest=?", digest) is None:
+            version = await self._row("ability_versions", "digest=?", digest)
+            if version is None:
                 raise AccessError("not_found")
+            if not self._version_available(version):
+                raise AccessError("unavailable")
             old = await self._row("ability_instances", "id=?", instance)
             if (old["revision"] if old else 0) != expected_revision:
                 raise AccessError("conflict")
@@ -975,6 +991,7 @@ class AbilityAccessStore:
     async def _view(self, agent: str) -> AbilityTreeView:
         row = await self._row("ability_agents", "id=?", agent)
         abilities = []
+        available_aliases: set[str] = set()
         async with self._db.execute(
             "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
             (self.project_id, agent),
@@ -987,7 +1004,14 @@ class AbilityAccessStore:
             members = json.loads(grant["members"])
             content = json.loads(grant["content"])
             axes = json.loads(grant["axes"])
+            available = self._version_available(version)
+            if available:
+                available_aliases.add(grant["alias"])
+            if not available:
+                axes = {path: {**fact, "available": False} for path, fact in axes.items()}
             skills = self._skill_nodes(definition, json.loads(version["manifest"]), content, axes)
+            if not available:
+                skills = [skill.model_copy(update={"body_allowed": False}) for skill in skills]
             abilities.append(
                 AbilityNode(
                     alias=grant["alias"],
@@ -997,6 +1021,7 @@ class AbilityAccessStore:
                     + hashlib.sha256(version["definition"].encode()).hexdigest(),
                     version_digest=instance["digest"],
                     revision=grant["revision"],
+                    availability="unknown" if available else "unavailable",
                     allowed_roots=json.loads(grant["roots"]),
                     skills=skills,
                     skill=skills[0] if skills else None,
@@ -1010,7 +1035,8 @@ class AbilityAccessStore:
                             ),
                             availability=(
                                 "unavailable"
-                                if not axes.get(f"operations/{key}", {}).get("available", True)
+                                if not available
+                                or not axes.get(f"operations/{key}", {}).get("available", True)
                                 else "unknown"
                             ),
                         )
@@ -1025,7 +1051,11 @@ class AbilityAccessStore:
             (self.project_id, agent),
         ) as cursor:
             tools = await cursor.fetchall()
-        visible = {node.alias: {item.key for item in node.operations} for node in abilities}
+        visible = {
+            node.alias: {item.key for item in node.operations}
+            for node in abilities
+            if node.alias in available_aliases
+        }
         return AbilityTreeView(
             project_id=self.project_id,
             agent_id=agent,
@@ -1106,7 +1136,7 @@ class AbilityAccessStore:
         return nodes
 
     async def view(self, actor: AccessIdentity, agent: str) -> AbilityTreeView:
-        """事务内读取同源投影，不扫描来源、不更新状态。"""
+        """读取提交事实与宿主提供的可用性投影；不更新授权状态。"""
         async with self._tx():
             await self._agent(actor, agent)
             return await self._view(agent)
@@ -1184,6 +1214,8 @@ class AbilityAccessStore:
         if fence.version_digest and fence.version_digest != instance["digest"]:
             raise AccessError("access_denied")
         definition = json.loads(version["definition"])
+        if not self._version_available(version):
+            raise AccessError("unavailable")
         is_content = fence.member.startswith("skill/")
         if is_content:
             if fence.member not in json.loads(version["manifest"]):
@@ -1235,6 +1267,8 @@ class AbilityAccessStore:
         if arguments is not None:
             admission = admission_for(definition, fence.member)
             if admission is None:
+                raise AccessError("unavailable")
+            if admission.contract == PYTHON_CONTRACT and self._version_availability is None:
                 raise AccessError("unavailable")
             admission.check(fence.member, arguments, roots, instance["root"])
         return f"{instance['digest']}:{fence.grant_revision}:{fence.tool_revision}"

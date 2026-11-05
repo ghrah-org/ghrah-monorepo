@@ -50,7 +50,7 @@ def test_unknown_contract_is_not_admitted(tmp_path: Path) -> None:
     assert admission_for(definition, "unknown_member") is None
 
     unregistered = _definition("fs")
-    unregistered["identity"]["namespace"] = "demo"
+    unregistered["identity"]["name"] = "unregistered"
     assert contract_of(unregistered, "read_file") is None
     assert admission_for(unregistered, "read_file") is None
 

@@ -226,6 +226,8 @@ class CoreUnitConfig:
     # 权限治理；builtin = 新版 ghrah.ability 受治理路径）。装配点显式选择；
     # 未选择时保持 legacy 仅为旧部署兼容。
     ability_source: str = "legacy"
+    # 本地包 Provider 的显式安装根；None 不读取安装存储。
+    ability_install_root: str | None = None
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
     # 工具表面阈值：本层只承载配置，表面装配读取；默认值单源在
@@ -782,7 +784,9 @@ class CoreUnit:
         # 未选择（legacy）保持原有接线；选择 builtin 后不回退旧注册表或旧
         # Skill 读取器，只属于旧模式的可写入口在各自 handler 里显式拒绝。
         assembly = AbilityAssembly.select(
-            self._config.ability_source, agent_store=self._config.manifest_store
+            self._config.ability_source,
+            agent_store=self._config.manifest_store,
+            install_root=self._config.ability_install_root,
         )
         self._assembly = assembly
         if assembly.is_builtin:

@@ -27,7 +27,7 @@ __all__ = [
 class AbilityMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    namespace: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_.]*[a-z0-9]$")
+    namespace: str = Field(min_length=1, pattern=r"^[a-z](?:[a-z0-9_.-]*[a-z0-9_-])?$")
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     title: str = ""
     description: str = Field(min_length=1)

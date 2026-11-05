@@ -10,7 +10,7 @@
 - 循环控制成员（``conversation`` / ``end_task``）仍由 Agent 原控制机制提供，
   不进入 Ability 关系库，也不按授权面裁剪；
 - 工具 schema 与描述来自**已提交版本的定义面**，不从实现脚本二次读取；
-- 执行实例仍由本地 builtin 装配构造，执行上下文接线属于后续工作包；
+- 内置执行实例由固定类装配，安装包由显式本地 Provider 加载；
 - 未配置策略时不授予任何能力；模板只决定“申请哪些成员”，不自行生效。
   已配置迁移或管理员事实的存量 Agent，在未配置策略时按既有事实启动（不扩权）。
 """
@@ -44,8 +44,8 @@ from ghrah.ability.execution.invocation import (
     MemberReference,
     OperationCall,
 )
-from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.loading.ability_roots import builtin_root
+from ghrah.ability.permissions.hitl import HITLRequiredAbility, PermissionDeniedAbility
 from ghrah.ability.permissions.scope import resolve_effective_permission
 from ghrah.ability.surface.naming import assign_tool_names
 from ghrah.ability.versions import AbilityVersion, capture_ability_version
@@ -296,6 +296,7 @@ async def register_package_instance(
     package: str,
     members: set[str],
     workspace_root: str | None,
+    source: Any = None,
 ) -> RegisteredPackage:
     """捕获包版本并登记实例；启动核定与迁移 bootstrap 共用这一条登记路径。
 
@@ -321,15 +322,18 @@ async def register_package_instance(
         None,
     )
     if entry is None:
-        raise StartupGrantError(f"未找到内置能力包：{package}")
+        raise StartupGrantError(f"未找到能力包：{package}")
     container, container_definition = entry
-    root = builtin_root().path
-    if root is None:
-        raise StartupGrantError("内置能力树不是可读目录，无法捕获版本")
-    package_root = root / container
-    version = capture_ability_version(
-        (package_root / "ability.yaml").read_text(encoding="utf-8"), root=package_root
-    )
+    if source is not None:
+        version = source.capture_package(package)
+    else:
+        root = builtin_root().path
+        if root is None:
+            raise StartupGrantError("内置能力树不是可读目录，无法捕获版本")
+        package_root = root / container
+        version = capture_ability_version(
+            (package_root / "ability.yaml").read_text(encoding="utf-8"), root=package_root
+        )
     definition = version.definition().model_dump(mode="json")
     file_members = sorted(member for member in members if file_member_paths(definition, member))
     if not workspace_root and file_members:
@@ -383,6 +387,7 @@ class StartupGrantMaterializer:
             raise TypeError("policy 必须是 GrantPolicy 或 None")
         self._store = store
         self._source = source
+        self._store.set_version_availability(source.version_available)
         self._actor = actor
         self._policy = policy
         self._workspace_root = workspace_root
@@ -395,6 +400,10 @@ class StartupGrantMaterializer:
     def registration(self, agent: str) -> Any:
         """返回从授权核定到运行绑定的库级独占范围。"""
         return self._store.startup_registration(self._actor, agent)
+
+    def resolve_agent(self, manifest: Any, *, runtime_name: str | None = None) -> ResolvedAgent:
+        """使用同一包来源解析子 Agent，保留显式安装根与已选版本。"""
+        return self._source.resolver().resolve(manifest, runtime_name=runtime_name)
 
     async def release_registration(self, agent: str) -> None:
         """运行已停止后解除主体占位；持久授权保留供显式恢复。"""
@@ -422,7 +431,7 @@ class StartupGrantMaterializer:
                 任何可用工具时失败，不回退到模板自动授予。
         """
         validate_agent_id(agent)
-        catalog = load_ability_definitions()
+        catalog = self._source.definitions()
         control, containers = self._split(catalog, resolved.abilities)
         if self._policy is not None:
             # 内容包可以没有 Operation，因而不会出现在模板的工具 ref 中。
@@ -450,6 +459,8 @@ class StartupGrantMaterializer:
         registered: dict[str, tuple[GrantInstance, AbilityVersion, dict[str, ResolvedAbility]]] = {}
         for package, members in sorted(containers.items()):
             instance, version = await self._register(catalog, package, set(members))
+            if instance.alias in registered:
+                raise StartupGrantError(f"能力包局部别名冲突：{instance.alias}")
             registered[instance.alias] = (instance, version, members)
         instances = [item[0] for item in registered.values()]
         template = {item[0].alias: set(item[2]) for item in registered.values()}
@@ -561,7 +572,7 @@ class StartupGrantMaterializer:
         containers: dict[str, dict[str, ResolvedAbility]] = {}
         for item in resolved:
             handler = item.implementation.handler or ""
-            if handler in CONTROL_HANDLERS:
+            if handler in CONTROL_HANDLERS and item.ability_name.startswith("ghrah.core."):
                 control.append(item)
                 continue
             package = self._package_of(catalog, item)
@@ -573,11 +584,9 @@ class StartupGrantMaterializer:
         """由成员全名定位所属包身份（``ghrah.fs.read_file`` → ``ghrah.fs``）。"""
         for definition in catalog.values():
             package = definition.identity.full_name
-            if item.ability_name.startswith(package + "."):
+            if item.ability_name.rpartition(".")[0] == package:
                 return package
-        raise StartupGrantError(
-            f"成员 {item.ability_name} 不属于任何内置能力包——builtin 模式不接受外部来源"
-        )
+        raise StartupGrantError(f"成员 {item.ability_name} 不属于任何已解析能力包")
 
     async def _register(
         self, catalog: Any, package: str, members: set[str]
@@ -595,6 +604,7 @@ class StartupGrantMaterializer:
             package=package,
             members=members,
             workspace_root=self._workspace_root,
+            source=self._source,
         )
         return registered.instance, registered.version
 
@@ -705,16 +715,42 @@ class StartupGrantMaterializer:
                 template.requested_permissions if template is not None else None,
                 workspace_root=self._workspace_root,
             )
-            built = instantiate_resolved_abilities(
-                [resolved],
-                workspace_root=self._workspace_root,
-                auto_approve_abilities=self._auto_approve_abilities,
-                require_approval_by_default=self._require_approval_by_default,
-                command_runner=self._command_runner,
-                safe_extra_commands=self._safe_extra_commands,
-                safe_extra_sub_commands=self._safe_extra_sub_commands,
-                permission_scopes={resolved.ability_name: scope},
-            )
+            if resolved.implementation.type == "python":
+                provider = self._source.packages
+                if provider is None:
+                    raise StartupGrantError("安装包 Provider 未接线")
+                inner = provider.create_operation(
+                    instance.package,
+                    binding.member,
+                    instance.version_digest,
+                    scope=scope,
+                    workspace_root=self._workspace_root,
+                )
+                required = [
+                    name
+                    for name in ("fs_write", "shell_access", "net_access")
+                    if getattr(resolved.permissions, name)
+                ]
+                if any(not getattr(scope, name) for name in required):
+                    inner = PermissionDeniedAbility(inner, "Permission denied by effective scope")
+                if scope.require_hitl and resolved.ability_name not in self._auto_approve_abilities:
+                    inner = HITLRequiredAbility(
+                        inner,
+                        ability_name=binding.member,
+                        reason="Operation requires HITL approval",
+                    )
+                built = [inner]
+            else:
+                built = instantiate_resolved_abilities(
+                    [resolved],
+                    workspace_root=self._workspace_root,
+                    auto_approve_abilities=self._auto_approve_abilities,
+                    require_approval_by_default=self._require_approval_by_default,
+                    command_runner=self._command_runner,
+                    safe_extra_commands=self._safe_extra_commands,
+                    safe_extra_sub_commands=self._safe_extra_sub_commands,
+                    permission_scopes={resolved.ability_name: scope},
+                )
             if not built:
                 raise StartupGrantError(
                     f"成员 {binding.alias}/{binding.member} 无法实例化——builtin 来源不支持该后端"

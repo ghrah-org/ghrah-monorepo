@@ -22,6 +22,7 @@ from ghrah.ability.provider_contracts import (
     CORE_CONTRACT,
     FS_CONTRACT,
     MCP_CONTRACT,
+    PYTHON_CONTRACT,
     SHELL_CONTRACT,
     contract_for,
 )
@@ -236,8 +237,8 @@ def contract_of(definition: Mapping[str, Any], member: str) -> str | None:
     """由已提交版本定义解析成员的提供者契约；未知来源返回 ``None``。
 
     v1 索引不写 ``provider_requirements``：契约由包来源与身份决定（内置包
-    ``ghrah.<name>`` 映射到各自后端；MCP 快照走 MCP 契约；外部源包暂由
-    安装后的 Provider 决定，解析层不替它猜后端）。
+    ``ghrah.<name>`` 映射到各自后端；MCP 快照走 MCP 契约；外部 Python 源包
+    走已登记的函数入口契约，宿主未接线 Provider 时仍不可执行）。
     """
     operations = definition.get("operations", {})
     operation = operations.get(member) if isinstance(operations, Mapping) else None
@@ -261,12 +262,41 @@ def admission_for(definition: Mapping[str, Any], member: str) -> BackendAdmissio
     contract = contract_of(definition, member)
     if contract is None:
         return None
+    if contract == PYTHON_CONTRACT:
+        operation = definition["operations"][member]
+        schema = operation["input_schema"]
+        resources = operation.get("resources", {})
+        if not isinstance(resources, Mapping):
+            return None
+        declared = resources.get("paths", [])
+        if not isinstance(declared, list) or any(
+            not isinstance(name, str) or name not in schema.get("properties", {})
+            for name in declared
+        ):
+            return None
+        paths = tuple(declared)
+
+        def check(
+            key: str, arguments: Mapping[str, Any], roots: tuple[str, ...], instance_root: str
+        ) -> None:
+            for name in paths:
+                prop = schema.get("properties", {}).get(name, {})
+                if name not in arguments and "default" not in prop:
+                    if name in schema.get("required", ()):
+                        raise AccessError("invalid_change")
+                    continue
+                value = arguments.get(name, prop.get("default"))
+                if value is None and name not in schema.get("required", ()):
+                    continue
+                _resolve_argument(value, instance_root, roots, argument=name)
+
+        return BackendAdmission(contract, paths, check)
     return _REGISTRY.get((contract, member))
 
 
 def file_member_paths(definition: Mapping[str, Any], member: str) -> tuple[str, ...]:
     """成员是否为文件类资源；是则返回路径参数名，否则空元组。"""
     admission = admission_for(definition, member)
-    if admission is None or admission.contract != FS_CONTRACT:
+    if admission is None or admission.contract not in {FS_CONTRACT, PYTHON_CONTRACT}:
         return ()
     return admission.path_arguments

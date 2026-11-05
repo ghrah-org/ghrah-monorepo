@@ -144,8 +144,8 @@ members:
 
 | 声明 | 要求 | 生成到 | 说明 |
 | --- | --- | --- | --- |
-| `class XxxInput(BaseModel)` | 必需 | `input_schema` | 参数模型；缺失即构建失败 |
-| `class XxxOutput(BaseModel)` | 建议 | `output_schema` | 返回结构；缺失时生成空 schema |
+| `Input`（`BaseModel` 子类或其别名） | 必需 | `input_schema` | 参数模型；缺失即构建失败 |
+| `Output`（`BaseModel` 子类或其别名） | 建议 | `output_schema` | 成功结果的 `data`；缺失时生成占位 schema |
 | `TITLE: str` | 必需 | `title` | 给模型看的短标题 |
 | `SUMMARY: str` | 必需 | `description` | 一行说明 |
 | `TAGS: list[str]` | 必需，可为 `[]` | `tags` | 发现与过滤；生成器排序去重 |
@@ -158,17 +158,24 @@ members:
 示例：
 
 ```python
+from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict
 
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
+from ghrah.types.results import ActionOutcome, ActionResult
 
-class RenderInput(BaseModel):
+
+class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template: str
-    rows: list[dict]
+    output_path: str
+    rows: list[str]
 
 
-class RenderOutput(BaseModel):
+class Output(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
@@ -180,11 +187,24 @@ TAGS = ["render", "reporting"]
 PERMISSIONS = {"fs_write": True, "require_hitl": True}
 EFFECTS = ["filesystem:write"]
 TIMEOUT_MS = 120_000
-RESOURCES = {"paths": ["template", "rows"]}
+RESOURCES = {"paths": ["template", "output_path"]}
 EXPOSE = True
+
+
+async def execute(call: OperationCall, services: ExecutionServices) -> ActionResult:
+    args = Input.model_validate(call.arguments)
+    template = Path(args.template).read_text(encoding="utf-8")
+    Path(args.output_path).write_text(template.format(rows="\n".join(args.rows)), encoding="utf-8")
+    return ActionResult(ActionOutcome.SUCCESS, {"path": args.output_path})
 ```
 
-模块顶层只放声明和可安全导入的定义；不要在 import 时执行 I/O、网络或长任务。生成器只读取上面的声明，**不会执行** Operation 的执行体。执行入口按运行时提供的 Operation 基类或模板实现。
+模块顶层只放声明和可安全导入的定义；不要在 import 时执行 I/O、网络或长任务。生成器只读取声明，**不会执行** `execute`。外部 Operation 的作者入口固定为模块级 `async def execute(call, services) -> ActionResult`，两个参数名与顺序固定；运行时将它适配为执行对象。
+
+`call.arguments` 是参数的唯一来源；成员、项目、Agent 与 run 由受信装配者绑定。运行时校验输入，应用模型默认值，并把 `RESOURCES.paths` 中声明的相对路径按授权工作区解析为绝对路径，再交给函数。`Output` 描述成功结果的 `data`，函数仍返回完整 `ActionResult`。已有 `Output` 会被校验；缺失继续使用构建器的告警规则。
+
+工具名、完整 schema、版本、权限检查和人工审批由运行时装配；外部模块不提供另一份工具定义或自定义 Hook。`services` 由当前 Provider 宿主显式注入，使用方按服务键取依赖；某个服务可能缺席，必须明确处理。当前服务表中的 Core 对象引用不是长期作者契约，独立 AbilityProvider 服务接入后需要本地服务或显式代理。
+
+安装只校验文件与索引，不 import Operation。运行期只为已选择、获授且可用的成员加载代码，加载即信任包代码。Operation 具有宿主进程权限，参数检查不构成系统调用沙箱。卸载会使后续调用不可用；已经进入执行的调用允许完成，超时和取消不承诺回滚副作用。
 
 ### 5.1 `PERMISSIONS`
 
@@ -205,7 +225,7 @@ EXPOSE = True
 - `PERMISSIONS` 只允许这 9 个键；未知键构建失败。
 - `fs_read_only` 与 `fs_write` 不能同时为 `true`。
 - `allowed_paths` / `denied_paths` 只写工作区相对路径，`/` 分隔，`"."` 表示工作区根；不能写绝对路径、盘符、UNC、`..`、`~`、环境变量或模板。
-- 包内资源用 `context.package_root` 读取，不要靠文件系统权限字段授予包内路径。
+- Operation 可用 `Path(__file__).resolve().parents[1]` 定位包内资源；Skill 委托脚本从输入信封的 `context.package_root` 取包根。文件系统权限字段描述工作区资源，不用于授予包内常量资源路径。
 
 ### 5.2 `EFFECTS`、`RESOURCES`、`EXPOSE`
 

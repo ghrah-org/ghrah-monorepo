@@ -956,8 +956,14 @@ class TestDefaultFactoryGrantStoreWiring:
     async def test_prepare_injects_open_grant_store(self, tmp_path: Path) -> None:
         from ghrah.ability.access import GrantPolicy, GrantRule
 
+        from ghrah.subject.config import AbilityConfig
+
         policy = GrantPolicy(rules=(GrantRule(package="ghrah.fs"),))
-        config = SubjectConfig(ability_source="builtin", ability_grant_policy=policy)
+        config = SubjectConfig(
+            ability_source="builtin",
+            ability_grant_policy=policy,
+            ability=AbilityConfig(install_root=str(tmp_path / "installed")),
+        )
         locator = (tmp_path / "project-root").as_uri()
         root = tmp_path / "project-root"
         root.mkdir()
@@ -969,6 +975,7 @@ class TestDefaultFactoryGrantStoreWiring:
             await factory.prepare(unit, "cluster-1", "project-1", locator)
             assert unit._config.ability_store is not None
             assert unit._config.ability_grant_policy is policy
+            assert unit._config.ability_install_root == str(tmp_path / "installed")
         finally:
             await factory.release("cluster-1")
 

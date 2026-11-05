@@ -253,7 +253,12 @@ class InstalledStore:
             return ()
         namespace, name = split
         package_dir = self._root / namespace / name
-        if is_link(package_dir) or not package_dir.is_dir():
+        if (
+            is_link(self._root)
+            or is_link(package_dir.parent)
+            or is_link(package_dir)
+            or not package_dir.is_dir()
+        ):
             return ()
         return self._versions(package_dir, namespace, name)
 

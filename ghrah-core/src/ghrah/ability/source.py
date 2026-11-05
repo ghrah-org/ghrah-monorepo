@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.loading import ability_catalog
+from ghrah.ability.loading.ability_roots import builtin_root
+from ghrah.ability.loading.ability_schema import AbilityDefinition
+from ghrah.ability.package.provider import InstalledAbilityProvider
+from ghrah.ability.versions import AbilityVersion, capture_ability_version
 from ghrah.manifest.ability import AbilityManifest
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
@@ -21,13 +26,55 @@ class BuiltinAbilitySource:
     装配者选择后端；生效授权、成员绑定及内容版本固定由后续运行接入负责。
     """
 
-    def __init__(self, *, agent_store: ManifestStoreProtocol | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        agent_store: ManifestStoreProtocol | None = None,
+        install_root: str | Path | None = None,
+    ) -> None:
         self._agent_store = agent_store
         # 显式准备时固定来源；后续查询不因来源目录变化而偷偷改接。
         self._manifests = dict(ability_catalog.load_all_builtin_manifests())
         self._classes = {
             key: ability_catalog.ability_class(key) for key in ability_catalog.builtin_handlers()
         }
+        self.packages = InstalledAbilityProvider(install_root) if install_root is not None else None
+
+    def definitions(self) -> dict[str, AbilityDefinition]:
+        """组合内置与显式安装来源的定义；不导入外部实现。"""
+        definitions = {
+            item.identity.full_name: item
+            for item in ability_catalog.load_ability_definitions().values()
+        }
+        if self.packages is not None:
+            definitions.update(self.packages.definitions())
+        return definitions
+
+    def capture_package(self, package: str) -> AbilityVersion:
+        """按确定来源捕获包版本；安装包必须先通过 lock 校验。"""
+        if not package.startswith("ghrah.") and self.packages is not None:
+            return self.packages.capture(package)
+        definition = next(
+            (
+                item
+                for item in ability_catalog.load_ability_definitions().values()
+                if item.identity.full_name == package
+            ),
+            None,
+        )
+        root = builtin_root().path
+        if definition is None or root is None:
+            raise ManifestValidationError(f"能力包来源不可用：{package}")
+        root = root / definition.container_name
+        return capture_ability_version(
+            (root / "ability.yaml").read_text(encoding="utf-8"), root=root
+        )
+
+    def version_available(self, version: AbilityVersion) -> bool:
+        """内置版本由当前宿主管理；安装版本由包加载器提供动态可用性。"""
+        if version.definition().identity.namespace == "ghrah":
+            return True
+        return self.packages is not None and self.packages.available(version)
 
     def load_builtin(self, ability_type: str) -> AbilityManifest:
         """从新增驱动读取内置类型，缺失时不回退旧注册表。"""
@@ -51,6 +98,8 @@ class BuiltinAbilitySource:
         """按完整成员名读取内置能力，返回隔离的兼容投影。"""
         manifest = self._manifests.get(full_name)
         if manifest is None:
+            if self.packages is not None:
+                return self.packages.manifest(full_name)
             raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
         return AbilityManifest.model_validate(manifest.model_dump())
 

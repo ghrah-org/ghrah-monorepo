@@ -611,18 +611,22 @@ def test_builtin_package_can_be_rebuilt(tmp_path: Path) -> None:
 
 
 def test_prototype_not_imported_by_runtime() -> None:
-    """原型模块只允许被作者侧工具与测试引用，运行路径不得 import。"""
+    """运行时可用包加载器，构建/import 探测仍只允许作者侧工具引用。"""
     source = Path(__file__).parents[3] / "src" / "ghrah"
     allowed = {
-        (source / "ability" / "package").resolve(),
         (source / "ability" / "tools").resolve(),
     }
     hits: list[str] = []
     for path in source.rglob("*.py"):
         resolved = path.resolve()
+        if path.name in {"generate.py", "introspect.py"}:
+            continue
         if any(resolved.is_relative_to(prefix) for prefix in allowed):
             continue
-        if "ghrah.ability.package" in path.read_text(encoding="utf-8"):
+        if any(
+            module in path.read_text(encoding="utf-8")
+            for module in ("ghrah.ability.package.generate", "ghrah.ability.package.introspect")
+        ):
             hits.append(str(path))
     assert not hits, f"运行路径 import 了原型模块: {hits}"
 

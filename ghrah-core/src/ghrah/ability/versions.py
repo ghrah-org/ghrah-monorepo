@@ -93,6 +93,8 @@ def implementation_identity(definition: AbilityDefinition, *, root: Path) -> str
         实现摘要；文件后端与 :func:`loaded_file_implementation` 相同，
         内容类包为 ``content-only:v1``。
     """
+    if not definition.operations:
+        return "content-only:v1"
     contracts = sorted(
         {
             contract

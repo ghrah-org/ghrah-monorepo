@@ -44,6 +44,7 @@ from ghrah.ability.package.paths import (
     derive_resource_key,
     ensure_portable_tree,
 )
+from ghrah.ability.package.schema import strip_schema_metadata as _strip_schema_metadata
 from ghrah.manifest.errors import ManifestValidationError
 
 __all__ = [
@@ -170,22 +171,6 @@ def _load_header(raw: str, *, builtin: bool) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip():
             raise BuildError(f"{field} 必须是非空字符串")
     return data
-
-
-def _strip_schema_metadata(node: Any, *, top_level: bool = True) -> Any:
-    """剥离所有层级 ``title``，只剥离顶层 ``description``。"""
-    if isinstance(node, dict):
-        result: dict[str, Any] = {}
-        for key, value in node.items():
-            if key == "title":
-                continue
-            if key == "description" and top_level:
-                continue
-            result[key] = _strip_schema_metadata(value, top_level=False)
-        return result
-    if isinstance(node, list):
-        return [_strip_schema_metadata(item, top_level=False) for item in node]
-    return node
 
 
 def _ensure_object_strict(name: str, node: Any, *, what: str) -> None:

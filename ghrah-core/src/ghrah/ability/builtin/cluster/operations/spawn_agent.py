@@ -223,13 +223,19 @@ class SpawnAgentAbility(Ability):
 
         try:
             manifest = store.load_agent(manifest_ref)
-            from ghrah.ability.source import BuiltinAbilitySource
+            if getattr(supervisor, "_builtin_abilities", False):
+                materializer = getattr(supervisor, "ability_materializer", None)
+                if materializer is None:
+                    raise RuntimeError("builtin 模式缺少授权装配边界")
+                resolved = materializer.resolve_agent(manifest, runtime_name=name or None)
+            else:
+                from ghrah.ability.source import BuiltinAbilitySource
 
-            resolved = (
-                BuiltinAbilitySource(agent_store=store)
-                .resolver()
-                .resolve(manifest, runtime_name=name or None)
-            )
+                resolved = (
+                    BuiltinAbilitySource(agent_store=store)
+                    .resolver()
+                    .resolve(manifest, runtime_name=name or None)
+                )
         except Exception as e:
             logger.warning(
                 "SpawnAgentAbility: manifest resolve failed for '%s': %s", manifest_ref, e

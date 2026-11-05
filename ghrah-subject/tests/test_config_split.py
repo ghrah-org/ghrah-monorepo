@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from ghrah.subject.config import (
+    AbilityConfig,
     CoreConnectionConfig,
     CoreTransportConfig,
     HITLPolicyConfig,
@@ -28,6 +29,19 @@ from ghrah.subject.config import (
     SubjectConfig,
     TransportKindConfig,
 )
+
+
+def test_ability_install_root_is_explicit(monkeypatch, tmp_path):
+    """安装根默认关闭，由部署环境显式指定，旧模式与相对路径直接拒绝。"""
+    monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT", raising=False)
+    assert SubjectConfig.from_env().ability.install_root is None
+    monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_SOURCE", "builtin")
+    monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT", str(tmp_path))
+    assert SubjectConfig.from_env().ability.install_root == str(tmp_path)
+    with pytest.raises(ValueError, match="绝对路径"):
+        AbilityConfig(install_root="relative")
+    with pytest.raises(ValueError, match="builtin"):
+        SubjectConfig(ability=AbilityConfig(install_root=str(tmp_path)))
 
 
 class TestFlatFieldCompat:

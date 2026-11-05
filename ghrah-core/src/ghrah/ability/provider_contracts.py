@@ -6,8 +6,8 @@
 
 v1 索引不再声明 ``provider_requirements``：成员的提供者契约由**包来源**决定。
 内置包按身份 ``ghrah.<name>`` 映射到各自后端契约；MCP 快照由 ``tools/list``
-生成，固定走 MCP 契约；其余外部源包由安装后的进程内 Provider 决定，解析层
-不替它猜后端（fail-closed）。
+生成，固定走 MCP 契约；外部 Python 源包固定走函数入口契约，运行宿主还须
+显式接线安装包 Provider；未知来源保持 fail-closed。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ SHELL_CONTRACT = "ghrah.shell.v1"
 CLUSTER_CONTRACT = "ghrah.cluster.v1"
 CORE_CONTRACT = "ghrah.core.v1"
 MCP_CONTRACT = "ghrah.mcp.v1"
+PYTHON_CONTRACT = "ghrah.operation.python.v1"
 
 BUILTIN_CONTRACTS = MappingProxyType(
     {
@@ -41,10 +42,12 @@ def contract_for(origin: str, namespace: str, name: str | None) -> str | None:
         name: ``identity.name``；可缺省。
 
     Returns:
-        后端契约名；未登记的内置包或外部源包返回 ``None``（调用方 fail-closed）。
+        后端契约名；未登记的内置包或未知来源返回 None（调用方 fail-closed）。
     """
     if namespace == "ghrah" and name is not None:
         return BUILTIN_CONTRACTS.get(name)
     if origin == "mcp":
         return MCP_CONTRACT
+    if origin == "source" and namespace not in {"ghrah", "mcp"}:
+        return PYTHON_CONTRACT
     return None

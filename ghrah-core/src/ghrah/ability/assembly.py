@@ -123,7 +123,13 @@ class AbilityAssembly:
     source: BuiltinAbilitySource | None = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def select(cls, mode: str | AbilitySourceMode, *, agent_store: Any = None) -> AbilityAssembly:
+    def select(
+        cls,
+        mode: str | AbilitySourceMode,
+        *,
+        agent_store: Any = None,
+        install_root: str | None = None,
+    ) -> AbilityAssembly:
         """在装配点显式选择模式。
 
         新来源在此**一次**构造：内置树解析失败会在这里抛出，不会拖到第一次
@@ -140,6 +146,8 @@ class AbilityAssembly:
             AbilityAssemblyError: 模式值非法。
         """
         parsed = AbilitySourceMode.parse(mode)
+        if install_root is not None and parsed is AbilitySourceMode.LEGACY:
+            raise AbilityAssemblyError("ability.install_root 需要 builtin 装配模式")
         if parsed is AbilitySourceMode.LEGACY:
             logger.warning(
                 "ability_source=legacy 已废弃：仅保留旧部署兼容，不在权限治理范围内"
@@ -147,7 +155,7 @@ class AbilityAssembly:
                 "builtin 路径生效）；请迁移到 ability_source=builtin"
             )
         source = (
-            BuiltinAbilitySource(agent_store=agent_store)
+            BuiltinAbilitySource(agent_store=agent_store, install_root=install_root)
             if parsed is AbilitySourceMode.BUILTIN
             else None
         )

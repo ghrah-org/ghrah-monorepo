@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from ghrah.ability.access import AccessError, AccessIdentity, GrantPolicy, GrantRule
-from ghrah.ability.versions import capture_ability_version
+from ghrah.ability.package.generate import build
+from ghrah.ability.package.installer import AbilityInstaller
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.manifest.parser import parse_agent_manifest
@@ -16,7 +17,7 @@ from ghrah.protocol.ability_tree import GrantAbilityRequest
 from ghrah.types.results import ActionOutcome
 from ouroboros import Context
 
-from ghrah.subject.config import SubjectConfig
+from ghrah.subject.config import AbilityConfig, SubjectConfig
 from ghrah.subject.core_cluster.registry import CoreClusterRegistry, default_core_unit_factory
 
 AGENT = "a" * 32
@@ -74,6 +75,7 @@ def config(tmp_path, *, policy=None):
         workspace_root=str(tmp_path / "workspace"),
         db_path=str(tmp_path / "subject.sqlite"),
         ability_source="builtin",
+        ability=AbilityConfig(install_root=str(tmp_path / "installed")),
         ability_grant_policy=policy
         if policy is not None
         else GrantPolicy(
@@ -130,16 +132,18 @@ async def test_subject_spawn_catalog_body_attachment_and_tool_result_persistence
             assert provider._identity.run_id == unit.supervisor.incarnation_id("reader")
             assert GUIDE in await provider.catalog_text()
 
-            # 显式准备一个已提交内容包；外部包安装与发现由独立打包轨承担。
+            # 外部内容经过安装校验与同一来源捕获，再显式选择和授予。
             source = tmp_path / "source"
             example = (
                 Path(__file__).resolve().parents[2]
                 / "ghrah-core/examples/ability_content/reporting"
             )
             shutil.copytree(example, source)
+            build(source)
+            AbilityInstaller(tmp_path / "installed").install(source)
             store = unit._config.ability_store
             admin = AccessIdentity("project", "deployment", "control", True, "deployment")
-            version = capture_ability_version((source / "ability.yaml").read_text(), root=source)
+            version = unit._assembly.source.capture_package("reporting")
             await store.commit_version(admin, version)
             await store.select_instance(admin, "reporting", version.digest, tmp_path)
             await store.grant(
