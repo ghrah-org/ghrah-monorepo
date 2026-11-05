@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { PluginNegotiateResultPayload } from "@ghrah/protocol";
 import type { PluginsManifest } from "./manifest.js";
 import { toWireReport, type TsHalfSpec } from "./spec.js";

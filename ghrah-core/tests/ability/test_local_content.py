@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """本地获授内容的快照读取、授权变更、运行隔离与 Context 继承边界。"""
 

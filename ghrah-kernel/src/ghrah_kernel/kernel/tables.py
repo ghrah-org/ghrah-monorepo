@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """本次 boot 的内存记录与不可复活的实例身份。"""
 
 import asyncio

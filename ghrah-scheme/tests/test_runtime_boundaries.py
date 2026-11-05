@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """验证原型的容量、失败、嵌套和异步核定边界。"""
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """启动物化：包实例登记、授权核定、工具选择与定义面 schema 投影。"""
 

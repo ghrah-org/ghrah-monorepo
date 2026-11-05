@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """AgentEntity 的 Subject 适配：复用 ProjectStore、Core 和项目消息权威。"""
 
 from __future__ import annotations

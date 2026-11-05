@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """Ability 关系库的可映射拒绝；单独成模块避免接纳层与存储层循环导入。"""
 

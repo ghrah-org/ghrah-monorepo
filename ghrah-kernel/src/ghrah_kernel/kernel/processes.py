@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Kernel 唯一持有子进程创建、信号与等待。"""
 
 import asyncio

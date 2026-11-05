@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """Ability 定义、内容与受控执行的领域入口。
 

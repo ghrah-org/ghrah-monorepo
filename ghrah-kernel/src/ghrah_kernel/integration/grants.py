@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受信部署显式选择许可期限；服务入口与命名视图共用签发形状。"""
 
 import math

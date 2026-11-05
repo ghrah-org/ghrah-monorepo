@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Project archive/restore Root freeze integration across Subject restarts."""
 
 from __future__ import annotations

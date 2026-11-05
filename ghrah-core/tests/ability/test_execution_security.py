@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """执行边界的权限、稳定主体、审批与隔离回归。"""
 

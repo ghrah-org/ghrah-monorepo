@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """显式捕获包内文件；运行内容仅来自已提交清单和按摘要保存的字节。"""
 

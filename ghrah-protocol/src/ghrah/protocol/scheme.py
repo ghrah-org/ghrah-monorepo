@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """Scheme 公共描述格式；动作内容由领域的唯一作者模型单向导出。"""
 

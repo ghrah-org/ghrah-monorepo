@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """机制入口的高层客户端，业务 codec 仍只在 SDK 使用。"""
 
 import time

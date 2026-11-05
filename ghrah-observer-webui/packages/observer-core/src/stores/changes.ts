@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { ActionNode } from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """应用资源关闭失败时仍由 Kernel 回收进程，失败不得伪报为干净收尾。"""
 
 import asyncio

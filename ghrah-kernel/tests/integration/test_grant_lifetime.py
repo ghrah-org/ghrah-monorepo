@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """许可期限由部署显式选择，长持句柄与有限 TTL 分别验收。"""
 
 import asyncio

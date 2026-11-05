@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受管 Provider 的最小消息端口；参数、可信上下文和效果证据分别传递。"""
 
 import asyncio

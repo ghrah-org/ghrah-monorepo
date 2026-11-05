@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """单一作者的边界编解码；JSON Schema 只接收明确支持的有限子集。"""
 

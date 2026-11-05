@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { getScenario, listScenarios, runScenario } from "./scenarios/index.js";
 import { MockServer } from "./server.js";
 import { MockState } from "./state.js";

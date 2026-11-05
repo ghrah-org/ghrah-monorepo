@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Provider SDK 的注册、防错、并发、取消与显式效果回执。"""
 
 import asyncio

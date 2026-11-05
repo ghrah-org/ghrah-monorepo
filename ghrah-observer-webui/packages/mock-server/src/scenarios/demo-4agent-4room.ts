@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { CommandType } from "@ghrah/protocol";
 import type { MockState } from "../state.js";
 import type { Scenario } from "./types.js";

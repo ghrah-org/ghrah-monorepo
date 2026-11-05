@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // 观察端视觉回归：4 个关键界面 × 2 种宽度 × 2 档字号，另加侧边栏收起状态。
 //
 // 数据来自 @ghrah/mock-server 的 demo 场景，并用 --replay-on-connect 保证“页面晚连也能

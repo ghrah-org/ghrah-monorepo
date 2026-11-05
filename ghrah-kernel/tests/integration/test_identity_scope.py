@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """身份与局部解析在真实 Kernel 和 Provider 进程之间保持隔离。"""
 
 import asyncio

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Ability 的独立 Caller 会话消费通道安装事件，实际走 read/write ABI。"""
 
 import asyncio

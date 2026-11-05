@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { generateRequestId } from "./builders.js";
 import { CommandType, EventType, SystemType } from "./enums.js";
 import type { ServerMessage } from "./message.js";

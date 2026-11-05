@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { demoScenario } from "./demo-4agent-4room.js";
 import { pluginsScenario } from "./plugins.js";
 import type { Scenario } from "./types.js";

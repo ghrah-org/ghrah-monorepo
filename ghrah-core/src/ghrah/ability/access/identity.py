@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """新版授权边界的稳定主体校验；名称不能被当成恢复凭据。"""
 

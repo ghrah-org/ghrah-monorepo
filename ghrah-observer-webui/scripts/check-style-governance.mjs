@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // 样式治理检查（ratchet 基线）。
 //
 // 只做一件事：把当前代码里的“已知违规”计数与 style-baseline.json 比较，

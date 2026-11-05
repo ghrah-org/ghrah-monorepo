@@ -259,7 +259,9 @@ metadata:
 - `metadata.tags` 可选；生成器会排序。
 - v1 不读取 `annotations`；不要依赖它。
 - 正文使用 Markdown；`references/`、`assets/` 放说明与素材。
-- `scripts/` 放委托子进程执行的脚本，v1 只允许 `.py`；脚本不是 Operation，不生成 `input_schema`，参数由脚本自己解释；调用入口是 `run_script`。
+- `scripts/` 放委托子进程执行的脚本。v1 只运行单个 `.py` 文件：运行时不设置 `PYTHONPATH`，脚本之间不能互相 import，也不能依赖解释器里没有的第三方包。脚本不是 Operation，不生成 `input_schema`，也不声明 `EFFECTS` 或 `TIMEOUT_MS`。参数由脚本自己解释；模型侧调用入口是 `run_script`。
+- 父进程只核对脚本已经登记、结果不超过 1 MiB、超时，以及在超时或取消时终止进程树。参数里的路径含义归脚本；脚本必须把路径收在输入信封的 `context.workspace` 里。`context.workspace` 是这次授予的工作区，不是包目录。包内文件从 `context.package_root` 读取。
+- Windows 上超时和取消会立刻终止整个进程树，没有两秒宽限。需要落盘的脚本必须在 `call.deadline_ms` 之前写完。不要把子进程 detach 出进程树，父进程无法跟踪脱离的子进程。
 - 一个包可以有 0 个、1 个或多个 Skill。
 
 ## 7. MCP 连接包

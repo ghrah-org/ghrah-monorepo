@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """项目 MessageManager 权威表的实体作用域只读端口，不启动消息投递。"""
 
 from __future__ import annotations

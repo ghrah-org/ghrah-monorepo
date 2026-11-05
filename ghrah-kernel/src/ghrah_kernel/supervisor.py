@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """期望状态与重启策略；所有进程手段均通过 KernelClient 请求。"""
 
 import asyncio

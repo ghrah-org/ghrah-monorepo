@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """文件切片的真实后端，只依赖领域调用，不识别 Scheme 路径。"""
 

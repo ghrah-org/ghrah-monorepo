@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """在 wheel 隔离环境验收真实 ActorAgent 与 Context，不依赖源码测试夹具。"""
 
 import asyncio

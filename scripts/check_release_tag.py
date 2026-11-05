@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """校验包级发布 tag 的版本与目标包声明完全一致。"""
 
 from __future__ import annotations

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # 使用 OpenAI SDK + MCP SDK 调用阿里云百炼联网搜索（WebSearch）MCP 服务
 import asyncio
 import json

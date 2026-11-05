@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """能力档案经过显式绑定和工厂进入 Agent 实际预算的跨仓验收。"""
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """独立 Kernel 宿主，控制连接关闭后回收本轮所有直属服务。"""
 
 import json

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """在临时数据库中装配完整 Ability；不修改生产 Agent 或来源包。"""
 

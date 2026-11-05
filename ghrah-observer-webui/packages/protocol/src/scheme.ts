@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /** Scheme 描述格式与 Python ghrah.protocol.scheme 对齐；业务 schema 由作者模型导出。 */
 import { z } from "zod";
 

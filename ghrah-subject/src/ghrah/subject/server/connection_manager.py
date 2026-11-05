@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Observer WebSocket 连接管理器。
 
 维护 Observer 的 WebSocket 连接，支持按条件广播消息。

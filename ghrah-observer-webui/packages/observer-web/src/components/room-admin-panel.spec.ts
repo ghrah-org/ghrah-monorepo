@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // @vitest-environment happy-dom
 
 import { useAgentsStore, useRoomsStore } from "@ghrah/observer-core";

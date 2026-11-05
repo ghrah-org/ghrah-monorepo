@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Agent 长期实体的身份、快照和显式操作契约。"""
 
 from __future__ import annotations

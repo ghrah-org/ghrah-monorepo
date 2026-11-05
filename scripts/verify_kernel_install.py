@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """在独立 wheel 环境验证命名服务启动、Scope 与收尾，不导入测试夹具。"""
 
 import asyncio

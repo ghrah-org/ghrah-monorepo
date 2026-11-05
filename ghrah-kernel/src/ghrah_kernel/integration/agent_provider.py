@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """ActorAgent 的受限消息入口；Context 写入完全交给 Core。
 
 Core 只在显式装配 Agent 时导入，默认微内核安装不依赖认知包。

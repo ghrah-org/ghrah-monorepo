@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受信连接绑定与 Provider 请求上下文；不解释主体种类或领域权限。"""
 
 import math

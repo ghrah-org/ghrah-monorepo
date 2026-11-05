@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """构建并审计 ghrah 的全部交付产物（含内部包），不执行发布操作。"""
 
 from __future__ import annotations

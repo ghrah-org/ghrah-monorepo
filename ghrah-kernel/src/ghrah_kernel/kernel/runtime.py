@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """会话、方案、句柄和调用路由；用户态业务载荷不在此解码。"""
 
 import asyncio

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """FastAPI 应用入口（Ouroboros 形态薄 facade）。
 
 Observer FastAPI app 由 ``WebSocketObserverEndpointUnit`` 在装配期间创建

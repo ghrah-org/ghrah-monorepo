@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """ghrah-subject: 控制面/执行层（effect host + Agent 外围管理）。
 
 Subject 运行时为 Ouroboros 装配形态：``assemble_subject``（mount_builtin_

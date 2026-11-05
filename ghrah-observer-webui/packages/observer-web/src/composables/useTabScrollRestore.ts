@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { nextTick, onActivated, onMounted, type Ref, type WatchSource, watch } from "vue";
 
 /** 纵向滚动恢复目标：number 为绝对 scrollTop；"bottom" 落底；null 恢复上次记录的用户滚动位置。 */

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """真实子进程中的服务端口夹具；不冒充 ActorAgent 或 Ability Provider。"""
 
 import argparse

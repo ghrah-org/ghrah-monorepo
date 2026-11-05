@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """文件切片明确支持的成员及参数映射，不按未知成员猜测执行入口。"""
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """ActionSession / ActionBranch 领域不变量测试。"""
 
 from __future__ import annotations

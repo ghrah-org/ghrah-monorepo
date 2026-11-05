@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { z } from "zod";
 
 /** import map 产物（`import-map.json`）的最小契约：`{"imports": {specifier: url}}`。 */

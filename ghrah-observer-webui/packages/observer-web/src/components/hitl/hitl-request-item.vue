@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script setup lang="ts">
 import type { HitlRequest } from "@ghrah/observer-core";
 import { computed, ref } from "vue";

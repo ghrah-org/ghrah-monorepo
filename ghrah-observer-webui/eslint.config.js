@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // ESLint：承担 oxlint 覆盖不了的部分 —— Vue SFC/template 规则 + TS 项目规则。
 // eslint-plugin-oxlint 依据 .oxlintrc.json 关闭与 oxlint 重复的规则（oxlint 先跑，见根 package.json lint 链）。
 import eslint from "@eslint/js";

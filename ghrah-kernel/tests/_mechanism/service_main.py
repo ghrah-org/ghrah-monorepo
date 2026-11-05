@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受管服务入口，Provider 与 Caller 分别持有独立连接。"""
 
 import argparse

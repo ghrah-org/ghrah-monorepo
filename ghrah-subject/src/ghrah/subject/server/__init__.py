@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Subject Observer Server 包。
 
 提供 Observer WebSocket 服务器，让 Observer 通过 WebSocket 连接到 Subject，

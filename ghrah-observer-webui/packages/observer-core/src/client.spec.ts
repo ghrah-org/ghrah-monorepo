@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { AbilityDefinitionPayload, CommandResultPayload } from "@ghrah/protocol";
 import { ClientType, CommandType, type WebSocketLike } from "@ghrah/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

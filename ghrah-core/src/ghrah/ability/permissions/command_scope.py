@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """命令白名单的纯字符串匹配：基础命令 + 可选子命令（两段式）。
 

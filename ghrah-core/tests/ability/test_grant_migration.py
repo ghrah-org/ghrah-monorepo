@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """一次性迁移 bootstrap：已部署 Agent 的初始获授写入与幂等边界。"""
 

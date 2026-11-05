@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from "vitest";
 import fixture from "../../protocol/src/__fixtures__/ability-tree.json";
 import { createAbilityTreeClient } from "./ability-tree.js";

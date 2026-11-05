@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { ref } from "vue";
 
 const ROOM_SIDEBAR_KEY = "ghrah.workspace.room-sidebar.collapsed";

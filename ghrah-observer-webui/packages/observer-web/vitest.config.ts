@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vitest/config";

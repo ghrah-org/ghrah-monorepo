@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """真实 Subject 工厂与生产 spawn 的获授内容闭环；不手工给 Context 注入端口。"""
 

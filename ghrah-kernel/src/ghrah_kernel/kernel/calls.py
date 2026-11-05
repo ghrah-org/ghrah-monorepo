@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """异步调用、有限结算、在途持有与交付资格；不解释业务载荷。"""
 
 import asyncio

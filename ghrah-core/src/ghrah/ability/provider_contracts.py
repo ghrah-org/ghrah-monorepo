@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """能力后端的提供者槽契约名：版本、登记与接纳共用的唯一字符串来源。
 

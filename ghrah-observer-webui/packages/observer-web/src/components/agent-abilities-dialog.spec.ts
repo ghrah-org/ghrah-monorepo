@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // @vitest-environment happy-dom
 import { useConnectionStore, useProjectsStore } from "@ghrah/observer-core";
 import { flushPromises, mount } from "@vue/test-utils";

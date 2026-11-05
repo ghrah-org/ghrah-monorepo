@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """消息骨架的业务替身，不是完整的 Agent 或 Ability 域。"""
 
 import asyncio

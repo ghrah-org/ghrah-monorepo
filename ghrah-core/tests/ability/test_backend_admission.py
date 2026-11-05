@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """后端专属接纳：按提供者槽契约登记，未登记的后端 fail-closed。"""
 

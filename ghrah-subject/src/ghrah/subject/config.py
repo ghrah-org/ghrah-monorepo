@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Subject 配置定义。
 
 管理 Subject 的运行时配置，包括工作区路径、数据库路径、权限策略和 Core 连接。

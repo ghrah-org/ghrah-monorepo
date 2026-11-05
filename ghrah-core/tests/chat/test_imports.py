@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """在全新解释器中验证适配器与 LLM 公共入口不依赖导入顺序。"""
 

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // 布局与样式护栏：只做断言、不做像素比对，因此可以跨机器跑在 CI 里。
 // 视觉基线（visual.spec.ts）绑定生成机器的字体渲染，只适合在本机或固定镜像内跑。
 //

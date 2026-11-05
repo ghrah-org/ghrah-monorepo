@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """长期 Agent 实体：固定身份，组合受限端口，由宿主适配现有权威。
 
 实体不持有 ActorAgent 或数据库连接。每次操作按稳定身份解析当前规格和运行实例，

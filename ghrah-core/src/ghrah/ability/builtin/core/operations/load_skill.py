@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """按获授目录的精确名称读取完整 Skill 正文或已登记的相对文本附件。"""
 

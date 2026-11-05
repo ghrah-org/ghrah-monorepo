@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """将阻塞消息 API 接入 asyncio；端点持有固定收发工作者。"""
 
 import asyncio

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Observer 命令路由器。
 
 解析 Observer WebSocket 消息类型，路由到对应的处理器。

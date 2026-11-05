@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受信启动、上下文与效果在真实跨进程调用中保持一致。"""
 
 import asyncio

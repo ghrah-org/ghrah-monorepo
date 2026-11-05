@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { readFileSync } from "node:fs";
 
 const css = readFileSync("src/style.css", "utf8");

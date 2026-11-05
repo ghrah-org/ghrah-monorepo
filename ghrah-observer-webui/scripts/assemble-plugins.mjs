@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-// ghrah 宿主插件装配脚本（D3）：
+
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// ghrah 宿主插件装配脚本：
 //   1. 扫描 GHRAH_OBSERVER_PLUGINS_DIR（默认 ~/.ghrah/plugins）下
 //      <plugin_id>/<version>/plugin.json + entry 产物；
 //   2. 校验（复用 @ghrah/plugin-registry 的 TsHalfSpecSchema）；

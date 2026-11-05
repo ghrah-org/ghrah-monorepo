@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionError, ServerClient, TimeoutError, type WebSocketLike } from "./client.js";
 import { ClientType, CommandType, EventType, SystemType } from "./enums.js";

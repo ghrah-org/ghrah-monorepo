@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """冻结的静态主体、组、资源归属与服务入口许可；不管理 Ability 成员。"""
 
 import json

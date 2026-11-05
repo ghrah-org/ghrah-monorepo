@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """准备、共享资源、故障代次、收尾失败和非合作任务的 owner 验证。"""
 

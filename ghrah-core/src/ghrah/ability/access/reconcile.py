@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """启动核定：把模板与显式策略算成目标事实，再以 CAS 写进关系库。
 

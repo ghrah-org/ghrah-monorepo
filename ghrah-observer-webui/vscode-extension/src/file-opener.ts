@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import * as os from "node:os";
 import * as path from "node:path";
 import { Uri, window, workspace } from "vscode";

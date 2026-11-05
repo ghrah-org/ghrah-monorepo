@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """脚本 Agent 通过自己的 Caller 会话消费能力，不直接导入 Ability。"""
 
 import asyncio

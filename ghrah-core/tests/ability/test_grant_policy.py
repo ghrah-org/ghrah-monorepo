@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """启动期授权策略形状：目标递进、默认值、确定性顺序与歧义拒绝。"""
 

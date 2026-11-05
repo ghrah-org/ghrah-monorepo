@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """真实受管入口；业务请求不能选择这里运行的服务实现。"""
 
 import argparse

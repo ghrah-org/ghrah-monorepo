@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Project/Recovery units 集成测试（Ouroboros 形态）：coexistence 工厂 +
 fake CoreClusterRegistry（假 CoreUnit 工厂）+ ProjectUnit/RecoveryUnit 挂载，
 验证装配、project_create 命令经 ctx.serial 路由、reconcile bootstrap。

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Frame batcher：高频 WS 事件合帧分发（性能红线 4）。
  *

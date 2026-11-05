@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """logging_setup 的测试：定向级别解析与日志装配。
 
 不启动端侧进程：只验证「级别怎么解析」「装配后根级别/定向级别/文件输出对不对」。

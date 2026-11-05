@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { RoomLogEntryPayload } from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // CSS 体积预算：构建产物只许变小，变大要显式确认。
 //
 // 读 packages/observer-web/dist/assets/*.css，统计原始字节与 gzip 字节，

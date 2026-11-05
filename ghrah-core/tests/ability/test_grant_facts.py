@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """授权事实形状：脚本作用域、可见/可用两轴、来源与历史、关系库升级。"""
 

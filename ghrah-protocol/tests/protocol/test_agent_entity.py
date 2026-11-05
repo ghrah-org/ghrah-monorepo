@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Python 与 TS 共用实体 wire 样本，校验默认值和闭集操作。"""
 
 import json

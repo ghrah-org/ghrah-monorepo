@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { CommandResultPayload, ServerMessage } from "@ghrah/protocol";
 import { CommandType, EventType, SystemType, type WebSocketLike } from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";

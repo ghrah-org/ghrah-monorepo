@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """配置 wire 拒绝旧 Agent 引用，并无损保留调用者参数。"""
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """事件总线。
 
 管理事件向 Observer 连接的推送，支持按 Agent 和事件类型过滤订阅。

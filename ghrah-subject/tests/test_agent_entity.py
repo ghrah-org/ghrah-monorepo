@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Agent 实体端到端验收：真实 Core/ProjectStore，使用临时目录，不调用 LLM。"""
 
 from __future__ import annotations

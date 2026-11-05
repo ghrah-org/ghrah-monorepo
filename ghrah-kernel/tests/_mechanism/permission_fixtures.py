@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受信实验许可与显式门闩；这不是 Authority 或密码证明。"""
 
 import asyncio

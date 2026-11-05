@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """固定顺序引导；不实现重启策略，不成为受管服务进程的父进程。"""
 
 import asyncio

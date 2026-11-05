@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { defineConfig, devices } from "@playwright/test";
 
 // 视觉回归的固定端口：4113 是 mock-server 的默认演示端口（避开真实 server 的 4112），

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """真实快照、关系库、Scheme 和 Context 的内容消费闭环及失败边界。
 

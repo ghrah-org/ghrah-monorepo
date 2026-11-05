@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """受管 Ability 替身；业务函数不碰控制信封与 bytes。"""
 
 import asyncio

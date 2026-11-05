@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """legacy 装配模式的废弃边界：仍可运行，但明确不在权限治理范围内。"""
 

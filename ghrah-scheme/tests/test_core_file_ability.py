@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """把未修改的 Core 执行器与文件 Ability 接到 Scheme，验证真实文件效果。"""
 

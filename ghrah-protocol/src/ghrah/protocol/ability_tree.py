@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """Ability 资源关系切片的数据契约；身份由受信入口提供，不取自业务载荷。"""
 

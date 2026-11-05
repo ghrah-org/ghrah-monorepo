@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """内核私有非阻塞 OS pipe；不把 FD 交给客户端。"""
 
 import asyncio

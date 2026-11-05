@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """当前 Agent/run 的获授内容服务；只读关系库与已提交字节，不依赖 Scheme。"""
 

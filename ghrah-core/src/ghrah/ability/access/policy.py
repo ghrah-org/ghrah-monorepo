@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """启动期授权策略的显式形状：模板之外只允许被明确覆盖、扩充或移除。
 

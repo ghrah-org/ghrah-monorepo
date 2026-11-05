@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """ghrah-subject 应用入口（Ouroboros 装配形态）。
 
 ``async with Context()`` + ``assemble_subject(profile="full")`` + 常驻等待；

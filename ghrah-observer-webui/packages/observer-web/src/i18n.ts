@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { createI18n } from "vue-i18n";
 import en from "./locales/en";
 import zhCN from "./locales/zh-CN";

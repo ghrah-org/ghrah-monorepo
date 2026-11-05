@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Playwright 的 webServer 探活要求 HTTP 200–403，而 ws 服务对普通 GET 返回 426，
 // 因此这里做一层包装：启动 mock-server，并在 ws 端口可连通后额外暴露 200 的健康端点。
 // 参数固定为视觉回归需要的确定性场景（replay-on-connect + 关闭持续链路模拟）。

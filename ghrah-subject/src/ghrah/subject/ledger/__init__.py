@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """ActionChain 读侧投影（Core sqlite 直连只读）。
 
 聚合裁决 D-C：存储真相源 = Core ``ContextManager`` sqlite；本模块是

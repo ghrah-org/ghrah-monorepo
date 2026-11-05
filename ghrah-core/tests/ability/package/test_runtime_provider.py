@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """安装包通过真实解析、授权、接纳执行；卸载后旧对象与再次启动均拒绝。"""
 

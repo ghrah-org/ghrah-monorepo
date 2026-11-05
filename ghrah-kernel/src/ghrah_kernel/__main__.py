@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """独立 Kernel 宿主入口；只解释系统管理会话，不装配业务场景。"""
 
 import argparse

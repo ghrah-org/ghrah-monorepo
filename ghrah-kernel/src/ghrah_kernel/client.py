@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """高层消息客户端；call 是 SDK 帮助函数，不代表完整 ABI。"""
 
 import asyncio

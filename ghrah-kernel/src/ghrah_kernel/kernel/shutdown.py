@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """关闭接纳、有限排空和直属回收；不解释服务依赖或业务载荷。"""
 
 import asyncio

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """只解释控制信封；业务载荷保持不透明。"""
 
 from dataclasses import asdict, dataclass, field, replace

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """项目资源关系唯一写者；定义读提交快照，来源可用性由宿主显式提供。"""
 
@@ -6,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -133,6 +136,48 @@ class MemberFence:
     tool_name: str = "_"
     tool_revision: int = 0
     version_digest: str = ""
+
+
+_SCRIPT_GRANT_ADDRESS = re.compile(
+    r"^skill/(?P<skill>[a-z0-9]+(?:-[a-z0-9]+)*)/scripts/(?P<key>[a-z0-9][a-z0-9._-]*)$"
+)
+"""授予侧脚本地址：``skill/<skill>/scripts/<key>``。模型地址用复数 ``skills/``。"""
+
+
+@dataclass(frozen=True)
+class ScriptGrant:
+    """一次可继续做文件核对的脚本授予。
+
+    这里只固定关系库能确定的事实：哪个包、哪一版、工作区、登记路径与摘要。
+    包目录是否仍在、文件是不是链接，由脚本运行器在起进程前再查。
+
+    Attributes:
+        alias: 命中的能力别名。
+        instance_id: 授予所绑定的实例。
+        version_digest: 该实例当前版本摘要。
+        grant_address: ``skill/<skill>/scripts/<key>``。
+        workspace: 实例根，也是子进程工作目录；不是包目录。
+        package: 包身份全名。
+        release: 发布版本号。
+        container: 内置包目录名。
+        namespace: 包命名空间。
+        relative_path: 索引里的包内相对路径。
+        digest: 授予版本清单中的内容摘要。
+        size: 授予版本清单中的字节数。
+    """
+
+    alias: str
+    instance_id: str
+    version_digest: str
+    grant_address: str
+    workspace: str
+    package: str
+    release: str
+    container: str
+    namespace: str
+    relative_path: str
+    digest: str
+    size: int
 
 
 @dataclass(frozen=True)
@@ -1154,6 +1199,101 @@ class AbilityAccessStore:
         async with self._tx():
             return await self._resolve(
                 actor, alias, member, tool=tool, global_instance=global_instance
+            )
+
+    async def resolve_script(
+        self, actor: AccessIdentity, agent: str, grant_address: str
+    ) -> ScriptGrant:
+        """按当前 run 解析一个已可见的脚本授予。
+
+        内容成员的 ``admit`` 只核可读，不核脚本执行权。这里单独看
+        ``skill/<skill>/scripts/<key>`` 的可见性与 ``available``：可见但
+        ``available`` 为假时拒绝执行，未出现在可见授予里时按不存在处理。
+        操作员身份不能代替 Agent 自己的 run。
+
+        Args:
+            actor: Agent 自己的受信身份，``subject_id`` 与 ``run_id`` 必须是当前 run。
+            agent: Agent 标识，须与 ``actor.subject_id`` 相同。
+            grant_address: 授予地址，不是磁盘路径，也不是模型看到的 ``skills/`` 地址。
+
+        Returns:
+            关系库能确定的脚本授予。调用方还要在起进程前核对包目录与文件。
+
+        Raises:
+            AccessError: ``not_found`` 没有可见脚本；``conflict`` 多个包撞同一个地址；
+                ``unavailable`` 版本已不可用；``access_denied`` 可见但未授执行权，
+                或身份/run 不匹配。
+        """
+        if _SCRIPT_GRANT_ADDRESS.fullmatch(grant_address) is None:
+            raise AccessError("not_found")
+        async with self._tx():
+            await self._agent(actor, agent)
+            if actor.subject_id != agent or actor.run_id != self.current_run(agent):
+                raise AccessError("access_denied")
+            async with self._db.execute(
+                "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
+                (self.project_id, agent),
+            ) as cursor:
+                grants = await cursor.fetchall()
+            matches: list[tuple[Any, Any, Any]] = []
+            for grant in grants:
+                content = json.loads(grant["content"])
+                if grant_address not in content:
+                    continue
+                axes = json.loads(grant["axes"])
+                fact = axes.get(grant_address) or {}
+                if not fact.get("visible", True):
+                    continue
+                instance = await self._row("ability_instances", "id=?", grant["instance"])
+                if instance is None:
+                    continue
+                version = await self._row("ability_versions", "digest=?", instance["digest"])
+                if version is None:
+                    continue
+                matches.append((grant, instance, version))
+            if not matches:
+                raise AccessError("not_found")
+            if len(matches) > 1:
+                raise AccessError("conflict")
+            grant, instance, version = matches[0]
+            if not self._version_available(version):
+                raise AccessError("unavailable")
+            fact = json.loads(grant["axes"]).get(grant_address) or {}
+            if not fact.get("available", False):
+                raise AccessError("access_denied")
+            manifest = json.loads(version["manifest"])
+            entry = manifest.get(grant_address)
+            if not isinstance(entry, dict):
+                raise AccessError("not_found")
+            relative = entry.get("path")
+            digest = entry.get("digest")
+            size = entry.get("size")
+            if (
+                not isinstance(relative, str)
+                or not isinstance(digest, str)
+                or type(size) is not int
+            ):
+                raise AccessError("unavailable")
+            definition = AbilityVersion(
+                version["digest"],
+                version["definition"],
+                version["implementation"],
+                version["manifest"],
+            ).definition()
+            identity = definition.identity
+            return ScriptGrant(
+                alias=grant["alias"],
+                instance_id=instance["id"],
+                version_digest=instance["digest"],
+                grant_address=grant_address,
+                workspace=instance["root"],
+                package=identity.full_name,
+                release=identity.version,
+                container=definition.container_name,
+                namespace=identity.namespace,
+                relative_path=relative,
+                digest=digest,
+                size=size,
             )
 
     async def _resolve(

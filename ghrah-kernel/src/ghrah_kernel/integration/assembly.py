@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """宿主读取受信启动配置；与普通调用参数的入口严格分开。"""
 
 import json

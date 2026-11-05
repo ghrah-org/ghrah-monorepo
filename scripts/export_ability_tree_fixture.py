@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """从真实领域定义和公共模型导出切片消费者样例；不注册端点或授予许可。"""
 

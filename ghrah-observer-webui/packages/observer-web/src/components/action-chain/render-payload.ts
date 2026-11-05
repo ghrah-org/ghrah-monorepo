@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * 尽力渲染：ContentBlock / ActionResultItem → 纯数据渲染描述（阶段 3 任务 3.1）。
  *

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """离线重建授权前的显式维护入口；默认只列范围，--apply 时先备份整库。"""
 

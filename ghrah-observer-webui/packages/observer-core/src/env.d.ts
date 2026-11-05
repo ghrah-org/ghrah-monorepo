@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Local ImportMetaEnv typing for observer-core (no vite dep).
 // Vite injects import.meta.env at build/dev time in observer-web; observer-core
 // is a library so we declare the minimal shape consumed by stores.

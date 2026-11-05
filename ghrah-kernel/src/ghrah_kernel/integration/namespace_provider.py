@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """最小用户态命名服务：按会话绑定的 Scope 解析，挂载不授予目标权限。"""
 
 from ..context import ProviderContext

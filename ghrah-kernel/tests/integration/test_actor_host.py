@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """真实 ActorAgent 的跨进程消息、Context 权威与正常关闭验收。"""
 
 import asyncio

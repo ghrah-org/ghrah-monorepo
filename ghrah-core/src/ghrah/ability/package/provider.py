@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """安装包的本地 Provider：校验、选版、加载与函数入口适配。
 
@@ -132,6 +134,24 @@ class InstalledAbilityProvider:
             tool=None,
             implementation=ImplementationDef(type="python", handler=member),
         )
+
+    def installed_root(self, package: str, release: str) -> Path | None:
+        """定位仍带安装记录的版本目录；不 import 包代码，也不跟随链接。
+
+        Args:
+            package: 包身份全名。
+            release: 发布版本号。
+
+        Returns:
+            版本目录；未安装、缺 lock 或目录本身是链接时为 ``None``。
+        """
+        item = self.store.resolve(package, release)
+        if item is None or item.lock is None or is_link(item.root):
+            return None
+        definition = item.root / "ability.yaml"
+        if is_link(definition) or not definition.is_file():
+            return None
+        return item.root
 
     def available(self, version: AbilityVersion) -> bool:
         """检查已捕获版本的安装根和 lock 是否仍存在；读取不改变授权事实。"""

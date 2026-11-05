@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """ghrah 进程内的 Scheme 控制原语；所有状态归一个 asyncio loop。"""
 

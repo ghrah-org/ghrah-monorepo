@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { type ActionNode, ActionNodeSchema, type BranchInfoPayload } from "@ghrah/protocol";
 import { describe, expect, it } from "vitest";
 import { layoutGraph } from "./layout-graph.js";

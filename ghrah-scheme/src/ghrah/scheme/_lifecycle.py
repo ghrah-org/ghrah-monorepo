@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """唯一资源 owner 的运行记录；协作回调不持锁，残余任务始终保留。"""
 

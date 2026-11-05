@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Observer WebSocket 连接处理器。
 
 处理 Observer WebSocket 连接生命周期、消息接收分发和心跳管理。

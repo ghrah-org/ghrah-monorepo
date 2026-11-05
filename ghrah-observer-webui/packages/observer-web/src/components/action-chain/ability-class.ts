@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /** ActionChain 能力语义分类（阶段 2 任务 2.3）。 */
 export type AbilityClass = "write" | "read" | "converse" | "unknown";
 

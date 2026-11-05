@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Provider SDK 在 handler 前后自动解码/编码业务参数。"""
 
 import asyncio

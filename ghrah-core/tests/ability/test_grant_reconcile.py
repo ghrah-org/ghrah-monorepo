@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """启动核定：模板与策略折算、幂等写入、CAS 重试与陈旧关系撤销。"""
 

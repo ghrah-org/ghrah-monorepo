@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """按 Project Root 懒路由 Task/Room 持久化的兼容门面。"""
 
 from __future__ import annotations

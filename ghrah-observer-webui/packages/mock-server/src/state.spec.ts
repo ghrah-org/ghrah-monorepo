@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { PythonHalfInfo, TaskClaimPayload, TaskInfoPayload } from "@ghrah/protocol";
 import { describe, expect, it } from "vitest";
 import { MockState } from "./state.js";

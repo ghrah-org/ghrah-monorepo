@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """从当前 Agent 的同一获授投影发现 Operation 与 Skill，不扫描部署目录。"""
 

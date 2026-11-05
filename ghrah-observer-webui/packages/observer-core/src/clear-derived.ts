@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import type { AgentTarget, RoomTarget } from "./scope.js";
 import { useActionChainsStore } from "./stores/action-chains.js";
 import { useAgentsStore } from "./stores/agents.js";

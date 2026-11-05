@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * 端到端 Mock 冒烟（计划任务 8.2）：真实 ObserverClient + connectStores 连接
  * @ghrah/mock-server（demo 场景，4 agent + 4 room），走完整 WS 协议断言全链路。

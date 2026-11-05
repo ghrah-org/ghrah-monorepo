@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Stylelint：只管“对不对”，不管“好不好看”。
 //
 // 排版交给 prettier（它的范围覆盖 CSS/SFC），因此这里关闭标准配置里的纯格式类规则，

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
 # SPDX-License-Identifier: Apache-2.0
 """授权装配边界：builtin 模式下把 Agent 模板变成可运行工具表的唯一入口。
 

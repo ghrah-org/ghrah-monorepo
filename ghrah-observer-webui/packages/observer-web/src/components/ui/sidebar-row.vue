@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script setup lang="ts">
 defineOptions({ inheritAttrs: false });
 defineProps<{ active?: boolean; disabled?: boolean; ariaLabel?: string }>();

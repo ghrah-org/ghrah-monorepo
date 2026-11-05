@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { expect, it, vi } from "vitest";
 import { CommandType, type CommandResultPayload } from "@ghrah/protocol";
 import { AgentEntity } from "./agent-entity.js";

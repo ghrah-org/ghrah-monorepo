@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """独立 Kernel、真实命名服务与显式服务夹具的跨进程装配。"""
 
 import asyncio

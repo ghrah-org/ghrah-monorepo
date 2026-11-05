@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """有界派生记录、可信许可声明核定与同步撤权门禁。"""
 
 import asyncio

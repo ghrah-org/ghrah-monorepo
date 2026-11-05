@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """宿主预先核定的启动记录；运行期只能选择记录，不能提交命令。"""
 
 import json
