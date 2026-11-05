@@ -123,6 +123,14 @@ class EntityModelConfigureOperation(EntityModel):
     expected_revision: int = Field(ge=1)
 
 
+class EntityPromptConfigureOperation(EntityModel):
+    """停止后修改本地规格提示词；空字符串为显式空值，下次启动生效。"""
+
+    type: Literal["prompt.configure"]
+    system_prompt: str
+    expected_revision: int = Field(ge=1)
+
+
 AgentEntityOperation = Annotated[
     EntityReadOperation
     | EntityLifecycleOperation
@@ -133,7 +141,8 @@ AgentEntityOperation = Annotated[
     | EntityMessageOperation
     | EntityDeliveryOperation
     | EntityAbilityConfigureOperation
-    | EntityModelConfigureOperation,
+    | EntityModelConfigureOperation
+    | EntityPromptConfigureOperation,
     Field(discriminator="type"),
 ]
 

@@ -159,6 +159,19 @@ export function useObserver() {
     return withClient((c) => c.getAgentInfo(target));
   }
 
+  async function unregisterAbility(target: AgentTarget, abilityName: string) {
+    return withClient((c) => c.unregisterAbility(target, abilityName));
+  }
+  async function registerWorkspace(locator: string, name = "") {
+    return withClient((c) => c.registerWorkspace(locator, name));
+  }
+  async function listWorkspaces() {
+    return withClient((c) => c.listWorkspaces());
+  }
+  async function getWorkspace(workspaceId: string) {
+    return withClient((c) => c.getWorkspace(workspaceId));
+  }
+
   async function registerAbility(target: AgentTarget, ability: AbilityDefinitionPayload) {
     return withClient((c) => c.registerAbility(target, ability));
   }
@@ -273,6 +286,10 @@ export function useObserver() {
 
   async function deleteProject(projectId: string, expectedVersion: number, cascadeRooms = false) {
     return withClient((c) => c.deleteProject({ projectId, expectedVersion, cascadeRooms }));
+  }
+
+  async function removeProjectAgent(target: AgentTarget, expectedVersion: number) {
+    return withClient((c) => c.removeProjectAgent(target, expectedVersion));
   }
 
   async function listAgents(projectId: string) {
@@ -505,6 +522,10 @@ export function useObserver() {
     sendAgentMessage,
     getAgentInfo,
     registerAbility,
+    unregisterAbility,
+    registerWorkspace,
+    listWorkspaces,
+    getWorkspace,
     sendHitlResponse,
     spawnAgent,
     terminateAgent,
@@ -527,6 +548,7 @@ export function useObserver() {
     restoreProject,
     deleteProject,
     listAgents,
+    removeProjectAgent,
     listSessions,
     createSession,
     activateSession,

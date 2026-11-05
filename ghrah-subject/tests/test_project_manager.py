@@ -626,6 +626,48 @@ class TestProjectAddRemoveAgent:
         statuses = {a.name: a.runtime_status for a in reread.agents}
         assert statuses == {"broken": "error", "healthy": "running"}
 
+    async def test_remove_agent_stale_version_does_not_terminate(
+        self, store: ProjectStore, tmp_path: Path
+    ) -> None:
+        """过期删除请求必须先拒绝，不能先停止实例再返回版本冲突。"""
+        events: list[tuple[str, dict[str, Any]]] = []
+        transport = _FakeClusterTransport()
+        mgr = _make_manager(
+            store,
+            events=events,
+            default_locator=_default_locator(tmp_path),
+            cluster_transport=transport,
+        )
+        created = await self._create(mgr, tmp_path)
+        project = created["data"]["project"]
+        added = await mgr.handle_command(
+            "project_add_agent",
+            {
+                "project_id": project["project_id"],
+                "agent": {
+                    "name": "a1",
+                    "cluster_id": project["cluster_ids"][0],
+                },
+            },
+        )
+        event_count = len(events)
+        result = await mgr.handle_command(
+            "project_remove_agent",
+            {
+                "project_id": project["project_id"],
+                "agent_id": added["data"]["agent_id"],
+                "agent_name": "a1",
+                "expected_version": project["version"],
+            },
+        )
+        assert result["success"] is False
+        assert "expected version" in result["error"]
+        assert transport._handle.terminated == []
+        record = await store.get(project["project_id"])
+        assert record is not None
+        assert [a.agent_id for a in record.agents] == [added["data"]["agent_id"]]
+        assert len(events) == event_count
+
     async def test_remove_agent_terminate_failure_keeps_definition(
         self, store: ProjectStore, tmp_path: Path
     ) -> None:

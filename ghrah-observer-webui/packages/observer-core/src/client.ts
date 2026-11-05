@@ -494,6 +494,28 @@ export class ObserverClient extends ServerClient {
     return this.request(msg, 30_000);
   }
 
+  async registerWorkspace(locator: string, name = ""): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_REGISTER,
+      client_type: ClientType.OBSERVER,
+      payload: { locator, name },
+    });
+  }
+  async listWorkspaces(): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_LIST,
+      client_type: ClientType.OBSERVER,
+      payload: {},
+    });
+  }
+  async getWorkspace(workspaceId: string): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_GET,
+      client_type: ClientType.OBSERVER,
+      payload: { workspace_id: workspaceId },
+    });
+  }
+
   async createWorkspace(target: AgentTarget): Promise<CommandResultPayload> {
     const msg: ServerMessage = {
       type: CommandType.CREATE_WORKSPACE,
@@ -963,6 +985,22 @@ export class ObserverClient extends ServerClient {
       client_type: ClientType.OBSERVER,
     };
     return this.request(msg, 30_000);
+  }
+
+  async removeProjectAgent(
+    target: AgentTarget,
+    expectedVersion: number,
+  ): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.PROJECT_REMOVE_AGENT,
+      client_type: ClientType.OBSERVER,
+      payload: {
+        project_id: target.projectId,
+        agent_id: target.agentId,
+        agent_name: target.agentName,
+        expected_version: expectedVersion,
+      },
+    });
   }
 
   async getProject(projectId: string): Promise<CommandResultPayload> {

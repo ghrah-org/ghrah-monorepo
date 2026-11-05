@@ -98,6 +98,36 @@ describe("ObserverClient", () => {
     });
   });
 
+  it("removes an Agent by stable project identity with an explicit project version", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "remove", success: true });
+    await client.removeProjectAgent(AGENT_TARGET, 7);
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.PROJECT_REMOVE_AGENT,
+      payload: { project_id: "p1", agent_id: "a1", agent_name: "agent-1", expected_version: 7 },
+    });
+  });
+
+  it("registers and reads Workspace records without using destructive workspace commands", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "workspace", success: true });
+    await client.registerWorkspace("file:///approved", "Approved");
+    await client.listWorkspaces();
+    await client.getWorkspace("w1");
+    expect(
+      request.mock.calls.map(([message]) => ({ type: message.type, payload: message.payload })),
+    ).toEqual([
+      {
+        type: CommandType.WORKSPACE_REGISTER,
+        payload: { locator: "file:///approved", name: "Approved" },
+      },
+      { type: CommandType.WORKSPACE_LIST, payload: {} },
+      { type: CommandType.WORKSPACE_GET, payload: { workspace_id: "w1" } },
+    ]);
+  });
+
   describe("subscribe", () => {
     it("sends subscribe command with correct payload", async () => {
       await connectClient(client, mockWs);

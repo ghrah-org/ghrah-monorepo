@@ -277,17 +277,30 @@ class WorkspaceUnit(SubjectUnit):
                         "success": False,
                         "error": f"Workspace not found: {workspace_id}",
                     }
+                from ghrah.protocol.payloads.workspace import WorkspaceGetResponsePayload
+
+                state: dict[str, Any] = {}
+                try:
+                    workspace = self.manager.get_workspace_by_id(workspace_id)
+                    if workspace is not None:
+                        status = await workspace.status()
+                        state = {"exists": status.exists, "writable": status.writable}
+                except Exception as exc:
+                    state = {"status_error": str(exc)}
                 return {
                     "success": True,
-                    "data": {
-                        "workspace_id": record.workspace_id,
-                        "name": record.name,
-                        "provider_type": record.provider_type,
-                        "subject_id": record.subject_id,
-                        "locator": record.locator,
-                        "created_at": record.created_at.isoformat(),
-                        "updated_at": record.updated_at.isoformat(),
-                    },
+                    "data": WorkspaceGetResponsePayload(
+                        **{
+                            "workspace_id": record.workspace_id,
+                            "name": record.name,
+                            "provider_type": record.provider_type,
+                            "subject_id": record.subject_id,
+                            "locator": record.locator,
+                            "created_at": record.created_at.isoformat(),
+                            "updated_at": record.updated_at.isoformat(),
+                            **state,
+                        }
+                    ).model_dump(mode="json"),
                 }
 
             if command == "workspace_list":

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import type { ManifestResolveAgentResponsePayload } from "@ghrah/protocol";
 import { useI18n } from "vue-i18n";
+import PermissionValues from "./permission-values.vue";
+import AgentPermissionSources from "./agent-permission-sources.vue";
 
-defineProps<{ preview: ManifestResolveAgentResponsePayload }>();
+defineProps<{ preview: ManifestResolveAgentResponsePayload; source?: string }>();
 const { t } = useI18n();
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 </script>
@@ -27,6 +29,13 @@ const json = (value: unknown) => JSON.stringify(value, null, 2);
       <summary>{{ t("config.preview.config") }}</summary>
       <pre>{{ json(preview.config) }}</pre>
     </details>
+    <AgentPermissionSources
+      v-if="source"
+      :key="source"
+      :source="source"
+      :mode="preview.ability_source"
+      :refresh-token="preview"
+    />
     <h4>{{ t("config.preview.abilities", { count: preview.abilities.length }) }}</h4>
     <article
       v-for="(ability, index) in preview.abilities"
@@ -40,6 +49,7 @@ const json = (value: unknown) => JSON.stringify(value, null, 2);
       </details>
       <details open>
         <summary>{{ t("config.preview.permissions") }}</summary>
+        <PermissionValues :permissions="ability.permissions" />
         <pre>{{ json(ability.permissions) }}</pre>
       </details>
       <details>

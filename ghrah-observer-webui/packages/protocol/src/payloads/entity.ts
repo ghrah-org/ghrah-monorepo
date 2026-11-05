@@ -28,6 +28,13 @@ export const AgentSnapshotSchema = z
 export const AgentEntityOperationSchema = z.discriminatedUnion("type", [
   z
     .object({
+      type: z.literal("prompt.configure"),
+      system_prompt: z.string(),
+      expected_revision: z.number().int().min(1),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal("model.configure"),
       endpoint_name: identifier,
       model_overrides: z.record(z.unknown()).nullable().optional().default(null),

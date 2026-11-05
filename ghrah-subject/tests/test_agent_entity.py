@@ -460,3 +460,111 @@ async def test_model_binding_preflight_and_room_reply(
         final = await entity.snapshot()
         assert final.specification.endpoint_name == "worker"
         assert final.specification.model_overrides["temperature"] == 0
+
+
+async def test_prompt_and_model_configuration_are_versioned_and_stopped_only(
+    tmp_path: Path,
+) -> None:
+    """只通过实体权威修改本地规格，保留原文并拒绝旧版本和运行态写入。"""
+    async with Context() as ctx:
+        await assemble_subject(ctx, _config(tmp_path), profile="full")
+        project = _data(await bridge_command(ctx, "project_create", {"name": "configuration"}))[
+            "project"
+        ]
+        manager = ctx.get("project_manager")
+        agent = await manager.agents.create(
+            AgentEntityCreatePayload(
+                project_id=project["project_id"],
+                cluster_id=project["cluster_ids"][0],
+                name="worker",
+                endpoint_name="worker",
+                start=False,
+                ability_types=["conversation"],
+            )
+        )
+        before = await agent.snapshot()
+        prompt = "  Configuration prompt\nKeep the last line.\n"
+        changed = await agent.configure_prompt(
+            prompt, expected_revision=before.specification_revision
+        )
+        assert changed["specification"]["system_prompt"] == prompt
+        assert (await agent.snapshot()).specification.system_prompt == prompt
+        with pytest.raises(StableError, match="agent_specification_conflict"):
+            await agent.configure_prompt("stale", expected_revision=before.specification_revision)
+        params = {"temperature": 0, "top_p": None, "max_tokens": 128, "extra_params": {"seed": 0}}
+        changed = await agent.configure_model(
+            "worker", expected_revision=changed["specification_revision"], model_overrides=params
+        )
+        assert changed["specification"]["model_overrides"] == params
+        revision = changed["specification_revision"]
+        with pytest.raises(ValueError, match="Unknown model request parameter"):
+            await agent.configure_model(
+                "worker", expected_revision=revision, model_overrides={"unexpected": True}
+            )
+        assert (await agent.snapshot()).specification_revision == revision
+        await agent.start()
+        snap = await agent.snapshot()
+        with pytest.raises(StableError, match="agent_must_be_stopped"):
+            await agent.configure_prompt("running", expected_revision=snap.specification_revision)
+        actor = _actor(ctx, project["cluster_ids"][0], "worker")
+        assert actor.config.system_prompt == prompt
+        await agent.stop()
+        snap = await agent.snapshot()
+        await agent.configure_prompt("", expected_revision=snap.specification_revision)
+        assert (await agent.snapshot()).specification.system_prompt == ""
+        await agent.start()
+        assert _actor(ctx, project["cluster_ids"][0], "worker").config.system_prompt == ""
+        catalog = await agent.context.list_sessions()
+        assert catalog["sessions"][0]["system_prompt"] == prompt
+        await agent.stop()
+        current = await agent.snapshot()
+        cleared = await agent.configure_model(
+            "worker", expected_revision=current.specification_revision, model_overrides={}
+        )
+        assert cleared["specification"]["model_overrides"] == {}
+        managed = await manager.agents.create(
+            AgentEntityCreatePayload(
+                project_id=project["project_id"],
+                cluster_id=project["cluster_ids"][0],
+                name="managed",
+                manifest_ref="sample.managed",
+                start=False,
+            )
+        )
+        snap = await managed.snapshot()
+        with pytest.raises(StableError, match="prompt_managed_by_manifest"):
+            await managed.configure_prompt("blocked", expected_revision=snap.specification_revision)
+
+
+async def test_legacy_unregister_returns_success_after_sync_actor_removal(tmp_path: Path) -> None:
+    """注销同步 Actor 能力后必须返回成功，且不能改写持久规格。"""
+    async with Context() as ctx:
+        await assemble_subject(ctx, _config(tmp_path), profile="full")
+        project = _data(await bridge_command(ctx, "project_create", {"name": "unregister"}))[
+            "project"
+        ]
+        manager = ctx.get("project_manager")
+        agent = await manager.agents.create(
+            AgentEntityCreatePayload(
+                project_id=project["project_id"],
+                cluster_id=project["cluster_ids"][0],
+                name="worker",
+                endpoint_name="worker",
+                start=True,
+                ability_types=["conversation", "end_task"],
+            )
+        )
+        result = await bridge_command(
+            ctx,
+            "unregister_ability",
+            {
+                **agent.identity.model_dump(),
+                "agent_name": "worker",
+                "ability_name": "conversation",
+            },
+        )
+        assert result["success"], result
+        assert result["data"]["unregistered"] is True
+        listed = await agent.abilities.list()
+        assert "conversation" not in listed["loaded_names"]
+        assert "conversation" in (await agent.snapshot()).specification.abilities

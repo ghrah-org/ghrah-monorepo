@@ -56,6 +56,107 @@ export default {
     closeUnverified:
       "Close this dialog? A session may already exist on the server. Closing does not delete it; check the session list before creating again.",
   },
+  agentDelete: {
+    title: "Delete agent entity",
+    scope:
+      "Removes this persistent Agent specification from the project. A running instance is terminated first; active work may be interrupted. This is not just stopping the Agent.",
+    retained:
+      "This operation does not automatically delete session history, mailbox data, Manifest files or workspace files. It has no entity restore action.",
+    identity: "Project / Agent ID",
+    typeName: "Type the exact Agent name to confirm",
+    confirm: "Delete this entity",
+    check: "Check deletion result",
+    verifyHint:
+      "Check the project from the server before retrying. This check does not send another deletion request.",
+    uncertain: "Deletion could not be confirmed. Check the result before doing anything else.",
+    verifyFailed: "Unable to read the project to confirm deletion.",
+    stillExists:
+      "The entity still exists in the project. Close this dialog, refresh its state and review before confirming again. Its runtime may have changed.",
+    refreshHint:
+      "Deletion was rejected. Close this dialog, refresh state and review before trying again.",
+  },
+  commonConfig: {
+    unsavedSettings:
+      "Save or discard the prompt and model drafts before starting, stopping or changing other persistent settings.",
+    refreshProject: "Refresh project configuration",
+    promptDraft: "Edit specification prompt",
+    promptHint:
+      "Stop the Agent before editing. The exact text, including an empty value, is saved for the next start; existing sessions are not rewritten.",
+    savePrompt: "Save specification prompt",
+    promptManifest:
+      "The prompt is managed by the referenced Manifest. Edit that file in Instance settings → Agent Config.",
+    modelParams: "Model request overrides (JSON object)",
+    modelHint:
+      "Supported keys: temperature, max_tokens, top_p, top_k, extra_params. Use an empty JSON object to clear overrides. Null numeric values mean unspecified. Changes apply on next start; endpoint credentials remain in agentconf.",
+    invalidModel:
+      "Enter a JSON object using only supported keys. Numeric parameters must be numbers (token counts must be integers), and extra_params must be an object.",
+    isolation: "Project isolation configuration",
+    isolationHint:
+      "Read-only stored configuration from the project record, not a guarantee of final runtime enforcement. Refresh project state to read changes.",
+    notProvided: "Not provided / server default",
+    inheritEffects: "null — inherit the global effect policy",
+    noOverride: "No override; inherit the source configuration",
+    emptyEffects: "[] — no effect actions listed",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    entityGrants: "Agent specification path grants",
+    grantsHint:
+      "Project-level grants and per-Agent specification grants are shown separately. An empty list does not grant unrestricted access.",
+    isolationFields: {
+      agent_path_grants: "Project Agent path grants",
+      agent_private_dir: "Agent private directories",
+      effect_allowlist: "Effect action allowlist",
+      hitl_override: "Human approval policy overrides",
+      task_scope: "Project task scope",
+    },
+    permissionSources: "Permission sources",
+    permissionHint:
+      "Declarations, Agent overrides and merged permissions are separate views. The merged result below is resolved by the server, not calculated by this page. Edit declarations in the Ability Manifest and overrides in the Agent Manifest. Declarations are read separately from current Ability files; the merged result is the resolver snapshot. Resolve again after concurrent edits. Runtime policy is checked separately.",
+    notDeclared: "Not declared",
+    declaration: "Ability Manifest declaration",
+    agentOverride: "Agent Manifest override",
+    declarationSource:
+      "Declaration is supplied by the {mode} resolver / registered implementation; this page does not read a legacy file for it.",
+    unregister: "Unregister runtime ability",
+    unregisterHint:
+      "Unregister {ability} from this running instance? This does not change its persistent specification, delete its Manifest, or revoke new Ability grants. The builtin source rejects this legacy operation.",
+    unregisterFailed:
+      "Unable to confirm ability removal. Refresh the registered list before retrying.",
+    unregisterVerify:
+      "The removal was accepted, but the refreshed registered list could not confirm it. Refresh before retrying.",
+    unregistered: "Removed {ability} from the running instance and verified its registered list.",
+    workspaces: "Workspace registry",
+    workspaceHint:
+      "Subject-wide registry. Registration authorizes access to an existing directory; it does not automatically mount it into this project or grant paths to an Agent. Directory contents are not modified.",
+    workspaceLoadFailed: "Unable to load Workspace records.",
+    workspaceUncertain:
+      "Registration or verification is not confirmed. Refresh the registry before registering again.",
+    workspaceSaved: "Registered and read back from the server.",
+    refreshWorkspaces: "Refresh Workspace registry",
+    noWorkspaces: "No registered workspaces.",
+    mounted: "Referenced by this project",
+    notMounted: "Not referenced by this project",
+    workspaceDetail: "Workspace record and provider status",
+    registerWorkspace: "Register approved directory",
+    workspaceName: "Workspace display name",
+    workspaceLocator: "Existing directory path or file:// URI",
+    workspaceApproval: "I approve registering this existing directory for read/write access.",
+    unknown: "Unknown / not reported",
+    yes: "Yes",
+    no: "No",
+    workspaceFields: {
+      workspace_id: "Workspace ID",
+      name: "Name",
+      provider_type: "Provider",
+      subject_id: "Subject ID",
+      locator: "Directory locator",
+      created_at: "Created at",
+      updated_at: "Updated at",
+      exists: "Directory exists",
+      writable: "Directory writable",
+      status_error: "Status query error",
+    },
+  },
   agentEntity: {
     specPromptTitle: "Persistent specification prompt",
     specPromptHint:

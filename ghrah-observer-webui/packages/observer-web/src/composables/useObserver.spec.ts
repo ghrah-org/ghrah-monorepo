@@ -163,3 +163,21 @@ it.each([undefined, "", "  Custom session prompt\n"])(
     observer.client.value = null;
   },
 );
+
+it("passes stable entity identity and project version through deletion", async () => {
+  setActivePinia(createPinia());
+  const observer = useObserver();
+  const removeProjectAgent = vi
+    .fn()
+    .mockResolvedValue({ success: false, error: "agent_terminate_failed" });
+  observer.client.value = { removeProjectAgent } as unknown as NonNullable<
+    typeof observer.client.value
+  >;
+  const target = { projectId: "p1", agentId: "a1", agentName: "Agent" };
+  expect(await observer.removeProjectAgent(target, 9)).toMatchObject({
+    success: false,
+    error: "agent_terminate_failed",
+  });
+  expect(removeProjectAgent).toHaveBeenCalledWith(target, 9);
+  observer.client.value = null;
+});

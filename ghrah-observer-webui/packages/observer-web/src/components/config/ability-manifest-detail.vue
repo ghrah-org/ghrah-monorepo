@@ -2,6 +2,7 @@
 import type { ManifestDetail } from "@ghrah/observer-core";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import PermissionValues from "./permission-values.vue";
 
 const props = defineProps<{ detail: ManifestDetail; disabled?: boolean }>();
 defineEmits<{ edit: []; view: []; delete: [] }>();
@@ -43,6 +44,10 @@ const json = (value: unknown) => JSON.stringify(value, null, 2);
       <p v-if="section.key === 'tool' && section.value === null">
         {{ t("config.ability.noTool") }}
       </p>
+      <PermissionValues
+        v-if="section.key === 'permissions'"
+        :permissions="section.value as Record<string, unknown>"
+      />
       <pre>{{ json(section.value) }}</pre>
     </section>
     <details>

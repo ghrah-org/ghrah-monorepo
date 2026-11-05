@@ -394,7 +394,7 @@ onBeforeUnmount(() => {
           role="region"
           :aria-label="t('config.preview.title')"
         >
-          <AgentManifestPreview :preview="preview" />
+          <AgentManifestPreview :preview="preview" :source="draft" />
         </section>
       </template>
     </div>

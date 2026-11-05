@@ -99,3 +99,17 @@ export type WorkspaceCreatedPayload = z.infer<typeof WorkspaceCreatedPayloadSche
 export type WorkspaceDestroyedPayload = z.infer<typeof WorkspaceDestroyedPayloadSchema>;
 export type WorkspaceSnapshotCreatedPayload = z.infer<typeof WorkspaceSnapshotCreatedPayloadSchema>;
 export type WorkspaceRolledBackPayload = z.infer<typeof WorkspaceRolledBackPayloadSchema>;
+
+export const WorkspaceGetResponsePayloadSchema = z.object({
+  workspace_id: z.string(),
+  name: z.string(),
+  provider_type: z.string(),
+  subject_id: z.string(),
+  locator: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  exists: z.boolean().nullable().optional(),
+  writable: z.boolean().nullable().optional(),
+  status_error: z.string().nullable().optional(),
+});
+export type WorkspaceGetResponsePayload = z.infer<typeof WorkspaceGetResponsePayloadSchema>;

@@ -397,3 +397,8 @@ export {
   type DiscoveredResource,
   type CatalogSnapshot,
 } from "./scheme.js";
+
+export {
+  WorkspaceGetResponsePayloadSchema,
+  type WorkspaceGetResponsePayload,
+} from "./payloads/workspace.js";

@@ -906,6 +906,9 @@ class ProjectManager:
             return error
         assert existing is not None
         expected = p.expected_version if p.expected_version is not None else existing.version
+        conflict = self._check_expected_version(existing, expected)
+        if conflict is not None:
+            return conflict
         target = next(
             (
                 a

@@ -223,3 +223,31 @@ async def test_workspace_on_ouroboros_mount_route_dispose_remount(
         assert recovered["data"]["writable"] is True
 
         await ws_fiber2.dispose()
+
+
+async def test_workspace_get_reads_provider_status_without_modifying_directory(
+    tmp_path: Path,
+) -> None:
+    """按登记 ID 返回实时存在性/可写性，注册不写目录内容。"""
+    async with Context() as ctx:
+        _, fiber = _mount(ctx, _config(tmp_path))
+        await wait_active(fiber)
+        directory = tmp_path / "approved"
+        directory.mkdir()
+        registered = await bridge_command(
+            ctx,
+            "workspace_register",
+            {"locator": path_to_locator(str(directory)), "name": "Approved"},
+        )
+        assert registered["success"], registered
+        wid = registered["data"]["workspace_id"]
+        response = await bridge_command(ctx, "workspace_get", {"workspace_id": wid})
+        assert response["success"]
+        assert response["data"]["exists"] is True
+        assert response["data"]["writable"] is True
+        assert list(directory.iterdir()) == []
+        directory.rmdir()
+        response = await bridge_command(ctx, "workspace_get", {"workspace_id": wid})
+        assert response["success"]
+        assert response["data"]["exists"] is False
+        assert response["data"]["writable"] is False
