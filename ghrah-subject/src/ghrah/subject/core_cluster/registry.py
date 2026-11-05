@@ -213,6 +213,8 @@ class CoreClusterRegistry:
         self,
         *,
         unit_factory: Callable[[str, str, str], Any],
+        ability_source: str = "legacy",
+        ability_grant_policy: Any = None,
     ) -> None:
         self._unit_factory = unit_factory
         self._ctx: Context | None = None
@@ -221,6 +223,12 @@ class CoreClusterRegistry:
         # （wait_active 最长 10s），无锁时并发调用会双挂载 CoreUnit（双 fiber
         # 指向同一 project sqlite），必须串行化。
         self._locks: dict[str, asyncio.Lock] = {}
+        # 能力关系库按项目共享（观测端管理面与 Core 执行面必须同一实例）；
+        # 生命周期到 registry.stop()，cluster 重启不重开、不关闭。
+        self._ability_source = ability_source
+        self._ability_grant_policy = ability_grant_policy
+        self._ability_stores: dict[str, Any] = {}
+        self._ability_store_lock = asyncio.Lock()
 
     def bind(self, ctx: Context) -> None:
         """绑定宿主 ctx（unit.init 时调用；运行时挂载经它 ctx.plugin）。"""
@@ -327,10 +335,87 @@ class CoreClusterRegistry:
                     await release(cluster_id)
         logger.info("CoreClusterRegistry: disposed cluster '%s'", cluster_id)
 
+    # ── 能力关系库服务面（观测端管理面与 Core 执行面共享）──
+
+    async def ability_store(self, project_id: str, project_root_locator: str) -> Any:
+        """按项目懒打开并复用能力关系库；关闭由 registry.stop() 统一负责。"""
+        if self._ability_source != "builtin":
+            raise StableError(
+                "ability_source_legacy",
+                "ability management requires ability_source=builtin",
+            )
+        if not project_id:
+            raise ValueError("project_id required")
+        if not project_root_locator:
+            raise ValueError("project_root_locator required")
+        async with self._ability_store_lock:
+            store = self._ability_stores.get(project_id)
+            if store is not None:
+                return store
+            from ghrah.ability.access import AbilityAccessStore
+
+            path = ProjectPaths.from_locator(project_root_locator).action_chain_db_path
+            store = await AbilityAccessStore.open(
+                path,
+                project_id,
+                operators=frozenset({"deployment"}),
+                runs=lambda agent: self._current_run(project_id, agent),
+            )
+            self._ability_stores[project_id] = store
+            return store
+
+    def operator_identity(self, project_id: str) -> Any:
+        """受信操作员身份：路径/配置注入，不从请求体读取。"""
+        from ghrah.ability.access import AccessIdentity
+
+        return AccessIdentity(project_id, "deployment", None, operator=True, source="admin")
+
+    def _current_run(self, project_id: str, agent: str) -> str | None:
+        for entry in self._clusters.values():
+            if entry.project_id != project_id:
+                continue
+            supervisor = getattr(entry.unit, "supervisor", None) or getattr(
+                entry.unit, "_supervisor", None
+            )
+            if supervisor is None:
+                continue
+            try:
+                run = supervisor.incarnation_for_agent(agent)
+            except Exception:
+                continue
+            if run:
+                return str(run)
+        return None
+
+    async def agent_tool_snapshot(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
+        """读取 Agent 当前可见工具名；跨 cluster 查找，取不到返回 None。"""
+        for entry in self._clusters.values():
+            if entry.project_id != project_id:
+                continue
+            method = getattr(entry.unit, "tool_snapshot", None)
+            if not callable(method):
+                continue
+            try:
+                snapshot = await method(agent_id)
+            except Exception:
+                continue
+            if snapshot is not None:
+                return tuple(snapshot)
+        return None
+
+    async def close_ability_stores(self) -> None:
+        """关闭全部项目的能力关系库（unit stop 时调用，幂等）。"""
+        async with self._ability_store_lock:
+            stores = list(self._ability_stores.values())
+            self._ability_stores.clear()
+        for store in stores:
+            await store.close()
+
     async def stop(self) -> None:
-        """关闭全部 cluster（unit.stop 时调用，幂等）。"""
+        """关闭全部 cluster 与项目能力关系库（unit.stop 时调用，幂等）。"""
         for cluster_id in list(self._clusters):
             await self.shutdown_cluster(cluster_id)
+        await self.close_ability_stores()
 
 
 def default_core_unit_factory(
@@ -338,6 +423,7 @@ def default_core_unit_factory(
     manifest_store: Any = None,
     llm_factory: Callable[[Any], Any] | None = None,
     room_projector: Callable[[Any], Awaitable[None]] | None = None,
+    ability_store_resolver: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> Callable[[str, str, str], Any]:
     """生产工厂：(cluster_id, project_id, root_locator) → CoreUnit。
 
@@ -375,7 +461,6 @@ def default_core_unit_factory(
 
     managers: dict[str, tuple[str, MessageManager, set[str]]] = {}
     memberships: dict[str, str] = {}
-    stores: dict[str, Any] = {}
     manager_lock = asyncio.Lock()
 
     async def prepare(unit: Any, cluster_id: str, project_id: str, locator: str) -> None:
@@ -402,27 +487,33 @@ def default_core_unit_factory(
             existing[2].add(cluster_id)
             memberships[cluster_id] = project_id
             unit._config = replace(unit._config, message_manager=existing[1])
-            # builtin 模式：为本次 spawn 打开启动授权关系库（与 Context 共用
-            # 项目数据库文件）；运行期只读，写入只经启动核定。
+            # builtin 模式：授权关系库按项目共享（观测端管理面与 Core 执行面
+            # 必须看到同一实例）；cluster 重启不重开、不关闭，统一由
+            # registry.stop() 收口。
             if unit._config.ability_source == "builtin":
-                from ghrah.ability.access import AbilityAccessStore
+                if ability_store_resolver is not None:
+                    store = await ability_store_resolver(project_id, locator)
+                else:
+                    # 兼容直接构造 default_core_unit_factory 的嵌入/测试路径：
+                    # 无 registry 服务时本地打开；生产挂载路径始终注入
+                    # resolver，保证与观测端管理面共享同一 store。
+                    from ghrah.ability.access import AbilityAccessStore
 
-                def runs(agent: str) -> str | None:
-                    supervisor = getattr(unit, "supervisor", None)
-                    if supervisor is None:
-                        return None
-                    try:
-                        return supervisor.incarnation_for_agent(agent)
-                    except Exception:
-                        return None
+                    def runs(agent: str) -> str | None:
+                        supervisor = getattr(unit, "supervisor", None)
+                        if supervisor is None:
+                            return None
+                        try:
+                            return supervisor.incarnation_for_agent(agent)
+                        except Exception:
+                            return None
 
-                store = await AbilityAccessStore.open(
-                    path,
-                    project_id,
-                    operators=frozenset({"deployment"}),
-                    runs=runs,
-                )
-                stores[cluster_id] = store
+                    store = await AbilityAccessStore.open(
+                        path,
+                        project_id,
+                        operators=frozenset({"deployment"}),
+                        runs=runs,
+                    )
                 unit._config = replace(
                     unit._config,
                     ability_store=store,
@@ -430,9 +521,6 @@ def default_core_unit_factory(
                 )
 
     async def release(cluster_id: str) -> None:
-        store = stores.pop(cluster_id, None)
-        if store is not None:
-            await store.close()
         async with manager_lock:
             project_id = memberships.pop(cluster_id, None)
             if project_id is None:

@@ -82,6 +82,7 @@ async def mount_builtin_units(
     units.extend([TaskUnit(config), DesiredStateUnit(config)])
 
     if profile == "full":
+        from ghrah.subject.units.ability_control import AbilityControlUnit
         from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
         from ghrah.subject.units.project import ProjectUnit
         from ghrah.subject.units.recovery import RecoveryUnit
@@ -98,6 +99,9 @@ async def mount_builtin_units(
                 if core_cluster_unit is not None
                 else CoreClusterRegistryUnit(config),
                 ProjectUnit(config),
+                # 能力管理面：requires PROJECT_STORE（ProjectUnit 之后）与
+                # CORE_CLUSTER_REGISTRY/ABILITY_ACCESS（registry 之后）。
+                AbilityControlUnit(config),
                 RoomUnit(config),
                 RecoveryUnit(config),
             ]
