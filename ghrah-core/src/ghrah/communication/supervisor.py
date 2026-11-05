@@ -1034,6 +1034,13 @@ class SupervisorActor:
         info = self._registry.get_info(agent_name)
         return info.actor_handle
 
+    async def get_agent_handle_by_id(self, agent_id: str) -> Any | None:
+        """按稳定 Agent ID 取 actor handle；不在运行则返回 None（不猜测名称）。"""
+        for info in self._registry.list_agents():
+            if info.config.effective_agent_id == agent_id:
+                return info.actor_handle
+        return None
+
     async def create_session(
         self,
         agent_name: str,

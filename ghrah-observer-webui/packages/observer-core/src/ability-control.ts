@@ -169,7 +169,7 @@ export function createAbilityControlClient(
             parsed,
           ),
         );
-        rejectTarget(result.view, projectId, agentId);
+        if (result.view !== null) rejectTarget(result.view, projectId, agentId);
         return result;
       });
     },
@@ -184,7 +184,7 @@ export function createAbilityControlClient(
             },
           }),
         );
-        rejectTarget(result.view, projectId, agentId);
+        if (result.view !== null) rejectTarget(result.view, projectId, agentId);
         return result;
       });
     },
@@ -197,7 +197,7 @@ export function createAbilityControlClient(
             parsed,
           ),
         );
-        rejectTarget(result.view, projectId, agentId);
+        if (result.view !== null) rejectTarget(result.view, projectId, agentId);
         return result;
       });
     },
@@ -212,7 +212,7 @@ export function createAbilityControlClient(
             },
           ),
         );
-        rejectTarget(result.view, projectId, agentId);
+        if (result.view !== null) rejectTarget(result.view, projectId, agentId);
         return result;
       });
     },

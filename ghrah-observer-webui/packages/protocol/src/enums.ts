@@ -141,6 +141,8 @@ export enum EventType {
   AGENT_ERROR = "agent_error",
   HEALTH_STATUS = "health_status",
   ABILITY_RESULT = "ability_result",
+  ABILITY_TREE_CHANGED = "ability_tree_changed",
+  ABILITY_PACKAGE_CHANGED = "ability_package_changed",
   HITL_REQUEST = "hitl_request",
   HITL_RESOLVED = "hitl_resolved",
   CONTEXT_USAGE_UPDATED = "context_usage_updated",

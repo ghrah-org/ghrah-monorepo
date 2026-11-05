@@ -76,11 +76,13 @@ def test_admin_view_rejects_negative_revision() -> None:
         )
 
 
-def test_tree_change_result_requires_view() -> None:
+def test_tree_change_result_allows_stopped_view_and_validates_when_present() -> None:
     result = AbilityTreeChangeResult.model_validate({"view": _tree_payload(), "revision": 3})
+    assert result.view is not None
     assert result.view.agent_id == "alice"
-    with pytest.raises(ValidationError):
-        AbilityTreeChangeResult.model_validate({"revision": 3})
+    # Agent 未运行时关系库仍可写，view 明确为 null（不伪造 run 视图）。
+    stopped = AbilityTreeChangeResult.model_validate({"revision": 3})
+    assert stopped.view is None
 
 
 def test_error_response_requires_code() -> None:

@@ -163,6 +163,8 @@ describe("EventType", () => {
     "agent_error",
     "health_status",
     "ability_result",
+    "ability_tree_changed",
+    "ability_package_changed",
     "hitl_request",
     "hitl_resolved",
     "context_usage_updated",
@@ -225,7 +227,7 @@ describe("EventType", () => {
     "plugin_crashed",
   ]);
 
-  it("has exactly 65 values matching Python EventType", () => {
+  it("has exactly 67 values matching Python EventType", () => {
     const tsValues = new Set(Object.values(EventType));
     expect(tsValues).toEqual(PYTHON_EVENT_VALUES);
   });

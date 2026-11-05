@@ -186,10 +186,15 @@ class AbilityChangesPage(TreeModel):
 
 
 class AbilityTreeChangeResult(TreeModel):
-    """一次授权/工具写入的权威响应；失败由 HTTP 错误体表达。"""
+    """一次授权/工具写入的权威响应；失败由 HTTP 错误体表达。
+
+    Agent 未运行时关系库仍可写（授权是 Agent 级持久事实），此时无法构造
+    需要受信 run 的 ``AbilityTreeView``，``view`` 明确为 null，调用方重读
+    admin/tree 或等启动后再取运行视图。
+    """
 
     format: Literal["ghrah.ability-control.change.v1"] = "ghrah.ability-control.change.v1"
-    view: AbilityTreeView
+    view: AbilityTreeView | None = None
     revision: int = Field(ge=0)
 
 
