@@ -10,10 +10,16 @@
 - CommandSafetyChecker: 命令安全分类器（含子命令路由）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型：
-- SAFE: 只读命令，自动通过（ls, cat, git status 等）
-- DANGEROUS: 不可逆破坏命令，自动拒绝（rm, chmod, kill 等）
-- REQUIRE_HITL: 有副作用但不一定危险的命令，需人工审批（curl, git commit 等）
+分类模型（判定顺序，2026-11-05 裁决）：
+1. ``denied_commands`` 命中 → 硬拒绝（不弹审批）
+2. 内置危险命令分类 → 硬拒绝
+3. ``allowed_commands`` 命中 → 自动批准（声明范围）
+4. 内置安全命令 → 自动批准（部署级基线）
+5. 范围外兜底：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope``
+   决定拒绝还是放行
+
+``allowed_commands`` 是**自动批准范围**，不是执行权限本身；声明了范围时，
+范围外仍要按兜底规则处理。内置安全列表是部署级基线，与声明范围并集生效。
 
 多面性命令（git, npm, pip 等）支持子命令级分类：
 - git status → SAFE
@@ -31,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.permissions.command_scope import command_in_scope
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.context import AbilityExecutionContext
@@ -261,6 +268,9 @@ class CommandSafetyChecker:
         safe_sub_commands: dict[str, set[str]] | None = None,
         dangerous_sub_commands: dict[str, set[str]] | None = None,
         require_approval: bool = True,
+        allowed_commands: tuple[str, ...] | list[str] | None = None,
+        denied_commands: tuple[str, ...] | list[str] | None = None,
+        deny_out_of_scope: bool = False,
     ) -> None:
         self._safe_commands = safe_commands if safe_commands is not None else DEFAULT_SAFE_COMMANDS
         self._dangerous_commands = (
@@ -275,6 +285,10 @@ class CommandSafetyChecker:
             else DEFAULT_DANGEROUS_SUB_COMMANDS
         )
         self._require_approval = require_approval
+        # None = 未声明范围（不限制）；空元组 = 声明了范围但什么都不自动批准。
+        self._allowed_commands = None if allowed_commands is None else tuple(allowed_commands)
+        self._denied_commands = tuple(denied_commands or ())
+        self._deny_out_of_scope = deny_out_of_scope
 
     def extend_safe_lists(
         self,
@@ -319,6 +333,14 @@ class CommandSafetyChecker:
 
         base_cmd_lower = base_cmd.lower()
 
+        if self._denied_commands and command_in_scope(self._denied_commands, command):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=base_cmd_lower,
+                sub_command=sub_cmd,
+                reason=f"Command denied by declared scope: {command}",
+            )
+
         if base_cmd_lower in self._dangerous_commands:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
@@ -327,44 +349,36 @@ class CommandSafetyChecker:
                 reason=f"Dangerous command: {base_cmd_lower}",
             )
 
+        if self._allowed_commands is not None and command_in_scope(self._allowed_commands, command):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=base_cmd_lower,
+                sub_command=sub_cmd,
+                reason=f"Command in declared scope: {command}",
+            )
+
         has_sub_routing = (
             base_cmd_lower in self._safe_sub_commands
             or base_cmd_lower in self._dangerous_sub_commands
         )
-        if has_sub_routing:
-            if sub_cmd:
-                sub_cmd_lower = sub_cmd.lower()
-                dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
-                if sub_cmd_lower in dangerous_subs:
-                    return CommandSafetyVerdict(
-                        category=CommandSafetyCategory.DANGEROUS,
-                        base_command=base_cmd_lower,
-                        sub_command=sub_cmd_lower,
-                        reason=f"Dangerous sub-command: {base_cmd_lower} {sub_cmd_lower}",
-                    )
-                safe_subs = self._safe_sub_commands.get(base_cmd_lower, set())
-                if sub_cmd_lower in safe_subs:
-                    return CommandSafetyVerdict(
-                        category=CommandSafetyCategory.SAFE,
-                        base_command=base_cmd_lower,
-                        sub_command=sub_cmd_lower,
-                        reason=f"Safe sub-command: {base_cmd_lower} {sub_cmd_lower}",
-                    )
-            else:
-                all_safe_subs = self._safe_sub_commands.get(base_cmd_lower, set())
-                all_dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
-                if not all_safe_subs and not all_dangerous_subs:
-                    pass
-            return CommandSafetyVerdict(
-                category=CommandSafetyCategory.REQUIRE_HITL,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
-                reason=(
-                    f"Command requires approval: {command}"
-                    if sub_cmd
-                    else f"Command requires approval: {base_cmd_lower}"
-                ),
-            )
+        if has_sub_routing and sub_cmd:
+            sub_cmd_lower = sub_cmd.lower()
+            dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
+            if sub_cmd_lower in dangerous_subs:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.DANGEROUS,
+                    base_command=base_cmd_lower,
+                    sub_command=sub_cmd_lower,
+                    reason=f"Dangerous sub-command: {base_cmd_lower} {sub_cmd_lower}",
+                )
+            safe_subs = self._safe_sub_commands.get(base_cmd_lower, set())
+            if sub_cmd_lower in safe_subs:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.SAFE,
+                    base_command=base_cmd_lower,
+                    sub_command=sub_cmd_lower,
+                    reason=f"Safe sub-command: {base_cmd_lower} {sub_cmd_lower}",
+                )
 
         if base_cmd_lower in self._safe_commands:
             return CommandSafetyVerdict(
@@ -374,19 +388,27 @@ class CommandSafetyChecker:
                 reason=f"Safe command: {base_cmd_lower}",
             )
 
-        if not self._require_approval:
+        if self._require_approval:
             return CommandSafetyVerdict(
-                category=CommandSafetyCategory.SAFE,
+                category=CommandSafetyCategory.REQUIRE_HITL,
                 base_command=base_cmd_lower,
                 sub_command=sub_cmd,
-                reason=f"Approval not required: {base_cmd_lower}",
+                reason=f"Command requires approval: {command}",
+            )
+
+        if self._deny_out_of_scope and self._allowed_commands is not None:
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=base_cmd_lower,
+                sub_command=sub_cmd,
+                reason=(f"Command outside declared scope and approval is disabled: {command}"),
             )
 
         return CommandSafetyVerdict(
-            category=CommandSafetyCategory.REQUIRE_HITL,
+            category=CommandSafetyCategory.SAFE,
             base_command=base_cmd_lower,
             sub_command=sub_cmd,
-            reason=f"Command requires approval: {command}",
+            reason=f"Approval not required: {base_cmd_lower}",
         )
 
     @staticmethod

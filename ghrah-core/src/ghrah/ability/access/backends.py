@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: Apache-2.0
+"""执行接纳的后端专属参数检查：与“成员关系校验”分开的一层。
+
+关系库的 ``_check`` 回答“这个 Agent 此刻是否获授这个成员、引用是否仍然
+有效”；本模块回答“这次调用的参数是否落在该后端允许的资源范围内”。两者
+分开实现，新增后端只需在这里登记，不必改关系库算法，也不笼统放开任意成员。
+
+每个条目按**提供者槽契约 + 成员键**登记：同名成员只有契约匹配才按该后端
+接纳，未知后端一律 ``unavailable``（fail-closed），不按成员名猜测执行入口。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from ghrah.ability.access.errors import AccessError
+
+__all__ = [
+    "BackendAdmission",
+    "admission_for",
+    "contract_of",
+    "file_member_paths",
+]
+
+FS_CONTRACT = "ghrah.fs.v1"
+SHELL_CONTRACT = "ghrah.shell.v1"
+CLUSTER_CONTRACT = "ghrah.cluster.v1"
+MCP_CONTRACT = "ghrah.mcp.v1"
+
+AdmissionCheck = Callable[[str, Mapping[str, Any], tuple[str, ...], str], None]
+"""``(成员键, 参数, 授予根, 实例根) -> None``；不合法时抛 ``AccessError``。"""
+
+
+@dataclass(frozen=True)
+class BackendAdmission:
+    """一个已登记后端的参数接纳函数。
+
+    Attributes:
+        contract: 提供者槽契约（如 ``ghrah.fs.v1``）。
+        path_arguments: 该成员声明为路径资源的参数名（供装配期判断是否需要
+            工作区并登记授予根）；命令/集群/MCP 成员为空。
+        check: 接纳函数；参数不合法时抛 :class:`AccessError`。
+    """
+
+    contract: str
+    path_arguments: tuple[str, ...]
+    check: AdmissionCheck
+
+
+def _resolve_argument(
+    value: Any, instance_root: str, roots: tuple[str, ...], *, argument: str
+) -> None:
+    """路径参数必须为字符串且落在实例根与授予根之内。"""
+    if not isinstance(value, str) or not value.strip():
+        raise AccessError("invalid_change")
+    path = Path(value)
+    resolved = (path if path.is_absolute() else Path(instance_root) / path).resolve()
+    if not resolved.is_relative_to(Path(instance_root).resolve()):
+        raise AccessError("access_denied")
+    if not any(resolved.is_relative_to(Path(root).resolve()) for root in roots):
+        raise AccessError("access_denied")
+
+
+def _fs_check(
+    member: str,
+    arguments: Mapping[str, Any],
+    roots: tuple[str, ...],
+    instance_root: str,
+) -> None:
+    """文件成员的路径参数逐个核对；缺参数按参数错误拒绝。"""
+    names = _FS_PATH_ARGUMENTS.get(member, ())
+    if not names:
+        raise AccessError("unavailable")
+    for name in names:
+        if name not in arguments:
+            raise AccessError("invalid_change")
+        _resolve_argument(arguments[name], instance_root, roots, argument=name)
+
+
+def _shell_check(
+    member: str,
+    arguments: Mapping[str, Any],
+    roots: tuple[str, ...],
+    instance_root: str,
+) -> None:
+    """命令成员：命令必须为非空字符串；工作目录（可选）按路径资源核对。"""
+    command = arguments.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise AccessError("invalid_change")
+    working_dir = arguments.get("working_dir")
+    if working_dir is not None:
+        _resolve_argument(working_dir, instance_root, roots, argument="working_dir")
+
+
+def _cluster_check(
+    member: str,
+    arguments: Mapping[str, Any],
+    roots: tuple[str, ...],
+    instance_root: str,
+) -> None:
+    """集群成员：没有路径资源轴，只核对必填身份参数的类型与形状。"""
+    for name in _CLUSTER_REQUIRED.get(member, ()):
+        value = arguments.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise AccessError("invalid_change")
+    for name in _CLUSTER_OPTIONAL.get(member, ()):
+        value = arguments.get(name)
+        if value is not None and not isinstance(value, str):
+            raise AccessError("invalid_change")
+
+
+def _mcp_check(
+    member: str,
+    arguments: Mapping[str, Any],
+    roots: tuple[str, ...],
+    instance_root: str,
+) -> None:
+    """MCP 成员：server / tool 必须为非空字符串，arguments 必须是对象。"""
+    for name in ("server", "tool"):
+        value = arguments.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise AccessError("invalid_change")
+    payload = arguments.get("arguments")
+    if payload is not None and not isinstance(payload, Mapping):
+        raise AccessError("invalid_change")
+
+
+_FS_PATH_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    "read_file": ("file_path",),
+    "write_file": ("file_path",),
+    "edit_file": ("file_path",),
+    "delete_file": ("file_path",),
+    "list_directory": ("dir_path",),
+    "search_files": ("path",),
+    "move_file": ("source_path", "destination_path"),
+}
+
+_CLUSTER_REQUIRED: dict[str, tuple[str, ...]] = {
+    "send_message": ("target", "content"),
+    "broadcast_message": ("content",),
+    "spawn_agent": ("manifest_ref",),
+    "terminate_agent": ("agent_name",),
+    "send": ("message",),
+}
+
+_CLUSTER_OPTIONAL: dict[str, tuple[str, ...]] = {
+    "query_agents": ("filter",),
+    "query_manifests": ("manifest_ref",),
+}
+
+_REGISTRY: dict[tuple[str, str], BackendAdmission] = {}
+
+
+def _register(contract: str, member: str, paths: tuple[str, ...], check: AdmissionCheck) -> None:
+    _REGISTRY[(contract, member)] = BackendAdmission(contract, paths, check)
+
+
+for _member, _args in _FS_PATH_ARGUMENTS.items():
+    _register(FS_CONTRACT, _member, _args, _fs_check)
+_register(SHELL_CONTRACT, "execute_command", (), _shell_check)
+for _member in (*_CLUSTER_REQUIRED, *_CLUSTER_OPTIONAL):
+    _register(CLUSTER_CONTRACT, _member, (), _cluster_check)
+_register(MCP_CONTRACT, "mcp_call", (), _mcp_check)
+
+
+def contract_of(definition: Mapping[str, Any], member: str) -> str | None:
+    """由已提交版本定义解析成员的提供者槽契约；未知成员返回 ``None``。"""
+    operations = definition.get("operations", {})
+    operation = operations.get(member) if isinstance(operations, Mapping) else None
+    if not isinstance(operation, Mapping):
+        return None
+    implementation = operation.get("implementation", {})
+    if not isinstance(implementation, Mapping):
+        return None
+    if implementation.get("operation") != member:
+        return None
+    slot = implementation.get("provider_slot")
+    requirements = definition.get("provider_requirements", {})
+    if not isinstance(requirements, Mapping):
+        return None
+    requirement = requirements.get(slot, {})
+    if not isinstance(requirement, Mapping):
+        return None
+    contract = requirement.get("contract")
+    return contract if isinstance(contract, str) else None
+
+
+def admission_for(definition: Mapping[str, Any], member: str) -> BackendAdmission | None:
+    """按定义解析成员的后端接纳；未登记的后端返回 ``None``（fail-closed）。"""
+    contract = contract_of(definition, member)
+    if contract is None:
+        return None
+    return _REGISTRY.get((contract, member))
+
+
+def file_member_paths(definition: Mapping[str, Any], member: str) -> tuple[str, ...]:
+    """成员是否为文件类资源；是则返回路径参数名，否则空元组。"""
+    admission = admission_for(definition, member)
+    if admission is None or admission.contract != FS_CONTRACT:
+        return ()
+    return admission.path_arguments

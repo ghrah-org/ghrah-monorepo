@@ -103,11 +103,11 @@ class TestFSPermissionChecker:
             assert status is None
 
     def test_workspace_root_read_outside_workspace(self) -> None:
-        """路径不在工作路径下需要审批（require_approval=True）。"""
+        """工作区是沙盒硬边界：沙盒外即使 require_approval=True 也拒绝。"""
         checker = FSPermissionChecker(workspace_root="/home/user/project")
         allowed, status = checker.check_read_path("/etc/passwd")
-        assert allowed is True
-        assert status == "pending"
+        assert allowed is False
+        assert "outside workspace sandbox" in (status or "")
 
     def test_workspace_root_read_outside_workspace_no_approval(self) -> None:
         """路径不在工作路径下且不需要审批时拒绝读取。"""
@@ -457,20 +457,32 @@ class TestAccessApprovalHook:
         result = await hook.execute(ctx, None)
         assert result.should_continue is True
 
-    async def test_execute_move_file_uses_destination_path(self) -> None:
-        """move_file 使用 destination_path 检查权限。"""
+    async def test_execute_move_file_checks_source_and_destination(self) -> None:
+        """move_file 同时核对源与目标：任一越界即拦截。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
+            inside = str(Path(tmpdir) / "dest.txt")
             ctx = _make_context(
                 current_ability_name="move_file",
                 tool_args={
-                    "source_path": "/tmp/source.txt",
-                    "destination_path": str(Path(tmpdir) / "dest.txt"),
+                    "source_path": str(Path(tmpdir) / "source.txt"),
+                    "destination_path": inside,
                 },
             )
-            result = await hook.execute(ctx, None)
-            assert result.should_continue is True
+            assert (await hook.execute(ctx, None)).should_continue is True
+
+            escaped = _make_context(
+                current_ability_name="move_file",
+                tool_args={
+                    "source_path": "/tmp/source.txt",
+                    "destination_path": inside,
+                },
+            )
+            result = await hook.execute(escaped, None)
+            assert result.should_continue is False
+            assert result.requires_hitl is True
+            assert "/tmp/source.txt" in (result.message or "")
 
     async def test_execute_uses_accumulated_data_fallback(self) -> None:
         """tool_args 为空时从 accumulated_data 获取。"""
@@ -539,3 +551,66 @@ class TestAccessApprovalHook:
             result = await hook.execute(ctx, None)
             assert result.should_continue is False
             assert "denied" in (result.message or "").lower()
+
+
+# ── 声明范围 × 沙盒语义（2026-11-05 裁决） ──
+
+
+class TestDeclaredScopeWithSandbox:
+    """allowed_paths 是自动批准范围；工作区是硬沙盒边界。"""
+
+    def test_allowed_scope_shadows_workspace_auto_approval(self) -> None:
+        """声明了更窄的范围后，工作区内但范围外的路径不再自动批准。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            checker = FSPermissionChecker(
+                allowed_paths=[str(src)], workspace_root=tmpdir, require_approval=True
+            )
+            inside, inside_status = checker.check_read_path(str(src / "a.txt"))
+            assert inside is True and inside_status is None
+            outside, outside_status = checker.check_read_path(str(Path(tmpdir) / "b.txt"))
+            assert outside is True and outside_status == "pending"
+
+    def test_out_of_scope_denies_without_approval(self) -> None:
+        """范围外且不允许审批时直接拒绝。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            checker = FSPermissionChecker(
+                allowed_paths=[str(src)], workspace_root=tmpdir, require_approval=False
+            )
+            allowed, status = checker.check_write_path(str(Path(tmpdir) / "b.txt"))
+            assert allowed is False
+            assert "not in allowed paths" in (status or "")
+
+    def test_declared_scope_outside_workspace_still_denied(self) -> None:
+        """声明路径落在沙盒外时，沙盒仍然优先拒绝（审批也不能放行）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                allowed_paths=["/tmp"],
+                workspace_root=tmpdir,
+                require_approval=True,
+            )
+            allowed, status = checker.check_read_path("/tmp/outside.txt")
+            assert allowed is False
+            assert "outside workspace sandbox" in (status or "")
+
+    def test_deny_all_paths_never_auto_approves(self) -> None:
+        """声明了范围但交集为空：沙盒内也不自动批准。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                workspace_root=tmpdir, require_approval=True, deny_all_paths=True
+            )
+            allowed, status = checker.check_read_path(str(Path(tmpdir) / "a.txt"))
+            assert allowed is True and status == "pending"
+            assert checker.deny_all_paths is True
+
+    def test_deny_all_paths_denies_without_approval(self) -> None:
+        """交集为空且不允许审批时拒绝。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                workspace_root=tmpdir, require_approval=False, deny_all_paths=True
+            )
+            allowed, _ = checker.check_read_path(str(Path(tmpdir) / "a.txt"))
+            assert allowed is False

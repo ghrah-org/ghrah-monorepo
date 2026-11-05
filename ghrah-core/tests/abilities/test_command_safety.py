@@ -344,3 +344,61 @@ class TestExtendSafeLists:
         checker = CommandSafetyChecker(require_approval=True)
         checker.extend_safe_lists(extra_commands={"pnpm"})
         assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+
+class TestDeclaredCommandScope:
+    """声明命令范围：allowed_commands 自动批准、denied_commands 硬拒绝。"""
+
+    def test_allowed_commands_auto_approve_two_segment(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, allowed_commands=("git status",))
+        assert checker.check_command("git status -s").category == CommandSafetyCategory.SAFE
+        assert (
+            checker.check_command("git commit -m x").category == CommandSafetyCategory.REQUIRE_HITL
+        )
+
+    def test_dangerous_command_vetoes_allowed_scope(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, allowed_commands=("rm",))
+        assert checker.check_command("rm -rf /").category == CommandSafetyCategory.DANGEROUS
+
+    def test_denied_commands_hard_deny_even_within_allowed(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=True,
+            allowed_commands=("git",),
+            denied_commands=("git push",),
+        )
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+        assert checker.check_command("git push origin main").category == (
+            CommandSafetyCategory.DANGEROUS
+        )
+
+    def test_out_of_scope_denies_when_approval_disabled(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=False,
+            allowed_commands=("git status",),
+            deny_out_of_scope=True,
+        )
+        assert checker.check_command("npm install").category == CommandSafetyCategory.DANGEROUS
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+    def test_out_of_scope_allows_when_no_scope_declared(self) -> None:
+        checker = CommandSafetyChecker(require_approval=False, deny_out_of_scope=True)
+        assert checker.check_command("npm install").category == CommandSafetyCategory.SAFE
+
+    def test_empty_declared_scope_denies_non_safe_commands(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=False, allowed_commands=(), deny_out_of_scope=True
+        )
+        assert checker.check_command("npm install").category == CommandSafetyCategory.DANGEROUS
+        # 内置安全列表仍是部署级基线
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+    async def test_hook_maps_denied_scope_to_stop(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, denied_commands=("git push",))
+        hook = CommandApprovalHook(checker)
+        context = _make_context(
+            current_ability_name="execute_command",
+            tool_args={"command": "git push origin main"},
+        )
+        result = await hook.execute(context, None)
+        assert result.should_continue is False
+        assert result.requires_hitl is False

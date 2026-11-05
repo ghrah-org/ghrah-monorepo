@@ -24,9 +24,15 @@ from ghrah.ability.access.store import (
     GrantRecord,
     MemberFence,
 )
+from ghrah.ability.permissions.scope import (
+    EffectivePermission,
+    command_in_scope,
+    resolve_effective_permission,
+)
 
 __all__ = [
     "AccessIdentity",
+    "EffectivePermission",
     "AbilityAccessStore",
     "AccessError",
     "GrantEffect",
@@ -45,5 +51,7 @@ __all__ = [
     "StartupMaterialization",
     "StartupToolBinding",
     "apply_grants",
+    "command_in_scope",
     "desired_grants",
+    "resolve_effective_permission",
 ]

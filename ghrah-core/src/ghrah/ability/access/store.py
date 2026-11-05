@@ -23,12 +23,13 @@ from ghrah.protocol.ability_tree import (
     OperationNode,
     RevokeAbilityRequest,
     SkillNode,
-    TreeErrorCode,
     TreeId,
     UnbindToolRequest,
 )
 from pydantic import ConfigDict, TypeAdapter
 
+from ghrah.ability.access.backends import admission_for, file_member_paths
+from ghrah.ability.access.errors import AccessError
 from ghrah.ability.access.facts import request_facts, stored_facts
 from ghrah.ability.content import (
     ContentChunk,
@@ -38,7 +39,6 @@ from ghrah.ability.content import (
     digest_bytes,
 )
 from ghrah.ability.contracts import operation_result_schema
-from ghrah.ability.file_members import FILE_OPERATIONS
 from ghrah.ability.versions import AbilityVersion
 
 _SCHEMA = """
@@ -142,14 +142,6 @@ class GrantRecord:
     axes: dict[str, dict[str, bool]]
     revision: int
     source: str
-
-
-class AccessError(ValueError):
-    """可映射为领域结果的明确拒绝。"""
-
-    def __init__(self, code: TreeErrorCode) -> None:
-        self.code = code
-        super().__init__(code)
 
 
 class AbilityAccessStore:
@@ -643,7 +635,10 @@ class AbilityAccessStore:
                 not set(members) <= operations
                 or not set(content) <= set(manifest)
                 or not (members or content)
-                or (set(members) & FILE_OPERATIONS.keys() and (not roots or not instance["root"]))
+                or (
+                    any(file_member_paths(definition, member) for member in members)
+                    and (not roots or not instance["root"])
+                )
                 or not all(Path(root).is_relative_to(instance["root"]) for root in roots)
             ):
                 raise AccessError("invalid_change")
@@ -1011,43 +1006,57 @@ class AbilityAccessStore:
     ) -> MemberFence:
         """从显式全局实例或当前 Agent 关联固定成员和代次。"""
         async with self._tx():
-            if global_instance:
-                self._require_operator(actor)
-                instance = await self._row("ability_instances", "id=?", alias)
-                if instance is None:
-                    raise AccessError("not_found")
-                fence = MemberFence(alias, instance["revision"], member)
-            else:
-                await self._agent(actor, actor.subject_id)
-                grant = await self._row(
-                    "ability_grants", "agent=? AND alias=?", actor.subject_id, alias
-                )
-                if grant is None:
-                    raise AccessError("not_found")
-                instance = await self._row("ability_instances", "id=?", grant["instance"])
-                tool_row = (
-                    await self._row("ability_tools", "agent=? AND name=?", actor.subject_id, tool)
-                    if tool is not None
-                    else None
-                )
-                if tool is not None and (
-                    tool_row is None or tool_row["alias"] != alias or tool_row["member"] != member
-                ):
-                    raise AccessError("access_denied")
-                fence = MemberFence(
-                    instance["id"],
-                    instance["revision"],
-                    member,
-                    actor.subject_id,
-                    actor.run_id,
-                    alias,
-                    grant["revision"],
-                    tool or "_",
-                    tool_row["revision"] if tool_row else 0,
-                )
-            fence = replace(fence, version_digest=instance["digest"])
-            await self._check(actor, fence)
-            return fence
+            return await self._resolve(
+                actor, alias, member, tool=tool, global_instance=global_instance
+            )
+
+    async def _resolve(
+        self,
+        actor: AccessIdentity,
+        alias: str,
+        member: str,
+        *,
+        tool: str | None,
+        global_instance: bool = False,
+    ) -> MemberFence:
+        """解析并核对成员引用；调用方持有事务。"""
+        if global_instance:
+            self._require_operator(actor)
+            instance = await self._row("ability_instances", "id=?", alias)
+            if instance is None:
+                raise AccessError("not_found")
+            fence = MemberFence(alias, instance["revision"], member)
+        else:
+            await self._agent(actor, actor.subject_id)
+            grant = await self._row(
+                "ability_grants", "agent=? AND alias=?", actor.subject_id, alias
+            )
+            if grant is None:
+                raise AccessError("not_found")
+            instance = await self._row("ability_instances", "id=?", grant["instance"])
+            tool_row = (
+                await self._row("ability_tools", "agent=? AND name=?", actor.subject_id, tool)
+                if tool is not None
+                else None
+            )
+            if tool is not None and (
+                tool_row is None or tool_row["alias"] != alias or tool_row["member"] != member
+            ):
+                raise AccessError("access_denied")
+            fence = MemberFence(
+                instance["id"],
+                instance["revision"],
+                member,
+                actor.subject_id,
+                actor.run_id,
+                alias,
+                grant["revision"],
+                tool or "_",
+                tool_row["revision"] if tool_row else 0,
+            )
+        fence = replace(fence, version_digest=instance["digest"])
+        await self._check(actor, fence)
+        return fence
 
     async def _check(
         self, actor: AccessIdentity, fence: MemberFence, arguments: dict[str, Any] | None = None
@@ -1058,6 +1067,7 @@ class AbilityAccessStore:
         version = await self._row("ability_versions", "digest=?", instance["digest"])
         if fence.version_digest and fence.version_digest != instance["digest"]:
             raise AccessError("access_denied")
+        definition = json.loads(version["definition"])
         is_content = fence.member.startswith("skill/")
         if is_content:
             if fence.member not in json.loads(version["manifest"]):
@@ -1065,10 +1075,10 @@ class AbilityAccessStore:
             if fence.tool_name != "_":
                 raise AccessError("access_denied")
         else:
-            operation = json.loads(version["definition"])["operations"].get(fence.member)
+            operation = definition["operations"].get(fence.member)
             if operation is None or not operation["expose"]:
                 raise AccessError("access_denied")
-        roots = [instance["root"]]
+        roots: tuple[str, ...] = (instance["root"],)
         if fence.agent_id == "_":
             self._require_operator(actor)
         else:
@@ -1086,7 +1096,7 @@ class AbilityAccessStore:
                 not in json.loads(grant["content"] if is_content else grant["members"])
             ):
                 raise AccessError("access_denied")
-            roots = json.loads(grant["roots"])
+            roots = tuple(json.loads(grant["roots"]))
             axes = json.loads(grant["axes"])
             if not is_content:
                 fact = axes.get(f"operations/{fence.member}", {})
@@ -1107,15 +1117,10 @@ class AbilityAccessStore:
                 ):
                     raise AccessError("access_denied")
         if arguments is not None:
-            member = FILE_OPERATIONS.get(fence.member)
-            if member is None or member.path_argument not in arguments:
-                raise AccessError("invalid_change")
-            path = Path(arguments[member.path_argument])
-            resolved = (path if path.is_absolute() else Path(instance["root"]) / path).resolve()
-            if not resolved.is_relative_to(instance["root"]) or not any(
-                resolved.is_relative_to(root) for root in roots
-            ):
-                raise AccessError("access_denied")
+            admission = admission_for(definition, fence.member)
+            if admission is None:
+                raise AccessError("unavailable")
+            admission.check(fence.member, arguments, roots, instance["root"])
         return f"{instance['digest']}:{fence.grant_revision}:{fence.tool_revision}"
 
     async def authorize(self, actor: AccessIdentity, fence: MemberFence) -> str:
@@ -1126,14 +1131,49 @@ class AbilityAccessStore:
     async def admit(
         self, actor: AccessIdentity, fence: MemberFence, arguments: dict[str, Any]
     ) -> tuple[str, None]:
-        """只读文件成员在读取事务中核定，不抢写锁或持久化调用参数。"""
+        """只读成员在读取事务中核定，不抢写锁或持久化调用参数。"""
         async with self._tx():
-            if fence.member.startswith("skill/"):
-                ContentReadRequest.model_validate(arguments)
-                return await self._check(actor, fence), None
-            if fence.member not in FILE_OPERATIONS:
-                raise AccessError("unavailable")
-            return await self._check(actor, fence, arguments), None
+            return await self._admit(actor, fence, arguments), None
+
+    async def admit_tool(
+        self,
+        actor: AccessIdentity,
+        agent: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str:
+        """按 Agent 当前工具选择解析成员并在同一事务内完成接纳。
+
+        生产执行入口只拿得到模型传来的工具名；成员、实例代次与关系修订都
+        从关系库当前事实重新解析，撤销或重新选择立即影响下一次调用。
+
+        Args:
+            actor: 受信调用方身份（Agent 自身）。
+            agent: Agent 标识。
+            tool_name: 当前工具选择里的工具名。
+            arguments: 本次调用的参数。
+
+        Returns:
+            接纳依据（版本摘要 + 关系修订 + 工具修订）。
+
+        Raises:
+            AccessError: 工具未选择、关系失效或参数越界。
+        """
+        async with self._tx():
+            tool = await self._row("ability_tools", "agent=? AND name=?", agent, tool_name)
+            if tool is None:
+                raise AccessError("access_denied")
+            fence = await self._resolve(actor, tool["alias"], tool["member"], tool=tool_name)
+            return await self._admit(actor, fence, arguments)
+
+    async def _admit(
+        self, actor: AccessIdentity, fence: MemberFence, arguments: dict[str, Any]
+    ) -> str:
+        """接纳核心：内容成员校验读取请求，其余成员走关系校验 + 后端参数检查。"""
+        if fence.member.startswith("skill/"):
+            ContentReadRequest.model_validate(arguments)
+            return await self._check(actor, fence)
+        return await self._check(actor, fence, arguments)
 
     async def list_instances(self, actor: AccessIdentity) -> list[str]:
         """从权威列举当前选定实例，供重启后显式重建导出。"""

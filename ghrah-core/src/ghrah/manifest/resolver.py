@@ -49,6 +49,12 @@ class ResolvedAbility:
     permissions: PermissionFlags
     implementation: ImplementationDef
     hooks: AbilityHooks
+    requested_permissions: PermissionFlags | None = None
+    """Agent 模板对本次实例单独声明的申请值；``None`` 表示未声明。
+
+    ``permissions`` 仍是包声明与模板申请合并后的兼容视图；需要按“声明只能
+    收紧”重新合并时，用本字段保留原始模板声明，不必从合并结果反推。
+    """
 
     @classmethod
     def from_builtin(
@@ -198,11 +204,16 @@ class ManifestResolver:
                     permissions=permissions,
                     implementation=ability_manifest.implementation,
                     hooks=ability_manifest.hooks,
+                    requested_permissions=ref.permissions,
                 )
             elif ref.type:
                 r = ResolvedAbility.from_builtin(ref.type, catalog=self._builtin_catalog)
                 if ref.permissions:
-                    r = dataclasses.replace(r, permissions=r.permissions.merge(ref.permissions))
+                    r = dataclasses.replace(
+                        r,
+                        permissions=r.permissions.merge(ref.permissions),
+                        requested_permissions=ref.permissions,
+                    )
             else:
                 raise ManifestValidationError("AbilityRef must have either 'ref' or 'type'")
             resolved.append(r)

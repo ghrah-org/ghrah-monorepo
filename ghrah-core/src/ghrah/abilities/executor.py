@@ -555,7 +555,10 @@ class LocalAbilityExecutor(AbilityExecutor):
         Returns:
             dict 包含 "ability_name" 和 "action_result"
         """
-        resolved_args = self._resolve_paths(tool_args, ability.name)
+        # 表面工具名可能与成员键不同（跨包撞名时会被限定）；路径规格按成员键
+        # 解析，不能把模型看到的工具名当成员身份。
+        spec_name = getattr(ability, "member", "") or ability.name
+        resolved_args = self._resolve_paths(tool_args, spec_name)
 
         # 集群服务注入：与 ActorAgent._build_ability_context 对齐——tool-call
         # 路径此前不注入 supervisor/manifest_store，LLM 工具调用集群类 ability

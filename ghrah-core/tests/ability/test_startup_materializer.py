@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from ghrah.protocol.ability_tree import RevokeAbilityRequest, UnbindToolRequest
 
 from ghrah.ability.access import (
     AbilityAccessStore,
@@ -70,6 +71,44 @@ abilities:
 """
 
 DEPLOY = AccessIdentity("project", "deployment", "control", True, "deployment")
+
+AGENT_SCOPED_YAML = """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: w1
+  name: consumer
+  description: W1 scoped permissions
+model:
+  endpoint_name: default
+system_prompt: Use the selected tools.
+max_iterations: 5
+abilities:
+  - type: conversation
+  - ref: ghrah.fs.read_file
+    permissions:
+      allowed_paths:
+        - ./src
+      require_hitl: true
+"""
+
+AGENT_UNSCOPED_HITL_YAML = """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: w1
+  name: consumer
+  description: W1 declared hitl without narrowing
+model:
+  endpoint_name: default
+system_prompt: Use the selected tools.
+max_iterations: 5
+abilities:
+  - type: conversation
+  - ref: ghrah.fs.read_file
+    permissions:
+      require_hitl: true
+"""
 
 
 def _resolved(text: str):
@@ -236,3 +275,134 @@ async def test_selected_member_schema_matches_captured_definition(store, tmp_pat
     definition = json.loads(version.definition_json)
     schema = next(item for item in result.abilities if item.name == "read_file").bind_tool()
     assert schema["function"]["parameters"] == definition["operations"]["read_file"]["input_schema"]
+
+
+async def test_revoke_after_startup_denies_next_execution(store, tmp_path):
+    """撤销立即影响下一次调用：已物化的工具在执行接纳处被拒绝。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    target = tmp_path / "note.txt"
+    target.write_text("w1 content", encoding="utf-8")
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.revoke(
+        DEPLOY, "alice", RevokeAbilityRequest(alias="fs", expected_revision=revision)
+    )
+    outcome = await read_file.execute(AbilityExecutionContext(tool_args={"file_path": str(target)}))
+    assert outcome.outcome.value == "failure"
+    assert "Access denied" in outcome.data["error"]
+
+
+async def test_execution_rejects_path_outside_workspace(store, tmp_path):
+    """清单允许但实际路径越界：执行接纳在读取前拒绝，没有文件效果。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    outcome = await read_file.execute(
+        AbilityExecutionContext(tool_args={"file_path": str(outside)})
+    )
+    assert outcome.outcome.value == "failure"
+    assert "Access denied" in outcome.data["error"]
+
+
+async def test_manifest_scope_narrows_auto_approval_and_keeps_hitl_outside(store, tmp_path):
+    """模板 allowed_paths 收窄自动批准范围；范围外按 require_hitl 转审批。"""
+    (tmp_path / "src").mkdir()
+    assembly, resolved = _resolved(AGENT_SCOPED_YAML)
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    hook = read_file.get_hooks()[0]
+
+    inside = AbilityExecutionContext(
+        current_ability_name="read_file",
+        tool_args={"file_path": str(tmp_path / "src" / "a.txt")},
+    )
+    assert await hook.should_trigger(inside) is True
+    assert (await hook.execute(inside, None)).should_continue is True
+
+    outside = AbilityExecutionContext(
+        current_ability_name="read_file",
+        tool_args={"file_path": str(tmp_path / "other.txt")},
+    )
+    pending = await hook.execute(outside, None)
+    assert pending.should_continue is False
+    assert pending.requires_hitl is True
+
+
+async def test_declared_hitl_without_narrowing_auto_approves_in_scope(store, tmp_path):
+    """只声明 require_hitl、不收窄范围时，工作区内自动批准（HITL 降噪）。"""
+    assembly, resolved = _resolved(AGENT_UNSCOPED_HITL_YAML)
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    hook = read_file.get_hooks()[0]
+    context = AbilityExecutionContext(
+        current_ability_name="read_file",
+        tool_args={"file_path": str(tmp_path / "note.txt")},
+    )
+    assert (await hook.execute(context, None)).should_continue is True
+
+
+async def test_projected_tool_name_maps_back_to_member_for_hooks(store, tmp_path):
+    """表面工具名被限定后，内核 Hook 仍按成员身份裁决。"""
+    assembly, resolved = _resolved(AGENT_SCOPED_YAML)
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    from ghrah.ability.access.startup import ProjectedAbility
+
+    renamed = ProjectedAbility(
+        read_file._inner,
+        tool_name="fs_read_file",
+        member="read_file",
+        tool_schema=read_file.bind_tool(),
+    )
+    hook = renamed.get_hooks()[0]
+    context = AbilityExecutionContext(
+        current_ability_name="fs_read_file",
+        tool_args={"file_path": str(tmp_path / "outside.txt")},
+    )
+    assert await hook.should_trigger(context) is True
+    assert (await hook.execute(context, None)).requires_hitl is True
+
+
+async def test_unbound_tool_is_rejected(store, tmp_path):
+    """未选中（工具选择被移除）的引用不能执行，即使关系仍在。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    target = tmp_path / "note.txt"
+    target.write_text("w1 content", encoding="utf-8")
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.write_unbind_tool(
+        DEPLOY,
+        "alice",
+        UnbindToolRequest(tool_name="read_file", expected_revision=revision),
+    )
+    outcome = await read_file.execute(AbilityExecutionContext(tool_args={"file_path": str(target)}))
+    assert outcome.outcome.value == "failure"
+    assert "Access denied" in outcome.data["error"]
+
+
+async def test_missing_resource_argument_is_rejected(store, tmp_path):
+    """参数错误在接纳处失败，不进入执行实现。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    outcome = await read_file.execute(AbilityExecutionContext(tool_args={}))
+    assert outcome.outcome.value == "failure"
+    assert "Invalid arguments" in outcome.data["error"]
