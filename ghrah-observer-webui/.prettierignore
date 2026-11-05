@@ -12,3 +12,4 @@ packages/protocol/src/__fixtures__/ability-tree.json
 
 # Python 作者模型生成，格式与字段由 export_ability_contracts.py --check 核对。
 packages/protocol/src/ability-tree.generated.ts
+packages/protocol/src/ability-control.generated.ts
