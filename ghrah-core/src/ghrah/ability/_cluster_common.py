@@ -11,7 +11,7 @@ from typing import Any
 _NO_SUPERVISOR_ERROR = (
     "No supervisor configured (standalone mode is a normal state). "
     "Cluster abilities require a SupervisorActor to be injected "
-    "via AbilityExecutionContext.supervisor at spawn time."
+    "via the SUPERVISOR execution service at spawn time."
 )
 
 _SUPERVISOR_NOT_CLUSTER_ERROR = (
@@ -31,7 +31,7 @@ def cluster_supervisor_error(supervisor: Any) -> str | None:
        cluster_id 为空 → 装配缺陷。
 
     Args:
-        supervisor: AbilityExecutionContext.supervisor（duck-typed）
+        supervisor: 执行期 SUPERVISOR 服务（duck-typed）
 
     Returns:
         错误文案；supervisor 可用时返回 None

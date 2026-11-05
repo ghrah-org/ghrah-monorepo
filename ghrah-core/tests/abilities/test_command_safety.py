@@ -9,19 +9,22 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.builtin.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
     CommandSafetyChecker,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 # ── CommandSafetyChecker.parse_command 测试 ──
@@ -248,66 +251,66 @@ class TestCommandApprovalHook:
     @pytest.mark.asyncio
     async def test_should_trigger_for_execute_command(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(current_ability_name="execute_command")
-        assert await hook.should_trigger(context) is True
+        call, services = _make_context(member="execute_command")
+        assert await hook.should_trigger(call, services) is True
 
     @pytest.mark.asyncio
     async def test_should_not_trigger_for_other_ability(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(current_ability_name="write_file")
-        assert await hook.should_trigger(context) is False
+        call, services = _make_context(member="write_file")
+        assert await hook.should_trigger(call, services) is False
 
     @pytest.mark.asyncio
     async def test_safe_command_passes(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "ls -la"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
         assert result.requires_hitl is False
 
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "rm -rf /"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False
 
     @pytest.mark.asyncio
     async def test_unknown_command_requires_hitl(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "curl https://example.com"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
 
     @pytest.mark.asyncio
     async def test_git_status_passes(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "git status"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
 
     @pytest.mark.asyncio
     async def test_git_clean_blocked(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "git clean -fdx"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False
 
@@ -395,10 +398,10 @@ class TestDeclaredCommandScope:
     async def test_hook_maps_denied_scope_to_stop(self) -> None:
         checker = CommandSafetyChecker(require_approval=True, denied_commands=("git push",))
         hook = CommandApprovalHook(checker)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "git push origin main"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False

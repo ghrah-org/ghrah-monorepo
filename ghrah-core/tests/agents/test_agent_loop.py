@@ -19,11 +19,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.errors import AbilityNotFoundError
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import ReasoningBlock, TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -64,7 +66,7 @@ class MockAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         self.execute_count += 1
         return self._action_result
 
@@ -93,12 +95,15 @@ class MockHook(Hook):
         self.trigger_count = 0
         self.execute_count = 0
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         self.trigger_count += 1
         return self._should_trigger
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         self.execute_count += 1
         return self._result
@@ -112,11 +117,14 @@ class StopAfterOneHook(Hook):
     def __init__(self) -> None:
         self._call_count = 0
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return True
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         self._call_count += 1
         if self._call_count == 1:
@@ -382,9 +390,9 @@ class TestRunHooks:
             MockAbility(name="test", hooks=[MockHook(hook_point=HookPoint.POST_EXECUTE)])
         )
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
-        result = await agent._run_hooks(HookPoint.BEFORE_ACTION, context)
+        result = await agent._run_hooks(HookPoint.BEFORE_ACTION, call, services)
         assert result is None
 
     @pytest.mark.asyncio
@@ -394,9 +402,9 @@ class TestRunHooks:
         agent = _create_agent()
         agent.register_ability(MockAbility(name="test", hooks=[hook]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
-        result = await agent._run_hooks(HookPoint.PRE_EXECUTE, context)
+        result = await agent._run_hooks(HookPoint.PRE_EXECUTE, call, services)
         assert result is not None
         assert result.should_continue is False
         assert result.message == "blocked"
@@ -415,9 +423,9 @@ class TestRunHooks:
         agent = _create_agent()
         agent.register_ability(MockAbility(name="test", hooks=[hook1, hook2]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
-        result = await agent._run_hooks(HookPoint.POST_EXECUTE, context)
+        result = await agent._run_hooks(HookPoint.POST_EXECUTE, call, services)
         assert result is not None
         assert result.route_to == "ability_b"
 
@@ -432,9 +440,9 @@ class TestRunHooks:
         agent = _create_agent()
         agent.register_ability(MockAbility(name="test", hooks=[hook]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
-        result = await agent._run_hooks(HookPoint.PRE_EXECUTE, context)
+        result = await agent._run_hooks(HookPoint.PRE_EXECUTE, call, services)
         assert result is None
         assert hook.execute_count == 0
 
@@ -454,9 +462,9 @@ class TestRunHooks:
         agent.register_ability(MockAbility(name="a1", hooks=[hook1]))
         agent.register_ability(MockAbility(name="a2", hooks=[hook2]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
-        result = await agent._run_hooks(HookPoint.BEFORE_ACTION, context)
+        result = await agent._run_hooks(HookPoint.BEFORE_ACTION, call, services)
         assert result is not None
         assert result.modified_context == {"key": "value"}
 
@@ -469,10 +477,10 @@ class TestRunHooks:
         agent = _create_agent()
         agent.register_ability(MockAbility(name="test", hooks=[error_hook]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
         with pytest.raises(HookError, match="should_trigger failed"):
-            await agent._run_hooks(HookPoint.PRE_EXECUTE, context)
+            await agent._run_hooks(HookPoint.PRE_EXECUTE, call, services)
 
     @pytest.mark.asyncio
     async def test_hook_execute_error(self) -> None:
@@ -483,10 +491,10 @@ class TestRunHooks:
         agent = _create_agent()
         agent.register_ability(MockAbility(name="test", hooks=[error_hook]))
 
-        context = AbilityExecutionContext()
+        call, services = make_call(), make_services()
 
         with pytest.raises(HookError, match="execute failed"):
-            await agent._run_hooks(HookPoint.PRE_EXECUTE, context)
+            await agent._run_hooks(HookPoint.PRE_EXECUTE, call, services)
 
 
 # ----------------------------------------------------------------
@@ -679,11 +687,16 @@ class TestDriveLoop:
             def __init__(self) -> None:
                 self._call_count = 0
 
-            async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+            async def should_trigger(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> bool:
                 return True
 
             async def execute(
-                self, context: AbilityExecutionContext, result: ActionResult | None
+                self,
+                call: OperationCall,
+                services: ExecutionServices,
+                result: ActionResult | None = None,
             ) -> HookResult:
                 self._call_count += 1
                 if self._call_count == 1:
@@ -1139,7 +1152,9 @@ class TestParallelToolCalls:
             def name(self) -> str:
                 return "fail_tool"
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 raise RuntimeError("Something went wrong")
 
             def get_hooks(self) -> list[Hook]:
@@ -1190,7 +1205,9 @@ class TestParallelToolCalls:
             def name(self) -> str:
                 return self._name
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 raise RuntimeError(self._error_msg)
 
             def get_hooks(self) -> list[Hook]:
@@ -1474,11 +1491,16 @@ class TestMessageQueue:
             def __init__(self) -> None:
                 self._call_count = 0
 
-            async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+            async def should_trigger(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> bool:
                 return True
 
             async def execute(
-                self, context: AbilityExecutionContext, result: ActionResult | None
+                self,
+                call: OperationCall,
+                services: ExecutionServices,
+                result: ActionResult | None = None,
             ) -> HookResult:
                 self._call_count += 1
                 if self._call_count == 1:
@@ -1906,7 +1928,9 @@ class TestIterationForceCloseOnCancel:
             def name(self) -> str:
                 return "end_task"
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 raise asyncio.CancelledError()
 
             def get_hooks(self) -> list[Hook]:

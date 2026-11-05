@@ -23,8 +23,9 @@ from ghrah.abilities.base import ActionResult
 from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.abilities.builtin.end_task import EndTaskAbility
 from ghrah.abilities.builtin.read_file import ReadFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.core.config import AgentConfig
@@ -74,11 +75,14 @@ class RouteToEndTaskHook(Hook):
 
     hook_point = HookPoint.AFTER_ACTION
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == "conversation"
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == "conversation"
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult.route("end_task", message="Route to end_task")
 

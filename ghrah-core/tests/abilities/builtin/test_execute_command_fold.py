@@ -8,19 +8,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     _fold_text,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 def _line_text(i: int) -> str:
@@ -99,12 +103,14 @@ class TestFoldTextUnit:
 class TestRunnerModeFold:
     async def test_stdout_folded(self) -> None:
         ability = ExecuteCommandAbility(fold_stdout_lines=100)
-        result = await ability.execute(_make_context(tool_args={"command": "big"}))
+        call, services = _make_context(tool_args={"command": "big"})
+        result = await ability.execute(call, services)
         # MockBigRunner 未注入——默认路径走 subprocess；改用 runner 注入
         ability = ExecuteCommandAbility(
             command_runner=MockBigRunner(_big_stdout(1000)), fold_stdout_lines=100
         )
-        result = await ability.execute(_make_context(tool_args={"command": "big"}))
+        call, services = _make_context(tool_args={"command": "big"})
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert "[... " in result.data["stdout"]
         assert "lines omitted" in result.data["stdout"]
@@ -116,14 +122,16 @@ class TestRunnerModeFold:
             command_runner=MockBigRunner(_big_stdout(1000), stderr=stderr),
             fold_stdout_lines=100,
         )
-        result = await ability.execute(_make_context(tool_args={"command": "loud"}))
+        call, services = _make_context(tool_args={"command": "loud"})
+        result = await ability.execute(call, services)
         assert result.data["stderr"] == stderr
         assert "lines omitted" not in result.data["stderr"]
 
     async def test_fold_disabled_zero(self) -> None:
         big = _big_stdout(1000)
         ability = ExecuteCommandAbility(command_runner=MockBigRunner(big), fold_stdout_lines=0)
-        result = await ability.execute(_make_context(tool_args={"command": "big"}))
+        call, services = _make_context(tool_args={"command": "big"})
+        result = await ability.execute(call, services)
         assert result.data["stdout"] == big
 
 
@@ -132,9 +140,8 @@ class TestSubprocessModeFold:
         ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
         # 跨平台：Windows 无 echo -e；用 python -c 生成多行
         script = "import sys; print('\\n'.join(f'line {i}' for i in range(1, 301)))"
-        result = await ability.execute(
-            _make_context(tool_args={"command": f'python -c "{script}"'})
-        )
+        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
+        result = await ability.execute(call, services)
         assert result.outcome in (ActionOutcome.SUCCESS, ActionOutcome.FAILURE)
         stdout = result.data["stdout"]
         if "lines omitted" in stdout or "lines omitted" in stdout:
@@ -144,9 +151,8 @@ class TestSubprocessModeFold:
     async def test_subprocess_stderr_full(self, tmp_path) -> None:
         ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
         script = "import sys; print('\\n'.join('err' for _ in range(200)), file=sys.stderr)"
-        result = await ability.execute(
-            _make_context(tool_args={"command": f'python -c "{script}"'})
-        )
+        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
+        result = await ability.execute(call, services)
         stderr = result.data["stderr"]
         assert stderr.count("200") >= 0
         # stderr 不折叠：300 行 stderr 不应出现省略标记
@@ -159,6 +165,7 @@ class TestThresholdBoundaries:
             ability = ExecuteCommandAbility(
                 command_runner=MockBigRunner(_big_stdout(n)), fold_stdout_lines=100
             )
-            result = await ability.execute(_make_context(tool_args={"command": "big"}))
+            call, services = _make_context(tool_args={"command": "big"})
+            result = await ability.execute(call, services)
             has_marker = "lines omitted" in result.data["stdout"]
             assert has_marker == expect_omit, f"n={n}"

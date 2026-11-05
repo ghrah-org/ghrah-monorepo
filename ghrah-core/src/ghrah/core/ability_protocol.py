@@ -7,8 +7,8 @@
 通过 Protocol（structural subtyping）定义 Ability、Registry、Executor 的接口契约，
 使 core 层可以仅依赖这些协议而非 abilities 层的具体实现。
 abilities.base.Ability 等具体类天然满足这些协议，无需显式继承。
-方法签名中使用 Any 替代 abilities 层的具体类型（如 AbilityExecutionContext），
-避免 protocol 层反向依赖 abilities。
+方法签名中使用 Any 替代执行层的具体类型（OperationCall / ExecutionServices），
+避免 protocol 层反向依赖实现模块。
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class AbilityProtocol(Protocol):
     @property
     def name(self) -> str: ...
 
-    async def execute(self, context: Any) -> ActionResult: ...
+    async def execute(self, call: Any, services: Any) -> ActionResult: ...
 
     def bind_tool(self) -> dict[str, Any] | None: ...
 
@@ -67,7 +67,8 @@ class ExecutorProtocol(Protocol):
     async def execute_ability(
         self,
         ability: AbilityProtocol,
-        context: Any,
+        call: Any,
+        services: Any,
     ) -> ActionResult: ...
 
     async def execute_tool_calls(
@@ -77,6 +78,7 @@ class ExecutorProtocol(Protocol):
         accumulated_data: dict[str, Any],
         context_manager: Any,
         last_action_result: Any = None,
+        invocation_factory: Any = None,
     ) -> list[dict]: ...
 
     def update_hooks(self, hooks: list[Any]) -> None: ...

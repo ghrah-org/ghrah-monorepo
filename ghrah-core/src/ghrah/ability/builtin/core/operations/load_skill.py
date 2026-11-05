@@ -13,7 +13,7 @@
 "不在清单里"的文件。
 
 接线语义（零隐式）：provider 经装配期注入
-（``AbilityExecutionContext.skill_provider``）；未接线时明确 FAILURE 说明缺席，
+（``SKILL_PROVIDER`` 执行服务）；未接线时明确 FAILURE 说明缺席，
 **不**静默当成"技能不存在"（那是两件不同的事）。
 """
 
@@ -25,12 +25,14 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import SKILL_PROVIDER
 from ghrah.ability.loading.skill_errors import SkillNotFoundError, SkillParseError
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +113,8 @@ class LoadSkillAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or {}
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         full_name = str(tool_args.get("full_name", "") or "").strip()
         if not full_name:
             return ActionResult(
@@ -120,7 +122,7 @@ class LoadSkillAbility(Ability):
                 data={"error": "full_name is required"},
             )
 
-        provider = context.skill_provider
+        provider = services.get(SKILL_PROVIDER)
         if provider is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

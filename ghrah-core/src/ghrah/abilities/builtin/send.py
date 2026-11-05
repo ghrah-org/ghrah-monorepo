@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin._cluster_common import cluster_supervisor_error
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.core.room_protocol import (
     ROOM_BRIDGE_UNAVAILABLE_ERROR,
     RoomBridgeProtocol,
@@ -26,8 +27,9 @@ from ghrah.core.room_protocol import (
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 class SendInput(BaseModel):
@@ -78,8 +80,8 @@ class SendAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        supervisor = context.supervisor
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        supervisor = services.get(SUPERVISOR)
         error = cluster_supervisor_error(supervisor)
         if error:
             return ActionResult(
@@ -93,7 +95,7 @@ class SendAbility(Ability):
                 data={"error": ROOM_BRIDGE_UNAVAILABLE_ERROR},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         try:
             args = SendInput.model_validate(
                 {k: v for k, v in tool_args.items() if k in SendInput.model_fields}
@@ -104,7 +106,7 @@ class SendAbility(Ability):
                 data={"error": f"invalid send args: {e}"},
             )
 
-        sender = context.agent_name or "unknown"
+        sender = call.identity.agent_name or "unknown"
         targets = args.targets or []
 
         resolved = await bridge.resolve_recipients(args.room_ids, targets)
@@ -117,13 +119,13 @@ class SendAbility(Ability):
         recipients: list[str] = list(resolved_data.get("recipients", []))
         # Room 成员可能使用稳定 ID；排除自身同时比较展示名和 Core 身份。
         sender_ids = {sender}
-        stable_id = getattr(context.context_manager, "agent_name", None)
+        stable_id = getattr(services.get(CONTEXT_MANAGER), "agent_name", None)
         if isinstance(stable_id, str):
             sender_ids.add(stable_id)
         to_deliver = [r for r in recipients if r not in sender_ids]
 
-        cm = context.context_manager
-        call_id = context.invocation.tool_call_id
+        cm = services.get(CONTEXT_MANAGER)
+        call_id = call.tool_call_id
         if cm is None or not call_id:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

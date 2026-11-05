@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -24,13 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hook_runner import HookRunner
 from ghrah.abilities.hook_store import HookStore
-from ghrah.abilities.hooks import HookPoint, HookResult
-from ghrah.abilities.invocation import AbilityInvocation
 from ghrah.abilities.paths import ABILITY_PATH_SPECS
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hooks import HookPoint, HookResult
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
@@ -92,13 +90,15 @@ class AbilityExecutor(ABC):
     async def execute_ability(
         self,
         ability: AbilityProtocol,
-        context: AbilityExecutionContext,
+        call: OperationCall,
+        services: ExecutionServices,
     ) -> ActionResult:
         """执行单个 Ability。
 
         Args:
             ability: 要执行的 Ability 实例
-            context: 执行上下文
+            call: 本次调用的值对象（成员、参数、``tool_call_id``、受信身份）
+            services: 执行期服务表
 
         Returns:
             执行结果
@@ -113,6 +113,7 @@ class AbilityExecutor(ABC):
         accumulated_data: dict[str, Any],
         context_manager: ContextManager,
         last_action_result: ActionResult | None = None,
+        invocation_factory: Any = None,
     ) -> list[dict]:
         """执行一组 tool_calls，返回结果列表。
 
@@ -124,6 +125,9 @@ class AbilityExecutor(ABC):
             accumulated_data: 累积数据
             context_manager: 上下文管理器
             last_action_result: 上一次 action 的结果（由 ActorAgent 从 IterationState 显式传入）
+            invocation_factory: 装配者提供的调用构造器
+                ``(ability, arguments, accumulated_data, tool_call_id=...) -> (call, services)``；
+                受信身份由它绑定，执行器不自行推导。
 
         Returns:
             结果列表，每个 dict 包含 "ability_name", "action_result", "tool_call_id"
@@ -134,7 +138,8 @@ class AbilityExecutor(ABC):
     async def handle_hitl_hook_result(
         self,
         hook_result: HookResult,
-        context: AbilityExecutionContext,
+        call: OperationCall,
+        services: ExecutionServices,
     ) -> HITLWaitResult:
         """处理 HITL Hook 结果。
 
@@ -143,7 +148,8 @@ class AbilityExecutor(ABC):
 
         Args:
             hook_result: Hook 返回的结果
-            context: 当前执行上下文
+            call: 本次调用的值对象
+            services: 执行期服务表
 
         Returns:
             审批终态回执：outcome（"approved" / "rejected" / "timeout"）
@@ -240,7 +246,7 @@ class LocalAbilityExecutor(AbilityExecutor):
             hitl_degraded_timeout: 熔断降级后的 HITL 等待秒数
         """
         self._agent_name = agent_name
-        self._deferred_contexts: dict[str, AbilityExecutionContext] = {}
+        self._deferred_invocations: dict[str, tuple[OperationCall, ExecutionServices]] = {}
         self._hook_store = HookStore()
         if hooks:
             self._hook_store.add_hooks(HookStore.AGENT_OWNER, hooks)
@@ -302,7 +308,8 @@ class LocalAbilityExecutor(AbilityExecutor):
     async def execute_ability(
         self,
         ability: AbilityProtocol,
-        context: AbilityExecutionContext,
+        call: OperationCall,
+        services: ExecutionServices,
     ) -> ActionResult:
         """执行单个 Ability，包含 PRE_EXECUTE 和 POST_EXECUTE Hook。
 
@@ -311,7 +318,8 @@ class LocalAbilityExecutor(AbilityExecutor):
 
         Args:
             ability: 要执行的 Ability 实例
-            context: 执行上下文
+            call: 本次调用的值对象
+            services: 执行期服务表
 
         Returns:
             执行结果
@@ -320,20 +328,18 @@ class LocalAbilityExecutor(AbilityExecutor):
             HookError: Hook 执行出错时
         """
         # PRE_EXECUTE hook（ability 级）
-        hook_result = await self._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context)
-        )
+        hook_result = await self._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
 
         # 处理 Hook 结果
         if hook_result is not None:
             if not hook_result.should_continue:
                 if hook_result.requires_hitl:
                     # 需要 HITL 审批：创建 Future 等待人工审批
-                    hitl_wait = await self.handle_hitl_hook_result(hook_result, context)
+                    hitl_wait = await self.handle_hitl_hook_result(hook_result, call, services)
                     if hitl_wait.outcome != "approved":
                         # 人工拒绝或等待超时——错误信息区分两者，超时不得
                         # 折算成"用户拒绝"信号进 LLM 上下文
-                        attribution = self._hitl_attribution(hitl_wait, context)
+                        attribution = self._hitl_attribution(hitl_wait, call)
                         if hitl_wait.outcome == "timeout":
                             if hitl_wait.degraded:
                                 error_msg = (
@@ -392,39 +398,40 @@ class LocalAbilityExecutor(AbilityExecutor):
                     data={"route_to": hook_result.route_to},
                     next_action_hint=hook_result.route_to,
                 )
-            elif hook_result.modified_context:
-                # 合并修改的上下文
-                context.accumulated_data.update(hook_result.modified_context)
+        # HookRunner 已把 modified_context 合并进 LOOP 服务里的循环数据。
 
         # 执行 Ability
-        action_result = await ability.execute(context)
+        action_result = await ability.execute(call, services)
 
         pending = action_result.data.get("await_reply")
         if pending:
-            pending["tool_args"] = dict(context.tool_args)
-            self._deferred_contexts[pending["message_id"]] = context
+            pending["tool_args"] = dict(call.arguments)
+            self._deferred_invocations[pending["message_id"]] = (call, services)
             return action_result
 
         # POST_EXECUTE hook（ability 级）
-        await self._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.POST_EXECUTE, context, action_result)
-        )
+        await self._hook_runner.run(HookPoint.POST_EXECUTE, call, services, action_result)
 
         return action_result
 
     async def finish_deferred(
-        self, message_id: str, context: AbilityExecutionContext, result: ActionResult
+        self,
+        message_id: str,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult,
     ) -> None:
         """持久同步回复确定后执行原 POST_EXECUTE，恢复时不重跑 PRE/工具。"""
-        original = self._deferred_contexts.pop(message_id, context)
-        original.agent_state = context.agent_state
+        original_call, original_services = self._deferred_invocations.pop(
+            message_id, (call, services)
+        )
         await self._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.POST_EXECUTE, original, result)
+            HookPoint.POST_EXECUTE, original_call, original_services, result
         )
 
     def clear_deferred(self) -> None:
         """接收作用域结束时释放未完成 Hook 上下文，持久检查点仍可恢复。"""
-        self._deferred_contexts.clear()
+        self._deferred_invocations.clear()
 
     async def execute_tool_calls(
         self,
@@ -433,6 +440,7 @@ class LocalAbilityExecutor(AbilityExecutor):
         accumulated_data: dict[str, Any],
         context_manager: ContextManager,
         last_action_result: ActionResult | None = None,
+        invocation_factory: Any = None,
     ) -> list[dict]:
         """执行一组 tool_calls，返回结果列表。
 
@@ -446,10 +454,13 @@ class LocalAbilityExecutor(AbilityExecutor):
             accumulated_data: 累积数据
             context_manager: 上下文管理器
             last_action_result: 上一次 action 的结果（由 ActorAgent 从 IterationState 显式传入）
+            invocation_factory: 装配者提供的调用构造器（受信身份由它绑定）
 
         Returns:
             结果列表，每个 dict 包含 "ability_name", "action_result", "tool_call_id"
         """
+        if invocation_factory is None:
+            raise RuntimeError("execute_tool_calls 需要装配者提供的调用构造器")
         results: list[dict] = []
         tool_call_tasks: list[tuple[AbilityProtocol, dict[str, Any], str]] = []
         task_ability_names: list[str] = []
@@ -488,15 +499,16 @@ class LocalAbilityExecutor(AbilityExecutor):
                 len(tool_call_tasks),
                 ", ".join(f"{a.name}({str(args)[:80]})" for a, args, _ in tool_call_tasks),
             )
-            # 为每个 ability 创建独立的 AbilityExecutionContext
+            # 为每个 ability 构造独立的调用对象与服务表
             raw_results = await asyncio.gather(
                 *[
-                    self._execute_single_with_context(
+                    self._execute_single(
                         ability,
                         args,
                         accumulated_data,
                         context_manager,
                         last_action_result,
+                        invocation_factory,
                         tool_call_id=_tc_id,
                     )
                     for ability, args, _tc_id in tool_call_tasks
@@ -533,17 +545,18 @@ class LocalAbilityExecutor(AbilityExecutor):
             )
         return results
 
-    async def _execute_single_with_context(
+    async def _execute_single(
         self,
         ability: AbilityProtocol,
         tool_args: dict[str, Any],
         accumulated_data: dict[str, Any],
         context_manager: ContextManager,
-        last_action_result: ActionResult | None = None,
+        last_action_result: ActionResult | None,
+        invocation_factory: Any,
         *,
         tool_call_id: str = "",
     ) -> dict:
-        """执行单个 ability（用于并行执行），创建独立的 AbilityExecutionContext。
+        """执行单个 ability（用于并行执行），调用对象由装配者构造。
 
         Args:
             ability: 要执行的 ability 实例
@@ -551,6 +564,8 @@ class LocalAbilityExecutor(AbilityExecutor):
             accumulated_data: 累积数据
             context_manager: 上下文管理器
             last_action_result: 上一次 action 的结果（由 ActorAgent 从 IterationState 显式传入）
+            invocation_factory: 装配者提供的调用构造器
+            tool_call_id: 模型调用标识
 
         Returns:
             dict 包含 "ability_name" 和 "action_result"
@@ -560,31 +575,13 @@ class LocalAbilityExecutor(AbilityExecutor):
         spec_name = getattr(ability, "member", "") or ability.name
         resolved_args = self._resolve_paths(tool_args, spec_name)
 
-        # 集群服务注入：与 ActorAgent._build_ability_context 对齐——tool-call
-        # 路径此前不注入 supervisor/manifest_store，LLM 工具调用集群类 ability
-        # （query_agents 等）拿到的 supervisor 恒为 None，误报 standalone。
-        supervisor = getattr(self, "_supervisor", None)
-        manifest_store = getattr(supervisor, "manifest_store", None)
-        skill_provider = getattr(supervisor, "skill_provider", None)
-
-        per_ability_context = AbilityExecutionContext(
-            invocation=AbilityInvocation(tool_call_id=tool_call_id),
-            current_ability_name=ability.name,
-            tool_args=resolved_args,
-            agent_state=context_manager.get_current_state(),
-            context_manager=context_manager,
-            supervisor=supervisor,
-            manifest_store=manifest_store,
-            skill_provider=skill_provider,
-            accumulated_data={
-                **copy.deepcopy(accumulated_data),
-                "tool_args": resolved_args,
-            },
-            last_action_result=last_action_result,
-            agent_name=self._agent_name,
+        call, services = invocation_factory(
+            ability,
+            resolved_args,
+            accumulated_data,
+            tool_call_id=tool_call_id,
         )
-
-        action_result = await self.execute_ability(ability, per_ability_context)
+        action_result = await self.execute_ability(ability, call, services)
 
         return {"ability_name": ability.name, "action_result": action_result}
 
@@ -622,20 +619,20 @@ class LocalAbilityExecutor(AbilityExecutor):
         return resolved
 
     @staticmethod
-    def _hitl_attribution(hitl_wait: HITLWaitResult, context: AbilityExecutionContext) -> str:
+    def _hitl_attribution(hitl_wait: HITLWaitResult, call: OperationCall) -> str:
         """组装超时错误的归因片段（ability + 调用参数摘要 + promise/tool_call id）。
 
         并行工具调用各自超时时，LLM 凭参数摘要与 id 将报错归因到具体调用。
-        摘要取 tool_args 中的 command / file_path / dir_path，无则退 ability 名。
+        摘要取参数中的 command / file_path / dir_path，无则退成员名。
         """
-        args = context.tool_args or {}
+        args = call.arguments
         summary = (
             args.get("command") or args.get("file_path") or args.get("dir_path") or args.get("path")
         )
         if summary:
-            target = f"{context.current_ability_name}({summary})"
+            target = f"{call.member.member}({summary})"
         else:
-            target = context.current_ability_name
+            target = call.member.member
         return (
             f"ability={target}, promise_id={hitl_wait.promise_id}, "
             f"tool_call_id={hitl_wait.tool_call_id}"
@@ -652,7 +649,8 @@ class LocalAbilityExecutor(AbilityExecutor):
     async def handle_hitl_hook_result(
         self,
         hook_result: HookResult,
-        context: AbilityExecutionContext,
+        call: OperationCall,
+        services: ExecutionServices,
     ) -> HITLWaitResult:
         """处理 HITL Hook 结果。
 
@@ -663,13 +661,16 @@ class LocalAbilityExecutor(AbilityExecutor):
 
         Args:
             hook_result: Hook 返回的结果
-            context: 当前执行上下文
+            call: 本次调用的值对象
+            services: 执行期服务表
 
         Returns:
             审批终态回执：outcome 附 promise_id / tool_call_id / 拒绝理由（归因字段）
         """
-        # 生成 tool_call_id 与 promise_id
-        tool_call_id = context.tool_args.get("call_id", "") or uuid.uuid4().hex[:12]
+        # 归因 id：受信调用标识优先，其次显式 call_id 参数，最后随机兜底
+        tool_call_id = (
+            call.tool_call_id or call.arguments.get("call_id", "") or uuid.uuid4().hex[:12]
+        )
         promise_id = uuid.uuid4().hex
 
         # 发布 HITL 请求事件（promise_id 随载荷下发，Observer 凭此回发审批；
@@ -677,8 +678,8 @@ class LocalAbilityExecutor(AbilityExecutor):
         await self._event_publisher.publish(
             HITLRequestEvent(
                 agent_name=self._agent_name,
-                ability_name=context.current_ability_name,
-                tool_call=context.tool_args,
+                ability_name=call.member.member,
+                tool_call=dict(call.arguments),
                 context={"tool_call_id": tool_call_id},
                 promise_id=promise_id,
                 reason=hook_result.message or "",
@@ -688,14 +689,14 @@ class LocalAbilityExecutor(AbilityExecutor):
         # 创建 Future 并等待
         future = self._hitl_store.create_future(
             agent_name=self._agent_name,
-            ability_name=context.current_ability_name,
+            ability_name=call.member.member,
             tool_call_id=tool_call_id,
         )
         if self._hitl_promise_registry is not None:
             self._hitl_promise_registry.register(
                 promise_id=promise_id,
                 agent_name=self._agent_name,
-                ability_name=context.current_ability_name,
+                ability_name=call.member.member,
                 tool_call_id=tool_call_id,
             )
 
@@ -716,13 +717,13 @@ class LocalAbilityExecutor(AbilityExecutor):
                 self._hitl_promise_registry.remove(promise_id)
             logger.info(
                 f"LocalAbilityExecutor[{self._agent_name}] HITL {outcome}: "
-                f"ability={context.current_ability_name}, tool_call_id={tool_call_id}"
+                f"ability={call.member.member}, tool_call_id={tool_call_id}"
             )
             await self._event_publisher.publish(
                 HITLResolvedEvent(
                     agent_name=self._agent_name,
                     promise_id=promise_id,
-                    ability_name=context.current_ability_name,
+                    ability_name=call.member.member,
                     tool_call_id=tool_call_id,
                     status=outcome,
                 )
@@ -737,20 +738,20 @@ class LocalAbilityExecutor(AbilityExecutor):
             self._consecutive_hitl_timeouts += 1
             logger.warning(
                 f"LocalAbilityExecutor[{self._agent_name}] HITL request timed out: "
-                f"ability={context.current_ability_name}, tool_call_id={tool_call_id}, "
+                f"ability={call.member.member}, tool_call_id={tool_call_id}, "
                 f"consecutive={self._consecutive_hitl_timeouts}"
             )
             if self._hitl_promise_registry is not None:
                 self._hitl_promise_registry.remove_triplet(
                     agent_name=self._agent_name,
-                    ability_name=context.current_ability_name,
+                    ability_name=call.member.member,
                     tool_call_id=tool_call_id,
                 )
             await self._event_publisher.publish(
                 HITLResolvedEvent(
                     agent_name=self._agent_name,
                     promise_id=promise_id,
-                    ability_name=context.current_ability_name,
+                    ability_name=call.member.member,
                     tool_call_id=tool_call_id,
                     status="timeout",
                 )

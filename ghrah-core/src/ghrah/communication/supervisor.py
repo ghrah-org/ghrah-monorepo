@@ -119,7 +119,7 @@ class SupervisorActor:
                 硬阻断，防止集群宽度爆炸）。
             manifest_store: ManifestStore 服务（duck-typed），供
                 spawn/query_manifests 等 manifest 类工具经
-                AbilityExecutionContext.services 显式接线；
+                ExecutionServices 服务表显式接线；
                 None = 未接线（对应工具显式 FAILURE 指路）。
             skill_provider: SkillAbilityProvider（duck-typed），供 skill 面消费
                 （list_abilities 的 skill 清单、上下文技能目录摘要注入）；
@@ -195,6 +195,7 @@ class SupervisorActor:
         persistence_factory: Callable[[AgentConfig], Any] | None = None,
         llm_factory: Callable[[AgentConfig], Any] | None = None,
         tags: list[str] | None = None,
+        tool_table_projector: Callable[[], Any] | None = None,
     ) -> str:
         """创建并注册一个 Agent，返回 agent name。
 
@@ -220,6 +221,8 @@ class SupervisorActor:
                 注入即全责。
             tags: 可选的 manifest AgentDef 标签透传（注册进 AgentInfo，
                 供集群身份注入段展示；无 manifest 路径不传）。
+            tool_table_projector: 可选的工具表投影器（builtin 模式由启动装配
+                边界提供，用于按当前获授事实刷新模型可见工具）。
 
         Returns:
             Agent 名称
@@ -316,6 +319,7 @@ class SupervisorActor:
             event_publisher=self._event_publisher,
             persistence_factory=persistence_factory,
             llm_factory=llm_factory if llm_factory is not None else self._llm_factory,
+            tool_table_projector=tool_table_projector,
         )
 
         # 恢复必须发生在 registry 可见之前。旧实现先注册再无条件 persist，

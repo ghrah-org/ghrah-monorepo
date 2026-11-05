@@ -14,13 +14,11 @@ import pytest
 from _helpers import make_action_result
 
 from ghrah.abilities.base import ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.message import ChatMessage
 from ghrah.context.manager import ContextManager
 from ghrah.context.node import ContextNode
 from ghrah.context.token_estimator import WeightedTokenEstimator
-from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage as Message
 
 # ----------------------------------------------------------------
@@ -609,26 +607,6 @@ class TestContextManagerFork:
         assert child.window_manager is None
         assert status["budget_tokens"] == 0
         assert status["compact_threshold"] is None
-
-
-# ----------------------------------------------------------------
-# TestContextManagerBuildContext — 上下文构建
-# ----------------------------------------------------------------
-
-
-class TestContextManagerBuildContext:
-    """ContextManager build_execution_context 测试。"""
-
-    def test_build_execution_context_basic(self) -> None:
-        """基本构建，字段正确。"""
-        cm = _make_cm(initial_state={"key": "value"})
-        config = AgentConfig(name="test-agent")
-
-        ctx = cm.build_execution_context(config=config)
-
-        assert isinstance(ctx, AbilityExecutionContext)
-        assert ctx.agent_state == {"key": "value"}
-        assert ctx.context_manager is cm
 
 
 # ----------------------------------------------------------------

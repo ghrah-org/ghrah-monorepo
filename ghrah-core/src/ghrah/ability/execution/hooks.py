@@ -27,7 +27,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 __all__ = [
@@ -117,7 +118,7 @@ class HookResult:
     Attributes:
         should_continue: 是否继续当前循环（PRE_EXECUTE 中设为 False 可拦截执行）
         route_to: 路由到其他 ability 名称（如 "end_task"），实现条件转移
-        modified_context: Hook 修改的上下文数据，将合并到 AbilityExecutionContext.accumulated_data
+        modified_context: Hook 修改的循环数据，将合并进 LOOP 服务
         message: 附加信息（如 HITL 提示、错误消息等）
         requires_hitl: 是否需要 HITL 审批（should_continue=False 时，
             requires_hitl=True 表示需要等待人工审批，requires_hitl=False 表示直接拦截）
@@ -190,6 +191,10 @@ class HookResult:
 class Hook(ABC):
     """Hook 基类：定义在特定触发点执行的控制逻辑。
 
+    Hook 与 Operation 看到同一份调用对象与服务表：成员身份从
+    ``call.member`` 读，参数从 ``call.arguments`` 读，依赖从 ``services`` 取。
+    ``HookResult.modified_context`` 合并进 ``LOOP`` 服务里的循环数据。
+
     子类必须实现：
     - hook_point: 触发点
     - should_trigger(): 判断是否应触发
@@ -199,10 +204,10 @@ class Hook(ABC):
         class MyHook(Hook):
             hook_point = HookPoint.PRE_EXECUTE
 
-            async def should_trigger(self, context):
-                return context.current_ability_name == "dangerous_action"
+            async def should_trigger(self, call, services):
+                return call.member.member == "dangerous_action"
 
-            async def execute(self, context, result):
+            async def execute(self, call, services, result):
                 return HookResult.stop(message="Blocked!")
     """
 
@@ -210,11 +215,12 @@ class Hook(ABC):
     scope: HookScope | None = None
 
     @abstractmethod
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         """判断是否应触发此 Hook。
 
         Args:
-            context: 当前执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             True 表示触发，False 表示跳过
@@ -223,12 +229,16 @@ class Hook(ABC):
 
     @abstractmethod
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         """执行 Hook 逻辑，返回控制指令。
 
         Args:
-            context: 当前执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
             result: 触发点的结果（PRE_EXECUTE 时为 None，POST_EXECUTE 时为 ActionResult）
 
         Returns:

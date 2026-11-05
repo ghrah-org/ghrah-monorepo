@@ -12,25 +12,35 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import ActionOutcome, ActionResult
 from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.abilities.builtin.end_task import EndTaskAbility
 from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.abilities.builtin.read_file import ReadFileAbility, ReadFileInput
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 # ── 辅助 ──
 
 
 def _make_context(
-    **overrides: Any,
-) -> AbilityExecutionContext:
-    """创建测试用 AbilityExecutionContext。"""
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+    *,
+    tool_args: dict[str, Any] | None = None,
+    accumulated_data: dict[str, Any] | None = None,
+    last_action_result: ActionResult | None = None,
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。
+
+    参数只来自 ``call.arguments``；循环数据（``llm_response`` 等）只经
+    ``LOOP`` 服务提供。
+    """
+    loop = dict(accumulated_data or {})
+    if last_action_result is not None:
+        loop["last_action_result"] = last_action_result
+    return make_call(arguments=tool_args or {}), make_services(loop=loop)
 
 
 # ── ConversationAbility 测试 ──
@@ -40,7 +50,7 @@ class TestConversationAbility:
     """ConversationAbility 测试。
 
     概念修正后，ConversationAbility 不再调用 LLM，
-    而是从 context.accumulated_data["llm_response"] 获取 LLM 响应。
+    而是从 ``services.require(LOOP).llm_response`` 获取 LLM 响应。
     """
 
     def test_name(self) -> None:
@@ -75,10 +85,12 @@ class TestConversationAbility:
         assert len(hooks) == 2
 
     async def test_execute_with_llm_response(self) -> None:
-        """从 accumulated_data["llm_response"] 获取 LLM 响应。"""
-        ctx = _make_context(accumulated_data={"llm_response": "Hello! How can I help you?"})
+        """从 LOOP 服务的 llm_response 获取 LLM 响应。"""
+        call, services = _make_context(
+            accumulated_data={"llm_response": "Hello! How can I help you?"}
+        )
         ability = ConversationAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "Hello! How can I help you?"
@@ -86,9 +98,9 @@ class TestConversationAbility:
 
     async def test_execute_without_llm_response(self) -> None:
         """没有 llm_response 时返回空的 SUCCESS result。"""
-        ctx = _make_context()
+        call, services = _make_context()
         ability = ConversationAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data == {}
@@ -96,9 +108,9 @@ class TestConversationAbility:
 
     async def test_execute_with_empty_llm_response(self) -> None:
         """空字符串的 llm_response 也返回空的 SUCCESS result。"""
-        ctx = _make_context(accumulated_data={"llm_response": ""})
+        call, services = _make_context(accumulated_data={"llm_response": ""})
         ability = ConversationAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data == {}
@@ -167,27 +179,28 @@ class TestEndTaskAbility:
         assert hooks[1] is hook
 
     async def test_done_hook_triggers_only_for_end_task(self) -> None:
-        """EndTaskDoneHook 仅在 current_ability_name == 'end_task' 时触发。"""
+        """EndTaskDoneHook 仅在 call.member.member == 'end_task' 时触发。"""
         from ghrah.abilities.builtin.end_task import EndTaskDoneHook
 
         hook = EndTaskDoneHook()
         assert hook.hook_point == HookPoint.AFTER_ACTION
-        assert await hook.should_trigger(_make_context(current_ability_name="end_task")) is True
-        assert (
-            await hook.should_trigger(_make_context(current_ability_name="conversation")) is False
-        )
+        end_call, services = make_call(member="end_task"), make_services()
+        assert await hook.should_trigger(end_call, services) is True
+        conversation_call = make_call(member="conversation")
+        assert await hook.should_trigger(conversation_call, services) is False
 
     async def test_done_hook_execute_stops_loop(self) -> None:
         """EndTaskDoneHook.execute 返回 should_continue=False。"""
         from ghrah.abilities.builtin.end_task import EndTaskDoneHook
 
         hook = EndTaskDoneHook()
-        result = await hook.execute(_make_context(current_ability_name="end_task"), None)
+        call, services = make_call(member="end_task"), make_services()
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
 
     async def test_execute_uses_current_turn_model_text(self) -> None:
-        """优先使用本轮模型可见文本（accumulated_data["llm_response"]）。"""
-        ctx = _make_context(
+        """优先使用本轮模型可见文本（LOOP 服务的 llm_response）。"""
+        call, services = _make_context(
             accumulated_data={
                 "llm_response": "最终答复正文",
                 # 上一轮查询结果：不得作为最终回复
@@ -199,7 +212,7 @@ class TestEndTaskAbility:
             ),
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "最终答复正文"
@@ -207,21 +220,21 @@ class TestEndTaskAbility:
 
     async def test_execute_ignores_previous_tool_result(self) -> None:
         """不把上一个工具结果（查询类能力带 content/response）当最终回复。"""
-        ctx = _make_context(
+        call, services = _make_context(
             last_action_result=ActionResult(
                 outcome=ActionOutcome.SUCCESS,
                 data={"content": "loaded skill body", "response": "query payload"},
             ),
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "Task completed"
 
     async def test_execute_falls_back_to_toolcall_summary(self) -> None:
         """本轮无正文时回退到 toolcall 参数里的 summary。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"summary": "任务完成：已梳理 34 项能力"},
             last_action_result=ActionResult(
                 outcome=ActionOutcome.SUCCESS,
@@ -229,49 +242,49 @@ class TestEndTaskAbility:
             ),
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.data["response"] == "任务完成：已梳理 34 项能力"
 
     async def test_execute_priority_text_over_summary(self) -> None:
         """本轮正文优先于 toolcall summary。"""
-        ctx = _make_context(
+        call, services = _make_context(
             accumulated_data={"llm_response": "完整终答"},
             tool_args={"summary": "摘要"},
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.data["response"] == "完整终答"
 
     async def test_execute_with_accumulated_data(self) -> None:
-        """从 accumulated_data 中提取 response。"""
-        ctx = _make_context(
+        """从 LOOP 服务中提取 response。"""
+        call, services = _make_context(
             accumulated_data={"response": "accumulated response"},
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "accumulated response"
 
     async def test_execute_default_response(self) -> None:
         """没有数据时返回默认回复。"""
-        ctx = _make_context()
+        call, services = _make_context()
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["response"] == "Task completed"
 
     async def test_execute_ignores_blank_text_and_summary(self) -> None:
         """空白正文/summary 不当作有效回复（避免渲染空内容）。"""
-        ctx = _make_context(
+        call, services = _make_context(
             accumulated_data={"llm_response": "   "},
             tool_args={"summary": ""},
         )
         ability = EndTaskAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.data["response"] == "Task completed"
 
@@ -322,11 +335,11 @@ class TestReadFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
-                accumulated_data={"tool_args": {"file_path": temp_path}},
+            call, services = _make_context(
+                tool_args={"file_path": temp_path},
             )
             ability = ReadFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["content"] == "Hello, World!"
@@ -343,16 +356,14 @@ class TestReadFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
-                accumulated_data={
-                    "tool_args": {
-                        "file_path": temp_path,
-                        "encoding": "utf-8",
-                    },
+            call, services = _make_context(
+                tool_args={
+                    "file_path": temp_path,
+                    "encoding": "utf-8",
                 },
             )
             ability = ReadFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["content"] == "你好世界"
@@ -361,13 +372,11 @@ class TestReadFileAbility:
 
     async def test_execute_file_not_found(self) -> None:
         """文件不存在时返回 FAILURE。"""
-        ctx = _make_context(
-            accumulated_data={
-                "tool_args": {"file_path": "/nonexistent/file.txt"},
-            },
+        call, services = _make_context(
+            tool_args={"file_path": "/nonexistent/file.txt"},
         )
         ability = ReadFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert (
@@ -376,20 +385,20 @@ class TestReadFileAbility:
 
     async def test_execute_no_file_path(self) -> None:
         """没有 file_path 参数时返回 FAILURE。"""
-        ctx = _make_context(
-            accumulated_data={"tool_args": {}},
+        call, services = _make_context(
+            tool_args={},
         )
         ability = ReadFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "file_path" in result.data["error"]
 
     async def test_execute_no_tool_args(self) -> None:
         """没有 tool_args 时返回 FAILURE。"""
-        ctx = _make_context()
+        call, services = _make_context()
         ability = ReadFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "file_path" in result.data["error"]
@@ -403,11 +412,11 @@ class TestReadFileAbility:
         try:
             # 使用文件所在目录作为 allowed_path
             allowed_dir = os.path.dirname(temp_path)
-            ctx = _make_context(
-                accumulated_data={"tool_args": {"file_path": temp_path}},
+            call, services = _make_context(
+                tool_args={"file_path": temp_path},
             )
             ability = ReadFileAbility(allowed_paths=[allowed_dir])
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["content"] == "allowed content"
@@ -416,14 +425,14 @@ class TestReadFileAbility:
 
     async def test_execute_allowed_paths_denied(self) -> None:
         """文件路径不在 allowed_paths 内，拒绝读取（require_approval=False 直接拒绝）。"""
-        ctx = _make_context(
-            accumulated_data={"tool_args": {"file_path": "/etc/passwd"}},
+        call, services = _make_context(
+            tool_args={"file_path": "/etc/passwd"},
         )
         checker = FSPermissionChecker(
             allowed_paths=["/tmp/data", "/home/user/docs"], require_approval=False
         )
         ability = ReadFileAbility(permission_checker=checker)
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "Permission denied" in result.data["error"]
@@ -433,14 +442,14 @@ class TestReadFileAbility:
         """
         文件路径不在 allowed_paths 内且 require_approval=True 时，Ability 不阻止（由 Hook 处理审批）
         """
-        ctx = _make_context(
-            accumulated_data={"tool_args": {"file_path": "/etc/passwd"}},
+        call, services = _make_context(
+            tool_args={"file_path": "/etc/passwd"},
         )
         checker = FSPermissionChecker(
             allowed_paths=["/tmp/data", "/home/user/docs"], require_approval=True
         )
         ability = ReadFileAbility(permission_checker=checker)
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         # require_approval=True 时，不在白名单的路径返回 (True, "pending")，
         # Ability 仅检查 if not allowed，因此不阻止操作。
@@ -455,11 +464,11 @@ class TestReadFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
-                accumulated_data={"tool_args": {"file_path": temp_path}},
+            call, services = _make_context(
+                tool_args={"file_path": temp_path},
             )
             ability = ReadFileAbility(allowed_paths=None)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["content"] == "no restriction"
@@ -474,11 +483,11 @@ class TestReadFileAbility:
 
         try:
             allowed_dir = os.path.dirname(temp_path)
-            ctx = _make_context(
-                accumulated_data={"tool_args": {"file_path": temp_path}},
+            call, services = _make_context(
+                tool_args={"file_path": temp_path},
             )
             ability = ReadFileAbility(allowed_paths=["/nonexistent", allowed_dir])
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["content"] == "multi path"

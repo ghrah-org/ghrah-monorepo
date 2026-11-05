@@ -11,7 +11,7 @@
 - 支持覆盖已存在的目标文件
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 源路径读取权限检查 + 目标路径写入权限检查
 3. 验证源文件存在
 4. 检查目标文件是否已存在
@@ -33,8 +33,9 @@ from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -138,18 +139,19 @@ class MoveFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行文件移动/重命名。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "source_path" 和 "destination_path"
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         source_path = tool_args.get("source_path", "")
         destination_path = tool_args.get("destination_path", "")
         create_dirs = tool_args.get("create_dirs", True)

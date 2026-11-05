@@ -12,11 +12,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin._cluster_common import cluster_supervisor_error
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 class BroadcastMessageInput(BaseModel):
@@ -61,15 +63,15 @@ class BroadcastMessageAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        error = cluster_supervisor_error(services.get(SUPERVISOR))
         if error:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": error},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         content = tool_args.get("content", "")
 
         if not content:
@@ -78,22 +80,22 @@ class BroadcastMessageAbility(Ability):
                 data={"error": "content is required"},
             )
 
-        sender = context.agent_name or "unknown"
+        sender = call.identity.agent_name or "unknown"
 
         try:
             args = BroadcastMessageInput.model_validate(tool_args)
-            cm = context.context_manager
-            call_id = context.invocation.tool_call_id
+            cm = services.get(CONTEXT_MANAGER)
+            call_id = call.tool_call_id
             if cm is None or not call_id:
                 raise RuntimeError("Persistent sending requires an action context and tool_call_id")
-            agents = await context.supervisor.list_agents()
+            agents = await services.get(SUPERVISOR).list_agents()
             targets = tuple(agent["name"] for agent in agents if agent["name"] != sender)
             if not targets:
                 return ActionResult(
                     outcome=ActionOutcome.SUCCESS,
                     data={"responses": [], "recipients": [], "agent_count": 0},
                 )
-            data = await context.supervisor.prepare_message(
+            data = await services.get(SUPERVISOR).prepare_message(
                 targets=targets,
                 content=args.content,
                 sender=sender,

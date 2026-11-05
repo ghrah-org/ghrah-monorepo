@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 import pytest
@@ -340,16 +341,23 @@ async def test_structured_input_and_reply_blocks_survive_persistent_route(tmp_pa
 
 async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
     from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
     observed = []
 
     class VerifyHook(Hook):
         hook_point = HookPoint.POST_EXECUTE
 
-        async def should_trigger(self, context):
-            return context.current_ability_name == "send_message"
+        async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+            return call.member.member == "send_message"
 
-        async def execute(self, context, result):
+        async def execute(
+            self,
+            call: OperationCall,
+            services: ExecutionServices,
+            result: Any = None,
+        ) -> HookResult:
             observed.append(result.data.get("response"))
             return HookResult.continue_()
 
@@ -366,6 +374,6 @@ async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
             actor._all_hooks.append(VerifyHook())
             assert await supervisor.send("a", "start") == "finished"
             assert observed == ["b reply"]
-            assert actor._ability_executor._deferred_contexts == {}
+            assert actor._ability_executor._deferred_invocations == {}
         finally:
             await supervisor.shutdown()

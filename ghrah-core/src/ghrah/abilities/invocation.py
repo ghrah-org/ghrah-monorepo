@@ -2,20 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ability invocation identity for a single ability call."""
+"""向后兼容模块：调用值对象已迁至 ``ghrah.ability.execution.invocation``。
+
+新代码请直接 ``from ghrah.ability.execution.invocation import ...``。旧名
+``AbilityInvocation``（能力名 + 参数 + ``tool_call_id``）已被
+``OperationCall`` 取代，不再保留。
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from ghrah.ability.execution.invocation import (
+    InvocationIdentity,
+    MemberReference,
+    OperationCall,
+)
 
-__all__ = ["AbilityInvocation"]
-
-
-@dataclass(frozen=True)
-class AbilityInvocation:
-    """Identity and arguments for one ability invocation."""
-
-    ability_name: str = ""
-    tool_args: dict[str, Any] = field(default_factory=dict)
-    tool_call_id: str = ""
+__all__ = [
+    "InvocationIdentity",
+    "MemberReference",
+    "OperationCall",
+]

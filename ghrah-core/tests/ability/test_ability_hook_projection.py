@@ -14,13 +14,14 @@
 
 from __future__ import annotations
 
+from _helpers import make_call, make_services
+
 from ghrah.ability.builtin.core.operations.conversation import (
     ConversationAbility,
     ConversationDoneHook,
 )
 from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility, EndTaskDoneHook
 from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
-from ghrah.ability.execution.context import AbilityExecutionContext
 from ghrah.ability.execution.hooks import Hook, HookPoint
 from ghrah.ability.loading.ability_catalog import load_all_builtin_manifests
 from ghrah.ability.permissions.fs_permissions import AccessApprovalHook
@@ -96,31 +97,30 @@ def test_core_done_hooks_survive_materialization() -> None:
 
 async def test_done_hooks_stop_only_their_own_ability() -> None:
     """两个终止 hook 各自只响应自己的成员，并返回停止指令。"""
-    conversation_ctx = AbilityExecutionContext(
-        current_ability_name="conversation", accumulated_data={"llm_response": "hello"}
-    )
-    end_task_ctx = AbilityExecutionContext(
-        current_ability_name="end_task", tool_args={"summary": "done"}
-    )
+    conversation_call = make_call(member="conversation")
+    conversation_services = make_services(loop={"llm_response": "hello"})
+    end_task_call = make_call(member="end_task", arguments={"summary": "done"})
+    end_task_services = make_services()
 
     conversation_hook = ConversationDoneHook()
-    assert await conversation_hook.should_trigger(conversation_ctx) is True
-    assert await conversation_hook.should_trigger(end_task_ctx) is False
-    assert (await conversation_hook.execute(conversation_ctx, None)).should_continue is False
+    assert await conversation_hook.should_trigger(conversation_call, conversation_services) is True
+    assert await conversation_hook.should_trigger(end_task_call, end_task_services) is False
+    assert (
+        await conversation_hook.execute(conversation_call, conversation_services, None)
+    ).should_continue is False
 
     end_task_hook = EndTaskDoneHook()
-    assert await end_task_hook.should_trigger(end_task_ctx) is True
-    assert await end_task_hook.should_trigger(conversation_ctx) is False
-    assert (await end_task_hook.execute(end_task_ctx, None)).should_continue is False
+    assert await end_task_hook.should_trigger(end_task_call, end_task_services) is True
+    assert await end_task_hook.should_trigger(conversation_call, conversation_services) is False
+    assert (
+        await end_task_hook.execute(end_task_call, end_task_services, None)
+    ).should_continue is False
 
 
 async def test_done_hooks_stop_through_legacy_runner() -> None:
     """旧 HookStore / HookRunner 能选出并执行新内置成员挂载的终止 hook。"""
-    from ghrah.abilities.context import AbilityExecutionContext as LegacyContext
-    from ghrah.abilities.hook_context import HookContext
     from ghrah.abilities.hook_runner import HookRunner
     from ghrah.abilities.hook_store import HookStore
-    from ghrah.abilities.hooks import HookPoint
 
     store = HookStore()
     store.add_hooks("conversation", ConversationAbility().get_hooks())
@@ -128,12 +128,7 @@ async def test_done_hooks_stop_through_legacy_runner() -> None:
     runner = HookRunner(store)
 
     for name in ("conversation", "end_task"):
-        result = await runner.run(
-            HookContext.from_ability_context(
-                HookPoint.AFTER_ACTION,
-                LegacyContext(current_ability_name=name),
-            )
-        )
+        result = await runner.run(HookPoint.AFTER_ACTION, make_call(member=name), make_services())
         assert result is not None
         assert result.should_continue is False
 
@@ -142,20 +137,16 @@ async def test_core_abilities_execute_after_declaration_removal() -> None:
     """移除声明后，两个核心成员仍返回正常的成功结果。"""
     conversation = ConversationAbility()
     conversation_result = await conversation.execute(
-        AbilityExecutionContext(
-            current_ability_name="conversation",
-            accumulated_data={"llm_response": "hello"},
-        )
+        make_call(member="conversation"),
+        make_services(loop={"llm_response": "hello"}),
     )
     assert conversation_result.outcome is ActionOutcome.SUCCESS
     assert conversation_result.data == {"response": "hello"}
 
     end_task = EndTaskAbility(mode="toolcall")
     end_task_result = await end_task.execute(
-        AbilityExecutionContext(
-            current_ability_name="end_task",
-            tool_args={"summary": "bye"},
-        )
+        make_call(member="end_task", arguments={"summary": "bye"}),
+        make_services(),
     )
     assert end_task_result.outcome is ActionOutcome.SUCCESS
     assert end_task_result.data == {"response": "bye"}

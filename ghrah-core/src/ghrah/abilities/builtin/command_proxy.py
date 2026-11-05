@@ -33,8 +33,9 @@ from ghrah.core.subject_bridge import (
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +122,14 @@ class CommandProxyAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         if self._bridge is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": COMMAND_BRIDGE_UNAVAILABLE_ERROR},
             )
 
-        tool_args = dict(context.tool_args or {})
+        tool_args = dict(call.arguments)
         dispatch = self._bridge.dispatch(self._command, tool_args)
         try:
             if self._timeout is not None:

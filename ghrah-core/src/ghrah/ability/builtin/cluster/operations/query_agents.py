@@ -12,11 +12,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -87,19 +89,20 @@ class QueryAgentsAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        supervisor = services.get(SUPERVISOR)
+        error = cluster_supervisor_error(supervisor)
         if error:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": error},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         name_filter = tool_args.get("filter")
 
         try:
-            agents = await context.supervisor.list_agents()
+            agents = await supervisor.list_agents()
         except Exception as e:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

@@ -30,7 +30,8 @@ ContextManager:
     - ContextManager 统一管理消息、状态、链式历史和驱动循环控制状态
     - _drive_loop 中每次迭代通过 begin_iteration / commit_iteration / rollback_iteration
     - 驱动循环控制状态（iteration, max_iterations, should_continue 等）由 ContextManager 管理
-    - AbilityExecutionContext 只保留 Ability 执行所需的最少信息
+    - 执行上下文只有 OperationCall（成员、参数、调用标识、受信身份）与
+      ExecutionServices（服务表）两件东西
 """
 
 from __future__ import annotations
@@ -43,13 +44,16 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.errors import AbilityNotFoundError
-from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hook_runner import HookRunner
 from ghrah.abilities.hook_store import HookListView, HookStore
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
-from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.ability.execution.execution_services import (
+    ExecutionServices,
+    build_execution_services,
+)
+from ghrah.ability.execution.invocation import InvocationIdentity, MemberReference, OperationCall
+from ghrah.ability.execution.loop_data import LoopData
 from ghrah.agents.runner import AgentRunner
 from ghrah.chat.content import ContentBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
@@ -140,7 +144,7 @@ class ActorAgent:
 
         - 所有消息和状态通过 ContextManager 管理
         - 驱动循环控制状态（iteration, max_iterations 等）由 ContextManager 管理
-        - AbilityExecutionContext 只保留 Ability 执行所需的最少信息
+        - 执行上下文只有 OperationCall 与 ExecutionServices
 
     用法:
         # 推荐使用 AgentBuilder 便捷创建
@@ -164,9 +168,11 @@ class ActorAgent:
         supervisor: Any = None,
         event_publisher: EventPublisher | None = None,
         llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
+        tool_table_projector: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
         self._supervisor = supervisor
+        self._tool_table_projector = tool_table_projector
         self._context_manager = context_manager
         self._context_manager_factory = context_manager_factory
         self._ability_executor = ability_executor
@@ -424,6 +430,39 @@ class ActorAgent:
         if self._llm is None:
             return
         self._llm.configure_tools(self._bound_tools)
+
+    async def refresh_tool_projection(self) -> None:
+        """按关系库当前授予重算模型可见工具表。
+
+        工具表是授权事实的派生投影：撤销或恢复在下一轮即反映到模型视野，
+        不必重启 Agent。投影器由装配边界提供；未接线的旧模式保持注册时的
+        静态工具表。投影失败时保留上一轮工具表（执行接纳仍会拒绝越权调用），
+        不因一次读失败把工具面清空。
+        """
+        if self._tool_table_projector is None or not self._abilities:
+            return
+        try:
+            visible = set(await self._tool_table_projector())
+        except Exception:
+            logger.warning(
+                "ActorAgent[%s]: tool projection refresh failed; keeping previous table",
+                self.config.name,
+                exc_info=True,
+            )
+            return
+        tools: list[dict[str, Any]] = []
+        for name, ability in self._abilities.items():
+            # 循环控制成员（conversation/end_task）不属于授权面，始终保留；
+            # 其余工具由关系库投影决定，撤销后从模型视野消失。
+            projected = getattr(ability, "member_reference", None) is not None
+            if projected and name not in visible:
+                continue
+            schema = ability.bind_tool()
+            if schema is not None:
+                tools.append(schema)
+        if tools != self._bound_tools:
+            self._bound_tools = tools
+            self._refresh_bound_tools()
 
     async def _ensure_llm(self) -> LLMProtocol:
         """惰性初始化 LLM 客户端。
@@ -703,9 +742,12 @@ class ActorAgent:
                     )
                 ]
             )
-            context = self._build_ability_context(name, invocation["args"], {})
-            context.invocation = AbilityInvocation(name, invocation["args"], call_id)
-            result = await self._ability_executor.execute_ability(self._abilities[name], context)
+            call, services = self._build_ability_call(
+                self._abilities[name], invocation["args"], {}, tool_call_id=call_id
+            )
+            result = await self._ability_executor.execute_ability(
+                self._abilities[name], call, services
+            )
             results = [{"ability_name": name, "tool_call_id": call_id, "action_result": result}]
             if result.data.get("await_reply"):
                 await cm.commit_iteration_async(
@@ -783,7 +825,7 @@ class ActorAgent:
         """核心驱动循环 — 每次迭代执行一个 action。
 
         驱动循环控制状态（iteration, max_iterations, should_continue 等）
-        由 ContextManager 管理，不再通过 AbilityExecutionContext 传递。
+        由 ContextManager 管理，不再通过调用对象传递。
 
         三层 Hook 架构：
             drive_loop 级：BEFORE_ACTION → _action → AFTER_ACTION
@@ -810,8 +852,10 @@ class ActorAgent:
                 continue
 
             # 1. BEFORE_ACTION hook（drive_loop 级）
-            before_ctx = self._build_hook_context(accumulated_data)
-            hook_result = await self._run_hooks(HookPoint.BEFORE_ACTION, before_ctx)
+            before_call, before_services = self._build_hook_call(accumulated_data)
+            hook_result = await self._run_hooks(
+                HookPoint.BEFORE_ACTION, before_call, before_services
+            )
             if hook_result is not None:
                 if hook_result.modified_context:
                     accumulated_data.update(hook_result.modified_context)
@@ -970,8 +1014,8 @@ class ActorAgent:
                     await self._run_compact_round("emergency", budget_override=budget_override)
                     continue
 
-                error_ctx = self._build_hook_context(accumulated_data)
-                await self._run_hooks(HookPoint.ON_ERROR, error_ctx)
+                error_call, error_services = self._build_hook_call(accumulated_data)
+                await self._run_hooks(HookPoint.ON_ERROR, error_call, error_services)
                 raise AgentError(self.config.name, f"Action failed: {e}") from e
             finally:
                 # 兜底：CancelledError 等 BaseException 不进上方 except Exception，
@@ -990,8 +1034,10 @@ class ActorAgent:
             else:
                 self._iteration_state.last_action_result = None
 
-            after_ctx = self._build_hook_context(accumulated_data, ability_name=last_ability_name)
-            hook_result = await self._run_hooks(HookPoint.AFTER_ACTION, after_ctx)
+            after_call, after_services = self._build_hook_call(
+                accumulated_data, ability_name=last_ability_name
+            )
+            hook_result = await self._run_hooks(HookPoint.AFTER_ACTION, after_call, after_services)
             if hook_result is not None:
                 if hook_result.modified_context:
                     accumulated_data.update(hook_result.modified_context)
@@ -1008,8 +1054,10 @@ class ActorAgent:
                 not iter_state.is_unlimited
                 and iter_state.iteration + 1 >= iter_state.max_iterations
             ):
-                max_ctx = self._build_hook_context(accumulated_data)
-                max_hook_result = await self._run_hooks(HookPoint.ON_MAX_ITERATIONS, max_ctx)
+                max_call, max_services = self._build_hook_call(accumulated_data)
+                max_hook_result = await self._run_hooks(
+                    HookPoint.ON_MAX_ITERATIONS, max_call, max_services
+                )
                 if max_hook_result is not None and max_hook_result.route_to:
                     await self._execute_routed_ability(
                         accumulated_data,
@@ -1268,10 +1316,12 @@ class ActorAgent:
         """
         cm = self._context_manager
         llm = await self._ensure_llm()
+        # 0. 工具面按当前获授事实重建（撤销/恢复下一轮生效）
+        await self.refresh_tool_projection()
 
         # 1. PRE_LLM_CALL hook（action 级）
-        pre_ctx = self._build_hook_context(accumulated_data)
-        hook_result = await self._run_hooks(HookPoint.PRE_LLM_CALL, pre_ctx)
+        pre_call, pre_services = self._build_hook_call(accumulated_data)
+        hook_result = await self._run_hooks(HookPoint.PRE_LLM_CALL, pre_call, pre_services)
         if hook_result is not None:
             if hook_result.modified_context:
                 accumulated_data.update(hook_result.modified_context)
@@ -1351,8 +1401,8 @@ class ActorAgent:
         cm.add_messages([llm_response.to_chat_message(source=f"agent:{self.config.name}")])
 
         # 4. POST_LLM_CALL hook（action 级）
-        post_ctx = self._build_hook_context(accumulated_data)
-        hook_result = await self._run_hooks(HookPoint.POST_LLM_CALL, post_ctx)
+        post_call, post_services = self._build_hook_call(accumulated_data)
+        hook_result = await self._run_hooks(HookPoint.POST_LLM_CALL, post_call, post_services)
         if hook_result is not None:
             if hook_result.modified_context:
                 accumulated_data.update(hook_result.modified_context)
@@ -1377,10 +1427,12 @@ class ActorAgent:
             # 纯文本响应 → conversation ability
             conversation_ability = self._abilities.get("conversation")
             if conversation_ability:
-                ability_ctx = self._build_ability_context("conversation", {}, accumulated_data)
+                conversation_call, conversation_services = self._build_ability_call(
+                    conversation_ability, {}, accumulated_data
+                )
                 # 委托给 AbilityExecutor 执行（包含 PRE/POST_EXECUTE Hook 和 HITL 处理）
                 action_result = await self._ability_executor.execute_ability(
-                    conversation_ability, ability_ctx
+                    conversation_ability, conversation_call, conversation_services
                 )
                 results.append({"ability_name": "conversation", "action_result": action_result})
             else:
@@ -1406,6 +1458,7 @@ class ActorAgent:
                 accumulated_data=accumulated_data,
                 context_manager=cm,
                 last_action_result=self._iteration_state.last_action_result,
+                invocation_factory=self._build_ability_call,
             )
 
             if any(entry["action_result"].data.get("await_reply") for entry in results):
@@ -1509,13 +1562,16 @@ class ActorAgent:
                 )
             finish = getattr(self._ability_executor, "finish_deferred", None)
             if callable(finish):
-                context = self._build_ability_context(
-                    entry["ability_name"], pending.get("tool_args", {}), {}
+                ability = self._abilities.get(entry["ability_name"])
+                if ability is None:
+                    raise AbilityNotFoundError(entry["ability_name"])
+                call, services = self._build_ability_call(
+                    ability,
+                    pending.get("tool_args", {}),
+                    {},
+                    tool_call_id=entry.get("tool_call_id", ""),
                 )
-                context.invocation = AbilityInvocation(
-                    entry["ability_name"], context.tool_args, entry.get("tool_call_id", "")
-                )
-                await finish(pending["message_id"], context, entry["action_result"])
+                await finish(pending["message_id"], call, services, entry["action_result"])
 
     def _add_tool_results(self, results: list[dict[str, Any]]) -> None:
         """将已完成工具结果加入本轮上下文。"""
@@ -1591,8 +1647,8 @@ class ActorAgent:
                 self.config.name,
                 ability_name,
             )
-            ctx = self._build_ability_context(ability_name, {}, accumulated_data)
-            action_result = await ability.execute(ctx)
+            call, services = self._build_ability_call(ability, {}, accumulated_data)
+            action_result = await ability.execute(call, services)
             logger.debug(
                 "ActorAgent[%s] routed ability '%s' finished with %s",
                 self.config.name,
@@ -1622,14 +1678,16 @@ class ActorAgent:
     async def _run_hooks(
         self,
         point: HookPoint,
-        context: AbilityExecutionContext,
+        call: OperationCall,
+        services: ExecutionServices,
         result: ActionResult | None = None,
     ) -> HookResult | None:
         """运行所有注册的指定触发点的 hooks。
 
         Args:
             point: Hook 触发点
-            context: 当前执行上下文
+            call: 本次调用的值对象
+            services: 执行期服务表
             result: ActionResult（POST_EXECUTE 时传入）
 
         Returns:
@@ -1638,72 +1696,84 @@ class ActorAgent:
         Raises:
             HookError: hook 执行出错时
         """
-        hook_context = HookContext.from_ability_context(point, context, result)
-        return await self._hook_runner.run(hook_context)
+        return await self._hook_runner.run(point, call, services, result)
 
     # ----------------------------------------------------------------
     # 上下文构建和回复
     # ----------------------------------------------------------------
 
-    def _build_hook_context(
+    def _invocation_identity(self) -> InvocationIdentity:
+        """受信调用身份：Agent 侧只绑定稳定 Agent 标识与显示名。
+
+        project / run 由启动装配边界在包装工具执行前补齐；ActorAgent 不持有
+        关系库，也不从消息或工具参数推导这两个字段。
+        """
+        return InvocationIdentity(
+            agent=self.config.effective_agent_id,
+            agent_name=self.config.name,
+        )
+
+    def _build_services(self, accumulated_data: dict[str, Any]) -> ExecutionServices:
+        """按统一形状组装服务表（所有执行入口共用）。"""
+        return build_execution_services(
+            context_manager=self._context_manager,
+            supervisor=self._supervisor,
+            loop=LoopData(copy.deepcopy(accumulated_data)),
+            manifest_store=getattr(self._supervisor, "manifest_store", None),
+            skill_provider=getattr(self._supervisor, "skill_provider", None),
+            ability_content=getattr(self._context_manager, "ability_content", None),
+            message_factory=getattr(self._context_manager, "message_factory", None),
+        )
+
+    def _build_hook_call(
         self,
         accumulated_data: dict[str, Any],
         ability_name: str = "",
-    ) -> AbilityExecutionContext:
-        """构建用于 Hook 的 AbilityExecutionContext。
+    ) -> tuple[OperationCall, ExecutionServices]:
+        """构建用于 Hook 的调用对象与服务表。
 
         Args:
-            accumulated_data: 累积数据
+            accumulated_data: 累积数据（按快照进入 LOOP 服务）
             ability_name: 最后执行的 ability 名称（供 AFTER_ACTION 等 hook 判断）
 
         Returns:
-            初始化后的 AbilityExecutionContext
+            (调用对象, 服务表)；成员引用按已注册工具固定，旧模式只有成员键。
         """
-        cm = self._context_manager
-        return AbilityExecutionContext(
-            current_ability_name=ability_name,
-            agent_state=cm.get_current_state(),
-            context_manager=cm,
-            accumulated_data=copy.deepcopy(accumulated_data),
-            last_action_result=self._iteration_state.last_action_result,
-            supervisor=self._supervisor,
-            agent_name=self.config.name,
-            manifest_store=getattr(self._supervisor, "manifest_store", None),
-            skill_provider=getattr(self._supervisor, "skill_provider", None),
+        ability = self._abilities.get(ability_name) if ability_name else None
+        member = getattr(ability, "member_reference", None)
+        call = OperationCall(
+            member=member or MemberReference(member=ability_name),
+            identity=self._invocation_identity(),
         )
+        return call, self._build_services(accumulated_data)
 
-    def _build_ability_context(
+    def _build_ability_call(
         self,
-        ability_name: str,
+        ability: AbilityProtocol,
         tool_args: dict[str, Any],
         accumulated_data: dict[str, Any],
-    ) -> AbilityExecutionContext:
-        """构建用于 Ability 执行的 AbilityExecutionContext。
+        *,
+        tool_call_id: str = "",
+    ) -> tuple[OperationCall, ExecutionServices]:
+        """构建用于 Ability 执行的调用对象与服务表。
 
         Args:
-            ability_name: ability 名称
-            tool_args: 工具调用参数
-            accumulated_data: 累积数据
+            ability: 本次要执行的 Ability（成员引用从它读取）
+            tool_args: 工具调用参数（唯一参数来源）
+            accumulated_data: 累积数据（按快照进入 LOOP 服务）
+            tool_call_id: 模型调用标识
 
         Returns:
-            初始化后的 AbilityExecutionContext
+            (调用对象, 服务表)
         """
-        cm = self._context_manager
-        return AbilityExecutionContext(
-            current_ability_name=ability_name,
-            tool_args=tool_args,
-            agent_state=cm.get_current_state(),
-            context_manager=cm,
-            accumulated_data={
-                **copy.deepcopy(accumulated_data),
-                "tool_args": tool_args,
-            },
-            last_action_result=self._iteration_state.last_action_result,
-            supervisor=self._supervisor,
-            agent_name=self.config.name,
-            manifest_store=getattr(self._supervisor, "manifest_store", None),
-            skill_provider=getattr(self._supervisor, "skill_provider", None),
+        member = getattr(ability, "member_reference", None) or MemberReference(member=ability.name)
+        call = OperationCall(
+            member=member,
+            arguments=dict(tool_args),
+            tool_call_id=tool_call_id,
+            identity=self._invocation_identity(),
         )
+        return call, self._build_services(accumulated_data)
 
     def _build_response(self, original: AgentMessage) -> AgentMessage:
         """根据循环结果构建最终回复消息。

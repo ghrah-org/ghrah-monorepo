@@ -5,8 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from ghrah.ability.access import AccessIdentity
-from ghrah.ability.execution.context import AbilityExecutionContext
-from ghrah.ability.execution.invocation import AbilityInvocation
+from ghrah.ability.execution.execution_services import build_execution_services
+from ghrah.ability.execution.invocation import (
+    InvocationIdentity,
+    MemberReference,
+    OperationCall,
+)
 from ghrah.ability.file_members import FILE_OPERATIONS
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
@@ -31,11 +35,18 @@ class FileBackend:
         key = FILE_OPERATIONS[member].path_argument
         path = Path(arguments[key])
         arguments[key] = str((path if path.is_absolute() else self.root / path).resolve())
-        context = AbilityExecutionContext(
-            agent_name=actor.subject_id,
-            invocation=AbilityInvocation(member, arguments, invocation_id),
+        call = OperationCall(
+            member=MemberReference(member=member),
+            arguments=arguments,
+            tool_call_id=invocation_id,
+            identity=InvocationIdentity(
+                project_id=actor.project_id,
+                agent=actor.subject_id,
+                run=actor.run_id,
+                agent_name=actor.subject_id,
+            ),
         )
-        result = await self._operations[member].execute(context)
+        result = await self._operations[member].execute(call, build_execution_services())
         if member == "list_directory" and result.outcome is ActionOutcome.SUCCESS:
             # 旧非递归后端只返回 name；容器定义的 path 是相对目录的路径。
             result.data["entries"] = [

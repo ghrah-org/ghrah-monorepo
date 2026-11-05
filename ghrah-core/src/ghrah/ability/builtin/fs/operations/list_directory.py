@@ -11,7 +11,7 @@
 - 集成 FSPermissionChecker 读取权限检查
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证（读取权限）
 3. 列出目录内容
 4. 返回 ActionResult，data 包含 entries 列表
@@ -31,8 +31,9 @@ from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -145,18 +146,19 @@ class ListDirectoryAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行目录列表。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "dir_path" 和 "entries" 列表
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         dir_path = tool_args.get("dir_path", "")
         recursive = tool_args.get("recursive", False)
         offset = int(tool_args.get("offset", 0) or 0)

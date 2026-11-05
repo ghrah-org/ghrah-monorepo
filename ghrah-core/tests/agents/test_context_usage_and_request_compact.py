@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -42,7 +43,7 @@ class MockConversationAbility(Ability):
     def name(self) -> str:
         return "conversation"
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return self._result
 
     def get_hooks(self) -> list[Any]:

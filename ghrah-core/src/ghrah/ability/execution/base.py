@@ -2,13 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ability 基类：Agent 能力的接口契约（= Rust Trait）。
+"""Ability 基类：一次调用 = 一个成员的执行契约（= Rust Trait）。
 
 核心设计：
-- 一个 Ability = 一个 tool call（或无 tool call 的纯 LLM 调用）
-- Ability 是最小的能力单元，Agent 通过组合多个 Ability 获得完整行为
-- bind_tool() 提供原生 Function Calling 绑定（高优先级）
-- to_prompt_description() 提供 prompt 模式的描述（低优先级，兼容不支持 FC 的模型）
+
+- 一个 Ability = 一个 tool call（或无 tool call 的纯 LLM 调用）；
+- Ability 是最小的能力单元，Agent 通过组合多个 Ability 获得完整行为；
+- ``bind_tool()`` 提供原生 Function Calling 绑定（高优先级）；
+- ``to_prompt_description()`` 提供 prompt 模式的描述（低优先级）。
+
+执行签名固定为 ``execute(call, services)``：
+
+- ``call`` 只带成员引用、参数、``tool_call_id`` 与受信身份；参数只有一个来源
+  ``call.arguments``，没有 ``context.tool_args`` 之类的回退；
+- ``services`` 带上下文管理器、supervisor、循环数据、内容与 MCP 服务等依赖，
+  新增依赖加服务键，不加调用对象属性。
 """
 
 from __future__ import annotations
@@ -19,8 +27,9 @@ from typing import TYPE_CHECKING, Any
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 __all__ = [
     "ActionOutcome",
@@ -41,7 +50,7 @@ class Ability(ABC):
 
     可选覆盖：
     - bind_tool(): 返回原生 Function Calling 的 tool schema
-    - to_prompt_description(): 返回 LLM 可理解的能力描述(TODO)
+    - to_prompt_description(): 返回 LLM 可理解的能力描述
     """
 
     @property
@@ -51,11 +60,12 @@ class Ability(ABC):
         ...
 
     @abstractmethod
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行该能力的动作。
 
         Args:
-            context: 执行上下文（含消息历史、当前状态、LLM 客户端等）
+            call: 一次调用的值对象（成员、参数、``tool_call_id``、受信身份）。
+            services: 执行期服务表（上下文管理器、supervisor、循环数据等）。
 
         Returns:
             执行结果
@@ -81,11 +91,10 @@ class Ability(ABC):
         return None
 
     def to_prompt_description(self) -> str:
-        """转换为 LLM 可理解的能力描述
-        TODO:
+        """转换为 LLM 可理解的能力描述。
+
         用于不支持 function calling 的模型的 system prompt 注入
-        (目前已经没有新的模型不支持原生工具调用了）
-        如 ReAct 模式下的工具描述。
+        （目前已经没有新的模型不支持原生工具调用了）。
 
         Returns:
             工具描述文本

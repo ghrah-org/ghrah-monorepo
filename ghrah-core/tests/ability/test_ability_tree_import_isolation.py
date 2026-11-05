@@ -24,7 +24,8 @@ import sys
 
 sys.modules["mcp"] = None  # 任何 `import mcp` 都会立即失败
 
-from ghrah.ability.execution.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.ability.source import BuiltinAbilitySource
 
 source = BuiltinAbilitySource()
@@ -33,7 +34,8 @@ assert "ghrah.mcp.mcp_call" in source.list_abilities()
 operation = source.create_operation("ghrah.mcp.mcp_call")
 result = asyncio.run(
     operation.execute(
-        AbilityExecutionContext(tool_args={"server": "local", "tool": "echo"})
+        OperationCall(arguments={"server": "local", "tool": "echo"}),
+        ExecutionServices(),
     )
 )
 assert result.outcome.value == "failure", result

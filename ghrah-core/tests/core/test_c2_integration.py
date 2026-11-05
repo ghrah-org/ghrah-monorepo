@@ -153,7 +153,7 @@ async def test_manifest_spawn_hitl_gate_full_chain() -> None:
         if store.list_pending():
             break
         await asyncio.sleep(0.01)
-    assert store.list_pending() == [("orch", "spawn_agent", "call-1")]
+    assert store.list_pending() == [("orch", "spawn_agent", "req-1")]
     assert any(e[0] == f"core:{EventType.HITL_REQUEST.value}" for e in ctx.events)
 
     resp = await unit.handle_command(
@@ -161,7 +161,7 @@ async def test_manifest_spawn_hitl_gate_full_chain() -> None:
         {
             "agent_name": "orch",
             "ability_name": "spawn_agent",
-            "tool_call_id": "call-1",
+            "tool_call_id": "req-1",
             "approved": True,
         },
         None,

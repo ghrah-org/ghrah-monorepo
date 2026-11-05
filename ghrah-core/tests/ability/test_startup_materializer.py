@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from _helpers import make_call, make_services
 from ghrah.protocol.ability_tree import (
     BindToolRequest,
     RevokeAbilityRequest,
@@ -22,7 +23,6 @@ from ghrah.ability.access import (
     StartupGrantMaterializer,
 )
 from ghrah.ability.assembly import AbilityAssembly
-from ghrah.ability.execution.context import AbilityExecutionContext
 from ghrah.manifest.parser import parse_agent_manifest
 
 AGENT_YAML = """\
@@ -184,7 +184,9 @@ async def test_projected_ability_executes_read_file(store, tmp_path):
         agent="alice", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
-    outcome = await read_file.execute(AbilityExecutionContext(tool_args={"file_path": str(target)}))
+    outcome = await read_file.execute(
+        make_call(arguments={"file_path": str(target)}), make_services()
+    )
     assert outcome.outcome.value == "success"
     assert outcome.data["content"] == "w1 content"
 
@@ -294,7 +296,9 @@ async def test_revoke_after_startup_denies_next_execution(store, tmp_path):
     await store.revoke(
         DEPLOY, "alice", RevokeAbilityRequest(alias="fs", expected_revision=revision)
     )
-    outcome = await read_file.execute(AbilityExecutionContext(tool_args={"file_path": str(target)}))
+    outcome = await read_file.execute(
+        make_call(arguments={"file_path": str(target)}), make_services()
+    )
     assert outcome.outcome.value == "failure"
     assert "Access denied" in outcome.data["error"]
 
@@ -309,7 +313,7 @@ async def test_execution_rejects_path_outside_workspace(store, tmp_path):
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     outcome = await read_file.execute(
-        AbilityExecutionContext(tool_args={"file_path": str(outside)})
+        make_call(arguments={"file_path": str(outside)}), make_services()
     )
     assert outcome.outcome.value == "failure"
     assert "Access denied" in outcome.data["error"]
@@ -325,18 +329,12 @@ async def test_manifest_scope_narrows_auto_approval_and_keeps_hitl_outside(store
     read_file = next(item for item in result.abilities if item.name == "read_file")
     hook = read_file.get_hooks()[0]
 
-    inside = AbilityExecutionContext(
-        current_ability_name="read_file",
-        tool_args={"file_path": str(tmp_path / "src" / "a.txt")},
-    )
-    assert await hook.should_trigger(inside) is True
-    assert (await hook.execute(inside, None)).should_continue is True
+    inside = make_call(member="read_file", arguments={"file_path": str(tmp_path / "src" / "a.txt")})
+    assert await hook.should_trigger(inside, make_services()) is True
+    assert (await hook.execute(inside, make_services(), None)).should_continue is True
 
-    outside = AbilityExecutionContext(
-        current_ability_name="read_file",
-        tool_args={"file_path": str(tmp_path / "other.txt")},
-    )
-    pending = await hook.execute(outside, None)
+    outside = make_call(member="read_file", arguments={"file_path": str(tmp_path / "other.txt")})
+    pending = await hook.execute(outside, make_services(), None)
     assert pending.should_continue is False
     assert pending.requires_hitl is True
 
@@ -349,11 +347,8 @@ async def test_declared_hitl_without_narrowing_auto_approves_in_scope(store, tmp
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     hook = read_file.get_hooks()[0]
-    context = AbilityExecutionContext(
-        current_ability_name="read_file",
-        tool_args={"file_path": str(tmp_path / "note.txt")},
-    )
-    assert (await hook.execute(context, None)).should_continue is True
+    call = make_call(member="read_file", arguments={"file_path": str(tmp_path / "note.txt")})
+    assert (await hook.execute(call, make_services(), None)).should_continue is True
 
 
 async def test_projected_tool_name_maps_back_to_member_for_hooks(store, tmp_path):
@@ -372,12 +367,9 @@ async def test_projected_tool_name_maps_back_to_member_for_hooks(store, tmp_path
         tool_schema=read_file.bind_tool(),
     )
     hook = renamed.get_hooks()[0]
-    context = AbilityExecutionContext(
-        current_ability_name="fs_read_file",
-        tool_args={"file_path": str(tmp_path / "outside.txt")},
-    )
-    assert await hook.should_trigger(context) is True
-    assert (await hook.execute(context, None)).requires_hitl is True
+    call = make_call(member="read_file", arguments={"file_path": str(tmp_path / "outside.txt")})
+    assert await hook.should_trigger(call, make_services()) is True
+    assert (await hook.execute(call, make_services(), None)).requires_hitl is True
 
 
 async def test_unbound_tool_is_rejected(store, tmp_path):
@@ -395,7 +387,9 @@ async def test_unbound_tool_is_rejected(store, tmp_path):
         "alice",
         UnbindToolRequest(tool_name="read_file", expected_revision=revision),
     )
-    outcome = await read_file.execute(AbilityExecutionContext(tool_args={"file_path": str(target)}))
+    outcome = await read_file.execute(
+        make_call(arguments={"file_path": str(target)}), make_services()
+    )
     assert outcome.outcome.value == "failure"
     assert "Access denied" in outcome.data["error"]
 
@@ -407,7 +401,7 @@ async def test_missing_resource_argument_is_rejected(store, tmp_path):
         agent="alice", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
-    outcome = await read_file.execute(AbilityExecutionContext(tool_args={}))
+    outcome = await read_file.execute(make_call(arguments={}), make_services())
     assert outcome.outcome.value == "failure"
     assert "Invalid arguments" in outcome.data["error"]
 
@@ -437,7 +431,8 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
         ),
     )
     outcome = await read_file.execute(
-        AbilityExecutionContext(tool_args={"file_path": str(target), "dir_path": str(tmp_path)})
+        make_call(arguments={"file_path": str(target), "dir_path": str(tmp_path)}),
+        make_services(),
     )
     assert outcome.outcome.value == "failure"
     assert "Access denied" in outcome.data["error"]
@@ -450,7 +445,7 @@ async def test_core_member_is_admitted(store, tmp_path):
         agent="alice", resolved=resolved
     )
     tool = next(item for item in result.abilities if item.name == "list_abilities")
-    outcome = await tool.execute(AbilityExecutionContext(tool_args={}))
+    outcome = await tool.execute(make_call(arguments={}), make_services())
     error = str(outcome.data.get("error", ""))
     assert "backend is not supported by the admission layer" not in error
 
@@ -515,3 +510,62 @@ async def test_revoked_migrated_facts_do_not_resurrect_at_startup(store, tmp_pat
         await _materializer(store, assembly, tmp_path, policy=None).materialize(
             agent="alice", resolved=resolved
         )
+
+
+async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> None:
+    """受信 run 变更后，旧运行留下的包装工具不能再借用新 run 执行。
+
+    启动装配把 run 固定进调用身份；接纳时要求当前 run 与绑定值一致。
+    否则“旧对象 + 新 run”会绕过运行代次变化继续执行。
+    """
+    current = {"run": "alice-run-1"}
+    db = await AbilityAccessStore.open(
+        tmp_path / "run.db",
+        "project",
+        operators=frozenset({"deployment"}),
+        runs=lambda agent: current["run"],
+    )
+    try:
+        assembly, resolved = _resolved(AGENT_YAML)
+        materializer = _materializer(db, assembly, tmp_path)
+        result = await materializer.materialize(agent="alice", resolved=resolved)
+        await materializer.bind_run("alice", result)
+        target = tmp_path / "note.txt"
+        target.write_text("run content", encoding="utf-8")
+        read_file = next(item for item in result.abilities if item.name == "read_file")
+
+        first = await read_file.execute(
+            make_call(arguments={"file_path": str(target)}), make_services()
+        )
+        assert first.outcome.value == "success"
+
+        current["run"] = "alice-run-2"
+
+        stale = await read_file.execute(
+            make_call(arguments={"file_path": str(target)}), make_services()
+        )
+        assert stale.outcome.value == "failure"
+        assert "earlier run" in stale.data["error"]
+    finally:
+        await db.close()
+
+
+async def test_tool_table_projector_tracks_revoke(store, tmp_path):
+    """可见工具名由关系库投影重建：撤销后立即从投影消失。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    materializer = _materializer(store, assembly, tmp_path)
+    result = await materializer.materialize(agent="alice", resolved=resolved)
+    projector = materializer.tool_table_projector("alice", result)
+
+    assert set(await projector()) == {"list_directory", "read_file"}
+
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.write_revoke(
+        DEPLOY,
+        "alice",
+        RevokeAbilityRequest(
+            alias="fs", members=["operations/read_file"], expected_revision=revision
+        ),
+    )
+
+    assert set(await projector()) == {"list_directory"}

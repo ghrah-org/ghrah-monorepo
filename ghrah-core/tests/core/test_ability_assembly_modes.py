@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 from test_core_unit import FakeCtx
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilityAssemblyError,
@@ -178,6 +178,7 @@ async def _authorized_builtin_unit(
     *,
     manifest_store: Any,
     policy: Any = None,
+    llm_factory: Any = None,
 ) -> tuple[Any, Any]:
     """构造带授权装配边界的 builtin CoreUnit（关系库 + 策略 + 工作区）。"""
     from ghrah.ability.access import GrantPolicy
@@ -191,6 +192,7 @@ async def _authorized_builtin_unit(
             workspace_root=str(tmp_path / "workspace"),
             ability_store=store,
             ability_grant_policy=policy if policy is not None else GrantPolicy(rules=()),
+            llm_factory=llm_factory,
         )
     )
     return unit, store
@@ -421,7 +423,8 @@ async def test_builtin_operation_runs_through_the_agent_executor(tmp_path: Path)
         target.write_text("builtin source content", encoding="utf-8")
         result = await handle._ability_executor.execute_ability(
             handle._abilities["read_file"],
-            AbilityExecutionContext(tool_args={"file_path": str(target)}),
+            make_call(arguments={"file_path": str(target)}),
+            make_services(),
         )
 
         assert result.outcome is ActionOutcome.SUCCESS
@@ -560,7 +563,6 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
     from ghrah.ability.access import AccessIdentity, GrantPolicy, GrantRule
     from ghrah.ability.access.startup import AuthorizedToolTable
     from ghrah.ability.builtin.cluster.operations.spawn_agent import _assemble_child_abilities
-    from ghrah.ability.execution.context import AbilityExecutionContext
 
     manifest_store = _consumer_store()
     # 策略按包声明生效：子 Agent 模板里只有 fs 包（引用未解析包会失败）
@@ -575,13 +577,15 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         resolved = assembly.manifest_resolver().resolve(
             manifest_store.load_agent("w0.fs-consumer"), runtime_name="child"
         )
-        context = AbilityExecutionContext(supervisor=unit.supervisor)
+        services = make_services(supervisor=unit.supervisor)
 
-        table = await _assemble_child_abilities(
-            context=context, manifest_ref="w0.fs-consumer", resolved=resolved
+        table, materialized, tool_table_projector = await _assemble_child_abilities(
+            services=services, manifest_ref="w0.fs-consumer", resolved=resolved
         )
 
         assert isinstance(table, AuthorizedToolTable)
+        assert materialized is not None
+        assert tool_table_projector is not None
         assert any(getattr(ability, "name", "") == "read_file" for ability in table)
 
         # 子 Agent 的授权事实写在关系库，与顶层 spawn 同一套事实
@@ -589,14 +593,19 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         records = await ability_store.grants(deployment, resolved.config.name)
         assert [record.alias for record in records] == ["fs"]
 
-        await unit.supervisor.spawn_agent(resolved.config, abilities=table)
+        await unit.supervisor.spawn_agent(
+            resolved.config,
+            abilities=table,
+            tool_table_projector=tool_table_projector,
+        )
         handle = await unit.supervisor.get_agent_handle(resolved.config.name)
         target = tmp_path / "workspace" / "child.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("child ok", encoding="utf-8")
         result = await handle._ability_executor.execute_ability(
             handle._abilities["read_file"],
-            AbilityExecutionContext(tool_args={"file_path": str(target)}),
+            make_call(arguments={"file_path": str(target)}),
+            make_services(),
         )
         assert result.outcome is ActionOutcome.SUCCESS
         assert result.data["content"] == "child ok"
@@ -606,7 +615,6 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
 
 async def test_subagent_spawn_without_boundary_fails_closed() -> None:
     from ghrah.ability.builtin.cluster.operations.spawn_agent import _assemble_child_abilities
-    from ghrah.ability.execution.context import AbilityExecutionContext
     from ghrah.types.results import ActionResult
 
     manifest_store = _consumer_store()
@@ -622,7 +630,7 @@ async def test_subagent_spawn_without_boundary_fails_closed() -> None:
     )
 
     result = await _assemble_child_abilities(
-        context=AbilityExecutionContext(supervisor=unit.supervisor),
+        services=make_services(supervisor=unit.supervisor),
         manifest_ref="w0.fs-consumer",
         resolved=resolved,
     )
@@ -650,3 +658,122 @@ async def test_builtin_supervisor_rejects_caller_assembled_tools() -> None:
 
     with pytest.raises(RegistryError, match="authorized assembly"):
         await unit.supervisor.spawn_agent(resolved.config, abilities=plain_list)
+
+
+# ----------------------------------------------------------------
+# 工具面持续投影：撤销后下一轮不再出现在模型视野
+# ----------------------------------------------------------------
+
+
+async def test_actor_tool_table_follows_revoke_without_restart(tmp_path: Path) -> None:
+    """关系库撤销后刷新工具表：工具从模型视野消失，控制成员保留。"""
+    from ghrah.protocol.ability_tree import RevokeAbilityRequest
+
+    from ghrah.ability.access import AccessIdentity
+
+    store = _consumer_store()
+    unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)
+    try:
+        receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+        assert receipt["success"], receipt.get("error")
+        handle = await unit.supervisor.get_agent_handle("consumer")
+
+        def tool_names() -> set[str]:
+            return {item["function"]["name"] for item in handle._bound_tools}
+
+        assert {"read_file", "write_file", "mcp_call"} <= tool_names()
+
+        actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+        revision = await ability_store.agent_revision(actor, "consumer")
+        await ability_store.write_revoke(
+            actor,
+            "consumer",
+            RevokeAbilityRequest(
+                alias="fs",
+                members=["operations/write_file"],
+                expected_revision=revision,
+            ),
+        )
+
+        await handle.refresh_tool_projection()
+
+        assert "write_file" not in tool_names()
+        assert "read_file" in tool_names()
+        # 循环控制成员不属于授权面，不随关系库投影消失
+        assert "end_task" in tool_names()
+
+        # 执行侧仍拒绝：工具表刷新只是投影，接纳才是闸门
+        denied = await handle._ability_executor.execute_ability(
+            handle._abilities["write_file"],
+            make_call(arguments={"file_path": str(tmp_path / "x.txt"), "content": "x"}),
+            make_services(),
+        )
+        assert denied.outcome is ActionOutcome.FAILURE
+    finally:
+        await ability_store.close()
+
+
+# ----------------------------------------------------------------
+# W2 出口：Mock LLM 在真实 receive 循环里完成工具轮与回复轮
+# ----------------------------------------------------------------
+
+
+async def test_builtin_mock_llm_tool_round_feeds_next_input(tmp_path: Path) -> None:
+    """真实 receive 循环：工具轮结果与 tool_call_id 进入下一轮输入，节点已提交。"""
+    from _helpers import ToolScriptedLLM
+
+    from ghrah.chat.content import ToolCallBlock
+    from ghrah.core.message import AgentMessage, MessageType
+
+    target = tmp_path / "workspace" / "note.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("builtin tool round", encoding="utf-8")
+
+    scripted = ToolScriptedLLM(
+        rounds=[
+            [
+                ToolCallBlock(
+                    id="call-1",
+                    name="read_file",
+                    arguments={"file_path": str(target)},
+                )
+            ]
+        ],
+        final_text="读完了",
+    )
+    unit, ability_store = await _authorized_builtin_unit(
+        tmp_path,
+        manifest_store=_consumer_store(),
+        llm_factory=lambda config: scripted,
+    )
+    try:
+        receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+        assert receipt["success"], receipt.get("error")
+        handle = await unit.supervisor.get_agent_handle("consumer")
+
+        reply = await handle.receive(
+            AgentMessage(
+                sender="user",
+                recipient="consumer",
+                content="读文件",
+                type=MessageType.CHAT,
+            )
+        )
+
+        assert reply.content == "读完了"
+        assert len(scripted.calls) >= 2
+
+        tool_results = [
+            block for message in scripted.calls[1] for block in getattr(message, "tool_results", [])
+        ]
+        assert tool_results, "工具结果必须进入下一次模型输入"
+        assert tool_results[0].tool_call_id == "call-1"
+        assert "builtin tool round" in tool_results[0].content
+
+        cm = handle._context_manager
+        assert cm.active_head is not None
+        committed = [name for node in cm.get_history() for name in node.ability_names]
+        assert "read_file" in committed
+        assert "conversation" in committed
+    finally:
+        await ability_store.close()

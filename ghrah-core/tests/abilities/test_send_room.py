@@ -11,10 +11,12 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.send import SendAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.room_protocol import ROOM_BRIDGE_UNAVAILABLE_ERROR, SerialRoomBridge
 
 
@@ -22,13 +24,15 @@ def _make_context(
     supervisor: Any,
     tool_args: dict[str, Any],
     agent_name: str = "architect",
-) -> AbilityExecutionContext:
-    return AbilityExecutionContext(
-        supervisor=supervisor,
-        agent_name=agent_name,
-        tool_args=tool_args,
-        context_manager=MagicMock(),
-        invocation=AbilityInvocation(tool_call_id="room-send-1"),
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(
+            arguments=tool_args,
+            agent_name=agent_name,
+            tool_call_id="room-send-1",
+        ),
+        make_services(supervisor=supervisor, context_manager=MagicMock()),
     )
 
 
@@ -100,18 +104,18 @@ class TestSendAbility:
         assert set(params) == {"room_ids", "message", "targets"}
 
     async def test_no_supervisor(self) -> None:
-        ctx = AbilityExecutionContext(supervisor=None, agent_name="a", tool_args={})
-        result = await SendAbility().execute(ctx)
+        call, services = _make_context(None, {}, agent_name="a")
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
     async def test_no_room_bridge(self) -> None:
         supervisor = _make_supervisor(room_bridge=None)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor,
             {"room_ids": ["r1"], "message": "hi"},
         )
-        result = await SendAbility().execute(ctx)
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["error"] == ROOM_BRIDGE_UNAVAILABLE_ERROR
 
@@ -130,11 +134,11 @@ class TestSendAbility:
             }
         )
         supervisor = _make_supervisor(bridge)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor,
             {"room_ids": ["r1", "r2"], "message": "hello", "targets": ["extern"]},
         )
-        result = await SendAbility().execute(ctx)
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         # human 成员不计；跨 room 去重；targets 并入
         assert result.data["recipients"] == [
@@ -155,10 +159,10 @@ class TestSendAbility:
     async def test_empty_targets_broadcast_semantics(self) -> None:
         bridge = _FakeBridge(rooms={"r1": [{"subject": "a", "subject_type": "agent"}]})
         supervisor = _make_supervisor(bridge)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor, {"room_ids": ["r1"], "message": "broadcast"}, agent_name="human"
         )
-        result = await SendAbility().execute(ctx)
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["delivered_to"] == ["a"]
         assert supervisor.prepare_message.call_args.kwargs["metadata"]["targets"] == []
@@ -167,8 +171,8 @@ class TestSendAbility:
     async def test_unknown_room_fails(self) -> None:
         bridge = _FakeBridge(fail_room="missing")
         supervisor = _make_supervisor(bridge)
-        ctx = _make_context(supervisor, {"room_ids": ["missing"], "message": "hi"})
-        result = await SendAbility().execute(ctx)
+        call, services = _make_context(supervisor, {"room_ids": ["missing"], "message": "hi"})
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "room not found: missing" in result.data["error"]
         assert bridge.append_calls == []
@@ -177,9 +181,8 @@ class TestSendAbility:
         bridge = _FakeBridge(rooms={"r1": [{"subject": "a", "subject_type": "agent"}]})
         supervisor = _make_supervisor(bridge)
         supervisor.prepare_message.side_effect = RuntimeError("write failed")
-        result = await SendAbility().execute(
-            _make_context(supervisor, {"room_ids": ["r1"], "message": "hi"})
-        )
+        call, services = _make_context(supervisor, {"room_ids": ["r1"], "message": "hi"})
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "write failed" in result.data["error"]
         assert bridge.append_calls == []
@@ -188,8 +191,8 @@ class TestSendAbility:
     async def test_invalid_args(self) -> None:
         bridge = _FakeBridge()
         supervisor = _make_supervisor(bridge)
-        ctx = _make_context(supervisor, {"room_ids": [], "message": "hi"})
-        result = await SendAbility().execute(ctx)
+        call, services = _make_context(supervisor, {"room_ids": [], "message": "hi"})
+        result = await SendAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "invalid send args" in result.data["error"]
 

@@ -6,7 +6,7 @@
 
 spawn 的配套查询面：LLM 在 spawn_agent 前经此查看可用 manifest 与
 各 manifest 冻结的能力清单。manifest_store 经
-AbilityExecutionContext.services 显式接线（装配期注入）——
+``MANIFEST_STORE`` 执行服务显式接线（装配期注入）——
 未接线 → FAILURE 指路（零隐式：绝不猜测 store 位置）。
 """
 
@@ -17,11 +17,13 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import MANIFEST_STORE
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +103,11 @@ class QueryManifestsAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         manifest_ref = tool_args.get("manifest_ref")
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

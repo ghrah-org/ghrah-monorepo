@@ -31,7 +31,8 @@ from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.paths import is_subpath
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 __all__ = [
@@ -285,25 +286,28 @@ class AccessApprovalHook(Hook):
     def __init__(self, checker: FSPermissionChecker) -> None:
         self._checker = checker
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         """在读写类 Ability 时触发检查。"""
-        name = context.current_ability_name
+        name = call.member.member
         return name in self.WRITE_ABILITIES or name in self.READ_ABILITIES
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         """检查访问路径权限，决定是否需要人工批准。
 
         一个成员可能涉及多个路径（``move_file`` 的源与目标、``search_files``
         的搜索根）：任一路径被拒绝即停止，任一路径待审批即转 HITL。
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
-        targets = self._extract_target_paths(context.current_ability_name, tool_args)
+        tool_args = call.arguments
+        targets = self._extract_target_paths(call.member.member, tool_args)
         if not targets:
             return HookResult.continue_()
 
-        operation = "write" if context.current_ability_name in self.WRITE_ABILITIES else "read"
+        operation = "write" if call.member.member in self.WRITE_ABILITIES else "read"
         pending: list[str] = []
         for target_path in targets:
             allowed, status = self._checker.check_access(target_path, operation)

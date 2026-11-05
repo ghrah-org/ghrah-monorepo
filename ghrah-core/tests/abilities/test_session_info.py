@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.builtin.session_info import SessionInfoAbility
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.types.results import ActionOutcome
 
 
@@ -37,11 +37,13 @@ class _FakeSupervisor:
 
 
 class TestSessionInfo:
+    """SessionInfoAbility 测试（call + services 契约）。"""
+
     async def test_static_snapshot_from_constructor(self) -> None:
         ability = SessionInfoAbility(
             environment_info={"deployment": "subject-mounted", "workspace_root": "/ws"}
         )
-        result = await ability.execute(AbilityExecutionContext())
+        result = await ability.execute(make_call(), make_services())
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["environment"] == {
             "deployment": "subject-mounted",
@@ -52,7 +54,7 @@ class TestSessionInfo:
     async def test_no_snapshot_degrades_with_pointer(self) -> None:
         """无快照 → environment=None + 指路文案，不整体失败。"""
         ability = SessionInfoAbility()
-        result = await ability.execute(AbilityExecutionContext())
+        result = await ability.execute(make_call(), make_services())
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["environment"] is None
         assert "unavailable" in result.data["environment_source"]
@@ -61,33 +63,34 @@ class TestSessionInfo:
         """spawn 装配期回填快照（CoreUnit duck-typed 注入路径）。"""
         ability = SessionInfoAbility()
         ability.set_environment_info({"deployment": "standalone"})
-        result = await ability.execute(AbilityExecutionContext())
+        result = await ability.execute(make_call(), make_services())
         assert result.data["environment"] == {"deployment": "standalone"}
 
     async def test_agent_and_session_sections(self) -> None:
         ability = SessionInfoAbility()
-        ctx = AbilityExecutionContext(agent_name="worker-1", context_manager=_FakeCM())
-        result = await ability.execute(ctx)
+        call = make_call(agent_name="worker-1")
+        services = make_services(context_manager=_FakeCM())
+        result = await ability.execute(call, services)
         assert result.data["agent"]["name"] == "worker-1"
         assert result.data["agent"]["session_id"] == "sess-1"
         assert result.data["agent"]["active_branch_id"] == "branch-1"
 
     async def test_context_manager_missing_session_pointer(self) -> None:
         ability = SessionInfoAbility()
-        result = await ability.execute(AbilityExecutionContext(agent_name="w"))
+        result = await ability.execute(make_call(agent_name="w"), make_services())
         assert result.data["agent"]["name"] == "w"
         assert "not wired" in result.data["agent"]["session"]
 
     async def test_cluster_section_with_supervisor(self) -> None:
         ability = SessionInfoAbility()
-        ctx = AbilityExecutionContext(supervisor=_FakeSupervisor())
-        result = await ability.execute(ctx)
+        call, services = make_call(), make_services(supervisor=_FakeSupervisor())
+        result = await ability.execute(call, services)
         assert result.data["cluster"]["count"] == 2
         assert result.data["cluster"]["members"][0] == {"name": "planner"}
 
     async def test_cluster_none_without_supervisor(self) -> None:
         ability = SessionInfoAbility()
-        result = await ability.execute(AbilityExecutionContext())
+        result = await ability.execute(make_call(), make_services())
         assert result.data["cluster"] is None
 
     def test_bind_tool_shape(self) -> None:

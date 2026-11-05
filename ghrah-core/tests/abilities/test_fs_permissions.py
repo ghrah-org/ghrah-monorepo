@@ -10,15 +10,18 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    """创建测试用 AbilityExecutionContext。"""
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 # ── FSPermissionChecker 测试 ──
@@ -394,43 +397,43 @@ class TestAccessApprovalHook:
         """写入类 Ability 触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
         for name in AccessApprovalHook.WRITE_ABILITIES:
-            ctx = _make_context(current_ability_name=name)
-            assert await hook.should_trigger(ctx) is True
+            call, services = _make_context(member=name)
+            assert await hook.should_trigger(call, services) is True
 
     async def test_should_trigger_read_ability(self) -> None:
         """读取类 Ability 触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
         for name in AccessApprovalHook.READ_ABILITIES:
-            ctx = _make_context(current_ability_name=name)
-            assert await hook.should_trigger(ctx) is True
+            call, services = _make_context(member=name)
+            assert await hook.should_trigger(call, services) is True
 
     async def test_should_not_trigger_other_ability(self) -> None:
         """其他 Ability 不触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
-        ctx = _make_context(current_ability_name="conversation")
-        assert await hook.should_trigger(ctx) is False
+        call, services = _make_context(member="conversation")
+        assert await hook.should_trigger(call, services) is False
 
     async def test_execute_auto_approved(self) -> None:
         """白名单内路径自动批准。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="write_file",
+            call, services = _make_context(
+                member="write_file",
                 tool_args={"file_path": str(Path(tmpdir) / "file.txt")},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is True
 
     async def test_execute_needs_approval(self) -> None:
         """白名单外路径需要人工批准。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
         assert "approval required" in (result.message or "").lower()
@@ -439,22 +442,22 @@ class TestAccessApprovalHook:
         """白名单外且不需要批准时拒绝。"""
         checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert "denied" in (result.message or "").lower()
 
     async def test_execute_no_file_path_continues(self) -> None:
         """没有 file_path 时放行（由 Ability 自身做参数验证）。"""
         hook = AccessApprovalHook(FSPermissionChecker())
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
 
     async def test_execute_move_file_checks_source_and_destination(self) -> None:
@@ -463,61 +466,67 @@ class TestAccessApprovalHook:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
             inside = str(Path(tmpdir) / "dest.txt")
-            ctx = _make_context(
-                current_ability_name="move_file",
+            call, services = _make_context(
+                member="move_file",
                 tool_args={
                     "source_path": str(Path(tmpdir) / "source.txt"),
                     "destination_path": inside,
                 },
             )
-            assert (await hook.execute(ctx, None)).should_continue is True
+            assert (await hook.execute(call, services, None)).should_continue is True
 
-            escaped = _make_context(
-                current_ability_name="move_file",
+            escaped_call, escaped_services = _make_context(
+                member="move_file",
                 tool_args={
                     "source_path": "/tmp/source.txt",
                     "destination_path": inside,
                 },
             )
-            result = await hook.execute(escaped, None)
+            result = await hook.execute(escaped_call, escaped_services, None)
             assert result.should_continue is False
             assert result.requires_hitl is True
             assert "/tmp/source.txt" in (result.message or "")
 
-    async def test_execute_uses_accumulated_data_fallback(self) -> None:
-        """tool_args 为空时从 accumulated_data 获取。"""
+    async def test_execute_ignores_loop_data_fallback(self) -> None:
+        """参数只来自 call.arguments：LOOP 里的 tool_args 不得当作本次参数。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            checker = FSPermissionChecker(allowed_paths=[tmpdir])
+            outside = "/etc/config.txt"
+            checker = FSPermissionChecker(allowed_paths=[tmpdir], require_approval=False)
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="write_file",
-                tool_args=None,
-                accumulated_data={"tool_args": {"file_path": str(Path(tmpdir) / "file.txt")}},
-            )
-            result = await hook.execute(ctx, None)
+            call, services = _make_context(member="write_file")
+            services.require(LOOP).update({"tool_args": {"file_path": outside}})
+            result = await hook.execute(call, services, None)
+            # 没有 arguments → 没有目标路径 → 放行（不读 LOOP 里的旧 tool_args）
             assert result.should_continue is True
+
+            call, services = _make_context(
+                member="write_file",
+                tool_args={"file_path": outside},
+            )
+            denied = await hook.execute(call, services, None)
+            assert denied.should_continue is False
 
     async def test_execute_read_ability_uses_dir_path(self) -> None:
         """list_directory 使用 dir_path 检查权限。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="list_directory",
+            call, services = _make_context(
+                member="list_directory",
                 tool_args={"dir_path": tmpdir},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is True
 
     async def test_execute_read_needs_approval(self) -> None:
         """读取操作也需要审批。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="read_file",
+        call, services = _make_context(
+            member="read_file",
             tool_args={"file_path": "/etc/passwd"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
         assert "read" in (result.message or "").lower()
@@ -526,11 +535,11 @@ class TestAccessApprovalHook:
         """写入操作审批消息包含 write。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert "write" in (result.message or "").lower()
 
@@ -544,11 +553,11 @@ class TestAccessApprovalHook:
                 denied_paths=[str(secret)],
             )
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="read_file",
+            call, services = _make_context(
+                member="read_file",
                 tool_args={"file_path": str(secret / "file.txt")},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is False
             assert "denied" in (result.message or "").lower()
 

@@ -21,11 +21,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import MANIFEST_STORE, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +78,7 @@ class SpawnAgentInput(BaseModel):
 
 async def _assemble_child_abilities(
     *,
-    context: Any,
+    services: Any,
     manifest_ref: str,
     resolved: Any,
 ) -> Any:
@@ -87,16 +89,17 @@ async def _assemble_child_abilities(
     FAILURE，不回退按模板实例化。legacy 模式保持旧装配路径。
 
     Args:
-        context: 执行上下文（含 supervisor）。
+        services: 执行服务表（含 supervisor）。
         manifest_ref: 本次 spawn 的 manifest 引用（错误信息用）。
         resolved: 已解析的子 Agent 模板。
 
     Returns:
-        工具表；失败时返回 ``ActionResult``。
+        ``(工具表, 启动物化结果或 None, 工具表投影器或 None)``；失败时返回
+        ``ActionResult``。
     """
     from ghrah.types.results import ActionOutcome, ActionResult
 
-    supervisor = context.supervisor
+    supervisor = services.get(SUPERVISOR)
     if getattr(supervisor, "_builtin_abilities", False):
         materializer = getattr(supervisor, "ability_materializer", None)
         if materializer is None:
@@ -123,14 +126,16 @@ async def _assemble_child_abilities(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": f"authorized assembly failed for '{manifest_ref}': {error}"},
             )
-        return materialized.abilities
+        projector = materializer.tool_table_projector(resolved.config.name, materialized)
+        return materialized.abilities, materialized, projector
     from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
 
-    return instantiate_resolved_abilities(
+    abilities = instantiate_resolved_abilities(
         resolved.abilities,
         workspace_root=None,
         auto_approve_abilities=(),
     )
+    return abilities, None, None
 
 
 class SpawnAgentAbility(Ability):
@@ -139,7 +144,7 @@ class SpawnAgentAbility(Ability):
     通过 SupervisorActor.spawn_agent() 在集群中创建一个新 Agent。
     新 Agent 与创建者平级，无父子层级关系。
 
-    主路径：``manifest_ref`` 经 AbilityExecutionContext.services 显式
+    主路径：``manifest_ref`` 经 ``MANIFEST_STORE`` 执行服务显式
     接线的 manifest_store 解析（未接线 → FAILURE 指路，零隐式）；
     新 Agent 的能力面由 manifest 完全冻结。name/description/
     system_prompt 可覆写 manifest 人设（HITL 审批载荷会展示完整
@@ -178,15 +183,16 @@ class SpawnAgentAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        supervisor = services.get(SUPERVISOR)
+        error = cluster_supervisor_error(supervisor)
         if error:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": error},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         manifest_ref = tool_args.get("manifest_ref", "")
         name = tool_args.get("name", "")
         description = tool_args.get("description", "")
@@ -198,7 +204,7 @@ class SpawnAgentAbility(Ability):
                 data={"error": "manifest_ref is required"},
             )
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -229,13 +235,14 @@ class SpawnAgentAbility(Ability):
                 data={"error": f"manifest resolve failed for '{manifest_ref}': {e}"},
             )
 
-        ability_instances = await _assemble_child_abilities(
-            context=context,
+        assembled = await _assemble_child_abilities(
+            services=services,
             manifest_ref=manifest_ref,
             resolved=resolved,
         )
-        if isinstance(ability_instances, ActionResult):
-            return ability_instances
+        if isinstance(assembled, ActionResult):
+            return assembled
+        ability_instances, materialized, tool_table_projector = assembled
         if not ability_instances:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -257,10 +264,21 @@ class SpawnAgentAbility(Ability):
             resolved_config = replace(resolved_config, **overrides)
 
         try:
-            agent_name = await context.supervisor.spawn_agent(
+            agent_name = await supervisor.spawn_agent(
                 resolved_config,
                 abilities=ability_instances,
+                tool_table_projector=tool_table_projector,
             )
+            materializer = getattr(supervisor, "ability_materializer", None)
+            if materialized is not None and materializer is not None:
+                try:
+                    await materializer.bind_run(agent_name, materialized)
+                except Exception as error:  # 绑定失败不掩盖“已 spawn 成功”的事实
+                    logger.warning(
+                        "SpawnAgentAbility: run binding failed for '%s': %s",
+                        agent_name,
+                        error,
+                    )
             return ActionResult(
                 outcome=ActionOutcome.SUCCESS,
                 data={

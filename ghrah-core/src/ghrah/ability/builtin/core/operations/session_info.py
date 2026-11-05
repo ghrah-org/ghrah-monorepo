@@ -10,8 +10,8 @@
 
 - 静态部分（构造注入）：spawn 装配期由 CoreUnit._environment_snapshot
   组装的部署快照（deployment/workspace_root/allowed_roots/hitl 参数）；
-- 动态部分（execute 叠加）：agent_name、session 信息（context_manager
-  接线时）、集群成员（supervisor 接线时）。
+- 动态部分（execute 叠加）：agent_name、session 信息（``CONTEXT_MANAGER``
+  服务接线时）、集群成员（``SUPERVISOR`` 服务接线时）。
 
 静态快照缺失（standalone 裸用、非 CoreUnit 装配）时返回明确指路而非
 猜测；动态部分按各自接线状态叠加，任一缺失只缺对应段，不整体失败。
@@ -22,11 +22,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +61,8 @@ class SessionInfoAbility(Ability):
 
     静态快照经构造注入（spawn 装配期组装），execute 只读叠加：
     - ``environment``：构造注入的部署快照（可能为 None）；
-    - ``agent``：agent_name + session 信息（context_manager 接线时）；
-    - ``cluster``：集群成员（supervisor 接线时）。
+    - ``agent``：agent_name + session 信息（``CONTEXT_MANAGER`` 服务接线时）；
+    - ``cluster``：集群成员（``SUPERVISOR`` 服务接线时）。
 
     用法::
 
@@ -117,11 +119,12 @@ class SessionInfoAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """组装静态快照 + 动态运行信息。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：SUCCESS 时 data 含 environment/agent/cluster 三段
@@ -138,8 +141,8 @@ class SessionInfoAbility(Ability):
         }
 
         # ---- agent/session 段（context_manager 接线时叠加） ----
-        agent: dict[str, Any] = {"name": context.agent_name}
-        cm = context.context_manager
+        agent: dict[str, Any] = {"name": call.identity.agent_name}
+        cm = services.get(CONTEXT_MANAGER)
         if cm is not None and hasattr(cm, "get_active_session"):
             try:
                 session = cm.get_active_session()
@@ -153,7 +156,7 @@ class SessionInfoAbility(Ability):
         data["agent"] = agent
 
         # ---- cluster 段（supervisor 接线时叠加） ----
-        supervisor = context.supervisor
+        supervisor = services.get(SUPERVISOR)
         if supervisor is not None and hasattr(supervisor, "list_agents"):
             try:
                 agents = await supervisor.list_agents()

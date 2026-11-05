@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,12 @@ from ghrah.ability.access.reconcile import (
 )
 from ghrah.ability.access.store import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import (
+    InvocationIdentity,
+    MemberReference,
+    OperationCall,
+)
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.permissions.scope import resolve_effective_permission
@@ -106,12 +112,25 @@ class StartupMaterialization:
     granted: tuple[str, ...]
     revoked: tuple[str, ...]
 
+    def bind_run(self, run: str) -> None:
+        """把本次运行的受信 run 绑定到所有投影工具上（Agent 注册完成后调用）。"""
+        for ability in self.abilities:
+            bind = getattr(ability, "bind_run", None)
+            if callable(bind):
+                bind(run)
+
 
 class ProjectedAbility:
     """把执行实例包装成固定工具名与定义面 schema 的模型工具。
 
     工具名由表面命名算法分配，可能与成员键不同；执行仍委托给本地装配出的
     实例，调用入口只按这张映射表查成员，不从模型传入的名字反推模块。
+
+    这里同时是**受信身份的装配边界**：调用对象里的成员引用与身份在执行前
+    被替换为启动时捕获的事实（实例、别名、成员键、版本摘要、项目与 run），
+    调用方（ActorAgent／执行器）无权改写。run 由 :meth:`bind_run` 在 Agent
+    注册完成后补齐——绑定之前是空串，接纳层按“旧对象不得借用新 run”拒绝
+    不匹配的调用。
     """
 
     def __init__(
@@ -121,12 +140,16 @@ class ProjectedAbility:
         tool_name: str,
         tool_schema: dict[str, Any],
         member: str = "",
+        member_reference: MemberReference | None = None,
+        identity: InvocationIdentity | None = None,
         admission: Any = None,
     ) -> None:
         self._inner = inner
         self._tool_name = tool_name
         self._tool_schema = tool_schema
         self._member = member
+        self._member_reference = member_reference or MemberReference(member=member)
+        self._identity = identity or InvocationIdentity()
         self._admission = admission
 
     @property
@@ -139,38 +162,56 @@ class ProjectedAbility:
         """该工具固定的成员键；执行器按它解析路径参数，不从工具名反推。"""
         return self._member
 
-    async def execute(self, context: Any) -> Any:
+    @property
+    def member_reference(self) -> MemberReference:
+        """启动时固定的成员引用（实例、别名、成员键、版本摘要）。"""
+        return self._member_reference
+
+    @property
+    def bound_run(self) -> str:
+        """装配边界绑定的受信 run；空串表示尚未绑定。"""
+        return self._identity.run
+
+    def bind_run(self, run: str) -> None:
+        """在 Agent 注册完成后绑定本次运行的受信 run。
+
+        绑定前调用对象里的 run 为空；绑定后接纳层要求当前 run 与它一致，
+        旧运行留下的工具对象不能借新 run 继续执行。
+        """
+        self._identity = replace(self._identity, run=run)
+
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> Any:
         """先做执行接纳，再委托给本地执行实例。
 
-        接纳在 HITL 钩子之后运行：审批只决定“范围外的调用要不要问人”，
-        关系与授予范围的复核不能被审批跳过——撤销、重新选择与越界在此
-        最后兜底，失败时没有副作用。
+        成员引用与受信身份在执行前被替换为装配时捕获的事实；接纳在 HITL
+        钩子之后运行：审批只决定“范围外的调用要不要问人”，关系与授予范围的
+        复核不能被审批跳过——撤销、重新选择与越界在此最后兜底，失败时没有
+        副作用。
         """
+        call = call.with_member(self._member_reference)
+        identity = self._identity
+        if identity.project_id or identity.run or identity.agent:
+            call = replace(call, identity=identity)
         if self._admission is not None:
-            error = await self._admission(context.tool_args or {})
+            error = await self._admission(call)
             if error is not None:
                 return ActionResult(
                     outcome=ActionOutcome.FAILURE,
                     data={"error": error},
                 )
-        return await self._inner.execute(context)
+        return await self._inner.execute(call, services)
 
     def bind_tool(self) -> dict[str, Any]:
         """返回来自定义面的固定 tool schema。"""
         return self._tool_schema
 
     def get_hooks(self) -> list[Any]:
-        """沿用执行实例的 Hook，并把包装工具名映射回成员身份。
+        """沿用执行实例的 Hook。
 
-        内核固定 Hook（路径审批、命令审批、显式 HITL）按成员键裁决；表面
-        工具名在跨包撞名时会被限定，二者不能混用。
+        调用对象在执行前已固定成员身份，Hook 按 ``call.member.member`` 裁决
+        与选择，不需要再包一层名字映射。
         """
-        return [
-            _MemberHook(hook, member=self._member, tool_name=self._tool_name)
-            if self._member
-            else hook
-            for hook in self._inner.get_hooks()
-        ]
+        return list(self._inner.get_hooks())
 
     def get_default_state(self) -> dict[str, Any]:
         """沿用执行实例的默认状态。"""
@@ -178,45 +219,6 @@ class ProjectedAbility:
 
     def __getattr__(self, item: str) -> Any:
         """其余属性（如环境快照读取的 checker）继续指向执行实例。"""
-        return getattr(self._inner, item)
-
-
-class _MemberHook:
-    """把包装工具名映射回成员身份后调用内核固定 Hook。"""
-
-    def __init__(self, inner: Any, *, member: str, tool_name: str) -> None:
-        self._inner = inner
-        self._member = member
-        self._tool_name = tool_name
-        self.hook_point = inner.hook_point
-
-    def _named(self, context: Any) -> Any:
-        if context.current_ability_name != self._tool_name:
-            return context
-        return _MemberNamedContext(context, self._member)
-
-    async def should_trigger(self, context: Any) -> bool:
-        """仅在本次工具调用时询问原 Hook，并以成员身份裁决。"""
-        return bool(await self._inner.should_trigger(self._named(context)))
-
-    async def execute(self, context: Any, result: Any) -> Any:
-        """用成员身份执行原 Hook，返回结果原样透传。"""
-        return await self._inner.execute(self._named(context), result)
-
-
-class _MemberNamedContext:
-    """只覆盖能力名的上下文视图；其余属性继续指向真实执行上下文。"""
-
-    def __init__(self, inner: Any, member: str) -> None:
-        object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "_member", member)
-
-    @property
-    def current_ability_name(self) -> str:
-        """内核 Hook 看到的成员身份。"""
-        return self._member
-
-    def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
 
 
@@ -397,7 +399,10 @@ class StartupGrantMaterializer:
             raise StartupGrantError(f"启动授权写入失败：{error.code}") from error
         bindings, revision = await self._bind(agent, desired, result.revision)
         sources = {alias: item[2] for alias, item in registered.items()}
-        abilities = self._instantiate(agent, control, instances, desired, bindings, sources)
+        run = self._current_run(agent)
+        abilities = self._instantiate(
+            agent, control, instances, desired, bindings, sources, run=run
+        )
         return StartupMaterialization(
             abilities=abilities,
             tools=bindings,
@@ -405,6 +410,67 @@ class StartupGrantMaterializer:
             granted=result.granted,
             revoked=result.revoked,
         )
+
+    async def bind_run(self, agent: str, materialization: StartupMaterialization) -> None:
+        """把当前受信 run 绑定到本次物化的投影工具上。
+
+        启动核定发生在 Agent 注册之前，那时读不到运行实例；注册完成后由装配
+        方调用本方法补齐 run。读不到 run（非运行态／standalone）时保持未绑定，
+        由接纳层按关系库现有身份复核。
+
+        Args:
+            agent: 已注册的 Agent 名称。
+            materialization: 本次启动物化结果。
+        """
+        try:
+            run = self._store.current_run(agent)
+        except AccessError:
+            logger.debug("builtin spawn: agent %s 尚无当前 run，跳过 run 绑定", agent)
+            return
+        materialization.bind_run(run)
+        logger.info("builtin spawn: agent %s 绑定受信 run=%s", agent, run)
+
+    def tool_table_projector(self, agent: str, materialization: StartupMaterialization) -> Any:
+        """返回“按关系库当前授予重算模型可见工具名”的投影器。
+
+        工具表是关系库的派生投影，必须能从权威重建：调用方每轮取一次可见
+        工具名，撤销在下一轮就从模型视野消失，无需重启 Agent。只保留本次
+        物化实际实例化过的工具——没有实例的成员即使后来被授予也不能凭空出现。
+
+        Args:
+            agent: Agent 名称。
+            materialization: 本次启动物化结果（提供已实例化工具集合）。
+
+        Returns:
+            无参异步投影器，返回当前可见的工具名元组；无法确认时返回空元组。
+        """
+        store = self._store
+        spawned = {binding.tool_name for binding in materialization.tools}
+
+        async def project() -> tuple[str, ...]:
+            try:
+                run = store.current_run(agent)
+            except AccessError:
+                return ()
+            actor = AccessIdentity(store.project_id, agent, run)
+            try:
+                view = await store.view(actor, agent)
+            except AccessError:
+                return ()
+            return tuple(sorted(tool.name for tool in view.bound_tools if tool.name in spawned))
+
+        return project
+
+    def _current_run(self, agent: str) -> str:
+        """读取当前受信 run；spawn 早期尚未注册运行实例时为空串。
+
+        绑定发生在 Agent 注册完成后（CoreUnit 调 :meth:`StartupMaterialization.bind_run`），
+        这里只取启动瞬间能确认的值，绝不猜测。
+        """
+        try:
+            return self._store.current_run(agent)
+        except AccessError:
+            return ""
 
     def _split(
         self, catalog: Any, resolved: list[ResolvedAbility]
@@ -529,6 +595,8 @@ class StartupGrantMaterializer:
         desired: dict[str, GrantFacts],
         bindings: tuple[StartupToolBinding, ...],
         sources: dict[str, dict[str, ResolvedAbility]],
+        *,
+        run: str = "",
     ) -> AuthorizedToolTable:
         """把选定成员实例化成工具，并把固定 schema、权限范围与接纳绑到包装层。"""
         definitions = {instance.alias: instance for instance in instances}
@@ -574,6 +642,18 @@ class StartupGrantMaterializer:
                     built[0],
                     tool_name=binding.tool_name,
                     member=binding.member,
+                    member_reference=MemberReference(
+                        instance_id=instance.instance_id,
+                        alias=binding.alias,
+                        member=binding.member,
+                        version_digest=instance.version_digest,
+                    ),
+                    identity=InvocationIdentity(
+                        project_id=self._store.project_id,
+                        agent=agent,
+                        run=run,
+                        agent_name=agent,
+                    ),
                     tool_schema={
                         "type": "function",
                         "function": {
@@ -588,26 +668,35 @@ class StartupGrantMaterializer:
         return AuthorizedToolTable(abilities)
 
     def _admission(self, agent: str, binding: StartupToolBinding, version_digest: str) -> Any:
-        """按启动时固定的成员与版本在当前关系中复核；撤销或改绑立即生效。
+        """按启动时固定的成员、版本与受信 run 在当前关系中复核。
 
         执行实现绑定在启动时的 ``_inner``，因此接纳不能只看同名工具当前指向
         哪个成员：期望的别名、成员与版本必须一并比对，否则管理端把工具改绑
         到别的成员后，旧实现仍会按新绑定被放行。
+
+        受信 run 同理：调用对象带着装配时绑定的 run，接纳用它作为关系库身份，
+        并要求它与当前 run 一致。运行代次变化后，旧工具对象不能借用新 run
+        继续执行。
         """
         store = self._store
 
-        async def admit(arguments: dict[str, Any]) -> str | None:
+        async def admit(call: OperationCall) -> str | None:
+            if call.member.alias != binding.alias or call.member.member != binding.member:
+                return _denial(binding, "access_denied")
             try:
-                run = store.current_run(agent)
+                current_run = store.current_run(agent)
             except AccessError:
                 return _denial(binding, "access_denied")
-            actor = AccessIdentity(store.project_id, agent, run)
+            bound_run = call.identity.run
+            if bound_run and bound_run != current_run:
+                return _denial(binding, "stale_invocation")
+            actor = AccessIdentity(store.project_id, agent, current_run)
             try:
                 basis = await store.admit_tool(
                     actor,
                     agent,
                     binding.tool_name,
-                    dict(arguments),
+                    dict(call.arguments),
                     expected_alias=binding.alias,
                     expected_member=binding.member,
                 )
@@ -643,6 +732,11 @@ def _denial(binding: StartupToolBinding, code: str) -> str:
         return (
             f"Invalid arguments for tool '{binding.tool_name}' ({target}): a required "
             "resource argument is missing or malformed"
+        )
+    if code == "stale_invocation":
+        return (
+            f"Tool '{binding.tool_name}' ({target}) belongs to an earlier run of this Agent; "
+            "start a new run or re-request the tool before calling it again"
         )
     if code == "unavailable":
         return (

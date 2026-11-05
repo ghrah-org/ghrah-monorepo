@@ -32,7 +32,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any
 
 from ghrah.protocol.types import (
     AGENT_SCOPED_EVENT_TYPES,
@@ -65,7 +65,6 @@ from ghrah.protocol.types import (
     generate_request_id,
 )
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilitySourceMode,
@@ -1109,8 +1108,16 @@ class CoreUnit:
                 self._validate_model_config(resolved.config.endpoint_name)
             # builtin：授权装配边界；legacy：旧装配实例化。builtin 未接线关系库
             # 时抛 StartupGrantError，不再回退按模板实例化。
-            ability_instances = await self._materialize_builtin_abilities(
+            materialization = await self._materialize_builtin_abilities(
                 resolved.config.name, resolved
+            )
+            ability_instances = materialization.abilities if materialization else None
+            tool_table_projector = (
+                self._startup_materializer.tool_table_projector(
+                    resolved.config.name, materialization
+                )
+                if materialization is not None and self._startup_materializer is not None
+                else None
             )
             if ability_instances is None:
                 ability_instances = assembly.instantiate(
@@ -1148,12 +1155,15 @@ class CoreUnit:
                     persistence_factory=self._config.persistence_factory,
                     llm_factory=self._config.llm_factory,
                     tags=list(manifest.metadata.tags),
+                    tool_table_projector=tool_table_projector,
                 )
             except RegistryError as e:
                 return self._err(str(e))
             recovery_mode = supervisor.recovery_mode(agent_name)
             incarnation_id = supervisor.incarnation_id(agent_name)
             self._apply_hitl_timeout(agent_name)
+            if materialization is not None:
+                await self._bind_materialized_run(agent_name, materialization)
             self._emit_event(
                 EventType.AGENT_SPAWNED.value,
                 {
@@ -1296,7 +1306,7 @@ class CoreUnit:
             resolved: 已解析的 Agent 模板。
 
         Returns:
-            授权边界产出的工具表；legacy 模式返回 None。
+            启动物化结果（工具表 + 工具绑定）；legacy 模式返回 None。
 
         Raises:
             StartupGrantError: builtin 模式未接线授权关系库，或核定失败。
@@ -1321,7 +1331,20 @@ class CoreUnit:
             list(materialized.granted),
             list(materialized.revoked),
         )
-        return materialized.abilities
+        return materialized
+
+    async def _bind_materialized_run(self, agent_name: str, materialization: Any) -> None:
+        """Agent 注册完成后把当前 run 绑到投影工具上。
+
+        启动核定发生在 Agent 注册之前，那时还读不到运行实例；受信 run 必须
+        在注册完成后补齐，之后旧运行留下的工具对象不能借新 run 继续执行。
+        读不到 run（非运行态／standalone）时保持未绑定，由接纳层按关系库
+        现有身份复核。
+        """
+        materializer = self._startup_materializer
+        if materializer is None:
+            return
+        await materializer.bind_run(agent_name, materialization)
 
     def _apply_hitl_timeout(self, agent_name: str) -> None:
         """best-effort 将 config.hitl_timeout 与 promise 注册表应用到 agent 的本地 executor。
@@ -1690,15 +1713,14 @@ class CoreUnit:
                 if ep.ability_name == "send" and action_result.outcome == ActionOutcome.SUCCESS:
                     action_result.data["status"] = "sent"
             else:
-                context = AbilityExecutionContext(
-                    current_ability_name=ep.ability_name,
-                    tool_args=ep.tool_args,
-                    context_manager=getattr(agent_handle, "_context_manager", None),
-                    supervisor=cast(Any, supervisor),
-                    agent_name=ep.agent_name,
-                    manifest_store=getattr(supervisor, "manifest_store", None),
-                )
-                action_result = await executor.execute_ability(ability, context)
+                build_call = getattr(agent_handle, "_build_ability_call", None)
+                if build_call is None:
+                    return self._err(
+                        f"Agent '{ep.agent_name}' cannot build an operation call "
+                        "(no assembly-bound invocation builder)"
+                    )
+                call, services = build_call(ability, ep.tool_args, {}, tool_call_id=request_id)
+                action_result = await executor.execute_ability(ability, call, services)
             success = action_result.outcome == ActionOutcome.SUCCESS
             error = None if success else str(action_result.data.get("error", "unknown error"))
             result_payload = AbilityResultPayload(

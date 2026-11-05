@@ -40,7 +40,8 @@ from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.permissions.command_scope import command_in_scope
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 logger = logging.getLogger(__name__)
@@ -472,13 +473,16 @@ class CommandApprovalHook(Hook):
     def __init__(self, checker: CommandSafetyChecker) -> None:
         self._checker = checker
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == "execute_command"
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == "execute_command"
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         command = tool_args.get("command", "")
         verdict = self._checker.check_command(command)
 

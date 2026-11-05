@@ -13,7 +13,7 @@
 一起提供——那是本地配置，读取时零网络。因此本能力运行前，调用方应当已经加载过声明
 该服务器的技能；没加载过会得到明确的授权失败，而不是"服务器不存在"。
 
-接线语义（零隐式）：运行时经装配期注入（``AbilityExecutionContext.mcp_runtime``）；
+接线语义（零隐式）：运行时经装配期注入（``MCP_RUNTIME`` 执行服务）；
 未接线时明确 FAILURE 说明缺席，**不**静默降级。
 """
 
@@ -25,11 +25,13 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import MCP_RUNTIME
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 __all__ = ["McpCallAbility", "McpCallInput"]
 
@@ -145,7 +147,7 @@ class McpCallAbility(Ability):
         """
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行一次 MCP 工具调用。
 
         失败一律转成 FAILURE 结果而非抛异常：工具边界不泄漏异常给模型循环。
@@ -153,14 +155,15 @@ class McpCallAbility(Ability):
         模型以为调用成功并沿错误前提继续推理。
 
         Args:
-            context: 执行上下文；``tool_args`` 取 ``server`` / ``tool`` /
-                ``arguments`` / ``skill``，``mcp_runtime`` 是装配期注入的运行时。
+            call: 本次调用的值对象；``arguments`` 取 ``server`` / ``tool`` /
+                ``arguments`` / ``skill``。
+            services: 执行期服务表；``MCP_RUNTIME`` 是装配期注入的运行时。
 
         Returns:
             SUCCESS（``content`` / ``server`` / ``tool``）或 FAILURE
             （``error`` 及必要的 ``note``）。
         """
-        tool_args = context.tool_args or {}
+        tool_args = call.arguments
         server = str(tool_args.get("server", "") or "").strip()
         tool = str(tool_args.get("tool", "") or "").strip()
         skill = str(tool_args.get("skill", "") or "").strip()
@@ -174,7 +177,7 @@ class McpCallAbility(Ability):
                 },
             )
 
-        runtime = context.mcp_runtime
+        runtime = services.get(MCP_RUNTIME)
         if runtime is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -187,7 +190,7 @@ class McpCallAbility(Ability):
             )
 
         # MCP SDK 是可选依赖：模块级导入会让内置树在未安装 SDK 时无法装配。
-        # 只有运行时真的接线（mcp_runtime 非 None）才需要这些错误类型。
+        # 只有运行时真的接线（``MCP_RUNTIME`` 服务非 None）才需要这些错误类型。
         from ghrah.mcp.errors import (
             McpCredentialMissingError,
             McpError,
@@ -202,7 +205,7 @@ class McpCallAbility(Ability):
 
         try:
             outcome = await runtime.call(
-                agent_scope=context.agent_name,
+                agent_scope=call.identity.agent_name,
                 server=server,
                 tool=tool,
                 arguments=arguments,

@@ -10,7 +10,7 @@
 - 集成 FSPermissionChecker 权限检查
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证
 3. 读取文件内容
 4. 检查 old_str 匹配次数（0 / 1 / N）
@@ -31,8 +31,9 @@ from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -108,18 +109,19 @@ class EditFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行文件编辑（精确字符串替换）。
 
         Args:
-            context: 执行上下文
+            call: 一次调用的值对象
+            services: 执行期服务表
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "file_path" 和 "replacements"
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         file_path = tool_args.get("file_path", "")
         old_str = tool_args.get("old_str", "")
         new_str = tool_args.get("new_str", "")

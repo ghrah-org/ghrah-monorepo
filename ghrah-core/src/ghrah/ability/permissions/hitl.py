@@ -28,7 +28,8 @@ from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.core.ability_protocol import AbilityProtocol
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 __all__ = [
@@ -43,7 +44,7 @@ class HITLApprovalHook(Hook):
     拦截宿主 ability 的每次执行，要求人工审批。审批消息携带 ability 名
     与 tool 参数摘要，供人审判断。
 
-    管辖权纪律：本 hook 仅触发于 ``current_ability_name == 宿主名``
+    管辖权纪律：本 hook 仅触发于 ``call.member.member == 宿主名``
     （自身执行域），不参与任何全局拦截。
     """
 
@@ -53,13 +54,16 @@ class HITLApprovalHook(Hook):
         self._ability_name = ability_name
         self._reason = reason
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._ability_name
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._ability_name
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
-        tool_args = context.tool_args or {}
+        tool_args = call.arguments
         summary = str(tool_args)[:200]
         return HookResult.hitl(
             message=f"{self._reason} — ability='{self._ability_name}' args={summary}"
@@ -81,8 +85,8 @@ class HITLRequiredAbility(AbilityProtocol):
     def name(self) -> str:
         return self._inner.name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        return await self._inner.execute(context)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        return await self._inner.execute(call, services)
 
     def get_hooks(self) -> list[Hook]:
         return [*self._inner.get_hooks(), self._hitl_hook]

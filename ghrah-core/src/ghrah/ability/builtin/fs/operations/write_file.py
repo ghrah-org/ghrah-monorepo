@@ -10,7 +10,7 @@
 - 集成 FSPermissionChecker 权限检查
 
 执行逻辑：
-1. 从 context.tool_args 获取 LLM 解析的参数
+1. 从 call.arguments 获取 LLM 解析的参数
 2. 权限验证（FSPermissionChecker.check_write_path）
 3. 如果 create_dirs=True，自动创建父目录
 4. 写入文件内容
@@ -30,8 +30,9 @@ from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
@@ -136,18 +137,19 @@ class WriteFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行文件写入。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "file_path" 和 "bytes_written"
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         file_path = tool_args.get("file_path", "")
         content = tool_args.get("content", "")
         create_dirs = tool_args.get("create_dirs", True)

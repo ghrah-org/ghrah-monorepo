@@ -18,6 +18,8 @@ from _helpers import ScriptedLLM
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
 from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.content import ToolCallBlock
 from ghrah.chat.format import LLMResponse
@@ -50,7 +52,7 @@ class CountingTool(Ability):
             },
         }
 
-    async def execute(self, context):
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         count = int(self.path.read_text()) if self.path.exists() else 0
         self.path.write_text(str(count + 1))
         return ActionResult(outcome=ActionOutcome.SUCCESS, data={"count": count + 1})
