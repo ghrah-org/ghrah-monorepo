@@ -2,7 +2,7 @@
 
 `ghrah-kernel` 是 ghrah 的应用微内核实现：一个持有进程、句柄与调用事实的本体，加上按期望状态驱动受管服务的监督者，以及它们共享的结构化消息 SDK。导入名为 `ghrah_kernel`。
 
-本包提供 14 个基础入口、两种 shutdown、策略型监督者，以及受信启动清单和真实命名服务。连接由宿主绑定稳定主体与解析 Scope（本次会话解释名字时使用的根和挂载集合）；两个会话可以把同名路径解析到不同实例。真实 ActorAgent 与 Ability Provider 尚未接入。
+本包提供 14 个基础入口、两种 shutdown、策略型监督者，以及受信启动清单、真实命名服务和受限文本 Agent 宿主。连接由宿主绑定稳定主体与解析 Scope（本次会话解释名字时使用的根和挂载集合）；两个会话可以把同名路径解析到不同实例。Agent 宿主使用真实 ActorAgent 与 SQLite Context，目前显式使用离线脚本模型。
 
 ## 包里有什么
 
@@ -19,7 +19,7 @@ ghrah-kernel/
 │   ├── context.py          # 受信连接绑定与独立于业务参数的调用上下文
 │   ├── launch.py           # 固定入口、解释器、环境与配置的受信清单
 │   ├── provider.py         # 注册、打开、调用、取消与显式效果回执
-│   ├── integration/        # 静态身份配置、真实命名服务与受管入口
+│   ├── integration/        # 静态身份、命名服务、ActorAgent 宿主与受管入口
 │   ├── kernel_main.py      # 内核宿主装配
 │   ├── supervisor.py       # 期望状态与重启策略
 │   └── kernel/             # 内核本体：进程、句柄、调用、引用、事件、流、收尾
@@ -40,9 +40,26 @@ ghrah-kernel/
 
 宿主在 `LaunchCatalog` 中预先声明模块、解释器、固定参数、环境和连接绑定。空清单拒绝所有服务启动；请求只能选择清单条目及启动实例键，不能提交模块路径或环境覆盖。`entry_key` 选择条目，省略时使用 `kind`；兼容字段 `fixture` 只选择清单中显式声明的 `variant`，Kernel 不再解释故障模式。
 
-`_kernel` 是供宿主注入连接 FD 的低层入口，必须显式传入 `--config <宿主配置文件>`。配置含 `launches` 和 `callers`，后者分别声明 `control`、`observer`、`peer` 三个预建连接的主体、解析 Scope 与诊断许可。普通客户端的 `hello` 或业务 payload 不能覆盖这些绑定。
+`_kernel` 是供宿主注入连接 FD 的低层入口，必须显式传入 `--config <宿主配置文件>`。配置必须包含 `identities`、`launches` 和 `callers`；`identities` 是唯一静态身份来源，`callers` 分别声明 `control`、`observer`、`peer` 三个预建连接的主体、解析 Scope 与诊断许可。所有连接和启动条目的绑定均从该目录核定，服务身份快照由装配层派生。若条目保留了内嵌身份快照，则必须与宿主完全一致；未知主体、非法 Scope 或快照漂移在创建服务子进程前失败。普通客户端的 `hello` 或业务 payload 不能覆盖这些绑定。
 
 用户态的 `StaticIdentityConfig` 记录稳定 Subject、直接 Group 成员、资源 Namespace、解析 Scope 和服务入口许可。配置在一次部署中冻结；组成员、资源 owner 或名字可见均不自动授予调用权。命名服务只改挂载，目标服务独立核验入口许可。Provider 的 handler 接收 `ProviderContext`，业务参数单独传入，并显式返回带效果证据的 `ProviderResult`；取消和异常缺少证据时保持 `UNKNOWN`。
+
+## 受限文本 Agent 宿主
+
+默认安装仅依赖消息编码库。真实 Agent 通过 `agent` 可选依赖引入 Core；本地构建验收须一并提供 Core、Protocol、Plugin 的 wheel，后者尚无发布通道。命名服务和内核本体仍可在未安装 Core 时独立运行。
+
+受信启动条目选择 `module="ghrah_kernel.integration.entry"`，配置使用 `provider="agent"`，并显式给出 `principal`、`administrator`、`namespace`、绝对路径 `database` 与 `model`。`principal` 必须与该启动条目的连接绑定一致，管理主体必须与宿主控制连接一致。模型配置当前形如 `{"kind":"scripted","responses":["回答"],"delay_seconds":0}`；序列耗尽会报错，不会转入真实模型或重复播放。
+
+服务只提供以下消息端口，入口资源名为 `agent`，许可由静态服务规则核定：
+
+- `receive`：只接收 `{"type":"chat","text":"你好"}`，文本为 1–8192 UTF-8 字节。不接收 COMMAND、sender、recipient、metadata、run_id 或工具选择。发送者从可信调用上下文产生，接收者固定为此 Agent；回复含输入编号、回复编号、关联编号、双方主体及真实回复文本。
+- `status`：参数为 `{}`，通过 Actor 的公开接口读取会话目录，并返回进程、运行代次、忙闲与脚本模型调用次数。
+- `history`：参数为 `{"limit":16}`，limit 范围 1–16；通过 Actor 的公开接口读取当前活动会话和分支的已提交节点。大结果仍受消息端点上限约束。
+- `close_resources`：只允许控制主体持管理根调用。普通打开的资源句柄不授予此动作。
+
+宿主显式构造 ActorAgent、ContextManager 和 SqliteBackend，只注册内置 ConversationAbility 及其正常结束 hook，不装入业务工具。ContextManager 是唯一写侧；每次真实回复返回前等待显式 `persist()`，落库失败不会返回成功。初始化时先恢复已有检查点，重启保留主体和历史，运行代次与旧句柄资格仍按 Kernel 规则变化。这里不暴露 reset/rebase，也没有第二份事件写库。
+
+Supervisor 使用 `ServiceBinding(path, scheme, scope, namespace)` 完成真实命名挂载，使用显式 `entry_key` 选择启动记录。旧二元组绑定仅保留替身协议兼容。为 Agent 声明 `close_action=("agent", "close_resources")` 后，正常 stop/restart、aclose 和 drain shutdown 先请求应用关闭，再让 Kernel 回收进程。关闭会停止并等待 Runner、持久化检查点、关闭 SQLite；失败会保留错误并继续回收。`now` shutdown、崩溃和强杀不保证运行应用关闭逻辑。
 
 ## 许可期限必须显式配置
 
@@ -58,7 +75,8 @@ ghrah-kernel/
 ```sh
 # 仓库根执行；uv 解析根 workspace
 uv run pytest ghrah-kernel -q -W error -o faulthandler_timeout=10
-uv run ruff check ghrah-kernel && uv run ruff format --check ghrah-kernel
+uv run ruff check ghrah-kernel
+uv run ruff format --check ghrah-kernel
 
 # 独立安装验收；只安装 kernel 和它的依赖，再真实启动命名服务
 uv build --package ghrah-kernel --out-dir /tmp/ghrah-kernel-check
@@ -73,5 +91,6 @@ uv run --isolated --no-project \
 
 - 已迁入：内核、监督者、消息基座与 97 项机制回归。
 - 已接入：受信启动清单、静态主体/Scope、真实命名服务、可信调用上下文与显式效果端口；CI 包含 wheel 独立启动验收。
-- 未接入：真实 ActorAgent、生产工具/内容/MCP 消费、独立 Ability Provider 与发行版默认启动入口。
+- 已接入：受限文本 ActorAgent、Context 落库/恢复、真实 Supervisor 挂载与正常资源关闭；CI 配置包含可选 Agent wheel 隔离验收，本地执行入口为 `scripts/verify_agent_install.py`。
+- 未接入：真实模型、生产工具/内容/MCP 消费、独立 Ability Provider 与发行版默认启动入口。引用祖先记录及实例表的长期有界回收仍须完成。
 - 未迁入：机制实验仓的 demo／verify 场景装配与 mock 受管入口；它们保留为可复现证据，不进入产品线。

@@ -10,17 +10,29 @@ from .client import RemoteError
 
 
 @dataclass(frozen=True)
+class ServiceBinding:
+    """显式指定挂载位置、解析 Scope 与资源所属命名空间。"""
+
+    path: str
+    scheme: str
+    scope: str
+    namespace: str
+
+
+@dataclass(frozen=True)
 class ServiceSpec:
     service_key: str
     kind: str
     restart: str = "never"
-    bindings: tuple[tuple[str, str], ...] = ()
+    bindings: tuple[ServiceBinding | tuple[str, str], ...] = ()
     fixture: str = "normal"
     timeout_action: str = "keep"
     max_restarts: int = 3
     window_seconds: float = 5
     drain_ms: int = 50
     entry_key: str | None = None
+    close_action: tuple[str, str] | None = None
+    close_timeout_ms: int = 1500
 
     def __post_init__(self):
         if (
@@ -38,6 +50,12 @@ class ServiceSpec:
             or not 1 <= self.window_seconds <= 60
             or type(self.drain_ms) is not int
             or not 0 <= self.drain_ms <= 500
+            or type(self.close_timeout_ms) is not int
+            or not 1 <= self.close_timeout_ms <= 2000
+            or (
+                self.close_action is not None
+                and (len(self.close_action) != 2 or not all(self.close_action))
+            )
         ):
             raise ValueError("无效的服务策略")
         if self.kind == "namespace" and self.restart != "never":
@@ -74,10 +92,22 @@ class Supervisor:
             if declared is None:
                 raise ValueError("服务清单引用了未声明的服务种类")
             names = {x["name"] for x in declared}
-            if any(
-                not path.startswith("/") or scheme not in names for path, scheme in spec.bindings
-            ):
-                raise ValueError("命名接线必须为绝对路径与本服务方案")
+            for binding in spec.bindings:
+                path, scheme = (
+                    (binding.path, binding.scheme)
+                    if isinstance(binding, ServiceBinding)
+                    else binding
+                )
+                if not path.startswith("/") or scheme not in names:
+                    raise ValueError("命名接线必须为绝对路径与本服务方案")
+                if isinstance(binding, ServiceBinding) and (
+                    not binding.scope or not binding.namespace
+                ):
+                    raise ValueError("真实命名接线必须声明 Scope 与命名空间")
+            if spec.close_action is not None:
+                scheme, action = spec.close_action
+                if not any(x["name"] == scheme and action in x["actions"] for x in declared):
+                    raise ValueError("关闭动作必须属于本服务声明的方案")
         self.client = client
         self.schemes = schemes
         self.states = {x.service_key: ServiceState(x) for x in services}
@@ -152,13 +182,36 @@ class Supervisor:
                         raise
 
     async def _kill_current(self, state, *, drain=False):
-        if state.kernel and not state.kernel["reaped"]:
-            reference = state.kernel["domain_id"]
-            if drain:
-                result = await self.client.drain(reference, timeout_ms=state.spec.drain_ms)
-                self.record(state, "drain", remaining_calls=result["inflight"])
-            state.kernel = await self.client.kill(reference)
-        await self._release_roots(state)
+        try:
+            if state.kernel and not state.kernel["reaped"]:
+                reference = state.kernel["domain_id"]
+                try:
+                    if drain:
+                        await self._close_application(state)
+                        result = await self.client.drain(reference, timeout_ms=state.spec.drain_ms)
+                        self.record(state, "drain", remaining_calls=result["inflight"])
+                finally:
+                    state.kernel = await self.client.kill(reference)
+        finally:
+            await self._release_roots(state)
+
+    async def _close_application(self, state):
+        if state.spec.close_action is None or state.registration is None:
+            return
+        scheme, action = state.spec.close_action
+        reference = state.registration["scheme_handles"][scheme]
+        invocation = await self.client.invoke(
+            reference, action, {}, timeout_ms=state.spec.close_timeout_ms
+        )
+        try:
+            result = await self.client.wait(
+                invocation, timeout_ms=state.spec.close_timeout_ms + 100
+            )
+            if result.error is not None or result.delivery_status != "DELIVERED":
+                raise RuntimeError(f"服务资源关闭失败: {result.error or result.delivery_status}")
+            self.record(state, "resources_closed", receipt=result.value)
+        finally:
+            await self.client.close(invocation)
 
     async def _launch(self, state, *, retry=False):
         async with state.lock:
@@ -200,17 +253,24 @@ class Supervisor:
                 )
                 state.kernel = dict(state.registration)
                 self.registrations[state.spec.service_key] = state.registration
-                for path, scheme in state.spec.bindings:
+                for binding in state.spec.bindings:
                     if state.desired != "running" or state.epoch != epoch or self._closing:
                         break
                     namespace = self.registrations[self.namespace]["scheme_handles"]["ns"]
+                    path, scheme = (
+                        (binding.path, binding.scheme)
+                        if isinstance(binding, ServiceBinding)
+                        else binding
+                    )
+                    target = dict(state.registration["scheme_refs"][scheme])
+                    parameters = {"path": path, "target": target}
+                    if isinstance(binding, ServiceBinding):
+                        parameters["scope"] = binding.scope
+                        target["namespace_id"] = binding.namespace
                     await self.client.call(
                         namespace,
                         "bind",
-                        {
-                            "path": path,
-                            "target": state.registration["scheme_refs"][scheme],
-                        },
+                        parameters,
                     )
                 if state.desired != "running" or state.epoch != epoch or self._closing:
                     await self._kill_current(state)
@@ -391,7 +451,12 @@ class Supervisor:
         state.epoch += 1
         self.changed.set()
         async with state.lock:
-            await self._kill_current(state, drain=True)
+            try:
+                await self._kill_current(state, drain=True)
+            except Exception as exc:
+                state.phase, state.error = "Failed", f"STOP_FAILED: {exc}"
+                self.record(state, "stop_failed", error=state.error)
+                raise
             state.phase = "Stopped"
             self.record(state, "stopped")
         return self.view(name)
@@ -436,6 +501,14 @@ class Supervisor:
             for state in self.states.values():
                 async with state.lock:
                     pass
+            close_errors = []
+            if mode == "drain":
+                for state in reversed(list(self.states.values())):
+                    if state.kernel and not state.kernel["reaped"]:
+                        try:
+                            await self._close_application(state)
+                        except Exception as exc:
+                            close_errors.append(f"{state.spec.service_key}: {exc}")
             for request in (await self.client.process_snapshot())["policy_requests"]:
                 await self.client.ack_policy(request, "stale")
             order = [
@@ -452,6 +525,11 @@ class Supervisor:
                 state.phase = "Stopped" if self.shutdown_report["clean"] else "Failed"
                 self.record(state, "shutdown")
             self.registrations.clear()
+            if close_errors:
+                self.shutdown_report["application_close_errors"] = close_errors
+                self.shutdown_report["clean"] = False
+                for state in self.states.values():
+                    state.phase = "Failed"
         return self.shutdown_report
 
     async def aclose(self):
@@ -461,9 +539,15 @@ class Supervisor:
                 raise RuntimeError(self.failure)
             return
         await self._quiesce()
+        errors = []
         for name in reversed(self.states):
-            await self.stop_service(name)
+            try:
+                await self.stop_service(name)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
         for request in (await self.client.process_snapshot())["policy_requests"]:
             await self.client.ack_policy(request, "stale")
         if self.failure:
-            raise RuntimeError(self.failure)
+            errors.append(self.failure)
+        if errors:
+            raise RuntimeError("; ".join(errors))

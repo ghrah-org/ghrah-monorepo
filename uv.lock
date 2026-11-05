@@ -445,8 +445,17 @@ dependencies = [
     { name = "cbor2" },
 ]
 
+[package.optional-dependencies]
+agent = [
+    { name = "ghrah-core" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "cbor2", specifier = ">=5.6" }]
+requires-dist = [
+    { name = "cbor2", specifier = ">=5.6" },
+    { name = "ghrah-core", marker = "extra == 'agent'", editable = "ghrah-core" },
+]
+provides-extras = ["agent"]
 
 [[package]]
 name = "ghrah-monorepo"

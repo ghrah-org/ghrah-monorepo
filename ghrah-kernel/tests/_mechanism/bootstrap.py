@@ -16,7 +16,14 @@ from ghrah_kernel.endpoint import AsyncEndpoint
 from ghrah_kernel.kernel_client import KernelClient
 from ghrah_kernel.wire import MessageConnection
 
-from .contracts import DEFAULT_SERVICES, SERVICE_SCHEMES, mechanism_catalog
+from .contracts import (
+    BOOTSTRAP,
+    DEFAULT_SERVICES,
+    OBSERVER,
+    SERVICE_SCHEMES,
+    mechanism_catalog,
+    mechanism_identities,
+)
 
 # 子进程入口从 tests 目录解析：内核宿主与其派生的受管服务共享这一环境。
 ENTRY_ENV = {
@@ -80,17 +87,18 @@ async def open_service_chain(*, observer_accepts=False, peer_accepts=False, asse
         config_path.write_text(
             json.dumps(
                 {
+                    "identities": mechanism_identities().to_dict(),
                     "launches": [asdict(record) for record in mechanism_catalog().records],
                     "callers": {
                         name: {
                             "principal": principal,
-                            "resolution_scope": "root",
+                            "resolution_scope": "mechanism",
                             "diagnostics": True,
                         }
                         for name, principal in (
-                            ("control", "bootstrap"),
-                            ("observer", "observer"),
-                            ("peer", "observer"),
+                            ("control", BOOTSTRAP),
+                            ("observer", OBSERVER),
+                            ("peer", OBSERVER),
                         )
                     },
                 }

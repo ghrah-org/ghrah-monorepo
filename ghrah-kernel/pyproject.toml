@@ -11,6 +11,9 @@ authors = [
 license = "Apache-2.0"
 license-files = ["LICENSES/*"]
 
+[project.optional-dependencies]
+agent = ["ghrah-core>=0.2.0a0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

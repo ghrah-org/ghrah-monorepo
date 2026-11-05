@@ -93,8 +93,10 @@ class RuntimeHost:
 
 
 @asynccontextmanager
-async def open_runtime(*, hello=True, lifetime=None):
-    directory = identities()
+async def open_runtime(
+    *, hello=True, lifetime=None, directory=None, extra_launches=(), assemble=True
+):
+    directory = directory or identities()
     if lifetime is not None:
         directory = replace(directory, grant_lifetime=lifetime)
     config = {"provider": "namespace", "identities": directory.to_dict(), "administrator": U1.ref}
@@ -135,6 +137,7 @@ async def open_runtime(*, hello=True, lifetime=None):
         "observer": directory.bind(U1.ref, "s1"),
         "peer": directory.bind(U2.ref, "s2"),
     }
+    records.extend(extra_launches)
     pairs = [Pipe(duplex=True) for _ in range(3)]
     tokens = [secrets.token_hex(16) for _ in pairs]
     clients = [KernelClient(RpcClient(AsyncEndpoint(MessageConnection(pair[0])))) for pair in pairs]
@@ -146,6 +149,7 @@ async def open_runtime(*, hello=True, lifetime=None):
         config_path.write_text(
             json.dumps(
                 {
+                    "identities": directory.to_dict(),
                     "launches": [asdict(x) for x in records],
                     "callers": {k: asdict(v) for k, v in bindings.items()},
                 }
@@ -180,14 +184,15 @@ async def open_runtime(*, hello=True, lifetime=None):
                 child.close()
             host = RuntimeHost(clients, process, tokens)
             await host.control.hello(tokens[0], requires_ns_root=False)
-            await host.start("names", "namespace")
-            for key in ("one", "two", "restricted", "agent"):
-                await host.start(key)
-            await host.mount("s1", "/service", "one", "n1")
-            await host.mount("s2", "/service", "two", "n2")
-            await host.mount("s1", "/agent", "agent", "n2")
-            await host.mount("s2", "/agent", "agent", "n2")
-            await host.mount("s1", "/restricted", "restricted", "n2")
+            if assemble:
+                await host.start("names", "namespace")
+                for key in ("one", "two", "restricted", "agent"):
+                    await host.start(key)
+                await host.mount("s1", "/service", "one", "n1")
+                await host.mount("s2", "/service", "two", "n2")
+                await host.mount("s1", "/agent", "agent", "n2")
+                await host.mount("s2", "/agent", "agent", "n2")
+                await host.mount("s1", "/restricted", "restricted", "n2")
             if hello:
                 await host.observer.hello(tokens[1])
                 await host.peer.hello(tokens[2])

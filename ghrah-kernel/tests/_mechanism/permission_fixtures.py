@@ -3,6 +3,8 @@
 import asyncio
 import time
 
+from .contracts import BOOTSTRAP, OBSERVER
+
 
 class PermissionFixtures:
     def __init__(self):
@@ -43,7 +45,7 @@ class PermissionFixtures:
             "revision": 1,
             "allowed_actions": ["echo", "identity"] if path == "readonly" else spec["actions"],
             "expiry": time.monotonic() + ttl,
-            "transfer_policy": {"kind": "allowlist", "principals": ["observer", "bootstrap"]},
+            "transfer_policy": {"kind": "allowlist", "principals": [OBSERVER, BOOTSTRAP]},
             "depth_left": 1,
         }
         if path in ("none", "same"):

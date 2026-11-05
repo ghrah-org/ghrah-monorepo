@@ -1,6 +1,7 @@
 """机制回归共享的替身契约与固定启动清单，不包含业务实现。"""
 
-from ghrah_kernel.context import CallerBinding
+from ghrah_kernel.integration.grants import GrantLifetime
+from ghrah_kernel.integration.identity import ResolutionScope, StaticIdentityConfig, Subject
 from ghrah_kernel.launch import LaunchCatalog, LaunchRecord
 from ghrah_kernel.supervisor import ServiceSpec
 
@@ -46,6 +47,25 @@ DEFAULT_SERVICES = (
     ServiceSpec("worker", "agent", "always", (("/scheme/agent/demo", "agent"),)),
 )
 
+BOOTSTRAP = Subject("fixture", "bootstrap", "user").ref
+OBSERVER = Subject("fixture", "observer", "user").ref
+
+
+def mechanism_identities():
+    """机制宿主也使用同一份可核验的静态身份目录。"""
+    subjects = (
+        Subject("fixture", "bootstrap", "user"),
+        Subject("fixture", "observer", "user"),
+        *(Subject("fixture", kind, "service") for kind in SERVICE_SCHEMES),
+    )
+    return StaticIdentityConfig(
+        subjects,
+        (),
+        (),
+        (ResolutionScope("mechanism", (), tuple(x.ref for x in subjects)),),
+        GrantLifetime("instance"),
+    )
+
 
 def mechanism_catalog():
     """显式允许机制夹具入口，产品 Kernel 不再硬编码测试模块。"""
@@ -55,7 +75,9 @@ def mechanism_catalog():
                 kind,
                 kind,
                 "_mechanism.service_main",
-                CallerBinding(f"fixture:{kind}", "root", True),
+                mechanism_identities().bind(
+                    Subject("fixture", kind, "service").ref, "mechanism", diagnostics=True
+                ),
                 arguments=("--kind", kind, "--fixture", variant),
                 variant=variant,
             )

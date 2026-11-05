@@ -106,6 +106,23 @@ def test_provider_reports_effect_and_cancellation_remains_unknown():
     asyncio.run(scenario())
 
 
+def test_explicit_cancel_preserves_dispatch_uncertainty_and_service_usability():
+    async def scenario():
+        async with open_runtime() as host:
+            client = host.observer
+            handle = await client.open("/service")
+            invocation = await client.invoke(handle, "delay", {"seconds": 5})
+            await client.cancel(invocation)
+            result = await client.wait(invocation)
+            assert result.settlement_state == "CANCELLED"
+            assert result.dispatch_fact == "DISPATCHED" and result.effect_evidence == "UNKNOWN"
+            await client.close(invocation)
+            assert (await client.call(handle, "context", {}))["principal"] == U1.ref
+            await client.close(handle)
+
+    asyncio.run(scenario())
+
+
 def test_restart_preserves_subject_but_invalidates_old_instance_handles():
     async def scenario():
         async with open_runtime() as host:

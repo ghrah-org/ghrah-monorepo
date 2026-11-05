@@ -5,7 +5,7 @@
 ## 仓库结构
 
 - `ghrah-core/` — Python 核心包（PyPI: ghrah-core）；文件 Scheme 切片为显式 `scheme` extra，默认安装不依赖尚未发布的 ghrah-scheme，当前只在 workspace／本地 wheel 组合验证。
-- `ghrah-kernel/` — Python 应用微内核包（14 个基础入口、跨进程句柄／调用事实、结构化消息 SDK、期望状态监督者；受信启动、静态身份/Scope 与真实命名服务已接入，真实 Agent/Ability 待接入；**未纳入 `publish.yml` 白名单，暂无发布通道**）
+- `ghrah-kernel/` — Python 应用微内核包（14 个基础入口、跨进程句柄／调用事实、结构化消息 SDK、期望状态监督者；受信启动、静态身份/Scope、命名服务及受限文本 ActorAgent/Context 宿主已接入；Core 为显式 `agent` extra，生产工具/内容/MCP 待合流；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-plugin/` — Python 插件基础设施包（plugin spec 契约/发现/注册/协商/离线验证；**未纳入 `publish.yml` 白名单，暂无发布通道**）
 - `ghrah-protocol/` — Python 协议包（PyPI: ghrah-protocol）
 - `ghrah-subject/` — Python subject 包（PyPI: ghrah-subject）

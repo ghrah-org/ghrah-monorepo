@@ -10,6 +10,58 @@ from ghrah_kernel.client import RemoteError
 from ghrah_kernel.integration.identity import Group, StaticIdentityConfig, Subject
 
 
+def test_same_group_resource_rejects_nonmember_even_when_both_scopes_can_see_it():
+    async def scenario():
+        directory = identities()
+        directory = replace(
+            directory,
+            scopes=(directory.scopes[0], replace(directory.scopes[1], namespaces=("n1", "n2"))),
+        )
+        async with open_runtime(directory=directory) as host:
+            await host.mount("s1", "/group", "one", "n1")
+            await host.mount("s2", "/group", "one", "n1")
+            handle = await host.observer.open("/group")
+            assert (await host.observer.call(handle, "context", {}))["principal"] == U1.ref
+            await host.peer._request(
+                "hello", principal=U1.ref, groups=["g1"], resolution_scope="s1"
+            )
+            with pytest.raises(RemoteError) as error:
+                await host.peer.open("/group")
+            assert error.value.code == "ACCESS_DENIED"
+            assert host.peer.session["principal"] == U2.ref
+            await host.observer.close(handle)
+
+    asyncio.run(scenario())
+
+
+def test_second_hello_cannot_rebind_existing_session():
+    async def scenario():
+        async with open_runtime() as host:
+            before = dict(host.peer.session)
+            after = await host.peer.hello(host.tokens[1], requires_ns_root=False)
+            assert after == before
+            reply = await host.peer._request(
+                "hello", principal=U1.ref, diagnostics=True, resolution_scope="s1"
+            )
+            assert reply.meta == before
+
+    asyncio.run(scenario())
+
+
+def test_root_mount_preserves_scope_view_and_redirects_child_paths():
+    async def scenario():
+        async with open_runtime() as host:
+            await host.mount("s1", "/", "one", "n1")
+            root = await host.observer.open("/")
+            assert (await host.observer.call(root, "inspect", {}))["scope"] == "s1"
+            child = await host.observer.open("/child")
+            assert (await host.observer.call(child, "context", {}))["label"] == "one"
+            await host.observer.close(child)
+            await host.observer.close(root)
+
+    asyncio.run(scenario())
+
+
 def test_two_users_and_same_subject_sessions_have_separate_handles_and_scopes():
     async def scenario():
         async with open_runtime() as host:

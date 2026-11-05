@@ -18,25 +18,40 @@ from .namespace_provider import NamespaceProvider
 async def run_service(
     provider_fd: int, caller_fd: int, credential: str, enrollment: str, configuration: dict
 ) -> None:
-    """显式装配命名服务并持有其连接，退出时关闭两侧端点。"""
+    """显式装配服务，正常退出时先关闭宿主资源再关闭两侧端点。"""
     caller = KernelClient(RpcClient(AsyncEndpoint(MessageConnection(Connection(caller_fd)))))
     endpoint = AsyncEndpoint(MessageConnection(Connection(provider_fd)))
+    agent = None
     try:
-        if configuration["provider"] != "namespace":
-            raise ValueError("没有声明该受管服务实现")
         identities = StaticIdentityConfig.from_dict(configuration["identities"])
-        namespace = NamespaceProvider(identities, configuration["administrator"])
         await caller.hello(credential, requires_ns_root=False)
+        if configuration["provider"] == "namespace":
+            service = NamespaceProvider(identities, configuration["administrator"])
+            schemes = NAMESPACE_SCHEMES
+        elif configuration["provider"] == "agent":
+            from .agent_provider import AGENT_SCHEMES, AgentProvider, create_resources
+
+            run_id = caller.session["domain_id"]
+            agent = AgentProvider(
+                configuration, await create_resources(configuration, run_id), run_id
+            )
+            service, schemes = agent, AGENT_SCHEMES
+        else:
+            raise ValueError("没有声明该受管服务实现")
         await Provider(
             endpoint,
             enrollment,
-            NAMESPACE_SCHEMES,
-            open_handler=namespace.open,
-            invoke_handler=namespace.invoke,
+            schemes,
+            open_handler=service.open,
+            invoke_handler=service.invoke,
         ).serve()
     finally:
-        await caller.aclose()
-        await endpoint.aclose()
+        try:
+            if agent is not None:
+                await agent.aclose()
+        finally:
+            await caller.aclose()
+            await endpoint.aclose()
 
 
 def main() -> int:
