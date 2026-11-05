@@ -347,6 +347,112 @@ describe("Agent Manifest resolve preview", () => {
   });
 });
 
+describe("Agent Manifest structured editing", () => {
+  it("edits all-field YAML through the structured form and preserves unknown fields", async () => {
+    const { client } = setupClient();
+    serverSource = `# author comment
+manifest: agent
+version: "2"
+metadata:
+  namespace: audit
+  name: helper
+  title: Helper
+  description: Display description
+  tags: [helper]
+  icon: heroicons.book
+  deprecated: false
+model:
+  endpoint_name: test-model
+  temperature: 0.2
+  max_tokens: 256
+  top_p: 0.9
+  top_k: 4
+  extra_params:
+    seed: 42
+system_prompt: Keep the entire prompt.
+max_iterations: 12
+communication_timeout: 120.5
+description: Runtime description
+abilities:
+  - ref: audit.fs.read_file
+    permissions:
+      require_hitl: true
+      fs_read_only: true
+      fs_write: false
+      net_access: false
+      shell_access: false
+      allowed_paths: [/workspace/docs]
+      denied_paths: []
+      allowed_commands: []
+      denied_commands: []
+context:
+  window:
+    max_tokens: 4000
+    strategies: [sliding]
+    compact_keep_recent: 10
+  persistence:
+    type: sqlite
+    compress: true
+    auto_persist: true
+    snapshot_interval: 60
+hooks:
+  on_error:
+    - type: builtin
+      handler: log_error
+future:
+  keep: true
+`;
+    serverSourceHash = "sha256:structured-base";
+    await open();
+    await button("Structured form").trigger("click");
+
+    const titleField = wrapper!.find('input[data-field="title"]');
+    expect((titleField.element as HTMLInputElement).value).toBe("Helper");
+    await titleField.setValue("Structured Helper");
+    await wrapper!
+      .find('[data-field="runtime-description"]')
+      .setValue("Runtime description updated");
+    const topP = wrapper!.find('input[data-field="top-p-field"]');
+    expect((topP.element as HTMLInputElement).value).toBe("0.9");
+    await topP.setValue("0.76");
+    expect((topP.element as HTMLInputElement).value).toBe("0.76");
+    expect((topP.element as HTMLInputElement).value).toBe("0.76");
+    await wrapper!.find('input[data-field="deprecated"]').setValue(false);
+    await button("YAML").trigger("click");
+
+    expect(wrapper!.text()).not.toContain("unexpected");
+    const source = wrapper!.get("#agent-manifest-source").element as HTMLTextAreaElement;
+    expect(source.value).toContain("title: Structured Helper");
+    expect(source.value).toContain("future:");
+    expect(source.value).toContain("keep: true");
+    expect(source.value).toContain("description: Runtime description updated");
+    expect(source.value).toContain("top_p: 0.76");
+
+    await button("Validate and save").trigger("click");
+    await flushPromises();
+    const submitted = client.validateManifest.mock.calls[0][0] as string;
+    expect(submitted).toContain("icon: heroicons.book");
+    expect(submitted).toContain("deprecated: false");
+    expect(submitted).toContain("compact_keep_recent: 10");
+    expect(submitted).toContain("handler: log_error");
+    expect(client.putAgent.mock.calls[0]?.slice(0, 3)).toEqual([fullName, submitted, true]);
+    expect(client.putAgent.mock.calls[0]?.[3]).toBe("sha256:structured-base");
+  });
+
+  it("keeps the current YAML draft when structured mode cannot parse it", async () => {
+    const { client } = setupClient();
+    serverSource = "manifest: [";
+    serverSourceHash = `sha256:${serverSource}`;
+    await open();
+    await button("Structured form").trigger("click");
+
+    expect(wrapper!.get('[role="alert"]').text()).toContain("unexpected end of the stream");
+    expect(wrapper!.get("textarea").element.value).toBe(serverSource);
+    expect(wrapper!.text()).not.toContain("Switching back to YAML");
+    expect(client.validateManifest).not.toHaveBeenCalled();
+  });
+});
+
 describe("Agent configuration page wiring", () => {
   it("opens the in-page editor and refreshes the selected summary after read-back", async () => {
     const { observer } = setupClient();
@@ -376,9 +482,9 @@ describe("new Agent Manifest validation", () => {
       data: { valid, errors: valid ? [] : ["Manifest validation error"] },
     });
     wrapper = mount(NewAgentManifestDialog, { attachTo: document.body });
-    await wrapper.get('input[placeholder="e.g. ghrah.examples"]').setValue("audit");
-    await wrapper.get('input[placeholder="e.g. designer"]').setValue("helper");
-    await wrapper.get('input[placeholder="e.g. gpt-4o-mini"]').setValue("test-model");
+    await wrapper.find('input[data-field="namespace"]').setValue("audit");
+    await wrapper.find('input[data-field="name"]').setValue("helper");
+    await wrapper.find('input[data-field="endpoint-name"]').setValue("test-model");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(client.validateManifest).toHaveBeenCalledWith(

@@ -4,12 +4,20 @@ import {
   type ManifestResolveAgentResponsePayload,
   ManifestResolveAgentResponsePayloadSchema,
 } from "@ghrah/protocol";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import AgentManifestForm from "./agent-manifest-form.vue";
 import AgentManifestPreview from "./agent-manifest-preview.vue";
+import {
+  applyAgentManifestForm,
+  createEmptyAgentManifestForm,
+  hookEvents,
+  parseAgentManifestForm,
+  type HookEvent,
+} from "./agent-manifest-form";
 
 const props = withDefaults(defineProps<{ fullName: string; initialMode?: "view" | "edit" }>(), {
   initialMode: "edit",
@@ -38,6 +46,9 @@ const sourceField = ref<HTMLTextAreaElement | null>(null);
 const submitted = ref<string | null>(null);
 const preview = ref<ManifestResolveAgentResponsePayload | null>(null);
 const previewPanel = ref<HTMLElement | null>(null);
+const sourceMode = ref<"yaml" | "structured">("yaml");
+const structuredError = ref("");
+const structured = reactive(createEmptyAgentManifestForm());
 let epoch = 0;
 
 const connected = computed(() => connection.state === "connected");
@@ -55,6 +66,7 @@ watch(draft, () => {
   saved.value = false;
   error.value = "";
   preview.value = null;
+  structuredError.value = "";
 });
 
 function failure(fallback: string, message?: string | null): Error {
@@ -69,6 +81,75 @@ async function readSource(): Promise<{ source: string; sourceHash: string }> {
   return { source: entry.detail.source, sourceHash: entry.detail.source_hash };
 }
 
+function enterStructuredMode() {
+  if (sourceMode.value === "structured" || busy.value || needsVerification.value) return;
+  try {
+    replaceStructuredForm(parseAgentManifestForm(draft.value));
+    sourceMode.value = "structured";
+  } catch (cause) {
+    structuredError.value = (cause as Error).message;
+  }
+}
+
+function enterYamlMode() {
+  if (sourceMode.value !== "structured" || busy.value || needsVerification.value) return;
+  try {
+    draft.value = applyAgentManifestForm(draft.value, structured);
+    sourceMode.value = "yaml";
+    void nextTick(() => sourceField.value?.focus());
+  } catch (cause) {
+    structuredError.value = (cause as Error).message;
+  }
+}
+
+function replaceStructuredForm(next: ReturnType<typeof parseAgentManifestForm>) {
+  Object.assign(structured, next, {
+    window: next.window,
+    persistence: next.persistence,
+    hooks: next.hooks,
+  });
+  structured.abilities.splice(0, structured.abilities.length, ...next.abilities);
+  for (const event of hookEvents) {
+    structured.hooks[event].splice(0, structured.hooks[event].length, ...next.hooks[event]);
+  }
+}
+
+function addAbility() {
+  structured.abilities.push({
+    mode: "type",
+    value: "",
+    permissions: {
+      enabled: false,
+      require_hitl: false,
+      fs_read_only: false,
+      fs_write: false,
+      net_access: false,
+      shell_access: false,
+      allowed_paths: "",
+      denied_paths: "",
+      allowed_commands: "",
+      denied_commands: "",
+    },
+  });
+}
+
+function removeAbility(index: number) {
+  if (structured.abilities.length > 1) structured.abilities.splice(index, 1);
+}
+
+function addHook(event: HookEvent) {
+  structured.hooks[event].push({
+    type: "builtin",
+    handler: "",
+    source: "",
+    params: "{}",
+  });
+}
+
+function removeHook(event: HookEvent, index: number) {
+  structured.hooks[event].splice(index, 1);
+}
+
 async function load() {
   if (busy.value || !connected.value) return;
   const current = ++epoch;
@@ -79,6 +160,7 @@ async function load() {
     if (current !== epoch) return;
     draft.value = loaded.source;
     original.value = loaded.source;
+    sourceMode.value = "yaml";
     sourceHash.value = loaded.sourceHash;
     saved.value = false;
     phase.value = null;
@@ -243,24 +325,59 @@ onBeforeUnmount(() => {
     <div class="manifest-editor">
       <p>{{ t("config.editor.fileHint") }}</p>
       <p>{{ t("config.editor.identityHint") }}</p>
+      <p v-if="structuredError" role="alert">{{ structuredError }}</p>
       <p v-if="!connected" role="alert">{{ t("config.manifest.notConnected") }}</p>
       <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="phase" role="status">{{ t(`config.editor.${phase}`) }}</p>
       <template v-if="original !== null">
-        <label for="agent-manifest-source">{{ t("config.editor.source") }}</label>
-        <textarea
-          id="agent-manifest-source"
-          ref="sourceField"
-          v-model="draft"
-          data-autofocus
-          :readonly="!editing || needsVerification"
-          :disabled="busy"
-          spellcheck="false"
-          rows="20"
-          :aria-describedby="
-            validation && !validation.valid ? 'manifest-validation-errors' : undefined
-          "
-        />
+        <div class="source-tabs" role="tablist" :aria-label="t('config.editor.sourceMode')">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="sourceMode === 'yaml'"
+            :disabled="busy || needsVerification"
+            @click="enterYamlMode"
+          >
+            {{ t("config.editor.yamlMode") }}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="sourceMode === 'structured'"
+            :disabled="busy || needsVerification"
+            @click="enterStructuredMode"
+          >
+            {{ t("config.editor.structuredMode") }}
+          </button>
+        </div>
+        <template v-if="sourceMode === 'yaml'">
+          <label for="agent-manifest-source">{{ t("config.editor.source") }}</label>
+          <textarea
+            id="agent-manifest-source"
+            ref="sourceField"
+            v-model="draft"
+            data-autofocus
+            :readonly="!editing || needsVerification"
+            :disabled="busy"
+            spellcheck="false"
+            rows="20"
+            :aria-describedby="
+              validation && !validation.valid ? 'manifest-validation-errors' : undefined
+            "
+          />
+        </template>
+        <template v-else>
+          <p role="status">{{ t("config.editor.structuredHint") }}</p>
+          <AgentManifestForm
+            :form="structured"
+            :lock-identity="true"
+            :disabled="!editing || busy || needsVerification"
+            @add-ability="addAbility"
+            @remove-ability="removeAbility"
+            @add-hook="addHook"
+            @remove-hook="removeHook"
+          />
+        </template>
         <p v-if="dirty">{{ t("config.editor.modified") }}</p>
         <p v-if="validation?.valid" role="status">{{ t("config.editor.valid") }}</p>
         <div v-if="validation && !validation.valid" id="manifest-validation-errors" role="alert">
@@ -357,5 +474,20 @@ onBeforeUnmount(() => {
   color: inherit;
   font-family: ui-monospace, monospace;
   font-size: var(--font-ui-code);
+}
+.source-tabs {
+  display: flex;
+  gap: var(--spacing-1);
+}
+.source-tabs button {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-size: var(--font-ui-body);
+}
+.source-tabs button[aria-selected="true"] {
+  font-weight: 600;
 }
 </style>
