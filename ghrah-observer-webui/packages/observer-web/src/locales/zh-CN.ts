@@ -35,6 +35,14 @@ export default {
     },
   },
   agentEntity: {
+    specPromptTitle: "持久规格提示词",
+    specPromptHint:
+      "此处只读展示最近一次实体快照中的规格值。会话提示词和运行装配结果可能不同，不代表最终发送给模型的提示词。点击「刷新状态」可重新读取。",
+    specPromptSource: "数据来源：specification.system_prompt",
+    specPromptContent: "完整规格提示词",
+    specPromptEmpty: "规格中的 system_prompt 为空；这不代表运行时或会话提示词为空。",
+    specPromptManifestHint:
+      "此实体引用了 Manifest。下方展示的是持久规格字段，并非该 Manifest 文件的读取结果；查看文件提示词请前往「实例设置 → Agent 配置」。",
     modelConfig: "模型端点",
     noModelConfigs: "暂无模型配置。请先在 agentconf 中创建模型端点，再刷新。",
     modelHint:

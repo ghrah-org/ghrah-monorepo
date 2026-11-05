@@ -40,6 +40,7 @@ function snapshot(online = false) {
       desired_state: online ? "running" : "stopped",
       abilities: ["send_message"],
       manifest_ref: "",
+      system_prompt: "",
       runtime_error: "",
     },
     specification_revision: 5,
@@ -273,5 +274,97 @@ it("saves a model binding independently from the entity name", async () => {
   await button(w, "Save model binding").trigger("click");
   await flushPromises();
   expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5);
+  w.unmount();
+});
+it.each([false, true])(
+  "shows the complete saved specification prompt (online=%s) without mutations",
+  async (online) => {
+    const state = snapshot(online);
+    const prompt =
+      "  Keep leading spaces.\n" + "Full specification line.\n".repeat(100) + "PROMPT_END_MARKER\n";
+    state.specification.system_prompt = prompt;
+    api.snapshot.mockResolvedValue(state);
+    const w = render();
+    await flushPromises();
+    const field = w.get('[data-testid="specification-prompt"]');
+    expect(field.element).toHaveProperty("value", prompt);
+    expect(field.element).toHaveProperty("readOnly", true);
+    expect(w.text()).toContain("specification.system_prompt");
+    expect(w.text()).toContain("not the final prompt sent to the model");
+    expect(api.start).not.toHaveBeenCalled();
+    expect(api.configure).not.toHaveBeenCalled();
+    expect(api.createSession).not.toHaveBeenCalled();
+    w.unmount();
+  },
+);
+it("distinguishes an empty specification field from a referenced Manifest and runtime prompt", async () => {
+  const state = snapshot();
+  state.specification.manifest_ref = "audit.helper";
+  api.snapshot.mockResolvedValue(state);
+  const w = render();
+  await flushPromises();
+  expect(w.find('[data-testid="specification-prompt"]').exists()).toBe(false);
+  expect(w.get('[data-testid="specification-prompt-empty"]').text()).toContain(
+    "system_prompt is empty",
+  );
+  expect(w.text()).toContain("audit.helper");
+  expect(w.text()).toContain("not a read of that Manifest file");
+  w.unmount();
+});
+it("shows a nonempty specification field independently of its Manifest reference", async () => {
+  const state = snapshot();
+  state.specification.manifest_ref = "audit.helper";
+  state.specification.system_prompt = "Saved specification prompt";
+  api.snapshot.mockResolvedValue(state);
+  const w = render();
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Saved specification prompt",
+  );
+  expect(w.text()).toContain("audit.helper");
+  expect(w.text()).toContain("not a read of that Manifest file");
+  const updated = snapshot();
+  updated.specification.system_prompt = "Updated authority value";
+  api.snapshot.mockResolvedValue(updated);
+  await button(w, "Refresh state").trigger("click");
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Updated authority value",
+  );
+  expect(w.text()).not.toContain("audit.helper");
+  w.unmount();
+});
+it("discards the previous prompt on target changes and ignores late snapshots", async () => {
+  const first = snapshot();
+  first.specification.system_prompt = "First target prompt";
+  api.snapshot.mockResolvedValueOnce(first);
+  const w = render();
+  await flushPromises();
+  let finishOld!: (value: ReturnType<typeof snapshot>) => void;
+  api.snapshot.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+  );
+  await button(w, "Refresh state").trigger("click");
+  const second = snapshot();
+  second.identity.agent_id = "a2";
+  second.specification.system_prompt = "Second target prompt";
+  api.snapshot.mockResolvedValueOnce(second);
+  await w.setProps({ agentId: "a2" });
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Second target prompt",
+  );
+  finishOld(first);
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Second target prompt",
+  );
   w.unmount();
 });

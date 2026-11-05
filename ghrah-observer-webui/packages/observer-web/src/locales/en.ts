@@ -35,6 +35,15 @@ export default {
     },
   },
   agentEntity: {
+    specPromptTitle: "Persistent specification prompt",
+    specPromptHint:
+      "Read-only value from the latest entity snapshot. Session prompts and runtime assembly may differ; this is not the final prompt sent to the model. Refresh state to read it again.",
+    specPromptSource: "Source: specification.system_prompt",
+    specPromptContent: "Complete specification prompt",
+    specPromptEmpty:
+      "The specification system_prompt is empty. This does not imply that the runtime or session prompt is empty.",
+    specPromptManifestHint:
+      "This entity references a Manifest. The text below is the persisted specification field, not a read of that Manifest file. View the file under Instance settings → Agent Config to inspect its prompt.",
     modelConfig: "Model endpoint",
     noModelConfigs:
       "No model configurations available. Create a model endpoint in agentconf, then refresh.",

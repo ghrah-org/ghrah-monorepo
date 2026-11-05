@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useProjectsStore } from "@ghrah/observer-core";
 import { type AgentSnapshot, AgentSnapshotSchema } from "@ghrah/protocol";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { z } from "zod";
 import BaseModal from "./ui/base-modal.vue";
@@ -323,6 +323,16 @@ function activateSession() {
 function createSession() {
   return mutate(() => entity().context.createSession(sessionName.value || undefined));
 }
+watch(
+  () => [props.projectId, props.agentId],
+  () => {
+    if (busy.value) stopWaiting();
+    snapshot.value = null;
+    tab.value = "overview";
+    success.value = "";
+    void refresh();
+  },
+);
 onMounted(() => {
   void refresh();
 });
@@ -495,6 +505,36 @@ onMounted(() => {
                 {{ t("agentEntity.stop") }}
               </button>
             </div>
+            <section
+              class="entity-card entity-stack entity-prompt"
+              :aria-label="t('agentEntity.specPromptTitle')"
+            >
+              <h3 class="entity-prompt-heading">{{ t("agentEntity.specPromptTitle") }}</h3>
+              <p>{{ t("agentEntity.specPromptHint") }}</p>
+              <p>
+                {{ t("agentEntity.specPromptSource") }}
+              </p>
+              <template v-if="snapshot.specification.manifest_ref">
+                <p>
+                  {{ t("agentEntity.manifest") }}:
+                  <code>{{ snapshot.specification.manifest_ref }}</code>
+                </p>
+                <p>{{ t("agentEntity.specPromptManifestHint") }}</p>
+              </template>
+              <label v-if="snapshot.specification.system_prompt.length">
+                {{ t("agentEntity.specPromptContent") }}
+                <textarea
+                  :value="snapshot.specification.system_prompt"
+                  readonly
+                  rows="12"
+                  spellcheck="false"
+                  data-testid="specification-prompt"
+                />
+              </label>
+              <p v-else data-testid="specification-prompt-empty">
+                {{ t("agentEntity.specPromptEmpty") }}
+              </p>
+            </section>
             <p>{{ t("agentEntity.lifecycleHint") }}</p>
             <p>{{ t("agentEntity.modelHint") }}</p>
             <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.modelManifest") }}</p>
@@ -783,6 +823,20 @@ pre {
 }
 .entity-content {
   white-space: pre-wrap;
+}
+.entity-prompt p {
+  margin: 0;
+}
+.entity-prompt-heading {
+  margin: 0;
+  font-size: var(--font-ui-body);
+}
+textarea[data-testid="specification-prompt"] {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-ui-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .entity-error {
   color: var(--ac-write);
