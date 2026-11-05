@@ -142,3 +142,27 @@ def test_registry_entries_are_json_definitions_only() -> None:
     """登记表只读定义形状，不 import 实现模块即可判定（导入隔离）。"""
     definition = _definition("fs")
     assert json.loads(json.dumps(definition))["operations"]["read_file"]["expose"] is True
+
+
+def test_core_member_shape_admission(tmp_path: Path) -> None:
+    """核心成员按参数形状接纳；内容读取成员仍只做形状检查。"""
+    root = str(tmp_path)
+    _admit("core", "list_abilities", {}, (root,), root)
+    _admit("core", "list_abilities", {"full_name": "ghrah.fs.read_file"}, (root,), root)
+    _admit("core", "load_skill", {"full_name": "guide"}, (root,), root)
+    _admit("core", "recall_context", {"mode": "list"}, (root,), root)
+    _admit("core", "session_info", {}, (root,), root)
+    with pytest.raises(AccessError) as missing:
+        _admit("core", "load_skill", {}, (root,), root)
+    assert missing.value.code == "invalid_change"
+    with pytest.raises(AccessError) as bad_mode:
+        _admit("core", "recall_context", {"mode": "all"}, (root,), root)
+    assert bad_mode.value.code == "invalid_change"
+
+
+def test_core_control_members_are_not_admitted() -> None:
+    """循环控制成员不进授权面：接纳层不为其登记入口。"""
+    definition = _definition("core")
+    assert admission_for(definition, "list_abilities") is not None
+    assert admission_for(definition, "conversation") is None
+    assert admission_for(definition, "end_task") is None

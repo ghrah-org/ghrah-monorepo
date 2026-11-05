@@ -28,6 +28,7 @@ __all__ = [
 FS_CONTRACT = "ghrah.fs.v1"
 SHELL_CONTRACT = "ghrah.shell.v1"
 CLUSTER_CONTRACT = "ghrah.cluster.v1"
+CORE_CONTRACT = "ghrah.core.v1"
 MCP_CONTRACT = "ghrah.mcp.v1"
 
 AdmissionCheck = Callable[[str, Mapping[str, Any], tuple[str, ...], str], None]
@@ -112,6 +113,59 @@ def _cluster_check(
             raise AccessError("invalid_change")
 
 
+def _core_check(
+    member: str,
+    arguments: Mapping[str, Any],
+    roots: tuple[str, ...],
+    instance_root: str,
+) -> None:
+    """核心成员：只核对显式声明过的参数形状，不做资源轴判断。
+
+    内建核心成员在当前进程内执行，没有外部资源根；内容读取
+    （``load_skill``）的授权属于内容接线，不在这里冒充已授权。
+    """
+    checker = _CORE_ARGUMENTS.get(member)
+    if checker is None:
+        raise AccessError("unavailable")
+    checker(arguments)
+
+
+def _optional_str(arguments: Mapping[str, Any], name: str) -> None:
+    value = arguments.get(name)
+    if value is not None and not isinstance(value, str):
+        raise AccessError("invalid_change")
+
+
+def _required_str(arguments: Mapping[str, Any], name: str) -> None:
+    value = arguments.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise AccessError("invalid_change")
+
+
+def _core_list_abilities(arguments: Mapping[str, Any]) -> None:
+    _optional_str(arguments, "full_name")
+
+
+def _core_load_skill(arguments: Mapping[str, Any]) -> None:
+    _required_str(arguments, "full_name")
+
+
+def _core_recall_context(arguments: Mapping[str, Any]) -> None:
+    mode = arguments.get("mode")
+    if mode is not None and mode not in {"list", "messages"}:
+        raise AccessError("invalid_change")
+    for name in ("node_id", "keyword"):
+        _optional_str(arguments, name)
+    if arguments.get("node_id_range") is not None and not isinstance(
+        arguments["node_id_range"], list
+    ):
+        raise AccessError("invalid_change")
+
+
+def _core_no_arguments(arguments: Mapping[str, Any]) -> None:
+    """无参数成员：接受空映射；多余参数由实现侧契约拒绝。"""
+
+
 def _mcp_check(
     member: str,
     arguments: Mapping[str, Any],
@@ -151,6 +205,13 @@ _CLUSTER_OPTIONAL: dict[str, tuple[str, ...]] = {
     "query_manifests": ("manifest_ref",),
 }
 
+_CORE_ARGUMENTS: dict[str, Any] = {
+    "list_abilities": _core_list_abilities,
+    "load_skill": _core_load_skill,
+    "recall_context": _core_recall_context,
+    "session_info": _core_no_arguments,
+}
+
 _REGISTRY: dict[tuple[str, str], BackendAdmission] = {}
 
 
@@ -164,6 +225,8 @@ _register(SHELL_CONTRACT, "execute_command", (), _shell_check)
 for _member in (*_CLUSTER_REQUIRED, *_CLUSTER_OPTIONAL):
     _register(CLUSTER_CONTRACT, _member, (), _cluster_check)
 _register(MCP_CONTRACT, "mcp_call", (), _mcp_check)
+for _member in _CORE_ARGUMENTS:
+    _register(CORE_CONTRACT, _member, (), _core_check)
 
 
 def contract_of(definition: Mapping[str, Any], member: str) -> str | None:

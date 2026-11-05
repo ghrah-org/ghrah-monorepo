@@ -484,13 +484,18 @@ class StartupGrantMaterializer:
                             "parameters": operation["input_schema"],
                         },
                     },
-                    admission=self._admission(agent, binding),
+                    admission=self._admission(agent, binding, instance.version_digest),
                 )
             )
         return abilities
 
-    def _admission(self, agent: str, binding: StartupToolBinding) -> Any:
-        """按工具名在当前关系中重新解析并接纳；撤销立即影响下一次调用。"""
+    def _admission(self, agent: str, binding: StartupToolBinding, version_digest: str) -> Any:
+        """按启动时固定的成员与版本在当前关系中复核；撤销或改绑立即生效。
+
+        执行实现绑定在启动时的 ``_inner``，因此接纳不能只看同名工具当前指向
+        哪个成员：期望的别名、成员与版本必须一并比对，否则管理端把工具改绑
+        到别的成员后，旧实现仍会按新绑定被放行。
+        """
         store = self._store
 
         async def admit(arguments: dict[str, Any]) -> str | None:
@@ -500,9 +505,18 @@ class StartupGrantMaterializer:
                 return _denial(binding, "access_denied")
             actor = AccessIdentity(store.project_id, agent, run)
             try:
-                await store.admit_tool(actor, agent, binding.tool_name, dict(arguments))
+                basis = await store.admit_tool(
+                    actor,
+                    agent,
+                    binding.tool_name,
+                    dict(arguments),
+                    expected_alias=binding.alias,
+                    expected_member=binding.member,
+                )
             except AccessError as error:
                 return _denial(binding, error.code)
+            if version_digest and not basis.startswith(f"{version_digest}:"):
+                return _denial(binding, "access_denied")
             return None
 
         return admit

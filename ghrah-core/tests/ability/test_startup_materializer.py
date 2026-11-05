@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 
 import pytest
-from ghrah.protocol.ability_tree import RevokeAbilityRequest, UnbindToolRequest
+from ghrah.protocol.ability_tree import (
+    BindToolRequest,
+    RevokeAbilityRequest,
+    UnbindToolRequest,
+)
 
 from ghrah.ability.access import (
     AbilityAccessStore,
@@ -406,3 +410,46 @@ async def test_missing_resource_argument_is_rejected(store, tmp_path):
     outcome = await read_file.execute(AbilityExecutionContext(tool_args={}))
     assert outcome.outcome.value == "failure"
     assert "Invalid arguments" in outcome.data["error"]
+
+
+async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
+    """工具名改绑到别的成员后，旧包装对象不能按新绑定继续执行旧实现。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+    target = tmp_path / "note.txt"
+    target.write_text("w1 content", encoding="utf-8")
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    read_file = next(item for item in result.abilities if item.name == "read_file")
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.write_unbind_tool(
+        DEPLOY, "alice", UnbindToolRequest(tool_name="read_file", expected_revision=revision)
+    )
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.write_bind_tool(
+        DEPLOY,
+        "alice",
+        BindToolRequest(
+            alias="fs",
+            member="list_directory",
+            tool_name="read_file",
+            expected_revision=revision,
+        ),
+    )
+    outcome = await read_file.execute(
+        AbilityExecutionContext(tool_args={"file_path": str(target), "dir_path": str(tmp_path)})
+    )
+    assert outcome.outcome.value == "failure"
+    assert "Access denied" in outcome.data["error"]
+
+
+async def test_core_member_is_admitted(store, tmp_path):
+    """核心成员进入工具表后可以经过接纳层，不再一律 unavailable。"""
+    assembly, resolved = _resolved(AGENT_CORE_YAML)
+    result = await _materializer(store, assembly, tmp_path).materialize(
+        agent="alice", resolved=resolved
+    )
+    tool = next(item for item in result.abilities if item.name == "list_abilities")
+    outcome = await tool.execute(AbilityExecutionContext(tool_args={}))
+    error = str(outcome.data.get("error", ""))
+    assert "backend is not supported by the admission layer" not in error

@@ -1141,27 +1141,37 @@ class AbilityAccessStore:
         agent: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        expected_alias: str | None = None,
+        expected_member: str | None = None,
     ) -> str:
         """按 Agent 当前工具选择解析成员并在同一事务内完成接纳。
 
-        生产执行入口只拿得到模型传来的工具名；成员、实例代次与关系修订都
-        从关系库当前事实重新解析，撤销或重新选择立即影响下一次调用。
+        生产执行入口只拿得到模型传来的工具名，因此必须把**启动时固定的**
+        成员身份作为期望值传回：若当前选择已把同名工具改绑到别的成员，
+        说明调用依据与执行实现不再一致，直接拒绝，不能按新绑定放行旧实现。
 
         Args:
             actor: 受信调用方身份（Agent 自身）。
             agent: Agent 标识。
             tool_name: 当前工具选择里的工具名。
             arguments: 本次调用的参数。
+            expected_alias: 启动时固定的能力别名；给出时当前选择必须一致。
+            expected_member: 启动时固定的成员键；给出时当前选择必须一致。
 
         Returns:
             接纳依据（版本摘要 + 关系修订 + 工具修订）。
 
         Raises:
-            AccessError: 工具未选择、关系失效或参数越界。
+            AccessError: 工具未选择、绑定已改、关系失效或参数越界。
         """
         async with self._tx():
             tool = await self._row("ability_tools", "agent=? AND name=?", agent, tool_name)
             if tool is None:
+                raise AccessError("access_denied")
+            if expected_alias is not None and tool["alias"] != expected_alias:
+                raise AccessError("access_denied")
+            if expected_member is not None and tool["member"] != expected_member:
                 raise AccessError("access_denied")
             fence = await self._resolve(actor, tool["alias"], tool["member"], tool=tool_name)
             return await self._admit(actor, fence, arguments)
