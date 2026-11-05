@@ -435,6 +435,7 @@ describe("extractManifestEntry", () => {
         full_name: "audit.fs.read_file",
         manifest: fixture.ability.manifest,
         source: fixture.ability.source,
+        source_hash: fixture.ability.source_hash,
       },
     });
   });
@@ -452,6 +453,7 @@ describe("extractManifestEntry", () => {
       full_name: "audit.helper",
       manifest: fixture.agent.manifest,
       source: fixture.agent.source,
+      source_hash: fixture.agent.source_hash,
     });
   });
 
