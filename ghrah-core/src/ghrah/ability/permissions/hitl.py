@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.core.ability_protocol import AbilityProtocol
+from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = [
     "HITLApprovalHook",
     "HITLRequiredAbility",
+    "PermissionDeniedAbility",
 ]
 
 
@@ -70,16 +72,15 @@ class HITLApprovalHook(Hook):
         )
 
 
-class HITLRequiredAbility(AbilityProtocol):
+class _DelegatingAbility(AbilityProtocol):
     """require_hitl 包装：委托宿主 ability，追加 PRE_EXECUTE HITL hook。
 
     组合而非继承——不破坏宿主 ability 的属性访问（checker/runner 等
     测试断言直接穿透）。
     """
 
-    def __init__(self, inner: AbilityProtocol, ability_name: str, reason: str) -> None:
+    def __init__(self, inner: AbilityProtocol) -> None:
         self._inner = inner
-        self._hitl_hook = HITLApprovalHook(ability_name, reason)
 
     @property
     def name(self) -> str:
@@ -89,7 +90,7 @@ class HITLRequiredAbility(AbilityProtocol):
         return await self._inner.execute(call, services)
 
     def get_hooks(self) -> list[Hook]:
-        return [*self._inner.get_hooks(), self._hitl_hook]
+        return self._inner.get_hooks()
 
     def bind_tool(self) -> dict[str, Any] | None:
         return self._inner.bind_tool()
@@ -102,3 +103,32 @@ class HITLRequiredAbility(AbilityProtocol):
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
+
+
+class HITLRequiredAbility(_DelegatingAbility):
+    """委托宿主能力并追加审批 Hook。"""
+
+    def __init__(self, inner: AbilityProtocol, ability_name: str, reason: str) -> None:
+        super().__init__(inner)
+        self._hitl_hook = HITLApprovalHook(ability_name, reason)
+
+    def get_hooks(self) -> list[Hook]:
+        return [*self._inner.get_hooks(), self._hitl_hook]
+
+
+class PermissionDeniedAbility(_DelegatingAbility):
+    """在审批和实际效果之前执行不可被批准覆盖的权限拒绝。"""
+
+    def __init__(self, inner: AbilityProtocol, reason: str) -> None:
+        super().__init__(inner)
+        self._reason = reason
+
+    def check_call(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        """返回硬拒绝，不进入人工审批。"""
+        return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": self._reason})
+
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        return self.check_call(call, services)
+
+    def get_hooks(self) -> list[Hook]:
+        return self._inner.get_hooks()

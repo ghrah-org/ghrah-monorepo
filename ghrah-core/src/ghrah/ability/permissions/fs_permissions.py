@@ -80,12 +80,14 @@ class FSPermissionChecker:
         denied_paths: list[str] | None = None,
         require_approval: bool = True,
         deny_all_paths: bool = False,
+        read_only: bool = False,
     ) -> None:
         self._allowed_paths = self._normalize_paths(allowed_paths) if allowed_paths else None
         self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self._denied_paths = self._normalize_paths(denied_paths) if denied_paths else None
         self._require_approval = require_approval
         self._deny_all_paths = deny_all_paths
+        self._read_only = read_only
 
     @staticmethod
     def _normalize_paths(paths: list[str]) -> list[Path]:
@@ -148,6 +150,8 @@ class FSPermissionChecker:
             - (True, "pending"): 需要 HITL 审批
             - (False, reason): 拒绝访问
         """
+        if operation == "write" and self._read_only:
+            return False, "Permission denied: read-only filesystem"
         resolved = self._resolve(path)
 
         # 沙盒硬边界：审批只决定“范围外是否问人”，不能放宽沙盒本身。

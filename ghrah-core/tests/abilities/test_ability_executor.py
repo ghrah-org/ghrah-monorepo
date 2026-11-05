@@ -343,7 +343,7 @@ class TestLocalAbilityExecutor:
     @pytest.mark.asyncio
     async def test_execute_ability_hitl_rejected_reason_passthrough(self):
         """审批人拒绝理由（HITLResult.result）须透传进错误信息，不被丢弃。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )
@@ -381,7 +381,7 @@ class TestLocalAbilityExecutor:
     @pytest.mark.asyncio
     async def test_execute_ability_hitl_timeout_attribution(self):
         """超时错误须携带命令摘要与归因 id（并行双超时可归因到具体调用）。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )
@@ -1045,7 +1045,7 @@ class TestHitlConsecutiveTimeoutCircuit:
     @pytest.mark.asyncio
     async def test_degraded_error_guides_end_task(self):
         """降级超时的错误信息声明通道疑似离线并引导 end_task。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )

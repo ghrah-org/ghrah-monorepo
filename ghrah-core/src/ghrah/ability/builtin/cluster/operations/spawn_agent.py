@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -114,7 +115,7 @@ async def _assemble_child_abilities(
             )
         try:
             materialized = await materializer.materialize(
-                agent=resolved.config.name, resolved=resolved
+                agent=resolved.config.effective_agent_id, resolved=resolved
             )
         except Exception as error:
             logger.warning(
@@ -126,7 +127,9 @@ async def _assemble_child_abilities(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": f"authorized assembly failed for '{manifest_ref}': {error}"},
             )
-        projector = materializer.tool_table_projector(resolved.config.name, materialized)
+        projector = materializer.tool_table_projector(
+            resolved.config.effective_agent_id, materialized
+        )
         return materialized.abilities, materialized, projector
     from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
 
@@ -235,6 +238,30 @@ class SpawnAgentAbility(Ability):
                 data={"error": f"manifest resolve failed for '{manifest_ref}': {e}"},
             )
 
+        if getattr(supervisor, "_builtin_abilities", False):
+            resolved.config = replace(resolved.config, agent_id=uuid4().hex)
+        if not getattr(supervisor, "_builtin_abilities", False):
+            return await self._spawn_resolved(
+                supervisor, services, manifest_ref, resolved, description, system_prompt
+            )
+        try:
+            async with supervisor.spawn_reservation(resolved.config):
+                return await self._spawn_resolved(
+                    supervisor, services, manifest_ref, resolved, description, system_prompt
+                )
+        except Exception as error:
+            return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": str(error)})
+
+    async def _spawn_resolved(
+        self,
+        supervisor: Any,
+        services: ExecutionServices,
+        manifest_ref: str,
+        resolved: Any,
+        description: str,
+        system_prompt: str,
+    ) -> ActionResult:
+        """在同一注册预留内核定工具并完成子 Agent 注册。"""
         assembled = await _assemble_child_abilities(
             services=services,
             manifest_ref=manifest_ref,
@@ -269,16 +296,6 @@ class SpawnAgentAbility(Ability):
                 abilities=ability_instances,
                 tool_table_projector=tool_table_projector,
             )
-            materializer = getattr(supervisor, "ability_materializer", None)
-            if materialized is not None and materializer is not None:
-                try:
-                    await materializer.bind_run(agent_name, materialized)
-                except Exception as error:  # 绑定失败不掩盖“已 spawn 成功”的事实
-                    logger.warning(
-                        "SpawnAgentAbility: run binding failed for '%s': %s",
-                        agent_name,
-                        error,
-                    )
             return ActionResult(
                 outcome=ActionOutcome.SUCCESS,
                 data={

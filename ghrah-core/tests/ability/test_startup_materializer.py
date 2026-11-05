@@ -139,7 +139,14 @@ async def store(tmp_path: Path):
 
 def _materializer(db, assembly, tmp_path: Path | None, policy=GrantPolicy(), **kwargs):
     """构造启动物化器；默认空策略（用模板结果）与临时工作区。"""
-    return StartupGrantMaterializer(
+
+    class RegisteredMaterializer(StartupGrantMaterializer):
+        async def materialize(self, **kwargs):
+            result = await super().materialize(**kwargs)
+            await self.bind_run(kwargs["agent"], result)
+            return result
+
+    return RegisteredMaterializer(
         store=db,
         source=assembly.source,
         actor=DEPLOY,
@@ -153,7 +160,7 @@ async def test_template_grants_requested_members_and_projects_tools(store, tmp_p
     """模板申请的两个成员被授予并选定；工具 schema 来自定义面。"""
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     assert [binding.member for binding in result.tools] == ["list_directory", "read_file"]
     assert [binding.tool_name for binding in result.tools] == ["list_directory", "read_file"]
@@ -167,11 +174,14 @@ async def test_template_grants_requested_members_and_projects_tools(store, tmp_p
     assert schema["function"]["name"] == "read_file"
     assert schema["function"]["parameters"]["properties"]["file_path"]["type"] == "string"
 
-    records = await store.grants(DEPLOY, "alice")
+    records = await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     assert [record.alias for record in records] == ["fs"]
     assert records[0].members == ("list_directory", "read_file")
     assert records[0].source == "deployment"
-    assert list(await store.tool_names(DEPLOY, "alice")) == ["list_directory", "read_file"]
+    assert list(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == [
+        "list_directory",
+        "read_file",
+    ]
     assert (await store.list_instances(DEPLOY)) == ["ghrah-fs"]
 
 
@@ -181,7 +191,7 @@ async def test_projected_ability_executes_read_file(store, tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("w1 content", encoding="utf-8")
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     outcome = await read_file.execute(
@@ -196,12 +206,12 @@ async def test_replace_policy_grants_whole_package(store, tmp_path):
     assembly, resolved = _resolved(AGENT_YAML)
     policy = GrantPolicy(mode="replace", rules=(GrantRule(package="ghrah.fs"),))
     result = await _materializer(store, assembly, tmp_path, policy).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     names = {item.name for item in result.abilities}
     assert {"read_file", "write_file", "edit_file", "list_directory"} <= names
     assert "conversation" in names
-    record = (await store.grants(DEPLOY, "alice"))[0]
+    record = (await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))[0]
     assert "write_file" in record.members
 
 
@@ -212,7 +222,7 @@ async def test_merge_policy_revokes_a_requested_member(store, tmp_path):
         rules=(GrantRule(package="ghrah.fs", operation="list_directory", effect="revoke"),)
     )
     result = await _materializer(store, assembly, tmp_path, policy).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     assert [binding.member for binding in result.tools] == ["read_file"]
     assert [item.name for item in result.abilities] == ["conversation", "read_file"]
@@ -222,9 +232,13 @@ async def test_materialize_is_idempotent(store, tmp_path):
     """重复启动物化不产生新历史，工具映射保持稳定。"""
     assembly, resolved = _resolved(AGENT_YAML)
     materializer = _materializer(store, assembly, tmp_path)
-    first = await materializer.materialize(agent="alice", resolved=resolved)
+    first = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
     before = await store.changes(DEPLOY)
-    second = await materializer.materialize(agent="alice", resolved=resolved)
+    second = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
     assert second.granted == () and second.revoked == ()
     assert second.revision == first.revision
     assert await store.changes(DEPLOY) == before
@@ -237,21 +251,30 @@ async def test_next_manifest_revokes_stale_package_and_unbinds_tools(store, tmp_
     """下一次启动只保留目标包；旧包授权与工具选择被撤销。"""
     assembly, resolved = _resolved(AGENT_YAML)
     materializer = _materializer(store, assembly, tmp_path)
-    await materializer.materialize(agent="alice", resolved=resolved)
-    assert await store.tool_names(DEPLOY, "alice") == ("list_directory", "read_file")
+    await materializer.materialize(agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved)
+    assert await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == (
+        "list_directory",
+        "read_file",
+    )
 
     _, core_resolved = _resolved(AGENT_CORE_YAML)
-    result = await materializer.materialize(agent="alice", resolved=core_resolved)
+    result = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=core_resolved
+    )
     assert result.revoked == ("fs",)
-    assert [record.alias for record in await store.grants(DEPLOY, "alice")] == ["core"]
-    assert await store.tool_names(DEPLOY, "alice") == ("list_abilities",)
+    assert [
+        record.alias for record in await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    ] == ["core"]
+    assert await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == ("list_abilities",)
 
 
 async def test_control_only_manifest_fails_closed(store, tmp_path):
     """只有循环控制成员时没有可授权的包，直接失败而非静默启动。"""
     assembly, resolved = _resolved(AGENT_CONTROL_ONLY)
     with pytest.raises(StartupGrantError, match="能力包成员"):
-        await _materializer(store, assembly, tmp_path).materialize(agent="alice", resolved=resolved)
+        await _materializer(store, assembly, tmp_path).materialize(
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+        )
 
 
 async def test_unknown_policy_package_fails_closed(store, tmp_path):
@@ -260,7 +283,7 @@ async def test_unknown_policy_package_fails_closed(store, tmp_path):
     policy = GrantPolicy(rules=(GrantRule(package="other.package"),))
     with pytest.raises(StartupGrantError, match="未解析的包"):
         await _materializer(store, assembly, tmp_path, policy).materialize(
-            agent="alice", resolved=resolved
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
         )
 
 
@@ -268,14 +291,16 @@ async def test_file_members_without_workspace_fail_closed(store):
     """文件类成员没有明确工作区时不授予，避免拿实例根当授权根。"""
     assembly, resolved = _resolved(AGENT_YAML)
     with pytest.raises(StartupGrantError, match="workspace_root"):
-        await _materializer(store, assembly, None).materialize(agent="alice", resolved=resolved)
+        await _materializer(store, assembly, None).materialize(
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+        )
 
 
 async def test_selected_member_schema_matches_captured_definition(store, tmp_path):
     """工具 schema 与已提交版本定义一致，不从实现脚本二次读取。"""
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     version = (await store.list_versions(DEPLOY))[0]
     definition = json.loads(version.definition_json)
@@ -289,12 +314,14 @@ async def test_revoke_after_startup_denies_next_execution(store, tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("w1 content", encoding="utf-8")
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.revoke(
-        DEPLOY, "alice", RevokeAbilityRequest(alias="fs", expected_revision=revision)
+        DEPLOY,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        RevokeAbilityRequest(alias="fs", expected_revision=revision),
     )
     outcome = await read_file.execute(
         make_call(arguments={"file_path": str(target)}), make_services()
@@ -309,7 +336,7 @@ async def test_execution_rejects_path_outside_workspace(store, tmp_path):
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     outcome = await read_file.execute(
@@ -324,7 +351,7 @@ async def test_manifest_scope_narrows_auto_approval_and_keeps_hitl_outside(store
     (tmp_path / "src").mkdir()
     assembly, resolved = _resolved(AGENT_SCOPED_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     hook = read_file.get_hooks()[0]
@@ -343,7 +370,7 @@ async def test_declared_hitl_without_narrowing_auto_approves_in_scope(store, tmp
     """只声明 require_hitl、不收窄范围时，工作区内自动批准（HITL 降噪）。"""
     assembly, resolved = _resolved(AGENT_UNSCOPED_HITL_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     hook = read_file.get_hooks()[0]
@@ -355,7 +382,7 @@ async def test_projected_tool_name_maps_back_to_member_for_hooks(store, tmp_path
     """表面工具名被限定后，内核 Hook 仍按成员身份裁决。"""
     assembly, resolved = _resolved(AGENT_SCOPED_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     from ghrah.ability.access.startup import ProjectedAbility
@@ -378,13 +405,13 @@ async def test_unbound_tool_is_rejected(store, tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("w1 content", encoding="utf-8")
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_unbind_tool(
         DEPLOY,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         UnbindToolRequest(tool_name="read_file", expected_revision=revision),
     )
     outcome = await read_file.execute(
@@ -398,7 +425,7 @@ async def test_missing_resource_argument_is_rejected(store, tmp_path):
     """参数错误在接纳处失败，不进入执行实现。"""
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
     outcome = await read_file.execute(make_call(arguments={}), make_services())
@@ -412,17 +439,19 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("w1 content", encoding="utf-8")
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_unbind_tool(
-        DEPLOY, "alice", UnbindToolRequest(tool_name="read_file", expected_revision=revision)
+        DEPLOY,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        UnbindToolRequest(tool_name="read_file", expected_revision=revision),
     )
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_bind_tool(
         DEPLOY,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         BindToolRequest(
             alias="fs",
             member="list_directory",
@@ -442,7 +471,7 @@ async def test_core_member_is_admitted(store, tmp_path):
     """核心成员进入工具表后可以经过接纳层，不再一律 unavailable。"""
     assembly, resolved = _resolved(AGENT_CORE_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     tool = next(item for item in result.abilities if item.name == "list_abilities")
     outcome = await tool.execute(make_call(arguments={}), make_services())
@@ -456,15 +485,15 @@ async def test_migrated_agent_starts_from_existing_facts_without_policy(store, t
 
     await migrate_agent(
         store,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
         workspace_root=str(tmp_path),
     )
-    revision_before = await store.agent_revision(DEPLOY, "alice")
+    revision_before = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     assembly, resolved = _resolved(AGENT_YAML)
 
     result = await _materializer(store, assembly, tmp_path, policy=None).materialize(
-        agent="alice", resolved=resolved
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
 
     # 模板还申请了 list_directory，但存量模式不自动扩权
@@ -473,11 +502,11 @@ async def test_migrated_agent_starts_from_existing_facts_without_policy(store, t
     assert result.granted == ()
     assert result.revoked == ()
     # 修订仍会因工具选择（bind）推进，但授权事实本身没有被改写
-    assert await store.agent_revision(DEPLOY, "alice") >= revision_before
-    records = await store.grants(DEPLOY, "alice")
+    assert await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") >= revision_before
+    records = await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     assert records[0].source == "migration"
     assert records[0].members == ("read_file",)
-    assert list(await store.tool_names(DEPLOY, "alice")) == ["read_file"]
+    assert list(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == ["read_file"]
 
 
 async def test_unconfigured_policy_without_facts_fails_closed(store, tmp_path):
@@ -486,7 +515,7 @@ async def test_unconfigured_policy_without_facts_fails_closed(store, tmp_path):
 
     with pytest.raises(StartupGrantError, match="未配置启动授权策略"):
         await _materializer(store, assembly, tmp_path, policy=None).materialize(
-            agent="alice", resolved=resolved
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
         )
 
 
@@ -496,19 +525,21 @@ async def test_revoked_migrated_facts_do_not_resurrect_at_startup(store, tmp_pat
 
     await migrate_agent(
         store,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
         workspace_root=str(tmp_path),
     )
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_revoke(
-        DEPLOY, "alice", RevokeAbilityRequest(alias="fs", expected_revision=revision)
+        DEPLOY,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        RevokeAbilityRequest(alias="fs", expected_revision=revision),
     )
     assembly, resolved = _resolved(AGENT_YAML)
 
     with pytest.raises(StartupGrantError, match="未配置启动授权策略"):
         await _materializer(store, assembly, tmp_path, policy=None).materialize(
-            agent="alice", resolved=resolved
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
         )
 
 
@@ -528,8 +559,10 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
     try:
         assembly, resolved = _resolved(AGENT_YAML)
         materializer = _materializer(db, assembly, tmp_path)
-        result = await materializer.materialize(agent="alice", resolved=resolved)
-        await materializer.bind_run("alice", result)
+        result = await materializer.materialize(
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+        )
+        await materializer.bind_run("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
         target = tmp_path / "note.txt"
         target.write_text("run content", encoding="utf-8")
         read_file = next(item for item in result.abilities if item.name == "read_file")
@@ -554,18 +587,63 @@ async def test_tool_table_projector_tracks_revoke(store, tmp_path):
     """可见工具名由关系库投影重建：撤销后立即从投影消失。"""
     assembly, resolved = _resolved(AGENT_YAML)
     materializer = _materializer(store, assembly, tmp_path)
-    result = await materializer.materialize(agent="alice", resolved=resolved)
-    projector = materializer.tool_table_projector("alice", result)
+    result = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
+    projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
 
     assert set(await projector()) == {"list_directory", "read_file"}
 
-    revision = await store.agent_revision(DEPLOY, "alice")
+    revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_revoke(
         DEPLOY,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         RevokeAbilityRequest(
             alias="fs", members=["operations/read_file"], expected_revision=revision
         ),
     )
 
     assert set(await projector()) == {"list_directory"}
+
+
+@pytest.mark.parametrize("auto_approve", [(), ("write_file",)])
+async def test_readonly_template_blocks_write_at_effect_boundary(store, tmp_path, auto_approve):
+    from ghrah.abilities.executor import LocalAbilityExecutor
+
+    text = AGENT_YAML.replace(
+        "  - ref: ghrah.fs.list_directory",
+        "  - ref: ghrah.fs.write_file\n    permissions:\n      fs_read_only: true",
+    )
+    assembly, resolved = _resolved(text)
+    materializer = _materializer(store, assembly, tmp_path, auto_approve_abilities=auto_approve)
+    table = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
+    await materializer.bind_run("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", table)
+    tool = next(t for t in table.abilities if t.name == "write_file")
+    target = tmp_path / "readonly.txt"
+    executor = LocalAbilityExecutor(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", hooks=tool.get_hooks(), hitl_timeout=0.01
+    )
+    result = await executor.execute_ability(
+        tool,
+        make_call(member="write_file", arguments={"file_path": str(target), "content": "x"}),
+        make_services(),
+    )
+    assert result.outcome.value == "failure"
+    assert not target.exists()
+    assert "read" in result.data["error"].lower()
+
+
+async def test_generic_template_hitl_is_preserved(store, tmp_path):
+    text = AGENT_YAML[: AGENT_YAML.index("abilities:")] + (
+        "abilities:\n  - type: conversation\n  - ref: ghrah.cluster.query_agents\n"
+        "    permissions:\n      require_hitl: true\n"
+    )
+    assembly, resolved = _resolved(text)
+    materializer = _materializer(store, assembly, tmp_path)
+    table = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
+    tool = next(t for t in table.abilities if t.name == "query_agents")
+    assert tool.get_hooks()

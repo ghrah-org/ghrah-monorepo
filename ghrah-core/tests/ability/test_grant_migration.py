@@ -77,19 +77,19 @@ async def test_migration_writes_initial_grants_once(
 
     result = await migrate_agent(
         store,
-        "coder",
+        "cccccccccccccccccccccccccccccccc",
         grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
         workspace_root=workspace,
     )
 
     assert result.already_migrated is False
     assert result.aliases == ("fs",)
-    records = await store.grants(MIGRATE, "coder")
+    records = await store.grants(MIGRATE, "cccccccccccccccccccccccccccccccc")
     assert [record.alias for record in records] == ["fs"]
     assert records[0].members == ("read_file",)
     assert records[0].roots == (workspace,)
     assert records[0].source == "migration"
-    assert await store.migrated(MIGRATE, "coder")
+    assert await store.migrated(MIGRATE, "cccccccccccccccccccccccccccccccc")
     # 迁移是显式快照：没有模板展开，写文件成员没有因此获得
     assert "write_file" not in records[0].members
 
@@ -98,25 +98,29 @@ async def test_migration_is_idempotent(store: AbilityAccessStore, tmp_path: Path
     workspace = _workspace(tmp_path)
     grants = [MigrationGrant(package="ghrah.fs", members=("read_file",))]
 
-    first = await migrate_agent(store, "coder", grants=grants, workspace_root=workspace)
-    second = await migrate_agent(store, "coder", grants=grants, workspace_root=workspace)
+    first = await migrate_agent(
+        store, "cccccccccccccccccccccccccccccccc", grants=grants, workspace_root=workspace
+    )
+    second = await migrate_agent(
+        store, "cccccccccccccccccccccccccccccccc", grants=grants, workspace_root=workspace
+    )
 
     assert first.already_migrated is False
     assert second.already_migrated is True
     assert second.revision == first.revision
     assert second.aliases == ("fs",)
-    records = await store.grants(MIGRATE, "coder")
+    records = await store.grants(MIGRATE, "cccccccccccccccccccccccccccccccc")
     assert len(records) == 1
 
 
 async def test_migration_refuses_existing_grants(store: AbilityAccessStore, tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
-    await _grant_as_admin(store, "coder", workspace)
+    await _grant_as_admin(store, "cccccccccccccccccccccccccccccccc", workspace)
 
     with pytest.raises(MigrationError, match="已有获授事实"):
         await migrate_agent(
             store,
-            "coder",
+            "cccccccccccccccccccccccccccccccc",
             grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
             workspace_root=workspace,
         )
@@ -127,23 +131,36 @@ async def test_revoke_after_migration_does_not_resurrect(
 ) -> None:
     workspace = _workspace(tmp_path)
     grants = [MigrationGrant(package="ghrah.fs", members=("read_file",))]
-    await migrate_agent(store, "coder", grants=grants, workspace_root=workspace)
+    await migrate_agent(
+        store, "cccccccccccccccccccccccccccccccc", grants=grants, workspace_root=workspace
+    )
 
-    revision = await store.agent_revision(ADMIN, "coder")
-    await store.revoke(ADMIN, "coder", RevokeAbilityRequest(alias="fs", expected_revision=revision))
-    assert await store.grants(MIGRATE, "coder") == []
+    revision = await store.agent_revision(ADMIN, "cccccccccccccccccccccccccccccccc")
+    await store.revoke(
+        ADMIN,
+        "cccccccccccccccccccccccccccccccc",
+        RevokeAbilityRequest(alias="fs", expected_revision=revision),
+    )
+    assert await store.grants(MIGRATE, "cccccccccccccccccccccccccccccccc") == []
 
     # 撤销后迁移标记仍在：下一次启动不会把已撤销的授权补回来
-    again = await migrate_agent(store, "coder", grants=grants, workspace_root=workspace)
+    again = await migrate_agent(
+        store, "cccccccccccccccccccccccccccccccc", grants=grants, workspace_root=workspace
+    )
     assert again.already_migrated is True
-    assert await store.grants(MIGRATE, "coder") == []
+    assert await store.grants(MIGRATE, "cccccccccccccccccccccccccccccccc") == []
 
 
 async def test_migration_requires_explicit_snapshot(
     store: AbilityAccessStore, tmp_path: Path
 ) -> None:
     with pytest.raises(MigrationError, match="没有可写入的获授事实"):
-        await migrate_agent(store, "coder", grants=[], workspace_root=_workspace(tmp_path))
+        await migrate_agent(
+            store,
+            "cccccccccccccccccccccccccccccccc",
+            grants=[],
+            workspace_root=_workspace(tmp_path),
+        )
 
 
 async def test_migration_requires_workspace_for_file_members(
@@ -152,7 +169,7 @@ async def test_migration_requires_workspace_for_file_members(
     with pytest.raises(MigrationError, match="workspace_root"):
         await migrate_agent(
             store,
-            "coder",
+            "cccccccccccccccccccccccccccccccc",
             grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
             workspace_root=None,
         )
@@ -163,13 +180,28 @@ async def test_migration_handles_multiple_agents(store: AbilityAccessStore, tmp_
     results = await migrate_agents(
         store,
         {
-            "coder": [MigrationGrant(package="ghrah.fs", members=("read_file",))],
-            "reviewer": [MigrationGrant(package="ghrah.fs", members=("list_directory",))],
+            "cccccccccccccccccccccccccccccccc": [
+                MigrationGrant(package="ghrah.fs", members=("read_file",))
+            ],
+            "dddddddddddddddddddddddddddddddd": [
+                MigrationGrant(package="ghrah.fs", members=("list_directory",))
+            ],
         },
         workspace_root=workspace,
     )
 
-    assert set(results) == {"coder", "reviewer"}
+    assert set(results) == {"cccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddd"}
     assert all(result.already_migrated is False for result in results.values())
-    assert len(await store.grants(MIGRATE, "coder")) == 1
-    assert len(await store.grants(MIGRATE, "reviewer")) == 1
+    assert len(await store.grants(MIGRATE, "cccccccccccccccccccccccccccccccc")) == 1
+    assert len(await store.grants(MIGRATE, "dddddddddddddddddddddddddddddddd")) == 1
+
+
+async def test_migration_refuses_display_name_before_writing(store, tmp_path):
+    with pytest.raises(ValueError, match="stable Agent ID"):
+        await migrate_agent(
+            store,
+            "coder",
+            grants=[MigrationGrant(package="ghrah.fs")],
+            workspace_root=_workspace(tmp_path),
+        )
+    assert await store._row("ability_agents", "id=?", "coder") is None

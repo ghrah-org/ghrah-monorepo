@@ -21,7 +21,9 @@ import json
 from typing import Literal
 
 from ghrah.protocol.ability_tree import TreeId, TreeKey
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ghrah.ability.access.identity import validate_agent_id
 
 __all__ = ["GrantMode", "GrantEffect", "GrantPolicy", "GrantRule"]
 
@@ -59,6 +61,11 @@ class GrantRule(BaseModel):
     effect: GrantEffect = "grant"
     visible: bool = True
     available: bool = True
+
+    @field_validator("agent")
+    @classmethod
+    def _stable_agent(cls, value: str | None) -> str | None:
+        return validate_agent_id(value) if value is not None else None
 
     @model_validator(mode="after")
     def _single_target(self) -> GrantRule:

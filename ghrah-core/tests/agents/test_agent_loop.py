@@ -2007,3 +2007,39 @@ class TestIterationForceCloseOnCancel:
         assert cm.get_current_state().get("dirty") is None
         cm.ensure_iteration_closed()  # 幂等
         assert cm.in_iteration is False
+
+
+async def test_hook_and_operation_consume_isolated_previous_result():
+    from ghrah.ability.execution.execution_services import LOOP
+
+    agent = _create_agent()
+    previous = ActionResult(outcome=ActionOutcome.SUCCESS, data={"values": [1]})
+    agent._iteration_state.last_action_result = previous
+    observed = []
+
+    class Consumer(MockAbility):
+        async def execute(self, call, services):
+            value = services.require(LOOP).last_action_result
+            observed.append(list(value.data["values"]))
+            value.data["values"].append(3)
+            return ActionResult(outcome=ActionOutcome.SUCCESS)
+
+    class Observer(Hook):
+        hook_point = HookPoint.PRE_EXECUTE
+
+        async def should_trigger(self, call, services):
+            return True
+
+        async def execute(self, call, services, result=None):
+            value = services.require(LOOP).last_action_result
+            observed.append(list(value.data["values"]))
+            value.data["values"].append(2)
+            return HookResult.continue_()
+
+    tool = Consumer(name="consume")
+    agent.register_ability(tool)
+    agent._all_hooks.append(Observer())
+    call, services = agent._build_ability_call(tool, {}, {})
+    await agent._ability_executor.execute_ability(tool, call, services)
+    assert observed == [[1], [1, 2]]
+    assert previous.data == {"values": [1]}

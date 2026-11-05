@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ghrah.ability.permissions.scope import (
     EffectivePermission,
     resolve_effective_permission,
@@ -80,17 +82,42 @@ def test_denied_commands_union() -> None:
 
 
 def test_boolean_rules_and_read_only_implies_no_write() -> None:
-    """布尔按“任一申请即要求”合并；只读生效时强制关闭写能力。"""
+    """只读与审批取 OR，权限位不能由模板扩大。"""
     package = PermissionFlags(fs_write=True, require_hitl=True)
     request = PermissionFlags(fs_read_only=True, shell_access=True)
     scope = resolve_effective_permission(package, request)
     assert scope.require_hitl is True
     assert scope.fs_read_only is True
     assert scope.fs_write is False
-    assert scope.shell_access is True
+    assert scope.shell_access is False
 
 
 def test_unbounded_properties() -> None:
     """范围属性的直观语义。"""
     bounded = EffectivePermission(allowed_paths=(), allowed_commands=())
     assert not bounded.unbounded_paths and not bounded.unbounded_commands
+
+
+def test_template_cannot_add_undeclared_permission_bits() -> None:
+    scope = resolve_effective_permission(
+        PermissionFlags(), PermissionFlags(fs_write=True, shell_access=True, net_access=True)
+    )
+    assert not scope.fs_write and not scope.shell_access and not scope.net_access
+
+
+def test_omitted_permission_bits_inherit_and_explicit_false_narrows() -> None:
+    declaration = PermissionFlags(fs_write=True, shell_access=True, net_access=True)
+    inherited = resolve_effective_permission(declaration, PermissionFlags(require_hitl=True))
+    assert inherited.fs_write and inherited.shell_access and inherited.net_access
+    narrowed = resolve_effective_permission(
+        declaration, PermissionFlags(fs_write=False, shell_access=False, net_access=False)
+    )
+    assert not narrowed.fs_write and not narrowed.shell_access and not narrowed.net_access
+
+
+@pytest.mark.parametrize("invalid", ["planner", "", "ABCDEF0123456789ABCDEF0123456789AB"])
+def test_policy_agent_cannot_be_a_display_name(invalid):
+    from ghrah.ability.access import GrantRule
+
+    with pytest.raises(ValueError):
+        GrantRule(package="ghrah.fs", agent=invalid)

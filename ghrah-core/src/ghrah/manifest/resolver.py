@@ -56,6 +56,9 @@ class ResolvedAbility:
     收紧”重新合并时，用本字段保留原始模板声明，不必从合并结果反推。
     """
 
+    declared_permissions: PermissionFlags | None = None
+    """原始包声明；执行物化与原始模板约束共同计算有效权限。"""
+
     @classmethod
     def from_builtin(
         cls,
@@ -204,6 +207,7 @@ class ManifestResolver:
                     permissions=permissions,
                     implementation=ability_manifest.implementation,
                     hooks=ability_manifest.hooks,
+                    declared_permissions=ability_manifest.metadata.permissions,
                     requested_permissions=ref.permissions,
                 )
             elif ref.type:
@@ -211,6 +215,7 @@ class ManifestResolver:
                 if ref.permissions:
                     r = dataclasses.replace(
                         r,
+                        declared_permissions=r.permissions,
                         permissions=r.permissions.merge(ref.permissions),
                         requested_permissions=ref.permissions,
                     )

@@ -43,7 +43,7 @@ class FileBackend:
                 project_id=actor.project_id,
                 agent=actor.subject_id,
                 run=actor.run_id,
-                agent_name=actor.subject_id,
+                agent_name="",  # 本端口未提供显示名，不把稳定主体伪装成名称。
             ),
         )
         result = await self._operations[member].execute(call, build_execution_services())

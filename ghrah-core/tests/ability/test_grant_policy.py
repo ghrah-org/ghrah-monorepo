@@ -14,7 +14,7 @@ def test_empty_policy_means_only_template_driven_grants() -> None:
     assert policy.mode == "merge"
     assert policy.rules == ()
     assert policy.ordered() == ()
-    assert policy.for_agent("alice") == ()
+    assert policy.for_agent("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == ()
 
 
 def test_rule_defaults_are_visible_and_available() -> None:
@@ -46,7 +46,9 @@ def test_ordered_puts_revocations_first_then_grants_by_target() -> None:
             GrantRule(package="fs", skill="beta", effect="revoke"),
             GrantRule(package="fs", operation="write_file"),
             GrantRule(package="fs", skill="alpha", script="run"),
-            GrantRule(package="fs", operation="read_file", agent="alice"),
+            GrantRule(
+                package="fs", operation="read_file", agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
             GrantRule(package="acme.tools"),
         )
     )
@@ -55,7 +57,7 @@ def test_ordered_puts_revocations_first_then_grants_by_target() -> None:
         ("grant", None, "acme.tools", None),
         ("grant", None, "fs", "operations/write_file"),
         ("grant", None, "fs", "skill/alpha/scripts/run"),
-        ("grant", "alice", "fs", "operations/read_file"),
+        ("grant", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fs", "operations/read_file"),
     ]
 
 
@@ -75,13 +77,19 @@ def test_for_agent_keeps_global_rules_and_orders_them() -> None:
     """Agent 级规则只对指定 Agent 生效；全局规则对所有 Agent 生效。"""
     policy = GrantPolicy(
         rules=(
-            GrantRule(package="fs", agent="bob"),
-            GrantRule(package="fs", agent="alice"),
+            GrantRule(package="fs", agent="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            GrantRule(package="fs", agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             GrantRule(package="acme.tools"),
         )
     )
-    assert [rule.agent for rule in policy.for_agent("alice")] == [None, "alice"]
-    assert [rule.agent for rule in policy.for_agent("bob")] == [None, "bob"]
+    assert [rule.agent for rule in policy.for_agent("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] == [
+        None,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+    assert [rule.agent for rule in policy.for_agent("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")] == [
+        None,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -8,9 +8,11 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import aiosqlite
 from ghrah.protocol.ability_tree import (
@@ -42,8 +44,8 @@ from ghrah.ability.contracts import operation_result_schema
 from ghrah.ability.versions import AbilityVersion
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=4));
-INSERT OR IGNORE INTO ability_tree_schema VALUES(4);
+CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=5));
+INSERT OR IGNORE INTO ability_tree_schema VALUES(5);
 CREATE TABLE IF NOT EXISTS ability_versions (
  project TEXT NOT NULL, digest TEXT NOT NULL, definition TEXT NOT NULL,
  implementation TEXT NOT NULL, manifest TEXT NOT NULL DEFAULT '{}',
@@ -72,8 +74,18 @@ CREATE TABLE IF NOT EXISTS ability_changes (
  revision INTEGER NOT NULL, reason TEXT NOT NULL, actor TEXT,
  before_revision INTEGER, version_digest TEXT,
  source TEXT NOT NULL DEFAULT 'admin', policy TEXT);
+CREATE TABLE IF NOT EXISTS ability_registrations (
+ project TEXT NOT NULL, agent TEXT NOT NULL, token TEXT NOT NULL, state TEXT NOT NULL,
+ owned_revision INTEGER NOT NULL, PRIMARY KEY(project,agent));
 CREATE INDEX IF NOT EXISTS idx_ability_changes_project_seq ON ability_changes(project,seq);
 """
+
+
+@dataclass
+class StartupRegistration:
+    """一次独占启动的提交标记；具体关系快照仅由关系库管理。"""
+
+    committed: bool = False
 
 
 GrantSource = Literal["admin", "deployment", "agent-default", "migration"]
@@ -162,6 +174,9 @@ class AbilityAccessStore:
         self._operators = operators
         self._runs = runs
         self._lock = asyncio.Lock()
+        self._startup_context: ContextVar[tuple[str, str, asyncio.Task[Any] | None] | None] = (
+            ContextVar("ability_startup", default=None)
+        )
         self.read_limit = 65536
 
     @classmethod
@@ -187,47 +202,23 @@ class AbilityAccessStore:
                     "SELECT name FROM sqlite_master WHERE name='ability_tree_schema'"
                 ) as cursor:
                     exists = await cursor.fetchone()
+                if not exists:
+                    async with db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name GLOB 'ability_*'"
+                    ) as cursor:
+                        if await cursor.fetchone() is not None:
+                            raise ValueError(
+                                "Ability 域缺少版本标记；须显式重建，禁止继承旧名称授权"
+                            )
                 if exists:
                     async with db.execute("SELECT version FROM ability_tree_schema") as cursor:
                         version = await cursor.fetchone()
-                    if version is None or version[0] not in {1, 2, 3, 4}:
-                        raise ValueError("不支持的 Ability 关系数据库版本")
-                    if version[0] == 1:
-                        await db.execute("ALTER TABLE ability_agents DROP COLUMN run")
-                        await db.execute("ALTER TABLE ability_changes ADD COLUMN actor TEXT")
-                        await db.execute(
-                            "ALTER TABLE ability_changes ADD COLUMN before_revision INTEGER"
+                    if version is None or version[0] != 5:
+                        raise ValueError(
+                            "Ability 关系数据库使用旧主体语义；稳定 Agent ID 需要显式重建 "
+                            "Ability 域（scripts/reset_ability_grants.py），不能按名称继承授权"
                         )
-                        await db.execute(
-                            "ALTER TABLE ability_changes ADD COLUMN version_digest TEXT"
-                        )
-                    if version[0] in {1, 2}:
-                        for table, column, default in (
-                            ("ability_versions", "manifest", "{}"),
-                            ("ability_grants", "content", "[]"),
-                        ):
-                            async with db.execute(f"PRAGMA table_info({table})") as cursor:
-                                columns = await cursor.fetchall()
-                            if columns:
-                                await db.execute(
-                                    f"ALTER TABLE {table} ADD COLUMN {column} TEXT "
-                                    f"NOT NULL DEFAULT '{default}'"
-                                )
-                    if version[0] in {1, 2, 3}:
-                        for table, column, definition in (
-                            ("ability_grants", "axes", "TEXT NOT NULL DEFAULT '{}'"),
-                            ("ability_grants", "source", "TEXT NOT NULL DEFAULT 'admin'"),
-                            ("ability_changes", "source", "TEXT NOT NULL DEFAULT 'admin'"),
-                            ("ability_changes", "policy", "TEXT"),
-                        ):
-                            async with db.execute(f"PRAGMA table_info({table})") as cursor:
-                                columns = await cursor.fetchall()
-                            if columns and column not in {row[1] for row in columns}:
-                                await db.execute(
-                                    f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
-                                )
-                    if version[0] != 4:
-                        await db.execute("DROP TABLE ability_tree_schema")
                 for statement in _SCHEMA.split(";"):
                     if statement.strip():
                         await db.execute(statement)
@@ -341,7 +332,110 @@ class AbilityAccessStore:
                 policy,
             ),
         )
+        owner = self._startup_context.get()
+        if owner is not None and owner[0] == agent and owner[2] is asyncio.current_task():
+            await self._db.execute(
+                "UPDATE ability_registrations SET owned_revision=? "
+                "WHERE project=? AND agent=? AND token=? AND state='pending'",
+                (revision, self.project_id, agent, owner[1]),
+            )
         return revision
+
+    @asynccontextmanager
+    async def startup_registration(
+        self,
+        actor: AccessIdentity,
+        agent: str,
+    ) -> AsyncIterator[StartupRegistration]:
+        """库级独占稳定主体；失败仅回滚本次拥有的修订，不覆盖并发管理写入。
+
+        占位只记录注册所有者，不复制 run。进程异常退出留下的占位必须停机核对
+        后显式处理，不以超时自动夺取一个可能仍在运行的主体。
+        """
+        self._require_operator(actor)
+        token = uuid4().hex
+        snapshots: dict[str, list[dict[str, Any]]] = {}
+        async with self._tx(write=True):
+            if await self._row("ability_registrations", "agent=?", agent):
+                raise AccessError("conflict")
+            for table, key in (
+                ("ability_agents", "id"),
+                ("ability_grants", "agent"),
+                ("ability_tools", "agent"),
+            ):
+                async with self._db.execute(
+                    f"SELECT * FROM {table} WHERE project=? AND {key}=?", (self.project_id, agent)
+                ) as cursor:
+                    snapshots[table] = [dict(row) for row in await cursor.fetchall()]
+            old = snapshots["ability_agents"]
+            revision = old[0]["revision"] if old else 0
+            async with self._db.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM ability_changes WHERE project=? AND agent=?",
+                (self.project_id, agent),
+            ) as cursor:
+                sequence = (await cursor.fetchone())[0]
+            await self._db.execute(
+                "INSERT INTO ability_registrations VALUES(?,?,?,?,?)",
+                (self.project_id, agent, token, "pending", revision),
+            )
+        registration = StartupRegistration()
+        context = self._startup_context.set((agent, token, asyncio.current_task()))
+        try:
+            yield registration
+        finally:
+            self._startup_context.reset(context)
+            async with self._tx(write=True):
+                claim = await self._row(
+                    "ability_registrations", "agent=? AND token=?", agent, token
+                )
+                if claim is None:
+                    raise AccessError("conflict")
+                if registration.committed:
+                    await self._db.execute(
+                        "UPDATE ability_registrations SET state='active' "
+                        "WHERE project=? AND agent=?",
+                        (self.project_id, agent),
+                    )
+                else:
+                    row = await self._row("ability_agents", "id=?", agent)
+                    current = row["revision"] if row else 0
+                    if current != claim["owned_revision"]:
+                        # 不覆盖另一任务的授权变更；保留占位阻止残留被当作可恢复授权。
+                        raise AccessError("conflict")
+                    for table, key in (
+                        ("ability_tools", "agent"),
+                        ("ability_grants", "agent"),
+                        ("ability_agents", "id"),
+                    ):
+                        await self._db.execute(
+                            f"DELETE FROM {table} WHERE project=? AND {key}=?",
+                            (self.project_id, agent),
+                        )
+                    for table in ("ability_agents", "ability_grants", "ability_tools"):
+                        for saved in snapshots[table]:
+                            columns = ",".join(saved)
+                            slots = ",".join("?" for _ in saved)
+                            await self._db.execute(
+                                f"INSERT INTO {table}({columns}) VALUES({slots})",
+                                tuple(saved.values()),
+                            )
+                    await self._db.execute(
+                        "DELETE FROM ability_changes WHERE project=? AND agent=? AND seq>?",
+                        (self.project_id, agent, sequence),
+                    )
+                    await self._db.execute(
+                        "DELETE FROM ability_registrations WHERE project=? AND agent=? AND token=?",
+                        (self.project_id, agent, token),
+                    )
+
+    async def release_registration(self, actor: AccessIdentity, agent: str) -> None:
+        """宿主已停止该主体后解除独占注册，不撤销持久授权。"""
+        self._require_operator(actor)
+        async with self._tx(write=True):
+            await self._db.execute(
+                "DELETE FROM ability_registrations WHERE project=? AND agent=? AND state='active'",
+                (self.project_id, agent),
+            )
 
     async def commit_version(self, actor: AccessIdentity, version: AbilityVersion) -> None:
         """提交确定定义；相同版本幂等，不扫描来源或自动给 Agent 授权。"""

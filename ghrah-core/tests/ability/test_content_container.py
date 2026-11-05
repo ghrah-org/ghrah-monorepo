@@ -479,7 +479,7 @@ def test_builtin_source_queries_use_the_prepared_snapshot(monkeypatch):
     assert source.create_operation("ghrah.fs.read_file").name == "read_file"
 
 
-async def test_schema_two_migrates_only_operation_grants(tmp_path):
+async def test_schema_two_requires_explicit_identity_reset(tmp_path):
     from ghrah.ability.versions import capture_file_version
 
     path = tmp_path / "legacy.db"
@@ -511,23 +511,10 @@ async def test_schema_two_migrates_only_operation_grants(tmp_path):
         INSERT INTO ability_tree_schema VALUES(2);
     """)
     await db.close()
-    store = await AbilityAccessStore.open(
-        path, "project", operators=frozenset({"admin"}), runs=lambda _: "alice-run"
-    )
-    host = AbilitySchemeHost(store)
-    try:
-        await host.restore(ADMIN)
-        client = host.session(Principal("project", "alice", "alice-run"))
-        view = await client.read("alice")
-        assert view.revision == 1
-        assert view.abilities[0].skill is None
-        assert [item.key for item in view.abilities[0].operations] == ["read_file"]
-        assert len(await store.changes(ADMIN)) == 1
-        with pytest.raises(SchemeError):
-            await client.call("/scheme/ability/files/skill/guide", "read", {})
-    finally:
-        await host.close()
-        await store.close()
+    with pytest.raises(ValueError, match="稳定 Agent ID"):
+        await AbilityAccessStore.open(
+            path, "project", operators=frozenset({"admin"}), runs=lambda _: "alice-run"
+        )
 
 
 async def test_same_operation_key_does_not_select_an_unsupported_backend(container):

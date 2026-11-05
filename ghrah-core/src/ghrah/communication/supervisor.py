@@ -14,8 +14,10 @@ SupervisorActor 是整个多 Agent 系统的中心编排者：
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable, Collection
+from collections.abc import AsyncIterator, Callable, Collection
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -155,6 +157,8 @@ class SupervisorActor:
         self.skill_provider = skill_provider
         # 集群级 LLM 工厂默认（spawn per-spawn kwarg 覆盖；工具路径继承）
         self._llm_factory = llm_factory
+        self._spawn_lock = asyncio.Lock()
+        self._spawn_owner: asyncio.Task[Any] | None = None
         self._registry = AgentRegistry()
         self._router = MessageRouter(self._registry, default_timeout=default_timeout)
         if message_manager is not None and room_bridge is not None:
@@ -188,6 +192,91 @@ class SupervisorActor:
         )
 
     async def spawn_agent(
+        self,
+        config: AgentConfig,
+        abilities: list[AbilityProtocol] | None = None,
+        *,
+        persistence_factory: Callable[[AgentConfig], Any] | None = None,
+        llm_factory: Callable[[AgentConfig], Any] | None = None,
+        tags: list[str] | None = None,
+        tool_table_projector: Callable[[], Any] | None = None,
+    ) -> str:
+        """在注册预留内创建 Agent，并在对外返回前绑定受信运行代次。"""
+        async with self.spawn_reservation(config):
+            name = await self._spawn_agent(
+                config,
+                abilities,
+                persistence_factory=persistence_factory,
+                llm_factory=llm_factory,
+                tags=tags,
+                tool_table_projector=tool_table_projector,
+            )
+            if self._builtin_abilities:
+                try:
+                    if self.ability_materializer is None:
+                        raise RegistryError("Authorized run binding is not configured")
+                    await self.ability_materializer.bind_run(config.effective_agent_id, abilities)
+                except BaseException:
+                    await self._abort_registration(name)
+                    raise
+            return name
+
+    def check_spawn(self, config: AgentConfig) -> None:
+        """在写授权前核对注册准入；显示名和稳定主体分别检查。"""
+        if self._registry.exists(config.name):
+            raise RegistryError(f"Agent already registered: {config.name}")
+        if any(
+            i.config.effective_agent_id == config.effective_agent_id
+            for i in self._registry.list_agents()
+        ):
+            raise RegistryError(f"Agent ID already registered: {config.effective_agent_id}")
+        if self._builtin_abilities:
+            from ghrah.ability.access.identity import validate_agent_id
+
+            try:
+                validate_agent_id(config.agent_id)
+            except ValueError as error:
+                raise RegistryError(str(error)) from error
+        if self._max_cluster_members > 0 and len(self._registry) >= self._max_cluster_members:
+            raise RegistryError("Cluster member limit reached")
+        if self.message_manager is not None and (
+            not self.message_manager.allow_persisted_agents
+            and config.effective_agent_id not in self.message_manager.agent_ids
+        ):
+            raise RegistryError("Agent ID is not declared in MessageManager")
+
+    @asynccontextmanager
+    async def spawn_reservation(self, config: AgentConfig) -> AsyncIterator[None]:
+        """串行保护授权核定到注册完成，重复启动在授权写入前拒绝。"""
+        task = asyncio.current_task()
+        if self._spawn_owner is task:
+            self.check_spawn(config)
+            yield
+            return
+        async with self._spawn_lock:
+            self.check_spawn(config)
+            self._spawn_owner = task
+            try:
+                if self._builtin_abilities and self.ability_materializer is not None:
+                    async with self.ability_materializer.registration(
+                        config.agent_id
+                    ) as registration:
+                        yield
+                        registration.committed = any(
+                            info.config.agent_id == config.agent_id
+                            for info in self._registry.list_agents()
+                        )
+                else:
+                    yield
+            except BaseException:
+                for info in self._registry.list_agents():
+                    if info.config.effective_agent_id == config.effective_agent_id:
+                        await self._abort_registration(info.name)
+                raise
+            finally:
+                self._spawn_owner = None
+
+    async def _spawn_agent(
         self,
         config: AgentConfig,
         abilities: list[AbilityProtocol] | None = None,
@@ -259,6 +348,11 @@ class SupervisorActor:
         if self._builtin_abilities:
             from ghrah.ability.access.startup import AuthorizedToolTable
 
+            if isinstance(abilities, AuthorizedToolTable) and any(
+                getattr(item, "bound_agent", config.agent_id) != config.agent_id
+                for item in abilities
+            ):
+                raise RegistryError("Authorized tools belong to another Agent ID")
             if not isinstance(abilities, AuthorizedToolTable):
                 raise RegistryError(
                     f"Agent '{config.name}' spawned with caller-assembled abilities in "
@@ -407,6 +501,13 @@ class SupervisorActor:
         info = self._registry.get_info(name)
         return str(getattr(info.actor_handle, "_recovery_mode", "memory"))
 
+    def incarnation_for_agent(self, agent_id: str) -> str | None:
+        """按稳定主体读取当前运行代次，不按显示名回退。"""
+        for info in self._registry.list_agents():
+            if info.config.effective_agent_id == agent_id:
+                return info.incarnation_id
+        return None
+
     def incarnation_id(self, name: str) -> str:
         """返回本次成功注册生成的运行实例 ID。"""
         return self._registry.get_info(name).incarnation_id
@@ -433,6 +534,20 @@ class SupervisorActor:
             except Exception:
                 logger.warning(f"Supervisor: close agent '{name}' persistence 失败")
 
+    async def _abort_registration(self, name: str) -> None:
+        """失败启动只回收新建 checkpoint，不覆盖恢复前已存在的 Context。"""
+        info = self._registry.get_info(name)
+        cm = info.actor_handle._context_manager
+        await info.actor_handle.stop_receiving()
+        await cm.wait_for_persist()
+        backend = getattr(cm, "persistence", None)
+        if self.recovery_mode(name) == "initialized" and backend is not None:
+            await backend.delete_checkpoint(info.config.effective_agent_id)
+        await self._close_agent_persistence(info.actor_handle, name)
+        if self.message_manager is not None:
+            await self.message_manager.unbind(info.config.effective_agent_id)
+        self._registry.unregister(name)
+
     async def terminate_agent(self, name: str) -> None:
         """注销并终止 Agent。
 
@@ -451,6 +566,8 @@ class SupervisorActor:
         await self._release_agent_persistence(info.actor_handle, name)
 
         self._registry.unregister(name)
+        if self._builtin_abilities and self.ability_materializer is not None:
+            await self.ability_materializer.release_registration(info.config.agent_id)
 
         logger.info(f"Supervisor terminated agent: {name}")
 

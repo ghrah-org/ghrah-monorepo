@@ -38,7 +38,11 @@ from ghrah.ability.permissions.command_safety import (
     CommandSafetyChecker,
 )
 from ghrah.ability.permissions.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.ability.permissions.hitl import HITLApprovalHook, HITLRequiredAbility
+from ghrah.ability.permissions.hitl import (
+    HITLApprovalHook,
+    HITLRequiredAbility,
+    PermissionDeniedAbility,
+)
 from ghrah.ability.permissions.scope import EffectivePermission, resolve_effective_permission
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.manifest.resolver import ResolvedAbility
@@ -49,6 +53,16 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+
+_REQUIRED_PERMISSION = {
+    "write_file": "fs_write",
+    "edit_file": "fs_write",
+    "delete_file": "fs_write",
+    "move_file": "fs_write",
+    "execute_command": "shell_access",
+    "mcp_call": "net_access",
+}
+
 
 # 向后兼容别名：原私有实现已提取为内核共享件（ghrah.ability.permissions.hitl），
 # 行为不变：HITL 闸门写成独立可复用件）。
@@ -104,17 +118,30 @@ def instantiate_resolved_abilities(
                 ra.implementation.type,
             )
             continue
+        effective = scopes.get(ra.ability_name) or resolve_effective_permission(
+            ra.declared_permissions or ra.permissions,
+            ra.requested_permissions,
+            workspace_root=workspace_root,
+        )
         ability = _instantiate_ability(
             ra,
             handler=handler,
             workspace_root=workspace_root,
-            scope=scopes.get(ra.ability_name),
+            scope=effective,
             auto_approved=handler in auto_approve_abilities,
             require_approval_by_default=require_approval_by_default,
             command_runner=command_runner,
             safe_extra_commands=safe_extra_commands,
             safe_extra_sub_commands=safe_extra_sub_commands,
         )
+        required = _REQUIRED_PERMISSION.get(handler)
+        if required is not None and not getattr(effective, required):
+            reason = (
+                "Permission denied: read-only filesystem"
+                if effective.fs_read_only and required == "fs_write"
+                else f"Permission denied: {required} is disabled"
+            )
+            ability = PermissionDeniedAbility(ability, reason)
         abilities.append(ability)
     return abilities
 
@@ -140,7 +167,7 @@ def _instantiate_ability(
     if handler == "end_task":
         return create_ability("end_task", mode="toolcall")
 
-    if handler in FS_ABILITY_TYPES or _has_fs_permission_fields(permissions):
+    if handler in FS_ABILITY_TYPES:
         checker = _make_fs_permission_checker(
             permissions,
             workspace_root=workspace_root,
@@ -148,11 +175,8 @@ def _instantiate_ability(
             auto_approved=auto_approved,
         )
         params: dict[str, Any] = {"permission_checker": checker}
-        # require_hitl 声明经 PRE_EXECUTE Hook 生效（对齐 unit._create_ability_from_def
-        # FS 分支）：内联检查只区分允许/拒绝，pending 须由 Hook 转 HITL 等待。
-        # require_approval=False 时不挂——白名单外维持直接拒绝。
-        if checker.require_approval:
-            params["hooks"] = [AccessApprovalHook(checker)]
+        # Hook 同时负责在审批之前执行硬拒绝；效果处继续复核同一检查器。
+        params["hooks"] = [AccessApprovalHook(checker)]
         return create_ability(handler, **params)
 
     if handler == "execute_command":
@@ -177,23 +201,13 @@ def _instantiate_ability(
     ability = create_ability(handler)
     # 通用 HITL 接线：非 FS/非 command ability 的 require_hitl 声明必须
     # 实际生效——裸实例化会静默忽略该声明（纸面门禁）。
-    if not auto_approved and bool(permissions.require_hitl):
+    if not auto_approved and bool(scope.require_hitl if scope else permissions.require_hitl):
         return _HITLRequiredAbility(
             ability,
             ability_name=handler,
             reason=f"manifest requires HITL approval for '{handler}'",
         )
     return ability
-
-
-def _has_fs_permission_fields(permissions: Any) -> bool:
-    """是否携带 FS 权限字段（对齐 subject 旧 materialize_permission_params 触发条件）。"""
-    return bool(
-        permissions.fs_read_only
-        or permissions.fs_write
-        or permissions.allowed_paths
-        or permissions.denied_paths
-    )
 
 
 def _make_fs_permission_checker(
@@ -225,6 +239,7 @@ def _make_fs_permission_checker(
         denied_paths=denied_paths,
         require_approval=require_approval,
         deny_all_paths=effective.allowed_paths == (),
+        read_only=effective.fs_read_only or not effective.fs_write,
     )
 
 

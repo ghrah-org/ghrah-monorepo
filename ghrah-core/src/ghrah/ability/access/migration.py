@@ -32,6 +32,7 @@ from ghrah.protocol.ability_tree import (
 from pydantic import TypeAdapter
 
 from ghrah.ability.access.errors import AccessError
+from ghrah.ability.access.identity import validate_agent_id
 from ghrah.ability.access.startup import StartupGrantError, register_package_instance
 from ghrah.ability.access.store import (
     MIGRATION_SOURCE,
@@ -128,6 +129,7 @@ async def migrate_agent(
         MigrationError: 没有可写入事实、Agent 已有授权、快照非法或迁移记录
             不完整。
     """
+    validate_agent_id(agent)
     entries = list(grants)
     if not entries:
         raise MigrationError(f"agent '{agent}' 的迁移快照没有可写入的获授事实")

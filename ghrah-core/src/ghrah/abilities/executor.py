@@ -28,7 +28,7 @@ from ghrah.abilities.hook_store import HookStore
 from ghrah.abilities.paths import ABILITY_PATH_SPECS
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.hooks import HookPoint, HookResult
-from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.execution.invocation import MemberReference, OperationCall
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
@@ -327,6 +327,17 @@ class LocalAbilityExecutor(AbilityExecutor):
         Raises:
             HookError: Hook 执行出错时
         """
+        prepare = getattr(ability, "prepare_call", None)
+        if callable(prepare):
+            call = prepare(call)
+        else:
+            call = call.with_member(MemberReference(member=ability.name))
+        check = getattr(ability, "check_call", None)
+        if callable(check):
+            denied = check(call, services)
+            if denied is not None:
+                return denied
+
         # PRE_EXECUTE hook（ability 级）
         hook_result = await self._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
 
@@ -667,10 +678,8 @@ class LocalAbilityExecutor(AbilityExecutor):
         Returns:
             审批终态回执：outcome 附 promise_id / tool_call_id / 拒绝理由（归因字段）
         """
-        # 归因 id：受信调用标识优先，其次显式 call_id 参数，最后随机兜底
-        tool_call_id = (
-            call.tool_call_id or call.arguments.get("call_id", "") or uuid.uuid4().hex[:12]
-        )
+        # 调用参数不能决定审批归因；没有外部调用 ID 的内部路由生成独立标识。
+        tool_call_id = call.tool_call_id or uuid.uuid4().hex
         promise_id = uuid.uuid4().hex
 
         # 发布 HITL 请求事件（promise_id 随载荷下发，Observer 凭此回发审批；
@@ -763,6 +772,11 @@ class LocalAbilityExecutor(AbilityExecutor):
                 degraded=degraded,
                 degraded_timeout=self._hitl_degraded_timeout,
             )
+
+        finally:
+            if self._hitl_promise_registry is not None:
+                self._hitl_promise_registry.remove(promise_id)
+            self._hitl_store.cancel_future(self._agent_name, call.member.member, tool_call_id)
 
     def receive_hitl_response(
         self,

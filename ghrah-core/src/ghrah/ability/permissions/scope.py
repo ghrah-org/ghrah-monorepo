@@ -7,7 +7,7 @@
 - ``denied_*`` 是硬拒绝，永不进入审批；
 - ``require_hitl`` 只决定范围外的兜底是审批还是拒绝；
 - 两个声明层（包内 ``PERMISSIONS`` 与 Agent 模板的 ``permissions``）合并时
-  只能收紧：路径与命令范围取交集，拒绝范围取并集，布尔按“任一申请即要求”
+  只能收紧：路径与命令范围取交集，拒绝范围取并集，审批与只读取 OR，写入/网络/shell 权限取 AND
   合并，``fs_read_only`` 生效时强制 ``fs_write`` 为假。
 
 范围解析发生在启动物化阶段一次，之后的执行只读结果，不在调用路径重算声明。
@@ -117,9 +117,16 @@ def resolve_effective_permission(
 
     require_hitl = any(layer.require_hitl for layer in layers)
     fs_read_only = any(layer.fs_read_only for layer in layers)
-    fs_write = any(layer.fs_write for layer in layers)
-    net_access = any(layer.net_access for layer in layers)
-    shell_access = any(layer.shell_access for layer in layers)
+
+    def permitted(name: str) -> bool:
+        ceiling = bool(getattr(declaration, name))
+        if request is None or name not in request.model_fields_set:
+            return ceiling
+        return ceiling and bool(getattr(request, name))
+
+    fs_write = permitted("fs_write")
+    net_access = permitted("net_access")
+    shell_access = permitted("shell_access")
     if fs_read_only:
         fs_write = False
 

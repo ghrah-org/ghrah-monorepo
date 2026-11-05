@@ -153,10 +153,16 @@ async def _abilities_of(unit: Any, name: str) -> dict[str, str]:
     }
 
 
+def _agent_id(name: str) -> str:
+    from uuid import NAMESPACE_URL, uuid5
+
+    return uuid5(NAMESPACE_URL, name).hex
+
+
 def _manifest_payload(name: str, manifest_ref: str) -> dict[str, Any]:
     return {
         "project_id": "default",
-        "config": {"name": name},
+        "config": {"name": name, "agent_id": _agent_id(name)},
         "manifest_ref": manifest_ref,
     }
 
@@ -520,7 +526,7 @@ class TestBuiltinGrantMaterialization:
             abilities = await _abilities_of(unit, "consumer")
             assert "read_file" not in abilities
             deploy = AccessIdentity("default", "deployment", "deployment", True, "deployment")
-            names = await store.tool_names(deploy, "consumer")
+            names = await store.tool_names(deploy, _agent_id("consumer"))
             assert "read_file" in names
             assert {"read_file", "write_file", "mcp_call"} <= set(names)
         finally:
@@ -579,6 +585,9 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         )
         services = make_services(supervisor=unit.supervisor)
 
+        from dataclasses import replace
+
+        resolved.config = replace(resolved.config, agent_id=_agent_id("child"))
         table, materialized, tool_table_projector = await _assemble_child_abilities(
             services=services, manifest_ref="w0.fs-consumer", resolved=resolved
         )
@@ -590,7 +599,7 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
 
         # 子 Agent 的授权事实写在关系库，与顶层 spawn 同一套事实
         deployment = AccessIdentity("default", "deployment", "deployment", True, "deployment")
-        records = await ability_store.grants(deployment, resolved.config.name)
+        records = await ability_store.grants(deployment, resolved.config.agent_id)
         assert [record.alias for record in records] == ["fs"]
 
         await unit.supervisor.spawn_agent(
@@ -656,6 +665,9 @@ async def test_builtin_supervisor_rejects_caller_assembled_tools() -> None:
     )
     plain_list = assembly.instantiate(resolved.abilities, workspace_root=None)
 
+    from dataclasses import replace
+
+    resolved.config = replace(resolved.config, agent_id=_agent_id("direct"))
     with pytest.raises(RegistryError, match="authorized assembly"):
         await unit.supervisor.spawn_agent(resolved.config, abilities=plain_list)
 
@@ -684,10 +696,10 @@ async def test_actor_tool_table_follows_revoke_without_restart(tmp_path: Path) -
         assert {"read_file", "write_file", "mcp_call"} <= tool_names()
 
         actor = AccessIdentity("default", "deployment", "control", True, "deployment")
-        revision = await ability_store.agent_revision(actor, "consumer")
+        revision = await ability_store.agent_revision(actor, _agent_id("consumer"))
         await ability_store.write_revoke(
             actor,
-            "consumer",
+            _agent_id("consumer"),
             RevokeAbilityRequest(
                 alias="fs",
                 members=["operations/write_file"],
@@ -775,5 +787,374 @@ async def test_builtin_mock_llm_tool_round_feeds_next_input(tmp_path: Path) -> N
         committed = [name for node in cm.get_history() for name in node.ability_names]
         assert "read_file" in committed
         assert "conversation" in committed
+
+        # 同一真实 Agent 闭环继续验证撤销、下一轮工具面与陈旧工具调用。
+        from ghrah.protocol.ability_tree import RevokeAbilityRequest
+
+        from ghrah.ability.access import AccessIdentity
+
+        actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+        agent_id = handle.config.agent_id
+        old_tool = handle._abilities["read_file"]
+        revision = await ability_store.agent_revision(actor, agent_id)
+        await ability_store.write_revoke(
+            actor,
+            agent_id,
+            RevokeAbilityRequest(
+                alias="fs", members=["operations/read_file"], expected_revision=revision
+            ),
+        )
+        next_reply = await handle.receive(
+            AgentMessage(sender="user", recipient="consumer", content="继续")
+        )
+        assert next_reply.content == "读完了"
+        assert "read_file" not in {tool["function"]["name"] for tool in scripted.tools}
+        call, services = handle._build_ability_call(
+            old_tool, {"file_path": str(target)}, {}, tool_call_id="after-revoke"
+        )
+        denied = await handle._ability_executor.execute_ability(old_tool, call, services)
+        assert denied.outcome is ActionOutcome.FAILURE
     finally:
         await ability_store.close()
+
+
+async def test_builtin_spawn_generates_stable_id_before_authorization(tmp_path):
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    try:
+        payload = _manifest_payload("planner", "w0.fs-consumer")
+        payload["config"].pop("agent_id")
+        receipt = await _spawn(unit, payload)
+        assert receipt["success"], receipt
+        handle = await unit.supervisor.get_agent_handle("planner")
+        agent_id = handle.config.agent_id
+        assert len(agent_id) == 32 and agent_id != "planner"
+        from ghrah.ability.access import AccessIdentity
+
+        actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+        assert await db.grants(actor, agent_id)
+        from ghrah.ability.access import AccessError
+
+        with pytest.raises(AccessError, match="not_found"):
+            await db.grants(actor, "planner")
+        identity = handle._invocation_identity()
+        assert identity.agent == agent_id and identity.agent_name == "planner"
+        assert identity.run == f"{agent_id}-run"
+        assert identity.project_id == "default"
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_duplicate_and_concurrent_spawn_cannot_rewrite_existing_grants(tmp_path):
+    import asyncio
+
+    from ghrah.ability.access import AccessIdentity
+
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+    await unit.init(FakeCtx())
+
+    async def spawn(payload):
+        return await unit.handle_command("spawn_agent", payload, None)
+
+    try:
+        payload = _manifest_payload("consumer", "w0.consumer")
+        receipts = await asyncio.gather(spawn(payload), spawn(payload))
+        assert sum(bool(r["success"]) for r in receipts) == 1
+        before = await db.grants(actor, _agent_id("consumer"))
+        revision = await db.agent_revision(actor, _agent_id("consumer"))
+        duplicate = await spawn(_manifest_payload("consumer", "w0.fs-consumer"))
+        assert not duplicate["success"]
+        assert await db.grants(actor, _agent_id("consumer")) == before
+        assert await db.agent_revision(actor, _agent_id("consumer")) == revision
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_failed_run_binding_removes_newly_registered_actor(tmp_path, monkeypatch):
+    from ghrah.ability.access import StartupGrantError
+
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    from dataclasses import replace
+
+    from ghrah.context.persistence.sqlite_backend import SqliteBackend
+
+    checkpoint_path = tmp_path / "failed-context.db"
+    unit._config = replace(
+        unit._config, persistence_factory=lambda _: SqliteBackend(checkpoint_path)
+    )
+
+    async def fail_binding(*args):
+        raise StartupGrantError("run binding unavailable")
+
+    await unit.init(FakeCtx())
+    monkeypatch.setattr(unit._startup_materializer, "bind_run", fail_binding)
+    try:
+        receipt = await unit.handle_command(
+            "spawn_agent", _manifest_payload("consumer", "w0.fs-consumer"), None
+        )
+        assert not receipt["success"] and "run binding unavailable" in receipt["error"]
+        assert not unit.supervisor._registry.exists("consumer")
+        assert unit.supervisor._spawn_owner is None
+        agent_id = _agent_id("consumer")
+        assert await db._row("ability_agents", "id=?", agent_id) is None
+        assert await db._row("ability_registrations", "agent=?", agent_id) is None
+        reader = SqliteBackend(checkpoint_path)
+        await reader.connect()
+        assert await reader.load_checkpoint(agent_id) is None
+        await reader.close()
+
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_real_spawn_tool_assigns_child_own_id_and_bound_run(tmp_path):
+    from ghrah.ability.access import AccessIdentity
+
+    store = _consumer_store()
+    store._agents["w0.parent"] = parse_agent_manifest(
+        _AGENT_YAML.replace("  - ref: ghrah.mcp.mcp_call", "  - ref: ghrah.cluster.spawn_agent")
+    )
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=store)
+    try:
+        receipt = await _spawn(unit, _manifest_payload("parent", "w0.parent"))
+        assert receipt["success"], receipt
+        parent = await unit.supervisor.get_agent_handle("parent")
+        spawn = parent._abilities["spawn_agent"]
+        call, services = parent._build_ability_call(
+            spawn, {"manifest_ref": "w0.fs-consumer", "name": "child"}, {}, tool_call_id="spawn-1"
+        )
+        result = await spawn.execute(call, services)
+        assert result.outcome is ActionOutcome.SUCCESS, result.data
+        child = await unit.supervisor.get_agent_handle("child")
+        assert len(child.config.agent_id) == 32 and child.config.agent_id != parent.config.agent_id
+        identity = child._invocation_identity()
+        assert identity.agent == child.config.agent_id and identity.agent_name == "child"
+        assert identity.run == f"{child.config.agent_id}-run"
+        actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+        grants = await db.grants(actor, child.config.agent_id)
+        assert [grant.alias for grant in grants] == ["fs"]
+        assert "spawn_agent" not in child._abilities
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_recreated_name_with_new_id_does_not_inherit_old_authorization(tmp_path):
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    try:
+        first = await _spawn(unit, _manifest_payload("planner", "w0.fs-consumer"))
+        assert first["success"], first
+        await unit.supervisor.terminate_agent("planner")
+        unit._startup_materializer._policy = None
+        payload = _manifest_payload("planner", "w0.fs-consumer")
+        payload["config"]["agent_id"] = _agent_id("new-stable-id")
+        receipt = await unit.handle_command("spawn_agent", payload, None)
+        assert not receipt["success"]
+        assert "没有存量授权事实" in receipt["error"]
+        assert not unit.supervisor._registry.exists("planner")
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+@pytest.mark.parametrize("entry", ["llm", "command", "routed", "child"])
+@pytest.mark.parametrize("member", ["query_agents", "session_info"])
+async def test_builtin_approval_is_identical_across_real_entrypoints(
+    tmp_path, monkeypatch, entry, member
+):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from _helpers import ToolScriptedLLM
+
+    from ghrah.chat.content import ToolCallBlock
+    from ghrah.core.message import AgentMessage
+
+    package = "cluster" if member == "query_agents" else "core"
+    store = _consumer_store()
+    text = _AGENT_YAML_FS[: _AGENT_YAML_FS.index("abilities:")] + (
+        f"abilities:\n  - type: conversation\n  - ref: ghrah.{package}.{member}\n"
+        "    permissions:\n      require_hitl: true\n"
+    )
+    store._agents["w0.secure"] = parse_agent_manifest(text)
+    scripted = ToolScriptedLLM(
+        [[ToolCallBlock(id="real-call", name=member, arguments={})]], final_text="done"
+    )
+    unit, db = await _authorized_builtin_unit(
+        tmp_path,
+        manifest_store=store,
+        llm_factory=lambda _: scripted,
+    )
+    try:
+        if entry == "child":
+            store._agents["w0.parent"] = parse_agent_manifest(
+                _AGENT_YAML.replace(
+                    "  - ref: ghrah.mcp.mcp_call", "  - ref: ghrah.cluster.spawn_agent"
+                )
+            )
+            receipt = await _spawn(unit, _manifest_payload("parent", "w0.parent"))
+            assert receipt["success"], receipt
+            parent = await unit.supervisor.get_agent_handle("parent")
+            spawn = parent._abilities["spawn_agent"]
+            call, services = parent._build_ability_call(
+                spawn, {"manifest_ref": "w0.secure", "name": "consumer"}, {}, tool_call_id="spawn"
+            )
+            assert (await spawn.execute(call, services)).outcome is ActionOutcome.SUCCESS
+        else:
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.secure"))
+            assert receipt["success"], receipt
+        handle = await unit.supervisor.get_agent_handle("consumer")
+        tool = handle._abilities[member]
+        actual = tool._inner._inner  # 投影 -> 审批委托 -> 实际 Operation。
+        effect = AsyncMock(wraps=actual.execute)
+        monkeypatch.setattr(actual, "execute", effect)
+        if entry == "command":
+            task = asyncio.create_task(
+                unit.handle_command(
+                    "execute_ability",
+                    {
+                        "request_id": "explicit-call",
+                        "agent_name": "consumer",
+                        "ability_name": member,
+                        "tool_args": {},
+                    },
+                    None,
+                )
+            )
+        elif entry == "routed":
+            task = asyncio.create_task(handle._execute_routed_ability({}, member))
+        elif entry == "child":
+            call, services = handle._build_ability_call(tool, {}, {}, tool_call_id="child-call")
+            task = asyncio.create_task(
+                handle._ability_executor.execute_ability(tool, call, services)
+            )
+        else:
+            task = asyncio.create_task(
+                handle.receive(AgentMessage(sender="user", recipient="consumer", content="run"))
+            )
+        async with asyncio.timeout(3):
+            while not handle._ability_executor.hitl_store.list_pending():
+                assert not task.done(), task.result() if task.done() else ""
+                await asyncio.sleep(0)
+        assert not effect.called
+        _, target, call_id = handle._ability_executor.hitl_store.list_pending()[0]
+        assert target == member
+        handle._ability_executor.receive_hitl_response(member, call_id, approved=True)
+        await task
+        assert effect.call_count == 1
+        assert not handle._ability_executor.hitl_store.list_pending()
+        assert not unit._hitl_promises.list_pending()
+        if entry == "llm":
+            assert len(scripted.calls) == 2
+            assert handle._context_manager.active_head is not None
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_cross_cluster_same_uuid_is_rejected_before_authorization_changes(tmp_path):
+    from ghrah.ability.access import AccessIdentity
+
+    first, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    second, other = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+    try:
+        assert (await _spawn(first, _manifest_payload("consumer", "w0.consumer")))["success"]
+        before = await db.grants(actor, _agent_id("consumer"))
+        payload = _manifest_payload("consumer", "w0.fs-consumer")
+        payload["config"]["name"] = "different-display"
+        assert not (await _spawn(second, payload))["success"]
+        assert await db.grants(actor, _agent_id("consumer")) == before
+        await first.supervisor.terminate_agent("consumer")
+        result = await second.handle_command("spawn_agent", payload, None)
+        assert result["success"], result
+    finally:
+        await first.stop()
+        await second.stop()
+        await other.close()
+        await db.close()
+
+
+async def test_failed_resume_preserves_prior_checkpoint_and_authorization(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from ghrah.ability.access import AccessIdentity, StartupGrantError
+    from ghrah.context.persistence.sqlite_backend import SqliteBackend
+
+    unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    path = tmp_path / "context.db"
+    unit._config = replace(unit._config, persistence_factory=lambda _: SqliteBackend(path))
+    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+    agent_id = _agent_id("consumer")
+    try:
+        receipt = await _spawn(unit, _manifest_payload("consumer", "w0.fs-consumer"))
+        assert receipt["success"], receipt
+        handle = await unit.supervisor.get_agent_handle("consumer")
+        handle._context_manager.begin_iteration()
+        handle._context_manager.apply_state_changes({"preserve": True})
+        handle._context_manager.commit_iteration(ability_names=[])
+        await unit.supervisor.terminate_agent("consumer")
+        reader = SqliteBackend(path)
+        await reader.connect()
+        before = await reader.load_checkpoint(agent_id)
+        await reader.close()
+        grants = await db.grants(actor, agent_id)
+
+        async def fail(*args):
+            raise StartupGrantError("cannot bind resumed run")
+
+        monkeypatch.setattr(unit._startup_materializer, "bind_run", fail)
+        failed = await unit.handle_command(
+            "spawn_agent", _manifest_payload("consumer", "w0.consumer"), None
+        )
+        assert not failed["success"]
+        assert await db.grants(actor, agent_id) == grants
+        reader = SqliteBackend(path)
+        await reader.connect()
+        after = await reader.load_checkpoint(agent_id)
+        await reader.close()
+        assert before == after
+        assert not unit.supervisor._registry.exists("consumer")
+    finally:
+        await unit.stop()
+        await db.close()
+
+
+async def test_real_same_display_names_in_two_clusters_keep_distinct_grants(tmp_path):
+    from ghrah.protocol.ability_tree import RevokeAbilityRequest
+
+    from ghrah.ability.access import AccessIdentity
+
+    first, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    second, other = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
+    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
+    try:
+        pa, pb = (
+            _manifest_payload("worker", "w0.fs-consumer"),
+            _manifest_payload("worker", "w0.consumer"),
+        )
+        pa["config"]["agent_id"], pb["config"]["agent_id"] = "a" * 32, "b" * 32
+        assert (await _spawn(first, pa))["success"]
+        assert (await _spawn(second, pb))["success"]
+        before = await db.grants(actor, "a" * 32)
+        revision = await other.agent_revision(actor, "b" * 32)
+        await other.write_revoke(
+            actor, "b" * 32, RevokeAbilityRequest(alias="fs", expected_revision=revision)
+        )
+        assert await db.grants(actor, "a" * 32) == before
+        handle = await first.supervisor.get_agent_handle("worker")
+        target = tmp_path / "workspace" / "kept.txt"
+        target.parent.mkdir(exist_ok=True)
+        target.write_text("a-only")
+        tool = handle._abilities["read_file"]
+        call, services = handle._build_ability_call(tool, {"file_path": str(target)}, {})
+        result = await handle._ability_executor.execute_ability(tool, call, services)
+        assert result.outcome is ActionOutcome.SUCCESS and result.data["content"] == "a-only"
+    finally:
+        await first.stop()
+        await second.stop()
+        await other.close()
+        await db.close()

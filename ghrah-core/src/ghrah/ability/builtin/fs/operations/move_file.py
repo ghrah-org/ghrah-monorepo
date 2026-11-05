@@ -46,7 +46,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "fs_write": True,
-    "fs_read_only": True,
     "require_hitl": True,
 }
 

@@ -331,8 +331,8 @@ def test_unknown_grant_source_is_rejected() -> None:
         AccessIdentity("project", "admin", "control", True, "guess")
 
 
-async def test_v3_relation_database_gains_axis_source_and_history_columns(tmp_path):
-    """v3 关系库升级保留既有事实，补齐来源、策略与成员轴列。"""
+async def test_v3_relation_database_requires_explicit_identity_reset(tmp_path):
+    """旧主体域不能自动升级或改写名称授权。"""
     path = tmp_path / "legacy.db"
     db = await aiosqlite.connect(path)
     try:
@@ -356,16 +356,15 @@ async def test_v3_relation_database_gains_axis_source_and_history_columns(tmp_pa
     finally:
         await db.close()
 
-    store = await AbilityAccessStore.open(
-        path, "project", operators=frozenset({"admin"}), runs={"alice": "alice-run"}.get
-    )
+    with pytest.raises(ValueError, match="稳定 Agent ID"):
+        await AbilityAccessStore.open(
+            path, "project", operators=frozenset({"admin"}), runs={"alice": "alice-run"}.get
+        )
+    db = await aiosqlite.connect(path)
     try:
-        grant = await store._row("ability_grants", "agent=? AND alias=?", "alice", "demos")
-        assert json.loads(grant["axes"]) == {}
-        assert grant["source"] == "admin"
-        changes = await store.changes(ADMIN)
-        assert changes[0]["source"] == "admin" and changes[0]["policy"] is None
-        async with store._db.execute("SELECT version FROM ability_tree_schema") as cursor:
-            assert (await cursor.fetchone())[0] == 4
+        async with db.execute("SELECT version FROM ability_tree_schema") as cursor:
+            assert (await cursor.fetchone())[0] == 3
+        async with db.execute("SELECT agent FROM ability_grants") as cursor:
+            assert (await cursor.fetchone())[0] == "alice"
     finally:
-        await store.close()
+        await db.close()

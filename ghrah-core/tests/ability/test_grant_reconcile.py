@@ -48,7 +48,7 @@ async def store(tmp_path):
         tmp_path / "project.db",
         "project",
         operators=frozenset({"admin", "deployment"}),
-        runs=lambda agent: "alice-run" if agent == "alice" else None,
+        runs=lambda agent: "alice-run" if agent == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" else None,
     )
     try:
         await db.commit_version(ADMIN, version)
@@ -66,14 +66,16 @@ async def test_template_grants_only_requested_operations(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     assert desired["demos"].members == frozenset({"read_file"})
     assert desired["demos"].content == frozenset()
 
-    result = await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
+    result = await apply_grants(
+        db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances
+    )
     assert result.granted == ("demos",) and result.revoked == ()
-    record = (await db.grants(DEPLOY, "alice"))[0]
+    record = (await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))[0]
     assert record.members == ("read_file",)
     assert record.source == "deployment"
     changes = await db.changes(ADMIN)
@@ -95,7 +97,7 @@ async def test_merge_policy_revokes_and_adds_script_visibility(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=policy,
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     facts = desired["demos"]
     assert facts.members == frozenset()
@@ -103,7 +105,12 @@ async def test_merge_policy_revokes_and_adds_script_visibility(store):
     assert facts.axes["skill/guide/scripts/run"] == (True, True)
 
     await apply_grants(
-        db, DEPLOY, "alice", desired, instances=instances, policy_digest=policy.digest
+        db,
+        DEPLOY,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        desired,
+        instances=instances,
+        policy_digest=policy.digest,
     )
     changes = await db.changes(ADMIN)
     assert changes[-1]["policy"] == policy.digest
@@ -118,7 +125,7 @@ async def test_replace_mode_ignores_template_and_expands_package(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=policy,
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     facts = desired["demos"]
     assert facts.members == frozenset({"read_file"})
@@ -136,7 +143,7 @@ async def test_policy_for_unknown_package_fails_closed(store):
             instances=instances,
             template={"demos": {"read_file"}},
             policy=policy,
-            agent="alice",
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
 
 
@@ -149,7 +156,7 @@ async def test_template_with_unknown_operation_fails_closed(store):
             instances=instances,
             template={"demos": {"missing"}},
             policy=GrantPolicy(),
-            agent="alice",
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
 
 
@@ -161,11 +168,15 @@ async def test_repeated_reconcile_is_idempotent(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
-    first = await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
+    first = await apply_grants(
+        db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances
+    )
     before = await db.changes(ADMIN)
-    second = await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
+    second = await apply_grants(
+        db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances
+    )
     assert second.granted == () and second.revoked == ()
     assert second.revision == first.revision
     assert await db.changes(ADMIN) == before
@@ -179,15 +190,15 @@ async def test_stale_alias_is_revoked(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )["demos"].to_request(
         alias="demos",
         instance_id="demo",
         expected_revision=0,
         allowed_roots=(str(root),),
     )
-    await db.ensure_agent(DEPLOY, "alice")
-    await db.write_grant(DEPLOY, "alice", request)
+    await db.ensure_agent(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    await db.write_grant(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", request)
     stale = {**_instance(version, root).__dict__}
     stale_instance = GrantInstance(
         alias="stale",
@@ -201,12 +212,12 @@ async def test_stale_alias_is_revoked(store):
         instances=[stale_instance],
         template={"stale": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )["stale"]
-    revision = await db.agent_revision(DEPLOY, "alice")
+    revision = await db.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await db.write_grant(
         DEPLOY,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         stale_facts.to_request(
             alias="stale",
             instance_id="demo",
@@ -214,22 +225,26 @@ async def test_stale_alias_is_revoked(store):
             allowed_roots=(str(root),),
         ),
     )
-    assert {record.alias for record in await db.grants(DEPLOY, "alice")} == {"demos", "stale"}
+    assert {
+        record.alias for record in await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    } == {"demos", "stale"}
 
     result = await apply_grants(
         db,
         DEPLOY,
-        "alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         desired_grants(
             instances=instances,
             template={"demos": {"read_file"}},
             policy=GrantPolicy(),
-            agent="alice",
+            agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ),
         instances=instances,
     )
     assert result.revoked == ("stale",)
-    assert [record.alias for record in await db.grants(DEPLOY, "alice")] == ["demos"]
+    assert [
+        record.alias for record in await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    ] == ["demos"]
 
 
 async def test_conflicting_revision_retries_after_reread(store, monkeypatch):
@@ -240,7 +255,7 @@ async def test_conflicting_revision_retries_after_reread(store, monkeypatch):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     real_revision = db.agent_revision
     calls = 0
@@ -252,7 +267,9 @@ async def test_conflicting_revision_retries_after_reread(store, monkeypatch):
         return revision + 1 if calls == 1 else revision
 
     monkeypatch.setattr(db, "agent_revision", flaky_revision)
-    result = await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
+    result = await apply_grants(
+        db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances
+    )
     assert result.granted == ("demos",)
     assert calls >= 2
 
@@ -265,11 +282,13 @@ async def test_operator_may_reconcile_before_agent_run_exists(store):
         instances=instances,
         template={"demos": {"read_file"}},
         policy=GrantPolicy(),
-        agent="alice",
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
-    await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
+    await apply_grants(db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances)
     # alice 尚未注册运行实例（runs 回调仍返回 alice-run，但未 register_agent）
-    assert [record.alias for record in await db.grants(DEPLOY, "alice")] == ["demos"]
+    assert [
+        record.alias for record in await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    ] == ["demos"]
 
 
 async def test_axes_survive_roundtrip_through_store(store):
@@ -279,9 +298,11 @@ async def test_axes_survive_roundtrip_through_store(store):
     policy = GrantPolicy(
         rules=(GrantRule(package="demo", skill="guide", script="run", available=True),)
     )
-    desired = desired_grants(instances=instances, template={}, policy=policy, agent="alice")
-    await apply_grants(db, DEPLOY, "alice", desired, instances=instances)
-    record = (await db.grants(DEPLOY, "alice"))[0]
+    desired = desired_grants(
+        instances=instances, template={}, policy=policy, agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    await apply_grants(db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances)
+    record = (await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))[0]
     assert record.axes == {"skill/guide/scripts/run": {"visible": True, "available": True}}
     assert json.loads(json.dumps(record.axes)) == record.axes
 

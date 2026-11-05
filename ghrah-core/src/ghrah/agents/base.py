@@ -1648,7 +1648,7 @@ class ActorAgent:
                 ability_name,
             )
             call, services = self._build_ability_call(ability, {}, accumulated_data)
-            action_result = await ability.execute(call, services)
+            action_result = await self._ability_executor.execute_ability(ability, call, services)
             logger.debug(
                 "ActorAgent[%s] routed ability '%s' finished with %s",
                 self.config.name,
@@ -1703,11 +1703,14 @@ class ActorAgent:
     # ----------------------------------------------------------------
 
     def _invocation_identity(self) -> InvocationIdentity:
-        """受信调用身份：Agent 侧只绑定稳定 Agent 标识与显示名。
+        """读取装配边界固定的身份；旧模式只绑定配置中的主体与显示名。
 
-        project / run 由启动装配边界在包装工具执行前补齐；ActorAgent 不持有
-        关系库，也不从消息或工具参数推导这两个字段。
+        Agent 不持有关系库，也不从消息或工具参数推导项目或运行代次。
         """
+        for ability in self._abilities.values():
+            identity = getattr(ability, "invocation_identity", None)
+            if identity is not None:
+                return identity
         return InvocationIdentity(
             agent=self.config.effective_agent_id,
             agent_name=self.config.name,
@@ -1718,7 +1721,14 @@ class ActorAgent:
         return build_execution_services(
             context_manager=self._context_manager,
             supervisor=self._supervisor,
-            loop=LoopData(copy.deepcopy(accumulated_data)),
+            loop=LoopData(
+                copy.deepcopy(
+                    {
+                        **accumulated_data,
+                        "last_action_result": self._iteration_state.last_action_result,
+                    }
+                )
+            ),
             manifest_store=getattr(self._supervisor, "manifest_store", None),
             skill_provider=getattr(self._supervisor, "skill_provider", None),
             ability_content=getattr(self._context_manager, "ability_content", None),
@@ -1773,6 +1783,9 @@ class ActorAgent:
             tool_call_id=tool_call_id,
             identity=self._invocation_identity(),
         )
+        prepare = getattr(ability, "prepare_call", None)
+        if callable(prepare):
+            call = prepare(call)
         return call, self._build_services(accumulated_data)
 
     def _build_response(self, original: AgentMessage) -> AgentMessage:

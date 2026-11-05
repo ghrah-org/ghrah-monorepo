@@ -12,11 +12,11 @@
         --workspace-root /path/to/workspace \\
         --snapshot migration.json
 
-快照形状（旧注册表/旧配置的导出，显式给出）::
+快照形状（操作员显式确认的稳定 Agent ID 与旧事实，不以显示名作键）::
 
     {
       "agents": {
-        "coder": [
+        "0123456789abcdef0123456789abcdef": [
           {
             "package": "ghrah.fs",
             "members": ["read_file", "write_file"],
@@ -44,6 +44,7 @@ from ghrah.ability.access import (
     MigrationGrant,
     migrate_agent,
 )
+from ghrah.ability.access.identity import validate_agent_id
 from ghrah.protocol.ability_tree import MemberAxes, SkillReadScope
 from pydantic import TypeAdapter
 
@@ -57,6 +58,7 @@ def _parse_snapshot(path: Path) -> dict[str, list[MigrationGrant]]:
     skills_adapter = TypeAdapter(list[SkillReadScope])
     result: dict[str, list[MigrationGrant]] = {}
     for agent, entries in data["agents"].items():
+        validate_agent_id(agent)
         if not isinstance(entries, list):
             raise SystemExit(f"agents[{agent!r}] must be a list")
         grants: list[MigrationGrant] = []

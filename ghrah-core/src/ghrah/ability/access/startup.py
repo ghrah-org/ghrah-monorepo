@@ -27,6 +27,7 @@ from pydantic import TypeAdapter
 
 from ghrah.ability.access.backends import file_member_paths
 from ghrah.ability.access.facts import GrantFacts, stored_facts
+from ghrah.ability.access.identity import validate_agent_id
 from ghrah.ability.access.policy import GrantPolicy
 from ghrah.ability.access.reconcile import (
     GrantInstance,
@@ -77,6 +78,13 @@ class AuthorizedToolTable(list):
     接纳。继承 ``list`` 是为了让环境快照注入、``session_info`` 回填等原地
     处理继续可用，同时保留“来自边界”的身份。
     """
+
+    def bind_run(self, run: str) -> None:
+        """把注册完成的受信代次固定到表内每个投影工具。"""
+        for ability in self:
+            bind = getattr(ability, "bind_run", None)
+            if callable(bind):
+                bind(run)
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,7 @@ class ProjectedAbility:
         member_reference: MemberReference | None = None,
         identity: InvocationIdentity | None = None,
         admission: Any = None,
+        current_run: Any = None,
     ) -> None:
         self._inner = inner
         self._tool_name = tool_name
@@ -151,6 +160,7 @@ class ProjectedAbility:
         self._member_reference = member_reference or MemberReference(member=member)
         self._identity = identity or InvocationIdentity()
         self._admission = admission
+        self._run_resolver = current_run
 
     @property
     def name(self) -> str:
@@ -178,7 +188,42 @@ class ProjectedAbility:
         绑定前调用对象里的 run 为空；绑定后接纳层要求当前 run 与它一致，
         旧运行留下的工具对象不能借新 run 继续执行。
         """
+        if not run or (self._identity.run and self._identity.run != run):
+            raise StartupGrantError("Cannot rebind a tool from an earlier run")
         self._identity = replace(self._identity, run=run)
+
+    @property
+    def invocation_identity(self) -> InvocationIdentity:
+        """装配者固定的受信身份，供 Agent 级 Hook 读取。"""
+        return self._identity
+
+    @property
+    def bound_agent(self) -> str:
+        """返回装配时固定的稳定主体。"""
+        return self._identity.agent
+
+    def prepare_call(self, call: OperationCall) -> OperationCall:
+        """在 Hook 之前固定成员和身份；调用参数无权覆盖。"""
+        return replace(call, member=self._member_reference, identity=self._identity)
+
+    def check_call(self, call: OperationCall, services: ExecutionServices) -> ActionResult | None:
+        """未绑定运行代次或权限硬拒绝时不进入审批。"""
+        if self._admission is not None and not self._identity.run:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE, data={"error": "Trusted run is not bound"}
+            )
+        if self._run_resolver is not None:
+            try:
+                current = self._run_resolver()
+            except AccessError:
+                current = None
+            if not current or current != self._identity.run:
+                return ActionResult(
+                    outcome=ActionOutcome.FAILURE,
+                    data={"error": "Tool belongs to an earlier run of this Agent"},
+                )
+        check = getattr(self._inner, "check_call", None)
+        return check(call, services) if callable(check) else None
 
     async def execute(self, call: OperationCall, services: ExecutionServices) -> Any:
         """先做执行接纳，再委托给本地执行实例。
@@ -188,10 +233,10 @@ class ProjectedAbility:
         复核不能被审批跳过——撤销、重新选择与越界在此最后兜底，失败时没有
         副作用。
         """
-        call = call.with_member(self._member_reference)
-        identity = self._identity
-        if identity.project_id or identity.run or identity.agent:
-            call = replace(call, identity=identity)
+        call = self.prepare_call(call)
+        denied = self.check_call(call, services)
+        if denied is not None:
+            return denied
         if self._admission is not None:
             error = await self._admission(call)
             if error is not None:
@@ -343,11 +388,19 @@ class StartupGrantMaterializer:
         self._safe_extra_commands = safe_extra_commands
         self._safe_extra_sub_commands = safe_extra_sub_commands
 
+    def registration(self, agent: str) -> Any:
+        """返回从授权核定到运行绑定的库级独占范围。"""
+        return self._store.startup_registration(self._actor, agent)
+
+    async def release_registration(self, agent: str) -> None:
+        """运行已停止后解除主体占位；持久授权保留供显式恢复。"""
+        await self._store.release_registration(self._actor, agent)
+
     async def materialize(self, *, agent: str, resolved: ResolvedAgent) -> StartupMaterialization:
         """执行一次启动物化。
 
         Args:
-            agent: 正在启动的 Agent 名称。
+            agent: 正在启动的稳定 Agent ID。
             resolved: 已解析的 Agent（模板成员与控制成员）。
 
         Returns:
@@ -357,6 +410,7 @@ class StartupGrantMaterializer:
             StartupGrantError: 包实例无法登记、策略与模板无法对齐，或没有
                 任何可用工具时失败，不回退到模板自动授予。
         """
+        validate_agent_id(agent)
         catalog = load_ability_definitions()
         control, containers = self._split(catalog, resolved.abilities)
         if not containers:
@@ -399,9 +453,16 @@ class StartupGrantMaterializer:
             raise StartupGrantError(f"启动授权写入失败：{error.code}") from error
         bindings, revision = await self._bind(agent, desired, result.revision)
         sources = {alias: item[2] for alias, item in registered.items()}
-        run = self._current_run(agent)
+        run = ""
         abilities = self._instantiate(
-            agent, control, instances, desired, bindings, sources, run=run
+            agent,
+            control,
+            instances,
+            desired,
+            bindings,
+            sources,
+            run=run,
+            agent_name=resolved.config.name,
         )
         return StartupMaterialization(
             abilities=abilities,
@@ -411,22 +472,23 @@ class StartupGrantMaterializer:
             revoked=result.revoked,
         )
 
-    async def bind_run(self, agent: str, materialization: StartupMaterialization) -> None:
+    async def bind_run(
+        self, agent: str, materialization: StartupMaterialization | AuthorizedToolTable
+    ) -> None:
         """把当前受信 run 绑定到本次物化的投影工具上。
 
         启动核定发生在 Agent 注册之前，那时读不到运行实例；注册完成后由装配
-        方调用本方法补齐 run。读不到 run（非运行态／standalone）时保持未绑定，
-        由接纳层按关系库现有身份复核。
+        方调用本方法补齐 run。读不到当前运行代次时明确失败，不借用名称或
+        旧运行的身份；注册方负责回收本次新建的执行实例。
 
         Args:
-            agent: 已注册的 Agent 名称。
-            materialization: 本次启动物化结果。
+            agent: 已注册的稳定 Agent ID。
+            materialization: 本次启动物化结果或授权工具表。
         """
         try:
             run = self._store.current_run(agent)
-        except AccessError:
-            logger.debug("builtin spawn: agent %s 尚无当前 run，跳过 run 绑定", agent)
-            return
+        except AccessError as error:
+            raise StartupGrantError(f"Agent {agent} has no trusted run to bind") from error
         materialization.bind_run(run)
         logger.info("builtin spawn: agent %s 绑定受信 run=%s", agent, run)
 
@@ -438,7 +500,7 @@ class StartupGrantMaterializer:
         物化实际实例化过的工具——没有实例的成员即使后来被授予也不能凭空出现。
 
         Args:
-            agent: Agent 名称。
+            agent: 稳定 Agent ID。
             materialization: 本次启动物化结果（提供已实例化工具集合）。
 
         Returns:
@@ -460,17 +522,6 @@ class StartupGrantMaterializer:
             return tuple(sorted(tool.name for tool in view.bound_tools if tool.name in spawned))
 
         return project
-
-    def _current_run(self, agent: str) -> str:
-        """读取当前受信 run；spawn 早期尚未注册运行实例时为空串。
-
-        绑定发生在 Agent 注册完成后（CoreUnit 调 :meth:`StartupMaterialization.bind_run`），
-        这里只取启动瞬间能确认的值，绝不猜测。
-        """
-        try:
-            return self._store.current_run(agent)
-        except AccessError:
-            return ""
 
     def _split(
         self, catalog: Any, resolved: list[ResolvedAbility]
@@ -597,6 +648,7 @@ class StartupGrantMaterializer:
         sources: dict[str, dict[str, ResolvedAbility]],
         *,
         run: str = "",
+        agent_name: str = "",
     ) -> AuthorizedToolTable:
         """把选定成员实例化成工具，并把固定 schema、权限范围与接纳绑到包装层。"""
         definitions = {instance.alias: instance for instance in instances}
@@ -652,7 +704,7 @@ class StartupGrantMaterializer:
                         project_id=self._store.project_id,
                         agent=agent,
                         run=run,
-                        agent_name=agent,
+                        agent_name=agent_name,
                     ),
                     tool_schema={
                         "type": "function",
@@ -663,6 +715,7 @@ class StartupGrantMaterializer:
                         },
                     },
                     admission=self._admission(agent, binding, instance.version_digest),
+                    current_run=lambda agent=agent: self._store.current_run(agent),
                 )
             )
         return AuthorizedToolTable(abilities)
@@ -688,7 +741,7 @@ class StartupGrantMaterializer:
             except AccessError:
                 return _denial(binding, "access_denied")
             bound_run = call.identity.run
-            if bound_run and bound_run != current_run:
+            if not bound_run or bound_run != current_run:
                 return _denial(binding, "stale_invocation")
             actor = AccessIdentity(store.project_id, agent, current_run)
             try:

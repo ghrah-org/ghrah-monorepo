@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
@@ -23,30 +24,116 @@ __all__ = [
 ]
 
 
-def normalize_command_entry(text: str) -> tuple[str, str | None]:
-    """把命令白名单条目归一为 ``(基础命令, 子命令或 None)``。
+# 只解析当前支持的命令入口，不猜测未知选项是否带值。
+_VALUE_OPTIONS = {
+    "git": {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"},
+    "docker": {"-H", "--host", "--context", "--config", "-l", "--log-level"},
+    "kubectl": {
+        "-n",
+        "--namespace",
+        "--context",
+        "--cluster",
+        "--user",
+        "--kubeconfig",
+        "--server",
+        "-s",
+        "--token",
+        "--certificate-authority",
+        "--client-certificate",
+        "--client-key",
+        "--request-timeout",
+    },
+    "npm": {"--prefix", "--userconfig", "--cache", "--registry", "--workspace", "-w", "--loglevel"},
+}
+_FLAG_OPTIONS = {
+    "git": {
+        "--no-pager",
+        "--paginate",
+        "--bare",
+        "--no-optional-locks",
+        "--version",
+        "--help",
+        "-h",
+    },
+    "docker": {"--debug", "-D", "--tls", "--tlsverify", "--version", "-v", "--help"},
+    "kubectl": {"--help", "--warnings-as-errors"},
+    "npm": {"--global", "-g", "--silent", "--verbose", "--version", "--help"},
+}
 
-    空条目返回 ``("", None)``，由调用方忽略。
-    """
-    stripped = text.strip()
-    if not stripped:
-        return "", None
-    try:
-        parts = shlex.split(stripped)
-    except ValueError:
-        parts = stripped.split()
-    if not parts:
-        return "", None
-    base = Path(parts[0]).name.lower()
+
+@dataclass(frozen=True)
+class ParsedCommand:
+    """有界命令入口解析结果；不能确认语义时不允许白名单放行。"""
+
+    base: str = ""
     sub: str | None = None
-    for part in parts[1:]:
-        if part.startswith("-"):
+    arguments: tuple[str, ...] = ()
+    ambiguous: bool = False
+
+
+def parse_command_entry(text: str) -> ParsedCommand:
+    """跳过已知带值选项；未知前置选项、shell 组合或展开均显式拒绝。"""
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return ParsedCommand(ambiguous=True)
+    if not parts:
+        return ParsedCommand()
+    base = Path(parts[0]).name.lower()
+    quote = None
+    escaped = False
+    for character in text:
+        if escaped:
+            escaped = False
             continue
-        if "/" in part or ("." in part and not part.startswith(".")):
+        if character == "\\" and quote != "'":
+            escaped = True
+        elif quote is not None:
+            if character == quote:
+                quote = None
+            elif quote == '"' and character in "$`":
+                return ParsedCommand(base=base, ambiguous=True)
+        elif character in "\"'":
+            quote = character
+        elif character in ";&|<>`$()\n":
+            return ParsedCommand(base=base, ambiguous=True)
+    index = 1
+    while index < len(parts):
+        token = parts[index]
+        if token == "--":
+            index += 1
+            break
+        if not token.startswith("-"):
+            break
+        option = token.split("=", 1)[0]
+        if option in _VALUE_OPTIONS.get(base, set()):
+            if "=" not in token:
+                index += 1
+                if index >= len(parts):
+                    return ParsedCommand(base=base, ambiguous=True)
+        elif base in _VALUE_OPTIONS and option not in _FLAG_OPTIONS.get(base, set()):
+            # 常见短选项的紧接值，如 -Csub、-ndefault。
+            if not any(
+                token.startswith(opt) and len(token) > len(opt)
+                for opt in _VALUE_OPTIONS[base]
+                if opt.startswith("-") and len(opt) == 2
+            ):
+                return ParsedCommand(base=base, ambiguous=True)
+        index += 1
+    sub = None
+    tail = tuple(parts[index:])
+    for token in tail:
+        if token.startswith("-") or "/" in token or ("." in token and not token.startswith(".")):
             continue
-        sub = part.lower()
+        sub = token.lower()
         break
-    return base, sub
+    return ParsedCommand(base, sub, tail)
+
+
+def normalize_command_entry(text: str) -> tuple[str, str | None]:
+    """将声明与调用归一为相同入口；不确定的声明不能制造匹配。"""
+    parsed = parse_command_entry(text)
+    return ("", None) if parsed.ambiguous else (parsed.base, parsed.sub)
 
 
 def command_entry_covers(entry: str, base: str, sub: str | None) -> bool:

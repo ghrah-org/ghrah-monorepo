@@ -412,7 +412,7 @@ def default_core_unit_factory(
                     if supervisor is None:
                         return None
                     try:
-                        return supervisor.incarnation_id(agent)
+                        return supervisor.incarnation_for_agent(agent)
                     except Exception:
                         return None
 

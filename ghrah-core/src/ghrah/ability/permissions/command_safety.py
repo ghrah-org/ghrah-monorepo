@@ -30,14 +30,12 @@
 from __future__ import annotations
 
 import logging
-import shlex
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
-from ghrah.ability.permissions.command_scope import command_in_scope
+from ghrah.ability.permissions.command_scope import command_in_scope, parse_command_entry
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
@@ -330,7 +328,14 @@ class CommandSafetyChecker:
                 reason="Empty command",
             )
 
-        base_cmd, sub_cmd = self.parse_command(command)
+        parsed = parse_command_entry(command)
+        base_cmd, sub_cmd = parsed.base, parsed.sub
+        if parsed.ambiguous:
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=base_cmd,
+                reason="Failed to parse command structure or leading options safely",
+            )
 
         base_cmd_lower = base_cmd.lower()
 
@@ -350,6 +355,37 @@ class CommandSafetyChecker:
                 reason=f"Dangerous command: {base_cmd_lower}",
             )
 
+        destructive = (
+            (base_cmd_lower == "git" and sub_cmd == "reset" and "--hard" in parsed.arguments)
+            or (
+                base_cmd_lower == "git"
+                and sub_cmd == "push"
+                and any(
+                    arg.startswith("--force")
+                    or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
+                    for arg in parsed.arguments
+                )
+            )
+            or (base_cmd_lower == "docker" and sub_cmd == "rm")
+            or (base_cmd_lower == "docker" and sub_cmd == "system" and "prune" in parsed.arguments)
+        )
+        if destructive:
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=base_cmd_lower,
+                sub_command=sub_cmd,
+                reason=f"Dangerous command: {command}",
+            )
+
+        dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
+        if sub_cmd and sub_cmd.lower() in dangerous_subs:
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=base_cmd_lower,
+                sub_command=sub_cmd.lower(),
+                reason=f"Dangerous sub-command: {base_cmd_lower} {sub_cmd.lower()}",
+            )
+
         if self._allowed_commands is not None and command_in_scope(self._allowed_commands, command):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.SAFE,
@@ -364,14 +400,6 @@ class CommandSafetyChecker:
         )
         if has_sub_routing and sub_cmd:
             sub_cmd_lower = sub_cmd.lower()
-            dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
-            if sub_cmd_lower in dangerous_subs:
-                return CommandSafetyVerdict(
-                    category=CommandSafetyCategory.DANGEROUS,
-                    base_command=base_cmd_lower,
-                    sub_command=sub_cmd_lower,
-                    reason=f"Dangerous sub-command: {base_cmd_lower} {sub_cmd_lower}",
-                )
             safe_subs = self._safe_sub_commands.get(base_cmd_lower, set())
             if sub_cmd_lower in safe_subs:
                 return CommandSafetyVerdict(
@@ -430,32 +458,8 @@ class CommandSafetyChecker:
         Returns:
             (基础命令, 子命令或None) 元组
         """
-        if not command or not command.strip():
-            return "", None
-
-        try:
-            parts = shlex.split(command)
-        except ValueError:
-            parts = command.split()
-
-        if not parts:
-            return "", None
-
-        base = Path(parts[0]).name
-
-        sub_cmd: str | None = None
-        for i in range(1, len(parts)):
-            part = parts[i]
-            if part.startswith("-"):
-                continue
-            if "/" in part:
-                continue
-            if "." in part and not part.startswith("."):
-                continue
-            sub_cmd = part
-            break
-
-        return base, sub_cmd
+        parsed = parse_command_entry(command)
+        return parsed.base, parsed.sub
 
 
 class CommandApprovalHook(Hook):

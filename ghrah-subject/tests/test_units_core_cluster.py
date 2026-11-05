@@ -985,3 +985,28 @@ class TestDefaultFactoryGrantStoreWiring:
             assert unit._config.ability_store is None
         finally:
             await factory.release("cluster-1")
+
+
+async def test_production_grant_store_asks_lifecycle_by_uuid_not_display_name(tmp_path):
+    from types import SimpleNamespace
+
+    from ghrah.ability.access import GrantPolicy
+
+    root = tmp_path / "project"
+    (root / "db").mkdir(parents=True)
+    config = SubjectConfig(ability_source="builtin", ability_grant_policy=GrantPolicy())
+    factory = default_core_unit_factory(config)
+    unit = factory("cluster", "project", root.as_uri())
+    called = []
+
+    def current(agent_id):
+        called.append(agent_id)
+        return "trusted-incarnation" if agent_id == "a" * 32 else None
+
+    try:
+        await factory.prepare(unit, "cluster", "project", root.as_uri())
+        unit._supervisor = SimpleNamespace(incarnation_for_agent=current)
+        assert unit._config.ability_store.current_run("a" * 32) == "trusted-incarnation"
+        assert called == ["a" * 32]
+    finally:
+        await factory.release("cluster")

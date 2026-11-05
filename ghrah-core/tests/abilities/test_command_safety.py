@@ -405,3 +405,54 @@ class TestDeclaredCommandScope:
         result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False
+
+
+@pytest.mark.parametrize(
+    ("allowed", "command"),
+    [
+        ("git", "git clean -fd"),
+        ("docker", "docker rmi image"),
+        ("kubectl", "kubectl delete pod test"),
+        ("npm", "npm publish"),
+    ],
+)
+def test_declared_allow_cannot_override_dangerous_subcommand(allowed, command):
+    checker = CommandSafetyChecker(require_approval=False, allowed_commands=(allowed,))
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C sub clean -fd",
+        "git -Csub clean -fd",
+        "git --git-dir=sub clean -fd",
+        "docker -H host rmi image",
+        "kubectl -n default delete pod x",
+        "kubectl --namespace=default delete pod x",
+        "npm --prefix sub publish",
+        "git reset --hard",
+        "git push --force",
+        "git push --force-with-lease",
+        "docker rm -f image",
+        "docker system prune",
+        "git --unknown value clean -fd",
+        "echo ok; git clean -fd",
+        "echo $(git clean -fd)",
+    ],
+)
+def test_leading_options_and_shell_composition_cannot_bypass_dangerous_checks(command):
+    checker = CommandSafetyChecker(
+        allowed_commands=("git", "docker", "kubectl", "npm", "echo"),
+        denied_commands=("git clean",),
+        require_approval=False,
+    )
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize("command", ["git -C sub status", "git --no-pager status"])
+def test_command_and_scope_share_leading_option_parsing(command):
+    checker = CommandSafetyChecker(allowed_commands=("git status",), require_approval=True)
+    assert checker.check_command(command).category is CommandSafetyCategory.SAFE
+    checker = CommandSafetyChecker(allowed_commands=("git",), denied_commands=("git status",))
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS

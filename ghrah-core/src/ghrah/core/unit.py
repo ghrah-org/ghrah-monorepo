@@ -176,8 +176,11 @@ class CoreUnitConfig:
             说明缺席（零隐式）。Subject 挂载模式下注入 ``SkillConfig.root``。
             选择 ``ability_source="builtin"`` 时该根**不被读取**（旧读取器不
             构造），只记警告——同一 Agent 不允许一边用新来源一边读旧目录。
-        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。未选择时
-            保持现有运行方式；选择新模式后能力声明、工具实例与 Skill 读取
+        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。
+            ``legacy`` **已废弃**：仅保留旧部署兼容，不在权限治理范围内
+            （有效权限合并、只读、权限位与危险命令白名单等保证只在
+            ``builtin`` 生效），不要把它当作受治理或安全的装配方式。
+            ``builtin`` 是受支持的路径：能力声明、工具实例与 Skill 读取
             服务同源，解析失败直接报错，不回退旧注册表或旧 Skill 读取器。
         default_abilities: spawn 未显式传 abilities 时注入的能力名列表
             （透传 SupervisorActor.default_abilities——部署方显式声明，
@@ -219,8 +222,9 @@ class CoreUnitConfig:
     # skill-ability 根目录（装配期显式注入的字符串路径）。None = 不接线：
     # skill 目录不被扫描、上下文不注入技能目录摘要（消费方显式说明缺席）。
     skill_root: str | None = None
-    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器；builtin = 新版
-    # ghrah.ability 来源）。装配点显式选择，未选择保持现有运行方式。
+    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器，已废弃且不参与
+    # 权限治理；builtin = 新版 ghrah.ability 受治理路径）。装配点显式选择；
+    # 未选择时保持 legacy 仅为旧部署兼容。
     ability_source: str = "legacy"
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
@@ -493,6 +497,10 @@ def _create_ability_from_def(
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
 ) -> AbilityProtocol:
     """将 AbilityDefinitionPayload 转换为 Ability 实例。
+
+    仅服务于已废弃的 ``ability_source=legacy`` 直传能力入口，不参与本轮
+    权限治理：只按 wire ``params`` 内的原始字段构造检查器，不做有效权限
+    合并、只读约束、权限位与 ``denied_*`` 执行，不能作为权限或安全依据。
 
     与原 server/router.py 的 ``_create_ability_from_def`` 共享同一套常量与
     AbilityRegistry.create 工厂：
@@ -1073,6 +1081,26 @@ class CoreUnit:
             raise ValueError(f"model_configuration_invalid: {name}") from exc
 
     async def _handle_spawn_agent(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        """在授权核定之前固定稳定主体，并预留本次注册。"""
+        from uuid import uuid4
+
+        sp = SpawnAgentPayload.model_validate(payload)
+        if self._require_assembly().is_builtin and not sp.config.agent_id:
+            config = sp.config.model_copy(update={"agent_id": uuid4().hex})
+            sp = sp.model_copy(update={"config": config})
+        if self._require_assembly().is_builtin:
+            from ghrah.ability.access.identity import validate_agent_id
+
+            validate_agent_id(sp.config.agent_id)
+        config = AgentConfig(name=sp.config.name, agent_id=sp.config.agent_id)
+        supervisor = self._require_supervisor()
+        try:
+            async with supervisor.spawn_reservation(config):
+                return await self._handle_reserved_spawn(sp.model_dump(), cmd_ctx)
+        except RegistryError as error:
+            return self._err(str(error))
+
+    async def _handle_reserved_spawn(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         """spawn_agent — 接收 SpawnAgentPayload。
 
         manifest_ref 路径：CoreUnit 内按装配模式解析 manifest 并直接构造工具
@@ -1106,15 +1134,17 @@ class CoreUnit:
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
                 self._validate_model_config(resolved.config.endpoint_name)
+            resolved.config = replace(resolved.config, agent_id=sp.config.agent_id)
+            supervisor.check_spawn(resolved.config)
             # builtin：授权装配边界；legacy：旧装配实例化。builtin 未接线关系库
             # 时抛 StartupGrantError，不再回退按模板实例化。
             materialization = await self._materialize_builtin_abilities(
-                resolved.config.name, resolved
+                resolved.config.effective_agent_id, resolved
             )
             ability_instances = materialization.abilities if materialization else None
             tool_table_projector = (
                 self._startup_materializer.tool_table_projector(
-                    resolved.config.name, materialization
+                    resolved.config.effective_agent_id, materialization
                 )
                 if materialization is not None and self._startup_materializer is not None
                 else None
@@ -1162,8 +1192,6 @@ class CoreUnit:
             recovery_mode = supervisor.recovery_mode(agent_name)
             incarnation_id = supervisor.incarnation_id(agent_name)
             self._apply_hitl_timeout(agent_name)
-            if materialization is not None:
-                await self._bind_materialized_run(agent_name, materialization)
             self._emit_event(
                 EventType.AGENT_SPAWNED.value,
                 {
@@ -1302,7 +1330,7 @@ class CoreUnit:
         方按旧装配实例化。
 
         Args:
-            agent: 正在启动的 Agent 名称。
+            agent: 正在启动的稳定 Agent ID。
             resolved: 已解析的 Agent 模板。
 
         Returns:
@@ -1332,19 +1360,6 @@ class CoreUnit:
             list(materialized.revoked),
         )
         return materialized
-
-    async def _bind_materialized_run(self, agent_name: str, materialization: Any) -> None:
-        """Agent 注册完成后把当前 run 绑到投影工具上。
-
-        启动核定发生在 Agent 注册之前，那时还读不到运行实例；受信 run 必须
-        在注册完成后补齐，之后旧运行留下的工具对象不能借新 run 继续执行。
-        读不到 run（非运行态／standalone）时保持未绑定，由接纳层按关系库
-        现有身份复核。
-        """
-        materializer = self._startup_materializer
-        if materializer is None:
-            return
-        await materializer.bind_run(agent_name, materialization)
 
     def _apply_hitl_timeout(self, agent_name: str) -> None:
         """best-effort 将 config.hitl_timeout 与 promise 注册表应用到 agent 的本地 executor。
