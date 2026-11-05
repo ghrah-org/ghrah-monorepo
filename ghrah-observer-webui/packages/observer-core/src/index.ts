@@ -65,6 +65,8 @@ export { type HitlRequest, useHitlStore } from "./stores/hitl.js";
 export {
   type AbilityManifestInfo,
   type AgentManifestInfo,
+  type ManifestDetail,
+  type ManifestEntry,
   extractAbilityList,
   extractAgentList,
   extractManifestEntry,

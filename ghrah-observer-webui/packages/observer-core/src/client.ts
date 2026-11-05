@@ -730,9 +730,11 @@ export class ObserverClient extends ServerClient {
   async resolveAgent(
     agentFullName: string,
     runtimeName?: string | null,
+    content?: string | null,
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { agent_full_name: agentFullName };
     if (runtimeName != null) payload["runtime_name"] = runtimeName;
+    if (content != null) payload["content"] = content;
 
     const msg: ServerMessage = {
       type: CommandType.MANIFEST_RESOLVE_AGENT,

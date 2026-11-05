@@ -212,6 +212,14 @@ class ManifestStore:
                 f"Expected manifest type '{expected_type}', got {manifest_type!r}"
             )
 
+        namespace, name = _full_name_to_path_parts(full_name)
+        metadata = data["metadata"]
+        if (metadata["namespace"], metadata["name"]) != (namespace, name):
+            raise ManifestValidationError(
+                f"Manifest metadata identity must match target '{namespace}.{name}'; "
+                "renaming through a content overwrite is not supported"
+            )
+
         path = self._full_name_to_path(full_name, dir_kind)
         if path.exists() and not overwrite:
             raise DuplicateManifestError(

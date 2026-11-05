@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ─── Manifest CRUD 载荷模型 ───
 
@@ -49,7 +49,11 @@ class ManifestResolvePayload(BaseModel):
     """manifest_resolve_agent 命令载荷。"""
 
     agent_full_name: str
-    runtime_name: str | None = None  # ─── Manifest CRUD 响应载荷模型 ───
+    runtime_name: str | None = None
+    content: str | None = None
+
+
+# ─── Manifest CRUD 响应载荷模型 ───
 
 
 class ManifestGetAbilityResponsePayload(BaseModel):
@@ -64,6 +68,20 @@ class ManifestGetAgentResponsePayload(BaseModel):
 
     manifest: dict[str, Any]
     source: str
+
+
+class ManifestListErrorPayload(BaseModel):
+    """列表中无法读取的单个声明；不得冒充完整摘要。"""
+
+    full_name: str
+    error: str
+
+
+class ManifestListAbilitiesResponsePayload(BaseModel):
+    """有效能力摘要与逐条读取错误，二者明确分开。"""
+
+    abilities: list[dict[str, Any]]
+    errors: list[ManifestListErrorPayload] = Field(default_factory=list)
 
 
 class ManifestPutResponsePayload(BaseModel):
@@ -88,6 +106,9 @@ class ManifestValidateResponsePayload(BaseModel):
 class ManifestResolveAgentResponsePayload(BaseModel):
     """manifest_resolve_agent 响应载荷。"""
 
+    agent_full_name: str
+    ability_source: Literal["legacy", "builtin"]
+    input_source: Literal["stored", "draft"]
     config: dict[str, Any]
     abilities: list[dict[str, Any]]  # ─── Manifest 事件载荷模型 ───
 

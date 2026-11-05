@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { AgentManifestInfo } from "@ghrah/observer-core";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import AgentManifestCard from "@/components/config/agent-manifest-card.vue";
 import AgentManifestDetail from "@/components/config/agent-manifest-detail.vue";
+import AgentManifestEditorDialog from "@/components/config/agent-manifest-editor-dialog.vue";
 import NewAgentManifestDialog from "@/components/config/new-agent-manifest-dialog.vue";
 import SpawnFromManifestDialog from "@/components/config/spawn-from-manifest-dialog.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
@@ -13,7 +14,11 @@ const { manifests, listManifestAgents, deleteAgent } = useObserver();
 const { t } = useI18n();
 const emit = defineEmits<{ dirtyChange: [dirty: boolean] }>();
 
-const selected = ref<AgentManifestInfo | null>(null);
+const selectedFullName = ref<string | null>(null);
+const selected = computed(
+  () => manifests.agentList.find((item) => item.full_name === selectedFullName.value) ?? null,
+);
+const editor = ref<{ fullName: string; mode: "view" | "edit" } | null>(null);
 const showSpawnDialog = ref(false);
 const showNewDialog = ref(false);
 const loading = ref(false);
@@ -34,6 +39,11 @@ function closeNewDialog() {
   setDialogDirty(false);
 }
 
+function closeEditor() {
+  editor.value = null;
+  setDialogDirty(false);
+}
+
 onMounted(async () => {
   if (manifests.agentList.length === 0) {
     await listManifestAgents();
@@ -41,16 +51,18 @@ onMounted(async () => {
 });
 
 function handleSelect(manifest: AgentManifestInfo) {
-  selected.value = selected.value?.full_name === manifest.full_name ? null : manifest;
+  selectedFullName.value =
+    selectedFullName.value === manifest.full_name ? null : manifest.full_name;
 }
 
 function handleSpawn(manifest: AgentManifestInfo) {
-  selected.value = manifest;
+  selectedFullName.value = manifest.full_name;
   showSpawnDialog.value = true;
 }
 
-function handleEdit(manifest: AgentManifestInfo) {
-  window.postMessage?.({ type: "openFile", fullName: manifest.full_name, kind: "agent" });
+function handleEdit(manifest: AgentManifestInfo, mode: "view" | "edit" = "edit") {
+  selectedFullName.value = manifest.full_name;
+  editor.value = { fullName: manifest.full_name, mode };
 }
 
 async function confirmDelete() {
@@ -67,7 +79,7 @@ async function confirmDelete() {
     error.value = t("config.agent.notConnected");
   }
   if (selected.value?.full_name === fullName) {
-    selected.value = null;
+    selectedFullName.value = null;
   }
 }
 </script>
@@ -111,7 +123,17 @@ async function confirmDelete() {
       :manifest="selected"
       @spawn="handleSpawn(selected!)"
       @edit="handleEdit(selected!)"
+      @view="handleEdit(selected!, 'view')"
       @delete="deleteTarget = selected!.full_name"
+    />
+
+    <AgentManifestEditorDialog
+      v-if="editor"
+      :key="editor.fullName"
+      :full-name="editor.fullName"
+      :initial-mode="editor.mode"
+      @dirty-change="setDialogDirty"
+      @close="closeEditor"
     />
 
     <SpawnFromManifestDialog

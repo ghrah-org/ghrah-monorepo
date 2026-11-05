@@ -11,12 +11,9 @@ defineProps<{
 defineEmits<{
   spawn: [];
   edit: [];
+  view: [];
   delete: [];
 }>();
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}...` : text;
-}
 </script>
 
 <template>
@@ -72,7 +69,7 @@ function truncate(text: string, max: number): string {
       </div>
       <pre
         class="text-xs bg-gray-50 dark:bg-gray-800 p-2 rounded overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto"
-        >{{ truncate(manifest.system_prompt, 500) }}</pre>
+        >{{ manifest.system_prompt }}</pre>
     </div>
 
     <div v-if="manifest.ability_refs.length > 0" class="space-y-1">
@@ -96,6 +93,9 @@ function truncate(text: string, max: number): string {
       </button>
       <button class="btn-secondary text-xs" @click="$emit('edit')">
         {{ t("config.agent.editYaml") }}
+      </button>
+      <button class="btn-secondary text-xs" @click="$emit('view')">
+        {{ t("config.editor.viewTitle") }}
       </button>
       <button class="btn-danger text-xs" @click="$emit('delete')">
         {{ t("config.agent.delete") }}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -404,11 +405,126 @@ class TestManifestStoreListingEmpty:
 
 
 class TestManifestServiceCommand:
+    @pytest.mark.parametrize(
+        ("kind", "full_name", "source"),
+        [
+            ("agent", "my_project.dev_agent", VALID_AGENT_YAML),
+            ("ability", "ghrah.fs.read_file", VALID_ABILITY_YAML),
+        ],
+    )
+    @pytest.mark.parametrize("field", ["name", "namespace"])
+    def test_overwrite_cannot_change_manifest_identity(
+        self, store: ManifestStore, kind: str, full_name: str, source: str, field: str
+    ) -> None:
+        put = f"manifest_put_{kind}"
+        assert handle_manifest_command(put, {"full_name": full_name, "content": source}, store)[
+            "success"
+        ]
+        original = handle_manifest_command(f"manifest_get_{kind}", {"full_name": full_name}, store)
+        metadata = original["data"]["manifest"]["metadata"]
+        changed = source.replace(f"{field}: {metadata[field]}", f"{field}: renamed")
+        rejected = handle_manifest_command(
+            put, {"full_name": full_name, "content": changed, "overwrite": True}, store
+        )
+        assert rejected["success"] is False
+        assert "identity must match target" in rejected["error"]
+        assert (
+            handle_manifest_command(f"manifest_get_{kind}", {"full_name": full_name}, store)
+            == original
+        )
+
+    def test_editor_round_trip_preserves_raw_source_and_updates_summary(
+        self, store: ManifestStore
+    ) -> None:
+        original = "# Keep this comment.\n" + VALID_AGENT_YAML
+        assert handle_manifest_command(
+            "manifest_put_agent", {"full_name": "my_project.dev_agent", "content": original}, store
+        )["success"]
+        edited = original.replace("You are a dev agent.", "Updated editor prompt.")
+        assert handle_manifest_command(
+            "manifest_validate", {"content": edited, "manifest_type": "agent"}, store
+        )["data"]["valid"]
+        saved = handle_manifest_command(
+            "manifest_put_agent",
+            {"full_name": "my_project.dev_agent", "content": edited, "overwrite": True},
+            store,
+        )
+        assert saved["success"], saved
+        reconnected = ManifestStore(store._root)
+        read = handle_manifest_command(
+            "manifest_get_agent", {"full_name": "my_project.dev_agent"}, reconnected
+        )
+        assert read["data"]["source"] == edited
+        listed = handle_manifest_command("manifest_list_agents", {}, reconnected)
+        assert listed["data"]["agents"][0]["system_prompt"] == "Updated editor prompt."
+
+    def test_validation_checks_the_requested_manifest_type(self, store: ManifestStore) -> None:
+        result = handle_manifest_command(
+            "manifest_validate", {"content": VALID_ABILITY_YAML, "manifest_type": "agent"}, store
+        )
+        assert result["success"] is True
+        assert result["data"]["valid"] is False
+        assert "Expected manifest type 'agent'" in result["data"]["errors"][0]
+
     def test_list_abilities(self, store: ManifestStore) -> None:
         store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)
         result = handle_manifest_command("manifest_list_abilities", {}, store)
         assert result["success"] is True
         assert "ghrah.fs.read_file" in [a["full_name"] for a in result["data"]["abilities"]]
+
+    def test_list_abilities_returns_complete_summary(self, store: ManifestStore) -> None:
+        store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)
+        result = handle_manifest_command("manifest_list_abilities", {}, store)
+        assert result["success"] is True
+        assert result["data"]["errors"] == []
+        summary = result["data"]["abilities"][0]
+        assert summary["description"] == "Read file contents"
+        assert summary["permissions"]["fs_read_only"] is True
+        assert summary["implementation_type"] == "builtin"
+        assert summary["has_hitl"] is False
+        assert summary["namespace"] == "ghrah.fs"
+
+    @pytest.mark.parametrize("content", ["[", "[]", INVALID_YAML_CONTENT])
+    def test_list_abilities_reports_broken_entries_separately(
+        self, store: ManifestStore, content: str
+    ) -> None:
+        store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)
+        broken = store._ability_path("ghrah.fs.broken")
+        broken.write_text(content, encoding="utf-8")
+        result = handle_manifest_command("manifest_list_abilities", {}, store)
+        assert result["success"] is True
+        assert [a["full_name"] for a in result["data"]["abilities"]] == ["ghrah.fs.read_file"]
+        assert len(result["data"]["errors"]) == 1
+        assert result["data"]["errors"][0]["full_name"] == "ghrah.fs.broken"
+        assert result["data"]["errors"][0]["error"]
+
+    def test_responses_match_frontend_fixture(self, store: ManifestStore) -> None:
+        fixture_path = (
+            Path(__file__).resolve().parents[2]
+            / "ghrah-observer-webui/packages/protocol/src/__fixtures__/manifest-responses.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        for kind, full_name in (("ability", "audit.fs.read_file"), ("agent", "audit.helper")):
+            response = fixture[kind]
+            put = handle_manifest_command(
+                f"manifest_put_{kind}",
+                {"full_name": full_name, "content": response["source"]},
+                store,
+            )
+            assert put["success"] is True, put
+            assert put["data"] == {"full_name": full_name, **response}
+            get = handle_manifest_command(f"manifest_get_{kind}", {"full_name": full_name}, store)
+            assert get == {"success": True, "data": response}
+            validate = handle_manifest_command(
+                "manifest_validate", {"content": response["source"], "manifest_type": kind}, store
+            )
+            assert validate == {"success": True, "data": fixture["validation_valid"]}
+        listed = handle_manifest_command("manifest_list_abilities", {}, store)
+        assert listed == {"success": True, "data": fixture["ability_list"]}
+        resolved = handle_manifest_command(
+            "manifest_resolve_agent", fixture["resolve_request"], store
+        )
+        assert resolved == {"success": True, "data": fixture["resolved_agent"]}
 
     def test_list_abilities_with_namespace(self, store: ManifestStore) -> None:
         store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)

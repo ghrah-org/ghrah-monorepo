@@ -63,6 +63,19 @@ describe("ObserverClient", () => {
     }
   });
 
+  it("sends explicit draft content for preview and preserves stored-preview calls", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "preview", success: true });
+    await client.resolveAgent("audit.helper", null, "manifest: agent\n");
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.MANIFEST_RESOLVE_AGENT,
+      payload: { agent_full_name: "audit.helper", content: "manifest: agent\n" },
+    });
+    await client.resolveAgent("audit.helper");
+    expect(request.mock.calls[1][0].payload).toEqual({ agent_full_name: "audit.helper" });
+  });
+
   describe("subscribe", () => {
     it("sends subscribe command with correct payload", async () => {
       await connectClient(client, mockWs);

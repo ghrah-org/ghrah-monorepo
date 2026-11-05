@@ -1,6 +1,4 @@
 import {
-  type AbilityManifestInfo,
-  type AgentManifestInfo,
   type AgentTarget,
   type ChainTarget,
   type CreateProjectOptions,
@@ -22,7 +20,11 @@ import {
   useProjectsStore,
   useRoomsStore,
 } from "@ghrah/observer-core";
-import type { AbilityDefinitionPayload, AgentConfigPayload } from "@ghrah/protocol";
+import type {
+  AbilityDefinitionPayload,
+  AgentConfigPayload,
+  CommandResultPayload,
+} from "@ghrah/protocol";
 import { ref, shallowRef, watch } from "vue";
 import { i18n } from "@/i18n";
 import { usePlugins } from "@/composables/usePlugins";
@@ -349,30 +351,46 @@ export function useObserver() {
   // ── Manifest: Ability ──
 
   async function listManifestAbilities(namespace?: string | null) {
-    const result = await withClient((c) => c.listManifestAbilities(namespace));
+    manifests.abilitiesLoading = true;
+    try {
+      const result = await withClient((c) => c.listManifestAbilities(namespace));
+      if (result?.success) {
+        const list = extractAbilityList(result.data);
+        if (!list) return invalidManifestResponse(result);
+        manifests.setAbilities(list.abilities, list.errors);
+      }
+      return result;
+    } finally {
+      manifests.abilitiesLoading = false;
+    }
+  }
+
+  function invalidManifestResponse(result: CommandResultPayload) {
+    error.value = i18n.global.t("common.invalidResponse");
+    return { ...result, success: false, error: error.value };
+  }
+
+  function cacheManifestResult(
+    result: CommandResultPayload | null,
+    kind: "ability" | "agent",
+    fullName: string,
+  ) {
     if (result?.success) {
-      const abilities = extractAbilityList(result.data);
-      if (abilities) manifests.setAbilities(abilities);
+      const entry = extractManifestEntry(result.data, { kind, fullName });
+      if (!entry) return invalidManifestResponse(result);
+      manifests.upsertManifestEntry(entry);
     }
     return result;
   }
 
   async function getAbility(fullName: string) {
     const result = await withClient((c) => c.getAbility(fullName));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAbility(entry as AbilityManifestInfo);
-    }
-    return result;
+    return cacheManifestResult(result, "ability", fullName);
   }
 
   async function putAbility(fullName: string, content: string, overwrite?: boolean) {
     const result = await withClient((c) => c.putAbility(fullName, content, overwrite));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAbility(entry as AbilityManifestInfo);
-    }
-    return result;
+    return cacheManifestResult(result, "ability", fullName);
   }
 
   async function deleteAbility(fullName: string) {
@@ -399,20 +417,12 @@ export function useObserver() {
 
   async function getAgent(fullName: string) {
     const result = await withClient((c) => c.getAgent(fullName));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAgent(entry as AgentManifestInfo);
-    }
-    return result;
+    return cacheManifestResult(result, "agent", fullName);
   }
 
   async function putAgent(fullName: string, content: string, overwrite?: boolean) {
     const result = await withClient((c) => c.putAgent(fullName, content, overwrite));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAgent(entry as AgentManifestInfo);
-    }
-    return result;
+    return cacheManifestResult(result, "agent", fullName);
   }
 
   async function deleteAgent(fullName: string) {
@@ -423,27 +433,38 @@ export function useObserver() {
 
   // ── Manifest: Utility ──
 
-  async function resolveAgent(agentFullName: string, runtimeName?: string | null) {
-    return withClient((c) => c.resolveAgent(agentFullName, runtimeName));
+  async function resolveAgent(
+    agentFullName: string,
+    runtimeName?: string | null,
+    content?: string | null,
+  ) {
+    return withClient((c) => c.resolveAgent(agentFullName, runtimeName, content));
   }
 
   async function validateManifest(content: string, manifestType: string) {
     manifests.setValidating(true);
     manifests.setValidationResult(null);
-    const result = await withClient((c) => c.validateManifest(content, manifestType));
-    manifests.setValidating(false);
-    if (result?.success) {
-      const vr = extractValidationResult(result.data);
-      if (vr) {
-        manifests.setValidationResult(vr);
+    error.value = null;
+    try {
+      const result = await withClient((c) => c.validateManifest(content, manifestType));
+      if (result?.success) {
+        const validation = extractValidationResult(result.data);
+        if (validation) {
+          manifests.setValidationResult(validation);
+          return result;
+        }
+        const invalid = invalidManifestResponse(result);
+        manifests.setValidationResult({ valid: false, errors: [invalid.error] });
+        return invalid;
       }
-    } else if (result && !result.success) {
       manifests.setValidationResult({
-        is_valid: false,
-        errors: [result.error ?? i18n.global.t("common.validationFailed")],
+        valid: false,
+        errors: [result?.error ?? error.value ?? i18n.global.t("common.validationFailed")],
       });
+      return result;
+    } finally {
+      manifests.setValidating(false);
     }
-    return result;
   }
 
   return {

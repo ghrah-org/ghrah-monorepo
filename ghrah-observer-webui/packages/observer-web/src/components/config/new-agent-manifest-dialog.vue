@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractValidationResult } from "@ghrah/observer-core";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
@@ -7,7 +8,7 @@ import { useObserver } from "@/composables/useObserver";
 
 const emit = defineEmits<{ close: []; dirtyChange: [dirty: boolean] }>();
 
-const { putAgent, listManifestAgents } = useObserver();
+const { putAgent, listManifestAgents, validateManifest, error: observerError } = useObserver();
 const { t } = useI18n();
 
 const loading = ref(false);
@@ -170,6 +171,17 @@ async function handleSubmit() {
   const fullName = `${ns}.${nm}`;
   const content = buildYaml();
 
+  const checked = await validateManifest(content, "agent");
+  const validation = checked?.success ? extractValidationResult(checked.data) : null;
+  if (!validation?.valid) {
+    error.value =
+      validation?.errors.join("\n") ||
+      checked?.error ||
+      observerError.value ||
+      t("common.validationFailed");
+    loading.value = false;
+    return;
+  }
   const result = await putAgent(fullName, content, false);
   loading.value = false;
 
@@ -179,7 +191,6 @@ async function handleSubmit() {
     error.value = t("config.manifest.notConnected");
   } else {
     await listManifestAgents();
-    window.postMessage?.({ type: "openFile", fullName, kind: "agent" });
     finishClose();
   }
 }
@@ -197,7 +208,8 @@ async function handleSubmit() {
     <form class="manifest-create-form space-y-5" @submit.prevent="handleSubmit">
       <div
         v-if="error"
-        class="text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded"
+        role="alert"
+        class="text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded whitespace-pre-wrap"
       >
         {{ error }}
       </div>
