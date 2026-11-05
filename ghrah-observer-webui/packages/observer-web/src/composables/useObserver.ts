@@ -283,10 +283,15 @@ export function useObserver() {
     return withClient((c) => c.listSessions(target));
   }
 
-  async function createSession(target: AgentTarget, options: { originSessionId?: string } = {}) {
+  async function createSession(
+    target: AgentTarget,
+    options: { originSessionId?: string; name?: string; systemPrompt?: string } = {},
+  ) {
     return withClient((c) =>
       c.createSession(target, {
         originSessionId: options.originSessionId,
+        name: options.name,
+        systemPrompt: options.systemPrompt,
       }),
     );
   }

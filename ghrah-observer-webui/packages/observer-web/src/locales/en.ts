@@ -34,6 +34,28 @@ export default {
       unavailable: "The operation is unavailable. Refresh to verify its state.",
     },
   },
+  sessionCreate: {
+    scope:
+      "Creates a new independent session without activating it. This does not modify the Agent specification or Manifest.",
+    custom: "Set a prompt for this session",
+    defaultHint:
+      "Leave this option off to inherit the running Agent's current context prompt (the active session's prompt). This may differ from the saved Agent specification and the session you are viewing.",
+    emptyHint:
+      "When this option is on, an empty input explicitly creates a session with an empty prompt. Spaces and line breaks are preserved.",
+    identity: "Created session: {id}",
+    verified: "Created and verified by reading the session list from the server.",
+    savedPrompt: "Saved session prompt (read only)",
+    emptySaved: "The saved session prompt is empty.",
+    verify: "Check created session",
+    verifyFailed:
+      "Unable to read back the created session. Check it before creating another session.",
+    promptMismatch:
+      "The saved prompt differs from the submitted prompt. Review the session before creating another one.",
+    uncertain:
+      "Creation could not be confirmed. Refresh the session list and check it before creating again.",
+    closeUnverified:
+      "Close this dialog? A session may already exist on the server. Closing does not delete it; check the session list before creating again.",
+  },
   agentEntity: {
     specPromptTitle: "Persistent specification prompt",
     specPromptHint:

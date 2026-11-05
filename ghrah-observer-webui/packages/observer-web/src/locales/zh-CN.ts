@@ -34,6 +34,23 @@ export default {
       unavailable: "操作暂不可用，请刷新核对状态。",
     },
   },
+  sessionCreate: {
+    scope: "创建独立的新会话，不自动激活，也不修改 Agent 规格或 Manifest。",
+    custom: "为本会话设置提示词",
+    defaultHint:
+      "不勾选时沿用运行中 Agent 当前上下文的提示词（激活会话的提示词），可能与持久规格和当前查看的会话不同。",
+    emptyHint: "勾选后留空，表示明确创建空提示词会话。空格和换行会原样保留。",
+    identity: "已创建会话：{id}",
+    verified: "已创建，并已从服务端会话列表回读确认。",
+    savedPrompt: "已保存的会话提示词（只读）",
+    emptySaved: "已保存的会话提示词为空。",
+    verify: "检查已创建的会话",
+    verifyFailed: "无法回读新会话，请先核对结果，再创建其他会话。",
+    promptMismatch: "已保存的提示词与提交内容不同，请先核对会话，再创建其他会话。",
+    uncertain: "暂时无法确认创建结果。请刷新会话列表核对，避免重复创建。",
+    closeUnverified:
+      "确定关闭？服务端可能已经创建了会话，关闭不会删除它；再次创建前请先核对会话列表。",
+  },
   agentEntity: {
     specPromptTitle: "持久规格提示词",
     specPromptHint:

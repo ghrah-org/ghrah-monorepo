@@ -143,3 +143,23 @@ it("passes Ability source hashes through the Observer wrapper", async () => {
     fixture.ability.source_hash,
   );
 });
+
+it.each([undefined, "", "  Custom session prompt\n"])(
+  "passes session prompt %s without changing its semantics",
+  async (systemPrompt) => {
+    setActivePinia(createPinia());
+    const observer = useObserver();
+    const createSession = vi.fn().mockResolvedValue({ success: true });
+    observer.client.value = { createSession } as unknown as NonNullable<
+      typeof observer.client.value
+    >;
+    const target = { projectId: "p1", agentId: "a1", agentName: "Agent" };
+    await observer.createSession(target, { name: "Named session", systemPrompt });
+    expect(createSession).toHaveBeenCalledWith(target, {
+      name: "Named session",
+      systemPrompt,
+      originSessionId: undefined,
+    });
+    observer.client.value = null;
+  },
+);

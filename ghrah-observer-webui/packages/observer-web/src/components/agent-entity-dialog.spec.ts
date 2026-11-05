@@ -368,3 +368,31 @@ it("discards the previous prompt on target changes and ignores late snapshots", 
   );
   w.unmount();
 });
+
+it("opens the shared session creator for this stable entity without creating immediately", async () => {
+  api.snapshot.mockResolvedValue(snapshot(true));
+  const w = mount(AgentEntityDialog, {
+    props: { projectId: "p1", agentId: "a1" },
+    global: {
+      stubs: {
+        Teleport: true,
+        CreateSessionDialog: {
+          name: "CreateSessionDialog",
+          props: ["agent", "route"],
+          template: '<div data-testid="session-creator" />',
+        },
+      },
+    },
+  });
+  await flushPromises();
+  await button(w, "Sessions & history").trigger("click");
+  await flushPromises();
+  await button(w, "Create session").trigger("click");
+  const creator = w.findComponent({ name: "CreateSessionDialog" });
+  expect(creator.props()).toMatchObject({
+    agent: { projectId: "p1", agentId: "a1", agentName: "Designer" },
+    route: "entity",
+  });
+  expect(api.createSession).not.toHaveBeenCalled();
+  w.unmount();
+});

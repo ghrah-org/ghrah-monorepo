@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { z } from "zod";
 import BaseModal from "./ui/base-modal.vue";
+import CreateSessionDialog from "./create-session-dialog.vue";
 import { useAgentEntityRequest } from "@/composables/useAgentEntity";
 
 const props = defineProps<{ projectId: string; agentId?: string }>();
@@ -91,7 +92,7 @@ const catalogSchema = z.object({
 const catalog = ref<z.infer<typeof catalogSchema> | null>(null);
 const sessionId = ref("");
 const branchId = ref("");
-const sessionName = ref("");
+const showSessionCreate = ref(false);
 const branches = computed(
   () => catalog.value?.branches.filter((b) => b.session_id === sessionId.value) ?? [],
 );
@@ -320,14 +321,15 @@ function saveAbilities() {
 function activateSession() {
   return mutate(() => entity().context.activateSession(sessionId.value));
 }
-function createSession() {
-  return mutate(() => entity().context.createSession(sessionName.value || undefined));
+async function sessionCreated() {
+  await loadContext();
 }
 watch(
   () => [props.projectId, props.agentId],
   () => {
     if (busy.value) stopWaiting();
     snapshot.value = null;
+    showSessionCreate.value = false;
     tab.value = "overview";
     success.value = "";
     void refresh();
@@ -648,14 +650,9 @@ onMounted(() => {
                 </button>
               </div>
             </template>
-            <form class="entity-actions" @submit.prevent="createSession">
-              <label
-                >{{ t("agentEntity.sessionName")
-                }}<input v-model="sessionName" :disabled="!canContext" /></label
-              ><button class="btn-secondary" type="submit" :disabled="!canContext">
-                {{ t("agentEntity.createSession") }}
-              </button>
-            </form>
+            <button class="btn-secondary" :disabled="!canContext" @click="showSessionCreate = true">
+              {{ t("agentEntity.createSession") }}
+            </button>
             <p>{{ t("agentEntity.historyHint") }}</p>
             <p v-if="historyLoaded && !nodes.length">{{ t("agentEntity.noHistory") }}</p>
             <details v-for="node in nodes" :key="node.id" class="entity-card">
@@ -764,6 +761,14 @@ onMounted(() => {
         </template>
       </div>
     </BaseModal>
+    <CreateSessionDialog
+      v-if="showSessionCreate && agentId"
+      :key="`${projectId}:${agentId}`"
+      :agent="{ projectId, agentId, agentName: snapshot?.specification.name ?? agentId }"
+      route="entity"
+      @created="sessionCreated"
+      @close="showSessionCreate = false"
+    />
   </Teleport>
 </template>
 

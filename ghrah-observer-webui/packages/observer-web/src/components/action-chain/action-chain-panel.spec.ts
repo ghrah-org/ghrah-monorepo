@@ -45,6 +45,7 @@ vi.mock("@/composables/useObserver", () => ({
 }));
 
 import ActionChainPanel from "./action-chain-panel.vue";
+import CreateSessionDialog from "../create-session-dialog.vue";
 
 /** 从画布节点 DOM 提取 meta 行文本（节点去重断言用）。 */
 function textOfMeta(
@@ -410,14 +411,15 @@ describe("ActionChainPanel", () => {
     const agents = useAgentsStore();
     const sessions = useSessionsStore();
     agents.onAgentSpawned(spawn("alpha"));
-    createSession.mockResolvedValue({
-      success: true,
-      data: { session_id: "alpha-session-2", agent_name: "alpha" },
+    const wrapper = mount(ActionChainPanel, {
+      props: { agent: target("alpha") },
+      global: { stubs: { CreateSessionDialog: true } },
     });
-    const wrapper = mount(ActionChainPanel, { props: { agent: target("alpha") } });
-    await wrapper.vm.$nextTick();
     await wrapper.get("button.chain-new-session").trigger("click");
-    expect(createSession).toHaveBeenCalledWith(target("alpha"));
+    const dialog = wrapper.getComponent(CreateSessionDialog);
+    expect(dialog.props()).toMatchObject({ agent: target("alpha"), route: "chain" });
+    expect(createSession).not.toHaveBeenCalled();
+    dialog.vm.$emit("created", "alpha-session-2");
     // D6：新建只切展示，不隐式激活运行态
     expect(activateSession).not.toHaveBeenCalled();
     expect(sessions.viewedSessionId(target("alpha"))).toBe("alpha-session-2");
