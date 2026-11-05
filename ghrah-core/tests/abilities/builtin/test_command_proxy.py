@@ -14,13 +14,15 @@ import asyncio
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 from pydantic import ValidationError
 
 from ghrah.abilities.builtin.command_proxy import (
     CommandProxyAbility,
     CommandProxyDescriptor,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.subject_bridge import (
     COMMAND_BRIDGE_UNAVAILABLE_ERROR,
     SubjectCommandBridge,
@@ -59,8 +61,9 @@ class _FakeSerial:
         return self._result
 
 
-def _ctx(tool_args: dict[str, Any] | None = None) -> AbilityExecutionContext:
-    return AbilityExecutionContext(current_ability_name="foo", tool_args=tool_args or {})
+def _ctx(tool_args: dict[str, Any] | None = None) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return make_call(member="foo", arguments=tool_args or {}), make_services()
 
 
 class TestCommandProxyDescriptor:
@@ -140,7 +143,8 @@ class TestCommandProxyAbilityExecute:
             tool_name="foo", bridge=SubjectCommandBridge(serial), command="foo_run"
         )
 
-        result = await ability.execute(_ctx({"payload": 1}))
+        call, services = _ctx({"payload": 1})
+        result = await ability.execute(call, services)
 
         assert result.outcome is ActionOutcome.SUCCESS
         assert result.data == {"echo": "ok"}
@@ -152,7 +156,8 @@ class TestCommandProxyAbilityExecute:
             tool_name="foo", bridge=SubjectCommandBridge(serial), command="foo_run"
         )
 
-        result = await ability.execute(_ctx())
+        call, services = _ctx()
+        result = await ability.execute(call, services)
 
         assert result.outcome is ActionOutcome.FAILURE
         assert result.data["error"] == "handler crashed"
@@ -163,7 +168,8 @@ class TestCommandProxyAbilityExecute:
             tool_name="foo", bridge=SubjectCommandBridge(serial), command="foo_run"
         )
 
-        result = await ability.execute(_ctx())
+        call, services = _ctx()
+        result = await ability.execute(call, services)
 
         assert result.outcome is ActionOutcome.FAILURE
         assert "foo_run" in result.data["error"]
@@ -172,7 +178,8 @@ class TestCommandProxyAbilityExecute:
         """bridge 缺席 → 明确错误（对齐 ROOM_BRIDGE_UNAVAILABLE_ERROR 形状）。"""
         ability = CommandProxyAbility(tool_name="foo", command="foo_run")
 
-        result = await ability.execute(_ctx())
+        call, services = _ctx()
+        result = await ability.execute(call, services)
 
         assert result.outcome is ActionOutcome.FAILURE
         assert result.data["error"] == COMMAND_BRIDGE_UNAVAILABLE_ERROR
@@ -186,7 +193,8 @@ class TestCommandProxyAbilityExecute:
             timeout=0.01,
         )
 
-        result = await ability.execute(_ctx())
+        call, services = _ctx()
+        result = await ability.execute(call, services)
 
         assert result.outcome is ActionOutcome.FAILURE
         assert "timed out" in result.data["error"]

@@ -18,9 +18,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.builtin.recall_context import RecallContextAbility, RecallContextInput
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.context.manager import ContextManager
 from ghrah.types.results import ActionOutcome
@@ -50,22 +52,26 @@ def _seed_round(cm: ContextManager, user_text: str, ai_text: str) -> None:
     cm.commit_iteration(ability_names=["conversation"], action_results=[])
 
 
-def _make_context(cm: ContextManager | None, tool_args: dict[str, Any]) -> AbilityExecutionContext:
-    return AbilityExecutionContext(
-        context_manager=cm,
-        tool_args=tool_args,
-        agent_name="recaller",
+def _make_context(
+    cm: ContextManager | None, tool_args: dict[str, Any]
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(arguments=tool_args, agent_name="recaller"),
+        make_services(context_manager=cm),
     )
 
 
 async def _run(cm: ContextManager | None, **tool_args: Any) -> dict[str, Any]:
-    result = await RecallContextAbility().execute(_make_context(cm, tool_args))
+    call, services = _make_context(cm, tool_args)
+    result = await RecallContextAbility().execute(call, services)
     assert result.outcome == ActionOutcome.SUCCESS, result.data
     return result.data
 
 
 async def _run_fail(cm: ContextManager | None, **tool_args: Any) -> str:
-    result = await RecallContextAbility().execute(_make_context(cm, tool_args))
+    call, services = _make_context(cm, tool_args)
+    result = await RecallContextAbility().execute(call, services)
     assert result.outcome == ActionOutcome.FAILURE
     assert isinstance(result.data, dict)
     return str(result.data.get("error", ""))
@@ -325,9 +331,8 @@ class TestBoundary:
             def get_history(self) -> list[Any]:
                 raise RuntimeError("boom")
 
-        result = await RecallContextAbility().execute(
-            _make_context(_BrokenCM(), {"mode": "list"})  # type: ignore[arg-type]
-        )
+        call, services = _make_context(_BrokenCM(), {"mode": "list"})  # type: ignore[arg-type]
+        result = await RecallContextAbility().execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "Failed to read" in str(result.data.get("error"))
 

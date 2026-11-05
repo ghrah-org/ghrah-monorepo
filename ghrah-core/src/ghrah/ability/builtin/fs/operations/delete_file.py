@@ -10,7 +10,7 @@
 - 删除是破坏性操作，需要写入权限
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证（写入权限，因为删除是破坏性操作）
 3. 验证文件存在
 4. 删除文件
@@ -23,39 +23,38 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/delete_file.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "fs_write": True,
     "require_hitl": True,
 }
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Delete File"
 SUMMARY = "Delete a file at the specified path. This operation is irreversible."
 TAGS = [
     "filesystem",
     "write",
     "delete",
 ]
-# --- catalogue 声明结束
+EFFECTS = ["filesystem:write"]
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,12 @@ __all__ = ["DeleteFileAbility", "DeleteFileInput"]
 class DeleteFileInput(BaseModel):
     """DeleteFile 工具的输入参数。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     file_path: str = Field(description="Path to the file to delete")
+
+
+Input = DeleteFileInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class DeleteFileAbility(Ability):
@@ -117,18 +121,19 @@ class DeleteFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行文件删除。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "file_path" 和 "deleted"
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         file_path = tool_args.get("file_path", "")
 
         if not file_path:

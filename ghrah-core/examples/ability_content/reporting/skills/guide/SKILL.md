@@ -1,6 +1,9 @@
 ---
-name: reporting-guide
+name: guide
 description: 使用获准模板和写作指南整理报告。
+metadata:
+  title: reporting-guide
+  tags: [reporting]
 ---
 
 # 报告编写

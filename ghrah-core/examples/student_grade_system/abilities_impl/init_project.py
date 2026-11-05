@@ -22,8 +22,9 @@ from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
 from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,8 @@ class InitProjectAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         project_type = tool_args.get("project_type", "")
         target_dir = tool_args.get("target_dir", "")
 

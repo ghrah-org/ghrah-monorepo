@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import pytest
+from _helpers import make_call, make_services
 
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hook_runner import HookRunner
 from ghrah.abilities.hook_store import HookStore
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult, HookScope
+from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.types.results import ActionResult
 
 
@@ -32,12 +33,15 @@ class CountingHook(Hook):
         self.should_trigger_count = 0
         self.execute_count = 0
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         self.should_trigger_count += 1
         return self._should_trigger
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         self.execute_count += 1
         return self._result
@@ -72,14 +76,14 @@ async def test_hook_runner_legacy_hooks_call_should_trigger() -> None:
     )
     store.add_hooks("legacy", [hook])
     runner = HookRunner(store)
-    context = AbilityExecutionContext(current_ability_name="read_file", accumulated_data={})
+    call, services = make_call(member="read_file"), make_services()
 
-    result = await runner.run(HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context))
+    result = await runner.run(HookPoint.PRE_EXECUTE, call, services)
 
     assert result is not None
     assert hook.should_trigger_count == 1
     assert hook.execute_count == 1
-    assert context.accumulated_data == {"hook_modified": True}
+    assert services.require(LOOP).raw == {"hook_modified": True}
     assert result.modified_context == {"hook_modified": True}
     assert result.data_updates == {"hook_modified": True}
 
@@ -94,9 +98,9 @@ async def test_hook_runner_scoped_hooks_skip_should_trigger() -> None:
     )
     store.add_hooks("read_file", [hook])
     runner = HookRunner(store)
-    context = AbilityExecutionContext(current_ability_name="read_file")
+    call, services = make_call(member="read_file"), make_services()
 
-    result = await runner.run(HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context))
+    result = await runner.run(HookPoint.PRE_EXECUTE, call, services)
 
     assert result is not None
     assert hook.should_trigger_count == 0

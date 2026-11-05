@@ -35,6 +35,9 @@ module_path, = sys.argv[1:2]
 sys.path.insert(0, os.path.dirname(module_path))
 spec = importlib.util.spec_from_file_location("_ghrah_build_probe", module_path)
 module = importlib.util.module_from_spec(spec)
+# 必须先登记再执行：``from __future__ import annotations`` 下 pydantic 需要能按
+# 模块名解析字符串注解（否则 dict[str, Any] 之类会报 not fully defined）。
+sys.modules[spec.name] = module
 try:
     spec.loader.exec_module(module)
 except Exception as exc:

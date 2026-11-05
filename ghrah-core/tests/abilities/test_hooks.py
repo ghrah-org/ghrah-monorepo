@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 # ── 辅助：用于测试的具体 Hook 子类 ──
 
@@ -28,11 +30,14 @@ class StubHook(Hook):
         self._should_trigger = should_trigger
         self._result = result or HookResult.continue_()
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return self._should_trigger
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return self._result
 
@@ -242,22 +247,22 @@ class TestHookABC:
 
     async def test_stub_hook_should_trigger_true(self) -> None:
         hook = StubHook(should_trigger=True)
-        ctx = self._make_context()
-        assert await hook.should_trigger(ctx) is True
+        call, services = self._make_invocation()
+        assert await hook.should_trigger(call, services) is True
 
     async def test_stub_hook_should_trigger_false(self) -> None:
         hook = StubHook(should_trigger=False)
-        ctx = self._make_context()
-        assert await hook.should_trigger(ctx) is False
+        call, services = self._make_invocation()
+        assert await hook.should_trigger(call, services) is False
 
     async def test_stub_hook_execute(self) -> None:
         hook = StubHook(result=HookResult.stop(message="blocked"))
-        ctx = self._make_context()
-        result = await hook.execute(ctx, None)
+        call, services = self._make_invocation()
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.message == "blocked"
 
     # ── 辅助 ──
 
-    def _make_context(self) -> AbilityExecutionContext:
-        return AbilityExecutionContext()
+    def _make_invocation(self) -> tuple[OperationCall, ExecutionServices]:
+        return make_call(), make_services()

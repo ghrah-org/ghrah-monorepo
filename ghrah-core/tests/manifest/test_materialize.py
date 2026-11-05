@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 # 触发内置 Ability 注册（instantiate_resolved_abilities 依赖 AbilityRegistry）
 import ghrah.abilities  # noqa: F401
@@ -218,19 +219,16 @@ class TestGenericHITLWiring:
 
     async def test_hitl_hook_returns_hitl_result(self) -> None:
         """包装后的 hook 执行返回 HookResult.hitl（requires_hitl=True）。"""
-        from ghrah.abilities.context import AbilityExecutionContext
         from ghrah.abilities.hooks import HookResult
 
         abilities = _resolved([AbilityRef(ref="ghrah.cluster.spawn_agent")])
         result = instantiate_resolved_abilities(abilities, workspace_root=None)
         hitl_hook = [h for h in result[0].get_hooks() if h.hook_point.name == "PRE_EXECUTE"][0]
 
-        ctx = AbilityExecutionContext(
-            current_ability_name="spawn_agent",
-            tool_args={"manifest_ref": "ghrah.designer"},
-        )
-        assert await hitl_hook.should_trigger(ctx) is True
-        hook_result = await hitl_hook.execute(ctx, None)
+        call = make_call(member="spawn_agent", arguments={"manifest_ref": "ghrah.designer"})
+        services = make_services()
+        assert await hitl_hook.should_trigger(call, services) is True
+        hook_result = await hitl_hook.execute(call, services, None)
         assert isinstance(hook_result, HookResult)
         assert hook_result.requires_hitl is True
         assert hook_result.should_continue is False

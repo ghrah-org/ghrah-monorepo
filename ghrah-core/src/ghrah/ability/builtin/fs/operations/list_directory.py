@@ -11,7 +11,7 @@
 - 集成 FSPermissionChecker 读取权限检查
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证（读取权限）
 3. 列出目录内容
 4. 返回 ActionResult，data 包含 entries 列表
@@ -22,33 +22,30 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/list_directory.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "fs_read_only": True,
 }
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "List Directory"
 SUMMARY = (
     "List files and directories at the specified path. Returns entry names, types, and "
     "sizes. Use recursive=true to list all nested contents."
@@ -57,7 +54,9 @@ TAGS = [
     "filesystem",
     "read",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -67,21 +66,56 @@ __all__ = ["ListDirectoryAbility", "ListDirectoryInput"]
 class ListDirectoryInput(BaseModel):
     """ListDirectory 工具的输入参数。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     dir_path: str = Field(description="Path to the directory to list")
     recursive: bool = Field(default=False, description="Recursively list nested directories")
     offset: int = Field(
         default=0,
+        ge=0,
         description=(
             "0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)"
         ),
     )
     limit: int = Field(
         default=0,
+        ge=0,
         description=(
             "Max number of entries to return "
             "(0 = no limit; pagination active when offset or limit is set)"
         ),
     )
+
+
+Input = ListDirectoryInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class DirectoryEntryOutput(BaseModel):
+    """目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Entry name")
+    type: Literal["file", "directory"] = Field(description="Entry type")
+    path: str = Field(default="", description="Path relative to the listed directory")
+    size: int = Field(default=-1, description="Entry size for files (-1 when unknown)")
+
+
+class ListDirectoryOutput(BaseModel):
+    """ListDirectory 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dir_path: str = Field(description="Directory path")
+    total_entries: int = Field(description="Total number of entries")
+    entries: list[DirectoryEntryOutput] = Field(description="Entries in this window")
+    offset: int = Field(default=0, description="Pagination offset (when paginated)")
+    limit: int = Field(default=0, description="Pagination limit (when paginated)")
+    truncated: bool = Field(default=False, description="Whether more entries remain")
+    next_offset: int | None = Field(default=None, description="Next offset, or null when done")
+
+
+Output = ListDirectoryOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class ListDirectoryAbility(Ability):
@@ -145,18 +179,19 @@ class ListDirectoryAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行目录列表。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "dir_path" 和 "entries" 列表
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         dir_path = tool_args.get("dir_path", "")
         recursive = tool_args.get("recursive", False)
         offset = int(tool_args.get("offset", 0) or 0)

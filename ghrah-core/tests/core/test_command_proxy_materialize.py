@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 from pydantic import ValidationError
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import HookPoint
 from ghrah.core.subject_bridge import (
     COMMAND_BRIDGE_UNAVAILABLE_ERROR,
@@ -90,8 +90,6 @@ async def test_standalone_bridge_none_materializes() -> None:
     ability = _materialize_command_proxy(_descriptor(), None, auto_approve_abilities=("foo",))
     assert ability.name == "foo"
 
-    result = await ability.execute(
-        AbilityExecutionContext(current_ability_name="foo", tool_args={})
-    )
+    result = await ability.execute(make_call(member="foo"), make_services())
     assert result.outcome is ActionOutcome.FAILURE
     assert result.data["error"] == COMMAND_BRIDGE_UNAVAILABLE_ERROR

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.ability import BuiltinAbilitySource, Operation
-from ghrah.ability.execution.context import AbilityExecutionContext
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
@@ -94,13 +94,13 @@ async def test_selected_new_operation_has_real_file_effect_and_rejects_escape(
     assert type(operation).__module__.startswith("ghrah.ability.")
     path = root / "note.txt"
     result = await operation.execute(
-        AbilityExecutionContext(tool_args={"file_path": str(path), "content": "new driver"})
+        make_call(arguments={"file_path": str(path), "content": "new driver"}), make_services()
     )
     assert result.outcome is ActionOutcome.SUCCESS
     assert path.read_text() == "new driver"
     outside = tmp_path / "outside.txt"
     refused = await operation.execute(
-        AbilityExecutionContext(tool_args={"file_path": str(outside), "content": "escape"})
+        make_call(arguments={"file_path": str(outside), "content": "escape"}), make_services()
     )
     assert refused.outcome is ActionOutcome.FAILURE
     assert not outside.exists()
@@ -116,11 +116,8 @@ async def test_new_spawn_consumes_current_manifest_store_and_endpoint_config() -
     )
     spawn = source.create_operation("ghrah.cluster.spawn_agent")
     result = await spawn.execute(
-        AbilityExecutionContext(
-            manifest_store=source,
-            supervisor=supervisor,
-            tool_args={"manifest_ref": "test_ns.source_agent", "name": "child"},
-        )
+        make_call(arguments={"manifest_ref": "test_ns.source_agent", "name": "child"}),
+        make_services(manifest_store=source, supervisor=supervisor),
     )
     assert result.outcome is ActionOutcome.SUCCESS
     config = supervisor.spawn_agent.await_args.args[0]

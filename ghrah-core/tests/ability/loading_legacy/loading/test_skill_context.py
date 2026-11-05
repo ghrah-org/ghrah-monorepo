@@ -38,9 +38,17 @@ def _operation(key: str) -> dict:
     return {
         "title": f"{key} 标题",
         "description": f"{key} 说明。",
-        "input_schema": {"type": "object", "properties": {}},
-        "output_schema": {"type": "object", "properties": {}},
-        "implementation": {"provider_slot": "backend", "operation": key},
+        "entry": f"operations/{key}.py",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
         "execution": {
             "mode": "request",
             "timeout_ms": 1000,
@@ -52,11 +60,11 @@ def _operation(key: str) -> dict:
 
 
 def _skill(key: str, *, description: str | None = None) -> dict:
-    """造一个 skill 成员声明。"""
+    """造一个 v1 skill 成员声明（正文位置固定为 ``skills/<键>/SKILL.md``）。"""
     return {
         "title": f"{key} 标题",
         "description": description or f"{key} 技能说明。",
-        "body": {"path": "skills/SKILL.md", "media_type": "text/markdown"},
+        "body": {"path": f"skills/{key}/SKILL.md", "media_type": "text/markdown"},
     }
 
 
@@ -66,24 +74,24 @@ def _definition(
     operations: dict[str, dict] | None = None,
     skills: dict[str, dict] | None = None,
 ) -> dict:
-    """造一份合法的 ``ability.yaml`` 内容。"""
-    payload: dict[str, object] = {
+    """造一份合法的 v1 ``ability.yaml`` 内容（两段式：头段 + ``members``）。"""
+    members: dict[str, object] = {}
+    if operations is not None:
+        members["operations"] = operations
+    if skills is not None:
+        members["skills"] = skills
+    return {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": {"namespace": name, "version": "0.1.0"},
         "title": name,
         "description": f"{name} 容器的说明。",
+        "members": members,
     }
-    if operations is not None:
-        payload["provider_requirements"] = {"backend": {"contract": "ghrah.test.v1"}}
-        payload["operations"] = operations
-    if skills is not None:
-        payload["skills"] = skills
-    return payload
 
 
 def _write(root: Path, name: str, payload: dict, *, body: str | None = "# body\n") -> Path:
-    """在池根目录下落一个能力包。"""
+    """在池根目录下落一个能力包（正文写到定义面声明的位置）。"""
     package = root / name
     package.mkdir(parents=True, exist_ok=True)
     (package / "ability.yaml").write_text(
@@ -92,9 +100,11 @@ def _write(root: Path, name: str, payload: dict, *, body: str | None = "# body\n
         newline="\n",
     )
     if body is not None:
-        skill_dir = package / "skills"
-        skill_dir.mkdir(exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(body, encoding="utf-8", newline="\n")
+        skills = (payload.get("members") or {}).get("skills") or {}
+        for member in skills.values():
+            target = package.joinpath(*member["body"]["path"].split("/"))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8", newline="\n")
     return package
 
 
@@ -184,7 +194,8 @@ class TestSkillDigest:
         )
         before = load_skill_catalog(_pool(tmp_path)).digest
 
-        (package / "skills" / "SKILL.md").write_text("# 二\n", encoding="utf-8", newline="\n")
+        body_path = package / "skills" / "research" / "SKILL.md"
+        body_path.write_text("# 二\n", encoding="utf-8", newline="\n")
 
         assert load_skill_catalog(_pool(tmp_path)).digest == before
 
@@ -340,7 +351,7 @@ class TestSkillRead:
             _definition("research", skills={"research": _skill("research")}),
         )
         catalog = load_skill_catalog(_pool(tmp_path))
-        (package / "skills" / "SKILL.md").unlink()
+        (package / "skills" / "research" / "SKILL.md").unlink()
 
         with pytest.raises(SkillContextError) as excinfo:
             catalog.read("research")
@@ -355,8 +366,8 @@ class TestSkillRead:
             _definition("research", skills={"research": _skill("research")}),
             body=None,
         )
-        skill_dir = package / "skills"
-        skill_dir.mkdir(exist_ok=True)
+        skill_dir = package / "skills" / "research"
+        skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_bytes(b"\xff\xfe\x00bad")
         catalog = load_skill_catalog(_pool(tmp_path))
 

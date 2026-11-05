@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.core.room_protocol import (
     ROOM_BRIDGE_UNAVAILABLE_ERROR,
     RoomBridgeProtocol,
@@ -26,26 +27,31 @@ from ghrah.core.room_protocol import (
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/send.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 # send 当前是 registry-only（无 manifest 声明），权限事实只在部署配置里。
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
-SUMMARY = ""
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Send"
+SUMMARY = (
+    "Send a message to rooms. Recipients are all agent members of the given rooms plus "
+    "optional direct targets. The message is appended to each room's log and delivered "
+    "via the supervisor."
+)
 TAGS = []
-# --- catalogue 声明结束
+EFFECTS = ["cluster:message"]
+TIMEOUT_MS = 60_000
+# 不进模型工具面：registry-only 成员，运行时不为它投影 manifest。
+EXPOSE = False
+# --- 成员声明结束
 
 
 class SendInput(BaseModel):
@@ -63,6 +69,9 @@ class SendInput(BaseModel):
         default=None,
         description=("Optional extra direct targets (agent names) in addition to the room members"),
     )
+
+
+Input = SendInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class SendAbility(Ability):
@@ -96,8 +105,8 @@ class SendAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        supervisor = context.supervisor
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        supervisor = services.get(SUPERVISOR)
         error = cluster_supervisor_error(supervisor)
         if error:
             return ActionResult(
@@ -111,7 +120,7 @@ class SendAbility(Ability):
                 data={"error": ROOM_BRIDGE_UNAVAILABLE_ERROR},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         try:
             args = SendInput.model_validate(
                 {k: v for k, v in tool_args.items() if k in SendInput.model_fields}
@@ -122,7 +131,7 @@ class SendAbility(Ability):
                 data={"error": f"invalid send args: {e}"},
             )
 
-        sender = context.agent_name or "unknown"
+        sender = call.identity.agent_name or "unknown"
         targets = args.targets or []
 
         resolved = await bridge.resolve_recipients(args.room_ids, targets)
@@ -135,13 +144,13 @@ class SendAbility(Ability):
         recipients: list[str] = list(resolved_data.get("recipients", []))
         # Room 成员可能使用稳定 ID；排除自身同时比较展示名和 Core 身份。
         sender_ids = {sender}
-        stable_id = getattr(context.context_manager, "agent_name", None)
+        stable_id = getattr(services.get(CONTEXT_MANAGER), "agent_name", None)
         if isinstance(stable_id, str):
             sender_ids.add(stable_id)
         to_deliver = [r for r in recipients if r not in sender_ids]
 
-        cm = context.context_manager
-        call_id = context.invocation.tool_call_id
+        cm = services.get(CONTEXT_MANAGER)
+        call_id = call.tool_call_id
         if cm is None or not call_id:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

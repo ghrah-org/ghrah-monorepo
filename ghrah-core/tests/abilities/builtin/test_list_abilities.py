@@ -16,9 +16,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.list_abilities import ListAbilitiesAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.types import ImplementationDef, PermissionFlags
 from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider
@@ -69,12 +72,11 @@ def _make_context(
     store: Any = None,
     tool_args: dict[str, Any] | None = None,
     skill_provider: Any = None,
-) -> AbilityExecutionContext:
-    return AbilityExecutionContext(
-        current_ability_name="list_abilities",
-        tool_args=tool_args or {},
-        manifest_store=store,
-        skill_provider=skill_provider,
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(member="list_abilities", arguments=tool_args or {}),
+        make_services(manifest_store=store, skill_provider=skill_provider),
     )
 
 
@@ -113,7 +115,7 @@ class TestListAbilitiesAbility:
 
     async def test_list_all_builtin_manifests(self) -> None:
         """未接线 store：内置 manifest 面完整可用 + sources 显式说明缺席。"""
-        result = await ListAbilitiesAbility().execute(_make_context())
+        result = await ListAbilitiesAbility().execute(*_make_context())
         assert result.outcome == ActionOutcome.SUCCESS
         data = result.data
         rows = _rows_by_name(data)
@@ -132,7 +134,7 @@ class TestListAbilitiesAbility:
 
     async def test_list_includes_registry_only_diff(self) -> None:
         """registry-only 项（无 manifest 的注册 handler）进 diff 段。"""
-        result = await ListAbilitiesAbility().execute(_make_context())
+        result = await ListAbilitiesAbility().execute(*_make_context())
         diff = result.data["diff"]
         # 现状已知：command_proxy / send 有注册无 yaml
         assert "command_proxy" in diff["registered_without_manifest"]
@@ -141,7 +143,7 @@ class TestListAbilitiesAbility:
     async def test_list_with_fs_store_merges_custom(self) -> None:
         """接线的 store：文件系统自定义定义并入列表。"""
         store = _FakeStore({"custom.pkg.demo": _ability_manifest()})
-        result = await ListAbilitiesAbility().execute(_make_context(store=store))
+        result = await ListAbilitiesAbility().execute(*_make_context(store=store))
         assert result.outcome == ActionOutcome.SUCCESS
         rows = _rows_by_name(result.data)
         assert "custom.pkg.demo" in rows
@@ -152,7 +154,7 @@ class TestListAbilitiesAbility:
 
     async def test_list_broken_store_falls_back_to_builtin(self) -> None:
         """store list_abilities 抛错 → 只剩内置面，不整体失败。"""
-        result = await ListAbilitiesAbility().execute(_make_context(store=_BrokenStore()))
+        result = await ListAbilitiesAbility().execute(*_make_context(store=_BrokenStore()))
         assert result.outcome == ActionOutcome.SUCCESS
         rows = _rows_by_name(result.data)
         assert "ghrah.fs.read_file" in rows
@@ -164,7 +166,7 @@ class TestListAbilitiesAbility:
 
     async def test_detail_builtin_with_tool_schema(self) -> None:
         result = await ListAbilitiesAbility().execute(
-            _make_context(tool_args={"full_name": "ghrah.fs.read_file"})
+            *_make_context(tool_args={"full_name": "ghrah.fs.read_file"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         data = result.data
@@ -177,7 +179,7 @@ class TestListAbilitiesAbility:
     async def test_detail_no_tool_manifest(self) -> None:
         """无 tool 声明的 manifest（如 conversation）→ tool 为 None 不报错。"""
         result = await ListAbilitiesAbility().execute(
-            _make_context(tool_args={"full_name": "ghrah.core.conversation"})
+            *_make_context(tool_args={"full_name": "ghrah.core.conversation"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["tool"] is None
@@ -185,7 +187,7 @@ class TestListAbilitiesAbility:
     async def test_detail_from_fs_store(self) -> None:
         store = _FakeStore({"custom.pkg.demo": _ability_manifest()})
         result = await ListAbilitiesAbility().execute(
-            _make_context(store=store, tool_args={"full_name": "custom.pkg.demo"})
+            *_make_context(store=store, tool_args={"full_name": "custom.pkg.demo"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["full_name"] == "custom.pkg.demo"
@@ -193,7 +195,7 @@ class TestListAbilitiesAbility:
     async def test_detail_registry_only_handler(self) -> None:
         """registry-only 项按 handler 名查询 → SUCCESS + note 说明无档案。"""
         result = await ListAbilitiesAbility().execute(
-            _make_context(tool_args={"full_name": "command_proxy"})
+            *_make_context(tool_args={"full_name": "command_proxy"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["in_registry"] is True
@@ -202,7 +204,7 @@ class TestListAbilitiesAbility:
 
     async def test_detail_not_found(self) -> None:
         result = await ListAbilitiesAbility().execute(
-            _make_context(tool_args={"full_name": "no.such.ability"})
+            *_make_context(tool_args={"full_name": "no.such.ability"})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"].lower()
@@ -216,7 +218,7 @@ class TestListAbilitiesAbility:
         store = _FakeStore(
             {"custom.pkg.ghost": _ability_manifest(name="ghost", handler="no_such_handler")}
         )
-        result = await ListAbilitiesAbility().execute(_make_context(store=store))
+        result = await ListAbilitiesAbility().execute(*_make_context(store=store))
         diff = result.data["diff"]
         assert "custom.pkg.ghost" in diff["manifest_without_registered"]
         rows = _rows_by_name(result.data)
@@ -249,7 +251,7 @@ class TestListAbilitiesSkillAbility:
     async def test_both_kinds_returned_and_marked(self, tmp_path: Path) -> None:
         _write_skill(tmp_path, "db-query")
         result = await ListAbilitiesAbility().execute(
-            _make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
+            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
         )
 
         assert result.outcome == ActionOutcome.SUCCESS
@@ -263,10 +265,10 @@ class TestListAbilitiesSkillAbility:
 
     async def test_ability_rows_unchanged_and_count_includes_skills(self, tmp_path: Path) -> None:
         """ability 行契约不变；count = ability 行 + skill 行 + registry-only 项。"""
-        baseline = await ListAbilitiesAbility().execute(_make_context())
+        baseline = await ListAbilitiesAbility().execute(*_make_context())
         _write_skill(tmp_path, "db-query")
         wired = await ListAbilitiesAbility().execute(
-            _make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
+            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
         )
 
         assert [row["full_name"] for row in wired.data["abilities"]] == [
@@ -275,7 +277,7 @@ class TestListAbilitiesSkillAbility:
         assert wired.data["count"] == baseline.data["count"] + 1
 
     async def test_unwired_provider_reports_absence(self) -> None:
-        result = await ListAbilitiesAbility().execute(_make_context())
+        result = await ListAbilitiesAbility().execute(*_make_context())
 
         assert result.data["skills"] == []
         assert result.data["sources"]["skill_ability"] is False
@@ -284,7 +286,7 @@ class TestListAbilitiesSkillAbility:
     async def test_skill_detail_by_full_name(self, tmp_path: Path) -> None:
         skill_dir = _write_skill(tmp_path, "db-query")
         result = await ListAbilitiesAbility().execute(
-            _make_context(
+            *_make_context(
                 tool_args={"full_name": "db-query"},
                 skill_provider=SkillAbilityProvider.from_root(tmp_path),
             )
@@ -306,7 +308,7 @@ class TestListAbilitiesSkillAbility:
         """skill 面接线后，真正的未命中仍是 FAILURE（不为 skill 放宽 ability 文案）。"""
         _write_skill(tmp_path, "db-query")
         result = await ListAbilitiesAbility().execute(
-            _make_context(
+            *_make_context(
                 tool_args={"full_name": "no.such.anything"},
                 skill_provider=SkillAbilityProvider.from_root(tmp_path),
             )
@@ -321,7 +323,7 @@ class TestListAbilitiesSkillAbility:
                 raise RuntimeError("skill root unavailable")
 
         result = await ListAbilitiesAbility().execute(
-            _make_context(skill_provider=_BrokenProvider())
+            *_make_context(skill_provider=_BrokenProvider())
         )
 
         assert result.outcome == ActionOutcome.SUCCESS
@@ -336,7 +338,7 @@ class TestListAbilitiesSkillAbility:
         (broken / SKILL_FILE_NAME).write_text("没有 frontmatter\n", encoding="utf-8")
 
         result = await ListAbilitiesAbility().execute(
-            _make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
+            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
         )
 
         assert [row["full_name"] for row in result.data["skills"]] == ["db-query"]

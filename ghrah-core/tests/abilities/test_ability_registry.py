@@ -15,9 +15,10 @@
 import pytest
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook
 from ghrah.abilities.registry import AbilityRegistry
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 # ---- 测试用自定义 Ability ----
 
@@ -29,7 +30,7 @@ class MockAbility(Ability):
     def name(self) -> str:
         return "mock"
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return ActionResult(outcome=ActionOutcome.SUCCESS, data={"mock": True})
 
     def get_hooks(self) -> list[Hook]:
@@ -43,7 +44,7 @@ class AnotherMockAbility(Ability):
     def name(self) -> str:
         return "another_mock"
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return ActionResult(outcome=ActionOutcome.SUCCESS, data={"another": True})
 
     def get_hooks(self) -> list[Hook]:
@@ -61,7 +62,7 @@ class ParamAbility(Ability):
     def name(self) -> str:
         return f"{self._prefix}param{self._suffix}"
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return ActionResult(outcome=ActionOutcome.SUCCESS)
 
     def get_hooks(self) -> list[Hook]:

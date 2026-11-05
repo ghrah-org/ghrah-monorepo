@@ -13,7 +13,7 @@
 "不在清单里"的文件。
 
 接线语义（零隐式）：provider 经装配期注入
-（``AbilityExecutionContext.skill_provider``）；未接线时明确 FAILURE 说明缺席，
+（``SKILL_PROVIDER`` 执行服务）；未接线时明确 FAILURE 说明缺席，
 **不**静默当成"技能不存在"（那是两件不同的事）。
 """
 
@@ -25,26 +25,24 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import SKILL_PROVIDER
 from ghrah.ability.loading.skill_errors import SkillNotFoundError, SkillParseError
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/load_skill.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Load Skill"
 SUMMARY = (
     "Load the full SKILL.md document of one skill (skill-ability) by its exact full name, "
     "returning the document text and its path. Skills are instruction documents, not "
@@ -54,7 +52,9 @@ TAGS = [
     "core",
     "skill",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 __all__ = ["LoadSkillAbility", "LoadSkillInput"]
 
@@ -72,6 +72,9 @@ class LoadSkillInput(BaseModel):
             "catalog (e.g. 'research'). Use list_abilities to see the names."
         ),
     )
+
+
+Input = LoadSkillInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class LoadSkillAbility(Ability):
@@ -111,8 +114,8 @@ class LoadSkillAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or {}
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         full_name = str(tool_args.get("full_name", "") or "").strip()
         if not full_name:
             return ActionResult(
@@ -120,7 +123,7 @@ class LoadSkillAbility(Ability):
                 data={"error": "full_name is required"},
             )
 
-        provider = context.skill_provider
+        provider = services.get(SKILL_PROVIDER)
         if provider is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

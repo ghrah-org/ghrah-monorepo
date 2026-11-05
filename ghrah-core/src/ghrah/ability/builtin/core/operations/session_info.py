@@ -10,8 +10,8 @@
 
 - 静态部分（构造注入）：spawn 装配期由 CoreUnit._environment_snapshot
   组装的部署快照（deployment/workspace_root/allowed_roots/hitl 参数）；
-- 动态部分（execute 叠加）：agent_name、session 信息（context_manager
-  接线时）、集群成员（supervisor 接线时）。
+- 动态部分（execute 叠加）：agent_name、session 信息（``CONTEXT_MANAGER``
+  服务接线时）、集群成员（``SUPERVISOR`` 服务接线时）。
 
 静态快照缺失（standalone 裸用、非 CoreUnit 装配）时返回明确指路而非
 猜测；动态部分按各自接线状态叠加，任一缺失只缺对应段，不整体失败。
@@ -21,26 +21,26 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict
+
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/session_info.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Session Info"
 SUMMARY = (
     "Read-only introspection of the runtime environment (deployment mode, allowed roots, "
     "HITL parameters), current session, and cluster members."
@@ -49,9 +49,17 @@ TAGS = [
     "core",
     "introspection",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 __all__ = ["SessionInfoAbility"]
+
+
+class Input(BaseModel):
+    """session_info 入参契约：无参数（额外字段拒绝）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SessionInfoAbility(Ability):
@@ -59,8 +67,8 @@ class SessionInfoAbility(Ability):
 
     静态快照经构造注入（spawn 装配期组装），execute 只读叠加：
     - ``environment``：构造注入的部署快照（可能为 None）；
-    - ``agent``：agent_name + session 信息（context_manager 接线时）；
-    - ``cluster``：集群成员（supervisor 接线时）。
+    - ``agent``：agent_name + session 信息（``CONTEXT_MANAGER`` 服务接线时）；
+    - ``cluster``：集群成员（``SUPERVISOR`` 服务接线时）。
 
     用法::
 
@@ -117,11 +125,12 @@ class SessionInfoAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """组装静态快照 + 动态运行信息。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult：SUCCESS 时 data 含 environment/agent/cluster 三段
@@ -138,8 +147,8 @@ class SessionInfoAbility(Ability):
         }
 
         # ---- agent/session 段（context_manager 接线时叠加） ----
-        agent: dict[str, Any] = {"name": context.agent_name}
-        cm = context.context_manager
+        agent: dict[str, Any] = {"name": call.identity.agent_name}
+        cm = services.get(CONTEXT_MANAGER)
         if cm is not None and hasattr(cm, "get_active_session"):
             try:
                 session = cm.get_active_session()
@@ -153,7 +162,7 @@ class SessionInfoAbility(Ability):
         data["agent"] = agent
 
         # ---- cluster 段（supervisor 接线时叠加） ----
-        supervisor = context.supervisor
+        supervisor = services.get(SUPERVISOR)
         if supervisor is not None and hasattr(supervisor, "list_agents"):
             try:
                 agents = await supervisor.list_agents()

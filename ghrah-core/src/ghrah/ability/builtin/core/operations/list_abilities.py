@@ -35,27 +35,25 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import MANIFEST_STORE, SKILL_PROVIDER
 from ghrah.ability.loading.skill_errors import SkillNotFoundError
 from ghrah.ability.loading.skill_models import SkillFingerprint
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/list_abilities.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "List Abilities"
 SUMMARY = (
     "List the abilities available in this deployment (read-only). Every row is marked "
     "kind='core-ability' (declared manifests + registry) or kind='skill-ability' (skill "
@@ -65,7 +63,9 @@ TAGS = [
     "core",
     "discovery",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 __all__ = ["ListAbilitiesAbility"]
 
@@ -92,6 +92,9 @@ class ListAbilitiesInput(BaseModel):
             "(e.g. 'ghrah.fs.read_file' or 'research'). Omit to list everything."
         ),
     )
+
+
+Input = ListAbilitiesInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class ListAbilitiesAbility(Ability):
@@ -136,23 +139,23 @@ class ListAbilitiesAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or {}
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         full_name = tool_args.get("full_name")
 
         if full_name:
-            return self._read_single(context, str(full_name))
-        return self._list_all(context)
+            return self._read_single(services, str(full_name))
+        return self._list_all(services)
 
     # ----------------------------------------------------------------
     # 列表 / 详情
     # ----------------------------------------------------------------
 
-    def _list_all(self, context: AbilityExecutionContext) -> ActionResult:
+    def _list_all(self, services: ExecutionServices) -> ActionResult:
         """全量列表：core-ability 行 + skill-ability 行 + 差异段。"""
         registry = self._registry_handlers()
-        manifests = self._all_manifests(context)
-        skills_all = self._all_skills(context)
+        manifests = self._all_manifests(services)
+        skills_all = self._all_skills(services)
         skills = skills_all[:_MAX_ABILITIES]
 
         rows: list[dict[str, Any]] = []
@@ -177,16 +180,16 @@ class ListAbilitiesAbility(Ability):
                 "skills": skills,
                 # registry-only 项（无档案的已注册 handler）不只是 diff，也是能力
                 "count": len(rows) + len(skills) + len(diff["registered_without_manifest"]),
-                "sources": self._sources_description(context),
+                "sources": self._sources_description(services),
                 "truncated": len(manifests) > _MAX_ABILITIES or len(skills_all) > _MAX_ABILITIES,
                 "diff": diff,
             },
         )
 
-    def _read_single(self, context: AbilityExecutionContext, full_name: str) -> ActionResult:
+    def _read_single(self, services: ExecutionServices, full_name: str) -> ActionResult:
         """单条详情：core 面查档案，未命中再查 skill 面，都未命中才 FAILURE。"""
         registry = self._registry_handlers()
-        manifest = self._load_manifest(context, full_name)
+        manifest = self._load_manifest(services, full_name)
         if manifest is None:
             if full_name in registry:
                 return ActionResult(
@@ -200,7 +203,7 @@ class ListAbilitiesAbility(Ability):
                         "note": "registry-only: registered handler without a manifest",
                     },
                 )
-            skill_result = self._read_skill(context, full_name)
+            skill_result = self._read_skill(services, full_name)
             if skill_result is not None:
                 return skill_result
             return ActionResult(
@@ -234,13 +237,13 @@ class ListAbilitiesAbility(Ability):
 
         return set(builtin_handlers())
 
-    def _all_manifests(self, context: AbilityExecutionContext) -> dict[str, Any]:
+    def _all_manifests(self, services: ExecutionServices) -> dict[str, Any]:
         """core 档案来源：包内内置 + 文件系统 store（接线时，损坏项跳过记 warning）。"""
         from ghrah.ability.loading.ability_catalog import load_all_builtin_manifests
 
         manifests: dict[str, Any] = dict(load_all_builtin_manifests())
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is None:
             return manifests
         try:
@@ -255,11 +258,11 @@ class ListAbilitiesAbility(Ability):
                 manifests[full_name] = manifest
         return manifests
 
-    def _load_manifest(self, context: AbilityExecutionContext, full_name: str) -> Any | None:
+    def _load_manifest(self, services: ExecutionServices, full_name: str) -> Any | None:
         """单条档案：优先文件系统 store（自定义覆盖），回落包内内置。"""
         from ghrah.ability.loading.ability_catalog import load_all_builtin_manifests
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is not None:
             manifest = self._try_load(store, full_name)
             if manifest is not None:
@@ -279,15 +282,15 @@ class ListAbilitiesAbility(Ability):
     # ----------------------------------------------------------------
 
     @staticmethod
-    def _all_skills(context: AbilityExecutionContext) -> list[dict[str, Any]]:
-        """skill-ability 行：经 ``context.skill_provider`` 扫描 skill 目录池。
+    def _all_skills(services: ExecutionServices) -> list[dict[str, Any]]:
+        """skill-ability 行：经 ``SKILL_PROVIDER`` 执行服务扫描 skill 目录池。
 
         未接线（provider 为 None）返回空表，缺席原因由
         :meth:`_sources_description` 显式说明——与 ManifestStore 同一口径。
         扫描问题（SKILL.md 损坏、full_name 冲突等）不阻断本列表：坏项由
         provider 的 ``scan().issues`` 承载，这里只列可用项。
         """
-        provider = context.skill_provider
+        provider = services.get(SKILL_PROVIDER)
         if provider is None:
             return []
         try:
@@ -306,13 +309,13 @@ class ListAbilitiesAbility(Ability):
         ]
 
     @staticmethod
-    def _read_skill(context: AbilityExecutionContext, full_name: str) -> ActionResult | None:
+    def _read_skill(services: ExecutionServices, full_name: str) -> ActionResult | None:
         """单条 skill-ability 详情（含指纹状态）；不在 skill 池中返回 None。
 
         返回 None = 该 full_name 不是 skill-ability，交由调用方判定未命中
         （core 面先查，skill 面后查）。
         """
-        provider = context.skill_provider
+        provider = services.get(SKILL_PROVIDER)
         if provider is None:
             return None
         try:
@@ -380,19 +383,19 @@ class ListAbilitiesAbility(Ability):
     # ----------------------------------------------------------------
 
     @staticmethod
-    def _sources_description(context: AbilityExecutionContext) -> dict[str, Any]:
+    def _sources_description(services: ExecutionServices) -> dict[str, Any]:
         """sources 段：本次实际覆盖了哪些来源、哪些缺席及原因。"""
         description: dict[str, Any] = {
             "manifests_builtin_package": True,
-            "manifests_fs_store": context.manifest_store is not None,
-            "skill_ability": context.skill_provider is not None,
+            "manifests_fs_store": services.get(MANIFEST_STORE) is not None,
+            "skill_ability": services.get(SKILL_PROVIDER) is not None,
         }
-        if context.manifest_store is None:
+        if services.get(MANIFEST_STORE) is None:
             description["note"] = (
                 "ManifestStore not wired — filesystem ability definitions are "
                 "not included (assembly-time injection, not implicit)"
             )
-        if context.skill_provider is None:
+        if services.get(SKILL_PROVIDER) is None:
             description["skills_absent_reason"] = (
                 "SkillAbilityProvider not wired — skill-ability entries are "
                 "not included (assembly-time injection, not implicit)"

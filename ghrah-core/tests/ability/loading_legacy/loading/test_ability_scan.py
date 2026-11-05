@@ -36,13 +36,13 @@ def _definition(
     skills: dict[str, object] | None = None,
     operations: bool = False,
 ) -> dict[str, object]:
-    """造一份合法的 ``ability.yaml`` 内容。
+    """造一份合法的 v1 ``ability.yaml`` 内容（两段式：头段 + ``members``）。
 
     Args:
         name: 目录名（同时是默认容器名）。
         namespace: ``identity.namespace``；None 取 ``name``（用户级包的单段身份）。
         identity_name: ``identity.name``；None 表示省略（容器名回退到 namespace）。
-        skills: ``skills`` 表内容；None 表示不声明技能。
+        skills: ``members.skills`` 表内容；None 表示不声明技能。
         operations: 是否加一个可执行成员（用户包通常没有实现脚本）。
 
     Returns:
@@ -51,24 +51,25 @@ def _definition(
     identity: dict[str, object] = {"namespace": namespace or name, "version": "0.1.0"}
     if identity_name is not None:
         identity["name"] = identity_name
-    payload: dict[str, object] = {
-        "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
-        "identity": identity,
-        "title": name,
-        "description": f"{name} 容器。",
-    }
+    members: dict[str, object] = {}
     if skills is not None:
-        payload["skills"] = skills
+        members["skills"] = skills
     if operations:
-        payload["provider_requirements"] = {"backend": {"contract": "ghrah.test.v1"}}
-        payload["operations"] = {
+        members["operations"] = {
             f"{name}_op": {
                 "title": "Op",
                 "description": "一个测试成员。",
-                "input_schema": {"type": "object", "properties": {}},
-                "output_schema": {"type": "object", "properties": {}},
-                "implementation": {"provider_slot": "backend", "operation": f"{name}_op"},
+                "entry": f"operations/{name}_op.py",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
                 "execution": {
                     "mode": "request",
                     "timeout_ms": 1000,
@@ -78,23 +79,33 @@ def _definition(
                 },
             }
         }
-    return payload
+    return {
+        "format": "ghrah.ability-definition",
+        "schema_version": "1",
+        "identity": identity,
+        "title": name,
+        "description": f"{name} 容器。",
+        "members": members,
+    }
 
 
-def _skill_member(name: str, *, body_path: str = "skills/SKILL.md") -> dict[str, object]:
-    """造一个 skill 成员声明。
+def _skill_member(name: str, *, body_path: str | None = None) -> dict[str, object]:
+    """造一个 v1 skill 成员声明。
 
     Args:
-        name: 成员键。
-        body_path: 正文相对路径。
+        name: 成员键（也决定规范正文位置 ``skills/<键>/SKILL.md``）。
+        body_path: 正文相对路径；None 取 v1 规范位置（只有刻意构造非法定义时才传别的值）。
 
     Returns:
-        ``skills`` 表里的一项。
+        ``members.skills`` 表里的一项。
     """
     return {
         "title": name,
         "description": f"{name} 技能。",
-        "body": {"path": body_path, "media_type": "text/markdown"},
+        "body": {
+            "path": body_path or f"skills/{name}/SKILL.md",
+            "media_type": "text/markdown",
+        },
     }
 
 
@@ -105,13 +116,13 @@ def _write_package(
     payload: dict[str, object] | None = None,
     body: bool = True,
 ) -> Path:
-    """在根目录下写一个能力包（可选写入 ``skills/SKILL.md``）。
+    """在根目录下写一个能力包（可选按定义面声明写入 skill 正文）。
 
     Args:
         root: 池根目录。
         name: 包目录名。
         payload: 定义内容；None 造一个只含技能的合法包。
-        body: 是否写入声明的正文文件。
+        body: 是否按声明位置写入正文文件（v1 为 ``skills/<成员键>/SKILL.md``）。
 
     Returns:
         新建的包目录。
@@ -125,9 +136,11 @@ def _write_package(
         newline="\n",
     )
     if body:
-        skill_dir = package / "skills"
-        skill_dir.mkdir(exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8", newline="\n")
+        skills = (data.get("members") or {}).get("skills") or {}
+        for member in skills.values():
+            target = package.joinpath(*member["body"]["path"].split("/"))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"# {name}\n", encoding="utf-8", newline="\n")
     return package
 
 
@@ -222,14 +235,25 @@ class TestCollection:
         assert len(result.issues) == 1
         assert "broken" in result.issues[0].path
 
-    def test_container_name_must_match_directory(self, tmp_path: Path) -> None:
-        """目录名只作定位，身份以定义面为准；两者不等就记问题并跳过。"""
-        _write_package(tmp_path, "alpha", payload=_definition("alpha", namespace="other"))
+    def test_directory_name_is_only_a_locator(self, tmp_path: Path) -> None:
+        """v1：目录名不参与身份判定——与 ``identity.name`` 不一致也照常收录。
+
+        容器名取定义面身份（``identity.name`` 优先），目录名只作定位；
+        以前"两者不等就记问题并跳过"的行为已退役。
+        """
+        payload = _definition(
+            "alpha",
+            namespace="ghrah",
+            identity_name="other",
+            skills={"alpha": _skill_member("alpha")},
+        )
+        _write_package(tmp_path, "alpha", payload=payload)
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
-        assert result.entries == ()
-        assert "容器名" in result.issues[0].reason
+        assert [entry.container for entry in result.entries] == ["other"]
+        assert result.definitions.keys() == {"other"}
+        assert result.issues == ()
 
     def test_directories_without_definition_are_skipped(self, tmp_path: Path) -> None:
         """普通子目录（``operations/`` 之类）不是能力包，静默跳过。"""
@@ -265,7 +289,7 @@ class TestSkills:
         assert skill.container == "research"
         assert skill.key == "research"
         assert skill.full_name == "research"
-        assert skill.body_path == "skills/SKILL.md"
+        assert skill.body_path == "skills/research/SKILL.md"
         assert skill.media_type == "text/markdown"
         assert skill.source == "skill-ability"
         assert skill.rank == roots.USER_ROOT_RANK
@@ -281,17 +305,21 @@ class TestSkills:
         assert "声明的正文不存在" in result.issues[0].reason
 
     def test_body_may_not_escape_the_package(self, tmp_path: Path) -> None:
-        """正文路径不能越出容器目录，否则一份外部 yaml 就能读到包外文件。"""
+        """正文路径不能越出容器目录：v1 契约要求它必须是 ``skills/<键>/SKILL.md``。
+
+        v1 把「正文位置」收紧成唯一规范路径，因此越界写法在解析期就被拒绝，不会
+        进入扫描面（扫描层仍保留越界判定，作为纵深防御）。
+        """
         payload = _definition(
             "research",
             skills={"research": _skill_member("research", body_path="../outside.md")},
         )
-        _write_package(tmp_path, "research", payload=payload)
+        _write_package(tmp_path, "research", payload=payload, body=False)
         (tmp_path / "outside.md").write_text("secret", encoding="utf-8")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
-        assert "正文路径非法" in result.issues[0].reason
+        assert "body.path 必须是" in result.issues[0].reason
         assert result.skills == ()
 
     def test_skills_sorted_by_full_name(self, tmp_path: Path) -> None:
@@ -325,21 +353,21 @@ class TestSkills:
         assert result.skills == ()
 
     def test_body_follows_declared_path(self, tmp_path: Path) -> None:
-        """正文位置只认声明：声明别处时读取就落到那个文件，框架不拼默认路径。"""
+        """正文位置只认定义面声明（v1 即 ``skills/<键>/SKILL.md``）。"""
         payload = _definition(
             "research",
-            skills={"research": _skill_member("research", body_path="skills/GUIDE.md")},
+            skills={"research": _skill_member("research")},
         )
         _write_package(tmp_path, "research", payload=payload, body=False)
-        package = tmp_path / "research" / "skills"
-        package.mkdir()
-        (package / "GUIDE.md").write_text("# guide\n", encoding="utf-8", newline="\n")
+        skill_dir = tmp_path / "research" / "skills" / "research"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# guide\n", encoding="utf-8", newline="\n")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
         (skill,) = result.skills
-        assert skill.body_path == "skills/GUIDE.md"
-        assert skill.body == tmp_path / "research" / "skills" / "GUIDE.md"
+        assert skill.body_path == "skills/research/SKILL.md"
+        assert skill.body == tmp_path / "research" / "skills" / "research" / "SKILL.md"
         assert result.issues == ()
 
     def test_multiple_skill_members_are_supported(self, tmp_path: Path) -> None:
@@ -347,8 +375,8 @@ class TestSkills:
         payload = _definition(
             "multi",
             skills={
-                "a": _skill_member("a", body_path="skills/a/SKILL.md"),
-                "b": _skill_member("b", body_path="skills/b/SKILL.md"),
+                "a": _skill_member("a"),
+                "b": _skill_member("b"),
             },
         )
         package = _write_package(tmp_path, "multi", payload=payload, body=False)

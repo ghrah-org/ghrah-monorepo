@@ -94,12 +94,13 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from ghrah.scheme.execution.base import Ability
+from ghrah.ability.execution.base import Ability
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.scheme.execution.context import AbilityExecutionContext
-    from ghrah.scheme.execution.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 PERMISSIONS: dict[str, Any] = {}
 HOOKS: dict[str, Any] = {}
@@ -119,9 +120,8 @@ class HelloEchoAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        args = context.tool_args or context.accumulated_data.get("tool_args", {})
-        text = str(args.get("text", ""))
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        text = str(call.arguments.get("text", ""))
         if not text:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -241,7 +241,7 @@ class ReadFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult: ...
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult: ...
 
 
 # 5) 私有辅助函数（下划线开头，不会被当成实现类）
@@ -261,11 +261,16 @@ def _number_lines(lines, *, start_no: int) -> str: ...
 
 ### 5.2 `execute` 的写法
 
+执行签名固定为 `execute(self, call: OperationCall, services: ExecutionServices)`：
+
+- `call` 只带成员引用（`call.member.member`）、参数（`call.arguments`）、`tool_call_id` 与受信身份（`call.identity`）；参数只有一个来源，不接受 `context.tool_args` 之类的回退；
+- `services` 带执行期依赖，按服务键取：`CONTEXT_MANAGER`、`SUPERVISOR`、`LOOP`（循环数据，如 `llm_response`）、`MANIFEST_STORE`、`SKILL_PROVIDER`、`MCP_RUNTIME`、`ABILITY_CONTENT`、`MESSAGE_FACTORY`。新增依赖加服务键，不给调用对象加属性；
+- 本机没有接线或允许为空的服务用 `services.get(...)` 并显式降级；必需服务用 `services.require(...)` 让缺失直接报错。
+
 ```python
-async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-    # a) 取参数：优先 context.tool_args，兼容 accumulated_data["tool_args"]
-    args = context.tool_args or context.accumulated_data.get("tool_args", {})
-    file_path = args.get("file_path", "")
+async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+    # a) 取参数：唯一来源是 call.arguments，没有旧门面回退
+    file_path = str(call.arguments.get("file_path", ""))
 
     # b) 自己做参数校验（执行器不做 schema 校验）
     if not file_path:

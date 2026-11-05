@@ -432,3 +432,38 @@ class TestFromEnv:
         """拼错的模式在装配前报错，不悄悄跑回 legacy。"""
         with pytest.raises(ValueError, match="unknown ability source mode"):
             SubjectConfig(ability_source="new")
+
+
+class TestAbilityGrantPolicy:
+    """启动期授权策略是 SubjectConfig 的显式字段：未配置即不授予。"""
+
+    def test_default_is_no_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_GRANT_POLICY", raising=False)
+        assert SubjectConfig().ability_grant_policy is None
+        assert SubjectConfig.from_env().ability_grant_policy is None
+
+    def test_explicit_policy_is_kept_as_is(self) -> None:
+        from ghrah.ability.access.policy import GrantPolicy, GrantRule
+
+        policy = GrantPolicy(mode="replace", rules=(GrantRule(package="acme.tools"),))
+        assert SubjectConfig(ability_grant_policy=policy).ability_grant_policy is policy
+
+    def test_non_policy_value_is_rejected(self) -> None:
+        with pytest.raises(TypeError, match="GrantPolicy"):
+            SubjectConfig(ability_grant_policy={"rules": []})  # type: ignore[arg-type]
+
+    def test_from_env_parses_inline_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "GHRAH_SUBJECT_ABILITY_GRANT_POLICY",
+            '{"mode": "merge", "rules": [{"package": "demo", "skill": "guide",'
+            ' "script": "run", "available": true}]}',
+        )
+        policy = SubjectConfig.from_env().ability_grant_policy
+        assert policy is not None and policy.mode == "merge"
+        assert policy.rules[0].member == "skill/guide/scripts/run"
+        assert policy.rules[0].available is True
+
+    def test_from_env_invalid_policy_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_GRANT_POLICY", '{"rules": [{"package": "FS"}]}')
+        with pytest.raises(ValueError, match="授权策略无效"):
+            SubjectConfig.from_env()

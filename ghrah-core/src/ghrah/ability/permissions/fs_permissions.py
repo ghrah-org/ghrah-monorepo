@@ -9,13 +9,16 @@
 - AccessApprovalHook: PRE_EXECUTE Hook，对读写操作进行人工批准（HITL）
 - WriteApprovalHook: AccessApprovalHook 的向后兼容别名
 
-权限模型（统一读写）：
+权限模型（统一读写，2026-11-05 裁决）：
+- workspace_root 是沙盒硬边界：沙盒外一律拒绝，审批不能放行
 - denied_paths 优先（硬性拒绝，不可覆盖）
-- allowed_paths 白名单和 workspace_root 控制自动批准的范围
-- 不在白名单且 require_approval=True 时需要人工批准（HITL）
-- 不在白名单且 require_approval=False 时直接拒绝
-- 未配置白名单且 require_approval=False 时拒绝所有访问（需设置 allowed_paths 或 workspace_root）
-- 未配置白名单且 require_approval=True 时所有访问需人工审批
+- allowed_paths 是**自动批准范围**，不是权限本身：
+  - 声明了范围：范围外即使落在工作区内也进入审批（或拒绝）
+  - 未声明范围（``None``）：工作区内即自动批准
+  - 声明了范围但交集为空（``deny_all_paths``）：不自动批准任何路径
+- 范围外 require_approval=True 时转人工批准（HITL），False 时直接拒绝
+- 既没有 allowed_paths 也没有 workspace_root 时：按 require_approval 决定
+  全部待审批还是全部拒绝（独立使用场景保持原语义）
 - is_subpath 严格前缀匹配（防止意外的前缀匹配）
 """
 
@@ -28,7 +31,8 @@ from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.paths import is_subpath
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 __all__ = [
@@ -75,11 +79,15 @@ class FSPermissionChecker:
         workspace_root: str | None = None,
         denied_paths: list[str] | None = None,
         require_approval: bool = True,
+        deny_all_paths: bool = False,
+        read_only: bool = False,
     ) -> None:
         self._allowed_paths = self._normalize_paths(allowed_paths) if allowed_paths else None
         self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self._denied_paths = self._normalize_paths(denied_paths) if denied_paths else None
         self._require_approval = require_approval
+        self._deny_all_paths = deny_all_paths
+        self._read_only = read_only
 
     @staticmethod
     def _normalize_paths(paths: list[str]) -> list[Path]:
@@ -109,17 +117,11 @@ class FSPermissionChecker:
             return False
         return any(is_subpath(resolved, denied) for denied in self._denied_paths)
 
-    def _is_path_allowed(self, resolved: Path) -> bool:
-        """检查已解析路径是否被允许（在白名单或工作路径下，且不在黑名单中）。"""
-        if self._is_in_denied_paths(resolved):
-            return False
-        return self._is_in_allowed_paths(resolved) or self._is_in_workspace(resolved)
-
     def _describe_allowed_roots(self) -> str:
         """渲染授权范围描述（越界拒绝报错附带给 agent，边界可查询）。
 
         汇总 allowed_paths + workspace_root；根数超过 8 个截断（+N more）。
-        全空时返回 "(none configured)"。
+        全空时返回 ``(none configured)``；声明范围但交集为空时明确说明。
         """
         roots: list[str] = []
         if self._allowed_paths is not None:
@@ -127,6 +129,8 @@ class FSPermissionChecker:
         if self._workspace_root is not None:
             roots.append(f"{self._workspace_root}/ (workspace)")
         if not roots:
+            if self._deny_all_paths:
+                return "(declared scope is empty)"
             return "(none configured)"
         if len(roots) > 8:
             shown = ", ".join(roots[:8])
@@ -146,7 +150,19 @@ class FSPermissionChecker:
             - (True, "pending"): 需要 HITL 审批
             - (False, reason): 拒绝访问
         """
+        if operation == "write" and self._read_only:
+            return False, "Permission denied: read-only filesystem"
         resolved = self._resolve(path)
+
+        # 沙盒硬边界：审批只决定“范围外是否问人”，不能放宽沙盒本身。
+        if self._workspace_root is not None and not is_subpath(resolved, self._workspace_root):
+            return False, (
+                f"Permission denied: {path} is outside workspace sandbox "
+                f"{self._workspace_root}; allowed roots: {self._describe_allowed_roots()}"
+            )
+
+        if self._is_in_denied_paths(resolved):
+            return False, f"Permission denied: {path} is in denied paths"
 
         if self._allowed_paths is None and self._workspace_root is None:
             if self._require_approval:
@@ -156,10 +172,16 @@ class FSPermissionChecker:
                 "(set allowed_paths or workspace_root, or enable require_approval for HITL)"
             )
 
-        if self._is_in_denied_paths(resolved):
-            return False, f"Permission denied: {path} is in denied paths"
-
-        if self._is_path_allowed(resolved):
+        auto_approved = (
+            not self._deny_all_paths
+            and self._allowed_paths is not None
+            and self._is_in_allowed_paths(resolved)
+        ) or (
+            not self._deny_all_paths
+            and self._allowed_paths is None
+            and self._is_in_workspace(resolved)
+        )
+        if auto_approved:
             return True, None
 
         if self._require_approval:
@@ -230,6 +252,11 @@ class FSPermissionChecker:
         """白名单外访问是否需要人工审批（False = 直接拒绝）。"""
         return self._require_approval
 
+    @property
+    def deny_all_paths(self) -> bool:
+        """是否声明了范围但交集为空：任何路径都不自动批准。"""
+        return self._deny_all_paths
+
 
 class AccessApprovalHook(Hook):
     """访问操作的人工批准 Hook。
@@ -263,40 +290,54 @@ class AccessApprovalHook(Hook):
     def __init__(self, checker: FSPermissionChecker) -> None:
         self._checker = checker
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         """在读写类 Ability 时触发检查。"""
-        name = context.current_ability_name
+        name = call.member.member
         return name in self.WRITE_ABILITIES or name in self.READ_ABILITIES
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
-        """检查访问路径权限，决定是否需要人工批准。"""
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
-        target_path = self._extract_target_path(context.current_ability_name, tool_args)
+        """检查访问路径权限，决定是否需要人工批准。
 
-        if not target_path:
+        一个成员可能涉及多个路径（``move_file`` 的源与目标、``search_files``
+        的搜索根）：任一路径被拒绝即停止，任一路径待审批即转 HITL。
+        """
+        tool_args = call.arguments
+        targets = self._extract_target_paths(call.member.member, tool_args)
+        if not targets:
             return HookResult.continue_()
 
-        operation = "write" if context.current_ability_name in self.WRITE_ABILITIES else "read"
-        allowed, status = self._checker.check_access(target_path, operation)
+        operation = "write" if call.member.member in self.WRITE_ABILITIES else "read"
+        pending: list[str] = []
+        for target_path in targets:
+            allowed, status = self._checker.check_access(target_path, operation)
+            if not allowed:
+                return HookResult.stop(message=status or f"Permission denied: {target_path}")
+            if status == "pending":
+                pending.append(target_path)
 
-        if not allowed:
-            return HookResult.stop(message=status or f"Permission denied: {target_path}")
-
-        if status == "pending":
+        if pending:
             return HookResult.hitl(
-                message=f"Human approval required for {operation} operation on: {target_path}",
+                message=(
+                    f"Human approval required for {operation} operation on: " + ", ".join(pending)
+                ),
             )
-
         return HookResult.continue_()
 
     @staticmethod
-    def _extract_target_path(ability_name: str, tool_args: dict[str, Any]) -> str | None:
-        """根据 ability 类型提取目标路径。"""
+    def _extract_target_paths(ability_name: str, tool_args: dict[str, Any]) -> list[str]:
+        """根据 ability 类型提取需要检查的路径（一个成员可能有多个）。"""
         if ability_name == "move_file":
-            return tool_args.get("destination_path")
-        return tool_args.get("file_path") or tool_args.get("dir_path")
+            paths = [tool_args.get("source_path"), tool_args.get("destination_path")]
+        elif ability_name == "search_files":
+            paths = [tool_args.get("path")]
+        else:
+            paths = [tool_args.get("file_path") or tool_args.get("dir_path")]
+        return [path for path in paths if isinstance(path, str) and path]
 
 
 WriteApprovalHook = AccessApprovalHook

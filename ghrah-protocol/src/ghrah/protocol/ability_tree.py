@@ -27,7 +27,12 @@ class OperationNode(TreeModel):
 
 
 class ContentResourceNode(TreeModel):
-    """已获授 Skill 子资源的确定内容描述。"""
+    """已获授 Skill 子资源的确定内容描述。
+
+    ``available`` 只对脚本有意义：脚本可见（正文可读）不等于可执行，
+    ``available=false`` 表示已获授可见但未获授执行。正文、附件与引用始终
+    可读，恒为 ``true``。
+    """
 
     key: TreeKey
     member: str
@@ -35,10 +40,15 @@ class ContentResourceNode(TreeModel):
     media_type: str
     size: int = Field(ge=0)
     digest: str
+    available: bool = True
 
 
 class SkillNode(TreeModel):
-    """单 Skill 及其获授附件；正文权限与附件权限分别投影。"""
+    """单 Skill 及其获授附件；正文权限与附件权限分别投影。
+
+    ``scripts`` 是已获授可见的脚本清单；脚本的可见性在这里表达，执行权由
+    ``ContentResourceNode.available`` 单独表达（默认不可执行）。
+    """
 
     key: TreeKey
     title: str
@@ -46,16 +56,41 @@ class SkillNode(TreeModel):
     body_allowed: bool
     assets: list[ContentResourceNode]
     references: list[ContentResourceNode]
+    scripts: list[ContentResourceNode] = Field(default_factory=list)
     availability: Literal["ready", "unavailable", "unknown"] = "unknown"
 
 
 class SkillReadScope(TreeModel):
-    """None 表示选中该类别全部现有资源，空列表表示不授予该类别。"""
+    """None 表示选中该类别全部现有资源，空列表表示不授予该类别。
+
+    ``scripts`` 只授予脚本可见（正文可读）；执行权不在此表达，由
+    ``GrantAbilityRequest.axes`` 单独给出。
+    """
 
     key: TreeKey
     body: bool = True
     assets: list[TreeKey] | None = None
     references: list[TreeKey] | None = None
+    scripts: list[TreeKey] | None = None
+
+
+class MemberAxes(TreeModel):
+    """一个获授成员的可见性与可用性显式事实。
+
+    地址写全名：Operation 为 ``operations/<key>``，内容成员为
+    ``skill/<skill>[/assets|references|scripts/<key>]``。未列出时按默认值：
+    Operation 与 Skill 内容可见且可用，脚本可见但不可执行。
+    """
+
+    member: str = Field(
+        pattern=(
+            r"^(operations/[a-z][a-z0-9_-]{0,63}"
+            r"|skill/[a-z][a-z0-9_-]{0,63}"
+            r"(/(assets|references|scripts)/[a-z][a-z0-9_-]{0,63})?)$"
+        )
+    )
+    visible: bool = True
+    available: bool = True
 
 
 class AbilityNode(TreeModel):
@@ -145,7 +180,9 @@ class GrantAbilityRequest(TreeModel):
     """对当前关系修订提交一次明确获授变更。
 
     ``skill`` 与 ``skills`` 是同一件事的单/多写法：只给 ``skill`` 时等价于只授予
-    一个技能；``skills`` 用来一次授予同一包里的多个技能。
+    一个技能；``skills`` 用来一次授予同一包里的多个技能。``axes`` 显式覆盖
+    成员的可见性与可用性，只能收紧或降级本次已授予的成员，不能新增成员。
+    ``policy`` 是本次授予所依据策略的摘要，只用于变更历史审计。
     """
 
     alias: TreeKey
@@ -155,6 +192,8 @@ class GrantAbilityRequest(TreeModel):
     skill: SkillReadScope | None = None
     skills: list[SkillReadScope] = Field(default_factory=list)
     whole_container: bool = False
+    axes: list[MemberAxes] = Field(default_factory=list)
+    policy: str | None = None
     expected_revision: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -162,6 +201,8 @@ class GrantAbilityRequest(TreeModel):
         """同一技能不能在一次变更里出现两份读范围。"""
         if len({item.key for item in self.skills}) != len(self.skills):
             raise ValueError("Skill 读范围重复")
+        if len({item.member for item in self.axes}) != len(self.axes):
+            raise ValueError("成员轴重复")
         return self
 
 

@@ -32,7 +32,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any
 
 from ghrah.protocol.types import (
     AGENT_SCOPED_EVENT_TYPES,
@@ -65,7 +65,6 @@ from ghrah.protocol.types import (
     generate_request_id,
 )
 
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilitySourceMode,
@@ -177,8 +176,11 @@ class CoreUnitConfig:
             说明缺席（零隐式）。Subject 挂载模式下注入 ``SkillConfig.root``。
             选择 ``ability_source="builtin"`` 时该根**不被读取**（旧读取器不
             构造），只记警告——同一 Agent 不允许一边用新来源一边读旧目录。
-        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。未选择时
-            保持现有运行方式；选择新模式后能力声明、工具实例与 Skill 读取
+        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。
+            ``legacy`` **已废弃**：仅保留旧部署兼容，不在权限治理范围内
+            （有效权限合并、只读、权限位与危险命令白名单等保证只在
+            ``builtin`` 生效），不要把它当作受治理或安全的装配方式。
+            ``builtin`` 是受支持的路径：能力声明、工具实例与 Skill 读取
             服务同源，解析失败直接报错，不回退旧注册表或旧 Skill 读取器。
         default_abilities: spawn 未显式传 abilities 时注入的能力名列表
             （透传 SupervisorActor.default_abilities——部署方显式声明，
@@ -220,8 +222,9 @@ class CoreUnitConfig:
     # skill-ability 根目录（装配期显式注入的字符串路径）。None = 不接线：
     # skill 目录不被扫描、上下文不注入技能目录摘要（消费方显式说明缺席）。
     skill_root: str | None = None
-    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器；builtin = 新版
-    # ghrah.ability 来源）。装配点显式选择，未选择保持现有运行方式。
+    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器，已废弃且不参与
+    # 权限治理；builtin = 新版 ghrah.ability 受治理路径）。装配点显式选择；
+    # 未选择时保持 legacy 仅为旧部署兼容。
     ability_source: str = "legacy"
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
@@ -232,6 +235,12 @@ class CoreUnitConfig:
     surface_hard_cap: int = DEFAULT_HARD_CAP
     surface_search_limit: int = DEFAULT_SEARCH_LIMIT
     surface_loaded_limit: int = DEFAULT_LOADED_LIMIT
+    # 启动授权关系库（装配方打开/关闭，duck-typed AbilityAccessStore）。
+    # None = 未接线：builtin 模式 spawn 直接失败，不再回退到按模板实例化；
+    # 注入后启动工具表只认授权事实（模板只决定申请哪些成员）。
+    ability_store: Any = None
+    # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
+    ability_grant_policy: Any = None
 
 
 # ----------------------------------------------------------------
@@ -489,6 +498,10 @@ def _create_ability_from_def(
 ) -> AbilityProtocol:
     """将 AbilityDefinitionPayload 转换为 Ability 实例。
 
+    仅服务于已废弃的 ``ability_source=legacy`` 直传能力入口，不参与本轮
+    权限治理：只按 wire ``params`` 内的原始字段构造检查器，不做有效权限
+    合并、只读约束、权限位与 ``denied_*`` 执行，不能作为权限或安全依据。
+
     与原 server/router.py 的 ``_create_ability_from_def`` 共享同一套常量与
     AbilityRegistry.create 工厂：
     1. 文件系统类（FS_ABILITY_TYPES）：将 require_hitl/allowed_paths/
@@ -673,6 +686,8 @@ class CoreUnit:
         self._hitl_promises = HITLPromiseRegistry()
         # 装配模式在 init(ctx) 时确定（需要 manifest_store 等装配期输入）。
         self._assembly: AbilityAssembly | None = None
+        # 授权装配边界（builtin 模式唯一入口）；None = 未接线或 legacy 模式。
+        self._startup_materializer: Any = None
 
         self._handlers: dict[str, _CommandHandler] = {
             CommandType.SPAWN_AGENT.value: self._handle_spawn_agent,
@@ -788,6 +803,27 @@ class CoreUnit:
         # skill-ability 接线：按模式构造读取服务（builtin 模式显式无读取器）。
         skill_provider: Any = assembly.skill_provider(self._config.skill_root)
 
+        # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
+        # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
+        # （不再回退按模板实例化）。
+        startup_materializer: Any = None
+        if assembly.is_builtin and self._config.ability_store is not None:
+            from ghrah.ability.access import build_startup_materializer
+
+            startup_materializer = build_startup_materializer(
+                store=self._config.ability_store,
+                source=assembly.source,
+                project_id=self._config.project_id,
+                policy=self._config.ability_grant_policy,
+                workspace_root=self._config.workspace_root,
+                auto_approve_abilities=self._config.auto_approve_abilities,
+                require_approval_by_default=self._config.require_approval_by_default,
+                command_runner=self._config.command_runner,
+                safe_extra_commands=self._config.safe_extra_commands,
+                safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+            )
+        self._startup_materializer = startup_materializer
+
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
             cluster_id=self._config.cluster_id,
@@ -803,6 +839,8 @@ class CoreUnit:
             skill_provider=skill_provider,
             llm_factory=self._config.llm_factory,
             message_manager=self._config.message_manager,
+            builtin_abilities=assembly.is_builtin,
+            ability_materializer=startup_materializer,
         )
         self._supervisor = supervisor
 
@@ -1043,6 +1081,26 @@ class CoreUnit:
             raise ValueError(f"model_configuration_invalid: {name}") from exc
 
     async def _handle_spawn_agent(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        """在授权核定之前固定稳定主体，并预留本次注册。"""
+        from uuid import uuid4
+
+        sp = SpawnAgentPayload.model_validate(payload)
+        if self._require_assembly().is_builtin and not sp.config.agent_id:
+            config = sp.config.model_copy(update={"agent_id": uuid4().hex})
+            sp = sp.model_copy(update={"config": config})
+        if self._require_assembly().is_builtin:
+            from ghrah.ability.access.identity import validate_agent_id
+
+            validate_agent_id(sp.config.agent_id)
+        config = AgentConfig(name=sp.config.name, agent_id=sp.config.agent_id)
+        supervisor = self._require_supervisor()
+        try:
+            async with supervisor.spawn_reservation(config):
+                return await self._handle_reserved_spawn(sp.model_dump(), cmd_ctx)
+        except RegistryError as error:
+            return self._err(str(error))
+
+    async def _handle_reserved_spawn(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         """spawn_agent — 接收 SpawnAgentPayload。
 
         manifest_ref 路径：CoreUnit 内按装配模式解析 manifest 并直接构造工具
@@ -1076,15 +1134,31 @@ class CoreUnit:
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
                 self._validate_model_config(resolved.config.endpoint_name)
-            ability_instances: list[AbilityProtocol] | None = assembly.instantiate(
-                resolved.abilities,
-                workspace_root=self._config.workspace_root,
-                auto_approve_abilities=self._config.auto_approve_abilities,
-                require_approval_by_default=self._config.require_approval_by_default,
-                command_runner=self._config.command_runner,
-                safe_extra_commands=self._config.safe_extra_commands,
-                safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+            resolved.config = replace(resolved.config, agent_id=sp.config.agent_id)
+            supervisor.check_spawn(resolved.config)
+            # builtin：授权装配边界；legacy：旧装配实例化。builtin 未接线关系库
+            # 时抛 StartupGrantError，不再回退按模板实例化。
+            materialization = await self._materialize_builtin_abilities(
+                resolved.config.effective_agent_id, resolved
             )
+            ability_instances = materialization.abilities if materialization else None
+            tool_table_projector = (
+                self._startup_materializer.tool_table_projector(
+                    resolved.config.effective_agent_id, materialization
+                )
+                if materialization is not None and self._startup_materializer is not None
+                else None
+            )
+            if ability_instances is None:
+                ability_instances = assembly.instantiate(
+                    resolved.abilities,
+                    workspace_root=self._config.workspace_root,
+                    auto_approve_abilities=self._config.auto_approve_abilities,
+                    require_approval_by_default=self._config.require_approval_by_default,
+                    command_runner=self._config.command_runner,
+                    safe_extra_commands=self._config.safe_extra_commands,
+                    safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+                )
             if not ability_instances:
                 # fail-closed：manifest 全 non-builtin/解析出 0 能力时明确报错，
                 # 不落入 default_abilities 或任何隐式注入（零隐式）。
@@ -1111,6 +1185,7 @@ class CoreUnit:
                     persistence_factory=self._config.persistence_factory,
                     llm_factory=self._config.llm_factory,
                     tags=list(manifest.metadata.tags),
+                    tool_table_projector=tool_table_projector,
                 )
             except RegistryError as e:
                 return self._err(str(e))
@@ -1246,6 +1321,45 @@ class CoreUnit:
                 "incarnation_id": incarnation_id,
             }
         )
+
+    async def _materialize_builtin_abilities(self, agent: str, resolved: Any) -> Any | None:
+        """builtin 模式：经授权装配边界物化工具表。
+
+        边界在 ``init`` 装配期构造一次；未注入启动授权关系库时直接失败，
+        不再保留“按模板实例化工具”的过渡退路。legacy 模式返回 None，由调用
+        方按旧装配实例化。
+
+        Args:
+            agent: 正在启动的稳定 Agent ID。
+            resolved: 已解析的 Agent 模板。
+
+        Returns:
+            启动物化结果（工具表 + 工具绑定）；legacy 模式返回 None。
+
+        Raises:
+            StartupGrantError: builtin 模式未接线授权关系库，或核定失败。
+        """
+        assembly = self._require_assembly()
+        if not assembly.is_builtin:
+            return None
+        from ghrah.ability.access import StartupGrantError
+
+        materializer = self._startup_materializer
+        if materializer is None:
+            raise StartupGrantError(
+                "builtin spawn 需要注入启动授权关系库（CoreUnitConfig.ability_store）；"
+                "已移除按模板实例化的过渡退路——关系库是授权唯一权威，"
+                "模板只表达申请，不能自行生效"
+            )
+        materialized = await materializer.materialize(agent=agent, resolved=resolved)
+        logger.info(
+            "builtin spawn 授权核定完成：agent=%s tools=%s granted=%s revoked=%s",
+            agent,
+            [binding.tool_name for binding in materialized.tools],
+            list(materialized.granted),
+            list(materialized.revoked),
+        )
+        return materialized
 
     def _apply_hitl_timeout(self, agent_name: str) -> None:
         """best-effort 将 config.hitl_timeout 与 promise 注册表应用到 agent 的本地 executor。
@@ -1614,15 +1728,14 @@ class CoreUnit:
                 if ep.ability_name == "send" and action_result.outcome == ActionOutcome.SUCCESS:
                     action_result.data["status"] = "sent"
             else:
-                context = AbilityExecutionContext(
-                    current_ability_name=ep.ability_name,
-                    tool_args=ep.tool_args,
-                    context_manager=getattr(agent_handle, "_context_manager", None),
-                    supervisor=cast(Any, supervisor),
-                    agent_name=ep.agent_name,
-                    manifest_store=getattr(supervisor, "manifest_store", None),
-                )
-                action_result = await executor.execute_ability(ability, context)
+                build_call = getattr(agent_handle, "_build_ability_call", None)
+                if build_call is None:
+                    return self._err(
+                        f"Agent '{ep.agent_name}' cannot build an operation call "
+                        "(no assembly-bound invocation builder)"
+                    )
+                call, services = build_call(ability, ep.tool_args, {}, tool_call_id=request_id)
+                action_result = await executor.execute_ability(ability, call, services)
             success = action_result.outcome == ActionOutcome.SUCCESS
             error = None if success else str(action_result.data.get("error", "unknown error"))
             result_payload = AbilityResultPayload(

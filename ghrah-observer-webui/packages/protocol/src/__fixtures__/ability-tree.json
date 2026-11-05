@@ -9,9 +9,9 @@
     "member": "skill/guide/assets/mark",
     "next_offset": null,
     "offset": 0,
-    "path": "assets/mark.bin",
+    "path": "skills/guide/assets/mark.bin",
     "total_bytes": 4,
-    "version_digest": "sha256:4ec3a436c6bfdf217bd3f5375f2b668208c4917a23615680a1f09432561ac455"
+    "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
   },
   "bound": {
     "error": null,
@@ -23,13 +23,13 @@
             "/workspace/alice"
           ],
           "availability": "ready",
-          "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+          "definition_digest": "sha256:973b4bc872a0154e5bebf5e543863fac7bea0245ae201c8df1967abdf2ecd45c",
           "instance_id": "files-alice",
           "instance_revision": 1,
           "operations": [
             {
               "availability": "unknown",
-              "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+              "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.",
               "input_schema": {
                 "additionalProperties": false,
                 "properties": {
@@ -67,57 +67,83 @@
                     "additionalProperties": false,
                     "properties": {
                       "data": {
+                        "$defs": {
+                          "DirectoryEntryOutput": {
+                            "additionalProperties": false,
+                            "description": "目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。",
+                            "properties": {
+                              "name": {
+                                "description": "Entry name",
+                                "type": "string"
+                              },
+                              "path": {
+                                "default": "",
+                                "description": "Path relative to the listed directory",
+                                "type": "string"
+                              },
+                              "size": {
+                                "default": -1,
+                                "description": "Entry size for files (-1 when unknown)",
+                                "type": "integer"
+                              },
+                              "type": {
+                                "description": "Entry type",
+                                "enum": [
+                                  "file",
+                                  "directory"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "type"
+                            ],
+                            "type": "object"
+                          }
+                        },
                         "additionalProperties": false,
                         "properties": {
                           "dir_path": {
+                            "description": "Directory path",
                             "type": "string"
                           },
                           "entries": {
+                            "description": "Entries in this window",
                             "items": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "name": {
-                                  "type": "string"
-                                },
-                                "path": {
-                                  "type": "string"
-                                },
-                                "size": {
-                                  "type": "integer"
-                                },
-                                "type": {
-                                  "enum": [
-                                    "file",
-                                    "directory"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "name",
-                                "type",
-                                "path"
-                              ],
-                              "type": "object"
+                              "$ref": "#/$defs/DirectoryEntryOutput"
                             },
                             "type": "array"
                           },
                           "limit": {
+                            "default": 0,
+                            "description": "Pagination limit (when paginated)",
                             "type": "integer"
                           },
                           "next_offset": {
-                            "type": [
-                              "integer",
-                              "null"
-                            ]
+                            "anyOf": [
+                              {
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "default": null,
+                            "description": "Next offset, or null when done"
                           },
                           "offset": {
+                            "default": 0,
+                            "description": "Pagination offset (when paginated)",
                             "type": "integer"
                           },
                           "total_entries": {
+                            "description": "Total number of entries",
                             "type": "integer"
                           },
                           "truncated": {
+                            "default": false,
+                            "description": "Whether more entries remain",
                             "type": "boolean"
                           }
                         },
@@ -184,7 +210,7 @@
             },
             {
               "availability": "unknown",
-              "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+              "description": "Read the content of a file at the specified path",
               "input_schema": {
                 "additionalProperties": false,
                 "properties": {
@@ -225,18 +251,25 @@
                         "additionalProperties": false,
                         "properties": {
                           "content": {
+                            "description": "File content (line-numbered when paginated)",
                             "type": "string"
                           },
                           "file_path": {
+                            "description": "Path of the file that was read",
                             "type": "string"
                           },
                           "limit": {
+                            "default": 0,
+                            "description": "Pagination limit (when paginated)",
                             "type": "integer"
                           },
                           "offset": {
+                            "default": 0,
+                            "description": "Pagination offset (when paginated)",
                             "type": "integer"
                           },
                           "total_lines": {
+                            "description": "Total number of lines in the file",
                             "type": "integer"
                           }
                         },
@@ -305,7 +338,7 @@
           "revision": 1,
           "skill": null,
           "skills": [],
-          "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346"
+          "version_digest": "sha256:944e28fd0d513a5eb2b909e8c69dcb16e8215be8a80ea80784ba7f20945cce9b"
         }
       ],
       "agent_id": "alice",
@@ -340,13 +373,13 @@
           "/workspace/alice"
         ],
         "availability": "ready",
-        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "definition_digest": "sha256:973b4bc872a0154e5bebf5e543863fac7bea0245ae201c8df1967abdf2ecd45c",
         "instance_id": "files-alice",
         "instance_revision": 1,
         "operations": [
           {
             "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -384,57 +417,83 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
+                      "$defs": {
+                        "DirectoryEntryOutput": {
+                          "additionalProperties": false,
+                          "description": "目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。",
+                          "properties": {
+                            "name": {
+                              "description": "Entry name",
+                              "type": "string"
+                            },
+                            "path": {
+                              "default": "",
+                              "description": "Path relative to the listed directory",
+                              "type": "string"
+                            },
+                            "size": {
+                              "default": -1,
+                              "description": "Entry size for files (-1 when unknown)",
+                              "type": "integer"
+                            },
+                            "type": {
+                              "description": "Entry type",
+                              "enum": [
+                                "file",
+                                "directory"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ],
+                          "type": "object"
+                        }
+                      },
                       "additionalProperties": false,
                       "properties": {
                         "dir_path": {
+                          "description": "Directory path",
                           "type": "string"
                         },
                         "entries": {
+                          "description": "Entries in this window",
                           "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
+                            "$ref": "#/$defs/DirectoryEntryOutput"
                           },
                           "type": "array"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Next offset, or null when done"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_entries": {
+                          "description": "Total number of entries",
                           "type": "integer"
                         },
                         "truncated": {
+                          "default": false,
+                          "description": "Whether more entries remain",
                           "type": "boolean"
                         }
                       },
@@ -501,7 +560,7 @@
           },
           {
             "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "description": "Read the content of a file at the specified path",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -542,18 +601,25 @@
                       "additionalProperties": false,
                       "properties": {
                         "content": {
+                          "description": "File content (line-numbered when paginated)",
                           "type": "string"
                         },
                         "file_path": {
+                          "description": "Path of the file that was read",
                           "type": "string"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_lines": {
+                          "description": "Total number of lines in the file",
                           "type": "integer"
                         }
                       },
@@ -622,7 +688,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346"
+        "version_digest": "sha256:944e28fd0d513a5eb2b909e8c69dcb16e8215be8a80ea80784ba7f20945cce9b"
       }
     ],
     "agent_id": "alice",
@@ -644,13 +710,13 @@
           "/workspace/alice"
         ],
         "availability": "ready",
-        "definition_digest": "sha256:3b2de431cc57020905c1c9471410aa8efdd45777c71175db5c8c9bf420c61880",
+        "definition_digest": "sha256:11c8551fc13d3d0c0baf15a95acd1df2ad20b06cce9604e3ab67281824244513",
         "instance_id": "reporting",
         "instance_revision": 1,
         "operations": [
           {
             "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -688,57 +754,83 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
+                      "$defs": {
+                        "DirectoryEntryOutput": {
+                          "additionalProperties": false,
+                          "description": "目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。",
+                          "properties": {
+                            "name": {
+                              "description": "Entry name",
+                              "type": "string"
+                            },
+                            "path": {
+                              "default": "",
+                              "description": "Path relative to the listed directory",
+                              "type": "string"
+                            },
+                            "size": {
+                              "default": -1,
+                              "description": "Entry size for files (-1 when unknown)",
+                              "type": "integer"
+                            },
+                            "type": {
+                              "description": "Entry type",
+                              "enum": [
+                                "file",
+                                "directory"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ],
+                          "type": "object"
+                        }
+                      },
                       "additionalProperties": false,
                       "properties": {
                         "dir_path": {
+                          "description": "Directory path",
                           "type": "string"
                         },
                         "entries": {
+                          "description": "Entries in this window",
                           "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
+                            "$ref": "#/$defs/DirectoryEntryOutput"
                           },
                           "type": "array"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Next offset, or null when done"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_entries": {
+                          "description": "Total number of entries",
                           "type": "integer"
                         },
                         "truncated": {
+                          "default": false,
+                          "description": "Whether more entries remain",
                           "type": "boolean"
                         }
                       },
@@ -805,7 +897,7 @@
           },
           {
             "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "description": "Read the content of a file at the specified path",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -846,18 +938,25 @@
                       "additionalProperties": false,
                       "properties": {
                         "content": {
+                          "description": "File content (line-numbered when paginated)",
                           "type": "string"
                         },
                         "file_path": {
+                          "description": "Path of the file that was read",
                           "type": "string"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_lines": {
+                          "description": "Total number of lines in the file",
                           "type": "integer"
                         }
                       },
@@ -927,19 +1026,21 @@
         "skill": {
           "assets": [
             {
+              "available": true,
               "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
               "key": "mark",
               "media_type": "application/octet-stream",
               "member": "skill/guide/assets/mark",
-              "path": "assets/mark.bin",
+              "path": "skills/guide/assets/mark.bin",
               "size": 4
             },
             {
+              "available": true,
               "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c",
               "key": "template",
               "media_type": "text/plain",
               "member": "skill/guide/assets/template",
-              "path": "assets/template.txt",
+              "path": "skills/guide/assets/template.txt",
               "size": 24
             }
           ],
@@ -949,20 +1050,33 @@
           "key": "guide",
           "references": [
             {
+              "available": true,
               "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c",
               "key": "mark",
               "media_type": "application/octet-stream",
               "member": "skill/guide/references/mark",
-              "path": "references/mark.bin",
+              "path": "skills/guide/references/mark.bin",
               "size": 4
             },
             {
+              "available": true,
               "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673",
               "key": "style",
               "media_type": "text/markdown",
               "member": "skill/guide/references/style",
-              "path": "references/style.md",
+              "path": "skills/guide/references/style.md",
               "size": 34
+            }
+          ],
+          "scripts": [
+            {
+              "available": false,
+              "digest": "sha256:612c06db1c12ed0143546cbb1c9106e3143a057137263c54900bd95452e6f59c",
+              "key": "render",
+              "media_type": "text/x-python",
+              "member": "skill/guide/scripts/render",
+              "path": "skills/guide/scripts/render.py",
+              "size": 54
             }
           ],
           "title": "reporting-guide"
@@ -971,19 +1085,21 @@
           {
             "assets": [
               {
+                "available": true,
                 "digest": "sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b",
                 "key": "mark",
                 "media_type": "application/octet-stream",
                 "member": "skill/guide/assets/mark",
-                "path": "assets/mark.bin",
+                "path": "skills/guide/assets/mark.bin",
                 "size": 4
               },
               {
+                "available": true,
                 "digest": "sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c",
                 "key": "template",
                 "media_type": "text/plain",
                 "member": "skill/guide/assets/template",
-                "path": "assets/template.txt",
+                "path": "skills/guide/assets/template.txt",
                 "size": 24
               }
             ],
@@ -993,26 +1109,39 @@
             "key": "guide",
             "references": [
               {
+                "available": true,
                 "digest": "sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c",
                 "key": "mark",
                 "media_type": "application/octet-stream",
                 "member": "skill/guide/references/mark",
-                "path": "references/mark.bin",
+                "path": "skills/guide/references/mark.bin",
                 "size": 4
               },
               {
+                "available": true,
                 "digest": "sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673",
                 "key": "style",
                 "media_type": "text/markdown",
                 "member": "skill/guide/references/style",
-                "path": "references/style.md",
+                "path": "skills/guide/references/style.md",
                 "size": 34
+              }
+            ],
+            "scripts": [
+              {
+                "available": false,
+                "digest": "sha256:612c06db1c12ed0143546cbb1c9106e3143a057137263c54900bd95452e6f59c",
+                "key": "render",
+                "media_type": "text/x-python",
+                "member": "skill/guide/scripts/render",
+                "path": "skills/guide/scripts/render.py",
+                "size": 54
               }
             ],
             "title": "reporting-guide"
           }
         ],
-        "version_digest": "sha256:4ec3a436c6bfdf217bd3f5375f2b668208c4917a23615680a1f09432561ac455"
+        "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
       }
     ],
     "agent_id": "alice",
@@ -1047,13 +1176,13 @@
           "/workspace/alice"
         ],
         "availability": "ready",
-        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "definition_digest": "sha256:973b4bc872a0154e5bebf5e543863fac7bea0245ae201c8df1967abdf2ecd45c",
         "instance_id": "files-alice",
         "instance_revision": 1,
         "operations": [
           {
             "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -1091,57 +1220,83 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
+                      "$defs": {
+                        "DirectoryEntryOutput": {
+                          "additionalProperties": false,
+                          "description": "目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。",
+                          "properties": {
+                            "name": {
+                              "description": "Entry name",
+                              "type": "string"
+                            },
+                            "path": {
+                              "default": "",
+                              "description": "Path relative to the listed directory",
+                              "type": "string"
+                            },
+                            "size": {
+                              "default": -1,
+                              "description": "Entry size for files (-1 when unknown)",
+                              "type": "integer"
+                            },
+                            "type": {
+                              "description": "Entry type",
+                              "enum": [
+                                "file",
+                                "directory"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ],
+                          "type": "object"
+                        }
+                      },
                       "additionalProperties": false,
                       "properties": {
                         "dir_path": {
+                          "description": "Directory path",
                           "type": "string"
                         },
                         "entries": {
+                          "description": "Entries in this window",
                           "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
+                            "$ref": "#/$defs/DirectoryEntryOutput"
                           },
                           "type": "array"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Next offset, or null when done"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_entries": {
+                          "description": "Total number of entries",
                           "type": "integer"
                         },
                         "truncated": {
+                          "default": false,
+                          "description": "Whether more entries remain",
                           "type": "boolean"
                         }
                       },
@@ -1208,7 +1363,7 @@
           },
           {
             "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "description": "Read the content of a file at the specified path",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -1249,18 +1404,25 @@
                       "additionalProperties": false,
                       "properties": {
                         "content": {
+                          "description": "File content (line-numbered when paginated)",
                           "type": "string"
                         },
                         "file_path": {
+                          "description": "Path of the file that was read",
                           "type": "string"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_lines": {
+                          "description": "Total number of lines in the file",
                           "type": "integer"
                         }
                       },
@@ -1329,7 +1491,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346"
+        "version_digest": "sha256:944e28fd0d513a5eb2b909e8c69dcb16e8215be8a80ea80784ba7f20945cce9b"
       }
     ],
     "agent_id": "alice",
@@ -1352,18 +1514,18 @@
     }
   },
   "text": {
-    "byte_count": 203,
-    "content": "---\nname: reporting-guide\ndescription: 使用获准模板和写作指南整理报告。\n---\n\n# 报告编写\n\n阅读[写作指南](references/style.md)。使用 assets/template.txt 和 assets/mark.bin。\n",
-    "digest": "sha256:9d3eec7cb91ee33f142861641f48c3855a35652235c386f43a56cfae3d50f7d5",
+    "byte_count": 248,
+    "content": "---\nname: guide\ndescription: 使用获准模板和写作指南整理报告。\nmetadata:\n  title: reporting-guide\n  tags: [reporting]\n---\n\n# 报告编写\n\n阅读[写作指南](references/style.md)。使用 assets/template.txt 和 assets/mark.bin。\n",
+    "digest": "sha256:e431e2b8881c5bba44186fa7418087bd434453587f46cc0f6920ae0bad55b5e2",
     "encoding": "utf-8",
     "instance_id": "reporting",
     "media_type": "text/markdown",
     "member": "skill/guide",
     "next_offset": null,
     "offset": 0,
-    "path": "SKILL.md",
-    "total_bytes": 203,
-    "version_digest": "sha256:4ec3a436c6bfdf217bd3f5375f2b668208c4917a23615680a1f09432561ac455"
+    "path": "skills/guide/SKILL.md",
+    "total_bytes": 248,
+    "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
   },
   "unavailable": {
     "abilities": [
@@ -1373,13 +1535,13 @@
           "/workspace/alice"
         ],
         "availability": "unavailable",
-        "definition_digest": "sha256:e3a1f609d0277ddb2174db0bc859ad8c0565750e2b528a4b644b48e654196b89",
+        "definition_digest": "sha256:973b4bc872a0154e5bebf5e543863fac7bea0245ae201c8df1967abdf2ecd45c",
         "instance_id": "files-alice",
         "instance_revision": 1,
         "operations": [
           {
             "availability": "unknown",
-            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents. For large directories, set offset/limit to paginate (0-based entry index); the response then carries total_entries/truncated/offset/limit. Without offset/limit the whole listing is returned.",
+            "description": "List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -1417,57 +1579,83 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
+                      "$defs": {
+                        "DirectoryEntryOutput": {
+                          "additionalProperties": false,
+                          "description": "目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。",
+                          "properties": {
+                            "name": {
+                              "description": "Entry name",
+                              "type": "string"
+                            },
+                            "path": {
+                              "default": "",
+                              "description": "Path relative to the listed directory",
+                              "type": "string"
+                            },
+                            "size": {
+                              "default": -1,
+                              "description": "Entry size for files (-1 when unknown)",
+                              "type": "integer"
+                            },
+                            "type": {
+                              "description": "Entry type",
+                              "enum": [
+                                "file",
+                                "directory"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ],
+                          "type": "object"
+                        }
+                      },
                       "additionalProperties": false,
                       "properties": {
                         "dir_path": {
+                          "description": "Directory path",
                           "type": "string"
                         },
                         "entries": {
+                          "description": "Entries in this window",
                           "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "path": {
-                                "type": "string"
-                              },
-                              "size": {
-                                "type": "integer"
-                              },
-                              "type": {
-                                "enum": [
-                                  "file",
-                                  "directory"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "type",
-                              "path"
-                            ],
-                            "type": "object"
+                            "$ref": "#/$defs/DirectoryEntryOutput"
                           },
                           "type": "array"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "next_offset": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Next offset, or null when done"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_entries": {
+                          "description": "Total number of entries",
                           "type": "integer"
                         },
                         "truncated": {
+                          "default": false,
+                          "description": "Whether more entries remain",
                           "type": "boolean"
                         }
                       },
@@ -1534,7 +1722,7 @@
           },
           {
             "availability": "unknown",
-            "description": "Read the content of a file at the specified path. With offset/limit, the returned content is paginated and each line is prefixed with its 1-based line number as '  N→text' (line numbers are for locating edits only — do not copy them into edit_file old_str). Without offset/limit the whole file is returned without line numbers.",
+            "description": "Read the content of a file at the specified path",
             "input_schema": {
               "additionalProperties": false,
               "properties": {
@@ -1575,18 +1763,25 @@
                       "additionalProperties": false,
                       "properties": {
                         "content": {
+                          "description": "File content (line-numbered when paginated)",
                           "type": "string"
                         },
                         "file_path": {
+                          "description": "Path of the file that was read",
                           "type": "string"
                         },
                         "limit": {
+                          "default": 0,
+                          "description": "Pagination limit (when paginated)",
                           "type": "integer"
                         },
                         "offset": {
+                          "default": 0,
+                          "description": "Pagination offset (when paginated)",
                           "type": "integer"
                         },
                         "total_lines": {
+                          "description": "Total number of lines in the file",
                           "type": "integer"
                         }
                       },
@@ -1655,7 +1850,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:fffd063a567e9e8db948110b22c56478afcbd7f5295ab0965b4a8ad6c4d42346"
+        "version_digest": "sha256:944e28fd0d513a5eb2b909e8c69dcb16e8215be8a80ea80784ba7f20945cce9b"
       }
     ],
     "agent_id": "alice",

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Ability 工具表面契约。
 
-本包只提供表面条目、工具名算法、阈值默认值与 per-Agent 覆盖类型：
-全部是带默认值的形状和纯函数，不读取授权库、不投影、不消费。表面
-装配在后续实现中调用这些形状，不在本包内接线。
+本包提供表面条目、工具名算法、阈值默认值、per-Agent 覆盖类型与授权面
+投影：形状和纯函数不读关系库，投影只消费已有的关系库投影（``AbilityTreeView``）。
+静态集裁切与搜索索引属于表面装配在后续实现中的接线。
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from ghrah.ability.surface.naming import (
     ToolNameError,
     assign_tool_names,
 )
+from ghrah.ability.surface.projection import project_grants
 from ghrah.ability.surface.types import MemberRef, SurfaceEntry
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     "SurfaceEntry",
     "ToolNameError",
     "assign_tool_names",
+    "project_grants",
 ]

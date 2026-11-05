@@ -174,8 +174,6 @@ def capture_content(
 ) -> tuple[AbilityDefinition, str, tuple[tuple[str, bytes], ...]]:
     """捕获声明清单；保持原文和相对根，不通过正文链接推断包内容。"""
     definition = definition.model_copy(deep=True)
-    if definition.assets:
-        raise ValueError("旧顶层 assets 归属不明；请显式迁入单 Skill")
     manifest: dict[str, dict[str, Any]] = {}
     blobs: dict[str, bytes] = {}
     total = 0
@@ -204,30 +202,23 @@ def capture_content(
     for key, skill in definition.skills.items():
         member = f"skill/{key}"
         raw = add(member, skill.body.path, skill.body.media_type).decode("utf-8")
-        if raw.startswith("---" + chr(10)):
-            parts = raw.split("---" + chr(10), 2)
-            if len(parts) != 3:
-                raise ValueError("SKILL.md frontmatter 未闭合")
-            metadata = load_yaml(parts[1])
-            if not isinstance(metadata, dict) or not all(
-                isinstance(metadata.get(name), str) and metadata[name].strip()
-                for name in ("name", "description")
-            ):
-                raise ValueError("SKILL.md 必须包含 name 和 description")
-            meta_block = metadata.get("metadata") or {}
-            if not isinstance(meta_block, dict):
-                raise ValueError("SKILL.md metadata 必须是映射")
-            skill.title = meta_block.get("title") or metadata.get("title") or metadata["name"]
-            skill.description = metadata["description"]
-            tags = meta_block.get("tags", metadata.get("tags"))
-            if isinstance(tags, list) and all(isinstance(item, str) for item in tags):
-                skill.tags = sorted(set(tags))
-        elif definition.schema_version in {"0.2", "1"}:
+        if not raw.startswith("---" + chr(10)):
             raise ValueError("标准 SKILL.md 缺少 frontmatter")
-        if isinstance(skill.references, list):
-            if skill.references:
-                raise ValueError("旧 references 列表须显式转换为具名内容清单")
-            skill.references = {}
+        parts = raw.split("---" + chr(10), 2)
+        if len(parts) != 3:
+            raise ValueError("SKILL.md frontmatter 未闭合")
+        metadata = load_yaml(parts[1])
+        if not isinstance(metadata, dict) or not all(
+            isinstance(metadata.get(name), str) and metadata[name].strip()
+            for name in ("name", "description")
+        ):
+            raise ValueError("SKILL.md 必须包含 name 和 description")
+        if metadata["name"] != key:
+            raise ValueError(
+                f"SKILL.md frontmatter name {metadata['name']!r} 与成员键 {key!r} 不一致"
+            )
+        # 索引是成员事实的唯一来源：正文只用于核对，不覆盖索引里的
+        # title / description / tags；不一致仍以生成的 ability.yaml 为准。
         for role, resources in (
             ("assets", skill.assets),
             ("references", skill.references),
@@ -238,13 +229,9 @@ def capture_content(
                     f"{member}/{role}/{resource}",
                     entry.path,
                     entry.media_type,
-                    entry.expected_digest,
+                    entry.digest,
                 )
         linked_bodies.append((skill.body.path, raw))
-    for key, operation in definition.operations.items():
-        if operation.script is not None:
-            entry = operation.script
-            add(f"operations/{key}/script", entry.path, entry.media_type, entry.expected_digest)
     for body_path, raw in linked_bodies:
         # 只校验本地链接；外部 URL 不获取。清单包含未被链接提到的声明文件。
         known = {entry["path"] for entry in manifest.values()}

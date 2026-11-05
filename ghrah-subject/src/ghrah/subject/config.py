@@ -13,8 +13,12 @@ import logging
 import os
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ghrah.protocol.types import RecoveryAction
+
+if TYPE_CHECKING:
+    from ghrah.ability.access.policy import GrantPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -304,8 +308,12 @@ class SubjectConfig:
         transport: transport kind 配置（websocket/ipc/grpc）
         enabled_third_party_units: 第三方 Unit allowlist
         ability_source: 能力来源装配模式（``legacy`` / ``builtin``）；决定 Core
-            同时使用哪套声明目录、工具实例与 Skill 读取服务
+            同时使用哪套声明目录、工具实例与 Skill 读取服务。``legacy``
+            **已废弃**：仅保留旧部署兼容，不在权限治理范围内（有效权限、
+            只读、权限位与危险命令白名单只在 ``builtin`` 生效）。
         default_spawn_abilities: 无 manifest 快速 spawn 的默认能力集（仅 legacy）
+        ability_grant_policy: 启动期 Ability 授权策略；None 表示不授予任何能力，
+            策略只在 spawn 时物化进关系库，运行期读取不重算
     """
 
     # 旧 flat 字段保留，避免破坏 scripts/start_all.py / conftest.py / 外部构造代码。
@@ -334,15 +342,19 @@ class SubjectConfig:
     transport: TransportKindConfig = field(default_factory=TransportKindConfig)
     enabled_third_party_units: list[str] = field(default_factory=list)
     # 能力来源装配模式：显式值决定 CoreUnit 同时用哪套「声明目录 / 工具实例 /
-    # Skill 读取服务」（legacy = 旧注册表 + 旧 Skill 读取器；builtin = 新版
-    # ghrah.ability）。未选择时保持现有运行方式；非法值在 __post_init__ 直接
-    # 报错，不猜测成 legacy。
+    # Skill 读取服务」。legacy 已废弃：仅旧部署兼容，不在权限治理范围内
+    # （有效权限、只读、权限位与危险命令白名单只在 builtin 生效）。未选择时
+    # 保持 legacy 仅为兼容；非法值在 __post_init__ 直接报错，不猜测成 legacy。
     ability_source: str = "legacy"
     # spawn 默认能力集——部署方的显式声明（fail-closed 兼容通道）：
     # Observer 无 abilities 快速 spawn 经 CoreUnitConfig.default_abilities
     # 注入此集；置空列表 = 关闭快速 spawn（必须 manifest_ref/显式 abilities）。
     # ability_source=builtin 时该集不生效（只属于旧注册表），CoreUnit 记警告。
     default_spawn_abilities: list[str] = field(default_factory=lambda: ["conversation", "end_task"])
+    # 启动期 Ability 授权策略（部署方显式配置）。None = 不授予任何能力；
+    # 策略只在 Agent spawn 时被核定并物化进关系库，运行期读取只认关系库事实，
+    # 不重新读取本配置，也不把 manifest 模板当授权来源。
+    ability_grant_policy: GrantPolicy | None = None
 
     # private backing（init=False，__post_init__ 后必有值；保证 property 非 Optional）。
     _persistence: PersistenceConfig = field(init=False)
@@ -396,6 +408,12 @@ class SubjectConfig:
         from ghrah.ability.assembly import AbilitySourceMode
 
         self.ability_source = AbilitySourceMode.parse(self.ability_source).value
+
+        if self.ability_grant_policy is not None:
+            from ghrah.ability.access.policy import GrantPolicy
+
+            if not isinstance(self.ability_grant_policy, GrantPolicy):
+                raise TypeError("ability_grant_policy 必须是 GrantPolicy 或 None")
 
     # ── 只读 slice property（非 Optional，mypy strict 友好）──
 
@@ -476,7 +494,10 @@ class SubjectConfig:
         - GHRAH_SUBJECT_TASKSTORE_DB（任务归因内核 sqlite 路径）
         - GHRAH_SUBJECT_SKILL_ROOT（skill 存储根路径，装配期自举 + 补 lock）
         - GHRAH_SUBJECT_ABILITY_SOURCE（能力来源装配模式：legacy|builtin；
-          选择 builtin 后声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
+          legacy 已废弃、仅旧部署兼容且不在权限治理范围内，选择 builtin 后
+          声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
+        - GHRAH_SUBJECT_ABILITY_GRANT_POLICY（启动期授权策略的 JSON 文本；
+          空 = 不授予任何能力，非法内容直接报错）
         - GHRAH_SUBJECT_ROOM_FILTER_ENABLED
         - GHRAH_SUBJECT_ROOM_FILTER_ABILITIES（逗号分隔白名单能力名）
         - GHRAH_SUBJECT_SAFE_EXTRA_COMMANDS（逗号/分号/空白分隔，追加基础命令 safe 白名单）
@@ -653,6 +674,14 @@ class SubjectConfig:
             ),
         )
 
+        # 启动期授权策略：env 内联 JSON（不新开策略文件），非法内容直接报错。
+        grant_policy_raw = os.environ.get("GHRAH_SUBJECT_ABILITY_GRANT_POLICY", "").strip()
+        ability_grant_policy = None
+        if grant_policy_raw:
+            from ghrah.ability.access.policy import GrantPolicy
+
+            ability_grant_policy = GrantPolicy.from_json(grant_policy_raw)
+
         return cls(
             workspace_root=workspace_root,
             db_path=os.environ.get(
@@ -680,6 +709,7 @@ class SubjectConfig:
             plugin_trust_slice=plugin_trust_slice,
             taskstore_slice=taskstore_slice,
             skill_slice=skill_slice,
+            ability_grant_policy=ability_grant_policy,
         )
 
 

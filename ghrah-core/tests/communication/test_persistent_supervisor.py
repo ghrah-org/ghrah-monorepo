@@ -10,7 +10,7 @@ import asyncio
 
 import aiosqlite
 import pytest
-from _helpers import ScriptedLLM
+from _helpers import ScriptedLLM, make_call, make_services
 
 from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
 from ghrah.abilities.builtin.conversation import ConversationAbility
@@ -272,7 +272,6 @@ async def test_wrong_backend_is_rejected_before_registering_or_binding(tmp_path)
 
 async def test_room_send_fails_before_log_or_background_delivery():
     from ghrah.abilities.builtin.send import SendAbility
-    from ghrah.abilities.context import AbilityExecutionContext
 
     class Bridge:
         def __init__(self):
@@ -299,11 +298,8 @@ async def test_room_send_fails_before_log_or_background_delivery():
     )
     try:
         result = await SendAbility().execute(
-            AbilityExecutionContext(
-                supervisor=supervisor,
-                agent_name="b",
-                tool_args={"room_ids": ["room"], "message": "work"},
-            )
+            make_call(agent_name="b", arguments={"room_ids": ["room"], "message": "work"}),
+            make_services(supervisor=supervisor),
         )
         assert "persistent action" in result.data["error"]
         assert not bridge.appended

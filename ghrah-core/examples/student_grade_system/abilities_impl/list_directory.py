@@ -10,7 +10,7 @@
 - 支持 exclude_dirs 参数追加额外排除项（与默认列表合并）
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证（读取权限）
 3. 合并默认排除列表与用户传入的 exclude_dirs
 4. 列出目录内容（排除指定目录）
@@ -29,8 +29,9 @@ from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
 from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +115,8 @@ class StudentGradeListDirectoryAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         dir_path = tool_args.get("dir_path", "")
         recursive = tool_args.get("recursive", False)
         extra_exclude = tool_args.get("exclude_dirs") or []

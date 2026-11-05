@@ -12,11 +12,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin._cluster_common import cluster_supervisor_error
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 class SendMessageInput(BaseModel):
@@ -55,11 +57,11 @@ class SendMessageAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        error = cluster_supervisor_error(services.get(SUPERVISOR))
         if error:
             return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": error})
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         if not tool_args.get("target"):
             return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": "target is required"})
         if not tool_args.get("content"):
@@ -68,14 +70,14 @@ class SendMessageAbility(Ability):
             )
         try:
             args = SendMessageInput.model_validate(tool_args)
-            cm = context.context_manager
-            call_id = context.invocation.tool_call_id
+            cm = services.get(CONTEXT_MANAGER)
+            call_id = call.tool_call_id
             if cm is None or not call_id:
                 raise RuntimeError("Persistent sending requires an action context and tool_call_id")
-            data = await context.supervisor.prepare_message(
+            data = await services.get(SUPERVISOR).prepare_message(
                 targets=(args.target,),
                 content=args.content,
-                sender=context.agent_name,
+                sender=call.identity.agent_name,
                 idempotency_key=f"tool:{cm.active_head.id}:{call_id}",
                 metadata={"inline_reply": True} if not args.fire_and_forget else None,
             )
@@ -84,7 +86,7 @@ class SendMessageAbility(Ability):
                     "message_id": data["message_id"],
                     "mode": "sync",
                     "target": args.target,
-                    "timeout": context.supervisor._resolve_timeout(args.target, None),
+                    "timeout": services.get(SUPERVISOR)._resolve_timeout(args.target, None),
                 }
             if args.fire_and_forget:
                 data["mode"] = "async"

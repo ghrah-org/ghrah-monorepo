@@ -12,25 +12,23 @@ from pydantic import BaseModel, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/send_message.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Send Message"
 SUMMARY = (
     "Prepare a persistent request to another agent. Delivery starts after commit. By "
     "default replies arrive through the persistent mailbox; fire_and_forget=false waits "
@@ -40,7 +38,9 @@ TAGS = [
     "cluster",
     "communication",
 ]
-# --- catalogue 声明结束
+EFFECTS = ["cluster:message"]
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 
 class SendMessageInput(BaseModel):
@@ -51,6 +51,9 @@ class SendMessageInput(BaseModel):
     fire_and_forget: bool = Field(
         default=True, description="If false, return the durable reply in this tool call"
     )
+
+
+Input = SendMessageInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class SendMessageAbility(Ability):
@@ -79,11 +82,12 @@ class SendMessageAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        supervisor = services.get(SUPERVISOR)
+        error = cluster_supervisor_error(supervisor)
         if error:
             return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": error})
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         if not tool_args.get("target"):
             return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": "target is required"})
         if not tool_args.get("content"):
@@ -92,14 +96,14 @@ class SendMessageAbility(Ability):
             )
         try:
             args = SendMessageInput.model_validate(tool_args)
-            cm = context.context_manager
-            call_id = context.invocation.tool_call_id
+            cm = services.get(CONTEXT_MANAGER)
+            call_id = call.tool_call_id
             if cm is None or not call_id:
                 raise RuntimeError("Persistent sending requires an action context and tool_call_id")
-            data = await context.supervisor.prepare_message(
+            data = await supervisor.prepare_message(
                 targets=(args.target,),
                 content=args.content,
-                sender=context.agent_name,
+                sender=call.identity.agent_name,
                 idempotency_key=f"tool:{cm.active_head.id}:{call_id}",
                 metadata={"inline_reply": True} if not args.fire_and_forget else None,
             )
@@ -108,7 +112,7 @@ class SendMessageAbility(Ability):
                     "message_id": data["message_id"],
                     "mode": "sync",
                     "target": args.target,
-                    "timeout": context.supervisor._resolve_timeout(args.target, None),
+                    "timeout": supervisor._resolve_timeout(args.target, None),
                 }
             if args.fire_and_forget:
                 data["mode"] = "async"

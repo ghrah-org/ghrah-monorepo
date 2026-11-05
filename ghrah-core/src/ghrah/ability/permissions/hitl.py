@@ -26,14 +26,17 @@ from typing import TYPE_CHECKING, Any
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.core.ability_protocol import AbilityProtocol
+from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
     from ghrah.types.results import ActionResult
 
 __all__ = [
     "HITLApprovalHook",
     "HITLRequiredAbility",
+    "PermissionDeniedAbility",
 ]
 
 
@@ -43,7 +46,7 @@ class HITLApprovalHook(Hook):
     拦截宿主 ability 的每次执行，要求人工审批。审批消息携带 ability 名
     与 tool 参数摘要，供人审判断。
 
-    管辖权纪律：本 hook 仅触发于 ``current_ability_name == 宿主名``
+    管辖权纪律：本 hook 仅触发于 ``call.member.member == 宿主名``
     （自身执行域），不参与任何全局拦截。
     """
 
@@ -53,39 +56,41 @@ class HITLApprovalHook(Hook):
         self._ability_name = ability_name
         self._reason = reason
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._ability_name
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._ability_name
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
-        tool_args = context.tool_args or {}
+        tool_args = call.arguments
         summary = str(tool_args)[:200]
         return HookResult.hitl(
             message=f"{self._reason} — ability='{self._ability_name}' args={summary}"
         )
 
 
-class HITLRequiredAbility(AbilityProtocol):
+class _DelegatingAbility(AbilityProtocol):
     """require_hitl 包装：委托宿主 ability，追加 PRE_EXECUTE HITL hook。
 
     组合而非继承——不破坏宿主 ability 的属性访问（checker/runner 等
     测试断言直接穿透）。
     """
 
-    def __init__(self, inner: AbilityProtocol, ability_name: str, reason: str) -> None:
+    def __init__(self, inner: AbilityProtocol) -> None:
         self._inner = inner
-        self._hitl_hook = HITLApprovalHook(ability_name, reason)
 
     @property
     def name(self) -> str:
         return self._inner.name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        return await self._inner.execute(context)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        return await self._inner.execute(call, services)
 
     def get_hooks(self) -> list[Hook]:
-        return [*self._inner.get_hooks(), self._hitl_hook]
+        return self._inner.get_hooks()
 
     def bind_tool(self) -> dict[str, Any] | None:
         return self._inner.bind_tool()
@@ -98,3 +103,32 @@ class HITLRequiredAbility(AbilityProtocol):
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
+
+
+class HITLRequiredAbility(_DelegatingAbility):
+    """委托宿主能力并追加审批 Hook。"""
+
+    def __init__(self, inner: AbilityProtocol, ability_name: str, reason: str) -> None:
+        super().__init__(inner)
+        self._hitl_hook = HITLApprovalHook(ability_name, reason)
+
+    def get_hooks(self) -> list[Hook]:
+        return [*self._inner.get_hooks(), self._hitl_hook]
+
+
+class PermissionDeniedAbility(_DelegatingAbility):
+    """在审批和实际效果之前执行不可被批准覆盖的权限拒绝。"""
+
+    def __init__(self, inner: AbilityProtocol, reason: str) -> None:
+        super().__init__(inner)
+        self._reason = reason
+
+    def check_call(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        """返回硬拒绝，不进入人工审批。"""
+        return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": self._reason})
+
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        return self.check_call(call, services)
+
+    def get_hooks(self) -> list[Hook]:
+        return self._inner.get_hooks()

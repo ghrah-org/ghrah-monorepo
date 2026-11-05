@@ -41,7 +41,6 @@ from ghrah.ability.loading.ability_roots import AbilityRoot
 from ghrah.ability.loading.ability_scan import AbilityScanResult, scan_ability_definitions
 from ghrah.ability.loading.ability_schema import (
     DEFINITION_FILE_NAME,
-    SCHEMA_VERSION,
     AbilityDefinition,
     OperationDefinition,
     load_yaml,
@@ -57,7 +56,6 @@ from ghrah.ability.loading.manifest_fields import (
 
 __all__ = [
     "ABILITY_DEFINITION_FILE",
-    "DEFINITION_SCHEMA_VERSION",
     "REGISTRY_ONLY_OPERATIONS",
     "ability_class",
     "builtin_full_names",
@@ -76,8 +74,6 @@ __all__ = [
 
 ABILITY_DEFINITION_FILE = DEFINITION_FILE_NAME
 """容器定义文件名。"""
-
-DEFINITION_SCHEMA_VERSION = SCHEMA_VERSION
 
 LEGACY_MANIFEST_VERSION = "1"
 """投影出的旧 manifest 的**格式版本**（非能力定义版本）。"""
@@ -306,7 +302,42 @@ def _json_type(raw: Any) -> str:
         if len(primitives) != 1:
             raise ManifestValidationError(f"不支持的联合类型：{raw!r}")
         return str(primitives[0])
+    if raw is None:
+        raise ManifestValidationError("属性缺少 type")
     return str(raw)
+
+
+def _normalize_property(prop: Mapping[str, Any]) -> Mapping[str, Any]:
+    """把 pydantic 生成的 ``anyOf: [T, null]`` 归一成 ``T`` 的属性 schema。
+
+    pydantic 对 ``T | None`` 生成 ``anyOf: [{type: T}, {type: "null"}]``，与
+    ``type: ["T", "null"]`` 是同一事实的两种表示。工具面只表达"可空参数"，
+    因此取非 null 分支的约束（``enum`` / ``minimum`` / ``maximum`` / ``items``），
+    外层字段（``description`` / ``default``）优先。
+
+    Args:
+        prop: ``input_schema.properties.<名>`` 的原始 schema。
+
+    Returns:
+        合并后的属性 schema；不是可空联合时原样返回。
+
+    Raises:
+        ManifestValidationError: ``anyOf`` 里除 null 外不是恰好一个分支。
+    """
+    raw_any = prop.get("anyOf")
+    if prop.get("type") is not None or not isinstance(raw_any, list):
+        return prop
+    branches = [
+        item
+        for item in raw_any
+        if isinstance(item, Mapping) and item.get("type") not in {None, "null"}
+    ]
+    nulls = [item for item in raw_any if isinstance(item, Mapping) and item.get("type") == "null"]
+    if len(branches) != 1 or not nulls:
+        raise ManifestValidationError(f"不支持的联合类型：{raw_any!r}")
+    merged = dict(branches[0])
+    merged.update({key: value for key, value in prop.items() if key != "anyOf"})
+    return merged
 
 
 def _to_tool_parameter(prop: Mapping[str, Any], *, required: bool) -> ToolParameter:
@@ -321,6 +352,7 @@ def _to_tool_parameter(prop: Mapping[str, Any], *, required: bool) -> ToolParame
     Returns:
         对应的 :class:`ToolParameter`；``items`` 是对象时递归转换。
     """
+    prop = _normalize_property(prop)
     items_raw = prop.get("items")
     return ToolParameter(
         type=_json_type(prop.get("type")),
@@ -387,12 +419,13 @@ def _project(
 ) -> AbilityManifest:
     """定义面 + 实现面 → 运行时 view（本模块的投影核心）。
 
-    做三件事：按约定 import 实现脚本并校验「恰好一个实现类」；从脚本读取
-    ``PERMISSIONS`` / ``SUMMARY`` / ``TAGS`` 声明；把定义面的 in/out schema
-    与实现面的声明合成 :class:`AbilityManifest`。
+    成员事实（``title`` / ``description`` / ``tags`` / ``permissions``）一律取自
+    生成索引 ``members.operations.<键>``，不再从实现模块读第二份声明；实现脚本
+    只负责"确实存在且恰好一个 Ability 实现类"这一条约定。这正是 P1 的
+    "索引是成员事实的唯一来源"。
 
     挂载面不携带 hook 引用：``AbilityManifest.hooks`` 仅供读取旧 manifest，
-    内置树投影不填充（安全语义由 ``PERMISSIONS`` 声明、内核固定实现）。
+    内置树投影不填充（安全语义由索引里的 ``permissions`` 申请值、内核固定实现）。
 
     Args:
         definition: 该成员所属容器的定义。
@@ -403,27 +436,19 @@ def _project(
         该成员的运行时 view（旧 manifest 形态），喂给展示与工具面注入。
 
     Raises:
-        ManifestValidationError: 实现脚本装载失败、实现类不唯一，或脚本缺少 /
-            写错上述任一模块级声明。
+        ManifestValidationError: 实现脚本装载失败、实现类不唯一，或索引里的
+            ``permissions`` 不是合法的 ``PermissionFlags``。
     """
     module = _operation_module(definition.container_name, operation_key)
     # 约定校验：一个脚本恰好定义一个有且只有一个 Ability 实现类。
     _operation_class(module)
 
-    permissions_raw = getattr(module, "PERMISSIONS", None)
-    if not isinstance(permissions_raw, dict):
-        raise ManifestValidationError(f"{module.__name__}: 缺少模块级 PERMISSIONS 声明")
-    summary = getattr(module, "SUMMARY", None)
-    if not isinstance(summary, str):
-        raise ManifestValidationError(f"{module.__name__}: 缺少模块级 SUMMARY 声明")
-    tags = getattr(module, "TAGS", None)
-    if not isinstance(tags, list):
-        raise ManifestValidationError(f"{module.__name__}: 缺少模块级 TAGS 声明")
-
     try:
-        permissions = PermissionFlags.model_validate(permissions_raw)
+        permissions = PermissionFlags.model_validate(operation.permissions)
     except ValidationError as exc:
-        raise ManifestValidationError(f"{module.__name__}.PERMISSIONS 非法：{exc}") from exc
+        raise ManifestValidationError(
+            f"{definition.container_name}.{operation_key}: permissions 非法：{exc}"
+        ) from exc
 
     return AbilityManifest(
         manifest="ability",
@@ -432,9 +457,8 @@ def _project(
             namespace=definition.legacy_namespace,
             name=operation_key,
             title=operation.title,
-            # 目录摘要取 SUMMARY：旧 metadata.description 的口径
-            description=summary or operation.description,
-            tags=[str(tag) for tag in tags],
+            description=operation.description,
+            tags=[str(tag) for tag in operation.tags],
             permissions=permissions,
         ),
         tool=_build_tool(operation_key, operation, enabled=operation.expose),

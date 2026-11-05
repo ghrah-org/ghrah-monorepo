@@ -178,7 +178,9 @@ class ProjectManager:
         on_event: OnEvent | None = None,
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
+        ability_source: str = "legacy",
     ) -> None:
+        self._ability_source = ability_source
         self._store = store
         self._workspace_mgr = workspace_mgr
         self._task_mgr = task_mgr
@@ -361,6 +363,10 @@ class ProjectManager:
 
     def _validate_agent(self, agent: AgentSpec, project: ProjectRecord) -> None:
         """agent_id/name 在 Project 内唯一 + cluster 归属/授权校验。"""
+        if self._ability_source == "builtin":
+            from ghrah.ability.access.identity import validate_agent_id
+
+            validate_agent_id(agent.agent_id)
         if agent.cluster_id not in project.cluster_ids:
             raise ValueError(f"agent {agent.name!r} cluster_id {agent.cluster_id!r} not in project")
         for existing in project.agents:
@@ -834,6 +840,11 @@ class ProjectManager:
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
+            if self._ability_source == "builtin" and not agent.agent_id:
+                return (
+                    None,
+                    "stable_agent_id_required: update the persisted Project spec before restore",
+                )
             existing = await handle.list_agents(project_id)
             if any(
                 (agent.agent_id and a.get("agent_id") == agent.agent_id)
@@ -871,6 +882,11 @@ class ProjectManager:
     async def _spawn_agent_spec(
         self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
     ) -> tuple[str | None, str | None]:
+        if self._ability_source == "builtin" and not agent.agent_id:
+            return (
+                None,
+                "stable_agent_id_required: update the persisted Project spec before restore",
+            )
         spawn_payload = SpawnAgentPayload(
             validate_model=validate_model or bool(agent.endpoint_name),
             project_id=project_id,

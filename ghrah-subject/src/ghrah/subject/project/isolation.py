@@ -39,7 +39,7 @@ __all__ = [
 class IsolationContext(BaseModel):
     """Project 隔离快照（Foxtrail Stage 3b 注入点，MVP 仅记录）。
 
-    TODO Foxtrail Stage 3b: 注入 ``AbilityExecutionContext.metadata["isolation"]``,
+    TODO Foxtrail Stage 3b: 注入到能力调用对象的受信元数据（isolation）中,
     由 effect 系统按 ``policy_config`` / ``agent_path_grants`` 裁决写操作。
 
     Attributes:
@@ -115,7 +115,7 @@ async def apply_isolation(
 
     TODO Foxtrail Stage 3b: 此处构造 ``PolicyConfig``（基于全局 + effect_allowlist
     收紧 + hitl_override，``exec_foreign_unwaivable`` 永远 True）并注入
-    ``AbilityExecutionContext.metadata["isolation"]``。
+    调用对象的受信元数据（isolation）中。
     """
     roots = resolve_project_roots(project.workspaces, registry, workspace_records)
     return IsolationContext(

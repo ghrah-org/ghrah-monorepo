@@ -6,7 +6,7 @@
 
 spawn 的配套查询面：LLM 在 spawn_agent 前经此查看可用 manifest 与
 各 manifest 冻结的能力清单。manifest_store 经
-AbilityExecutionContext.services 显式接线（装配期注入）——
+``MANIFEST_STORE`` 执行服务显式接线（装配期注入）——
 未接线 → FAILURE 指路（零隐式：绝不猜测 store 位置）。
 """
 
@@ -17,25 +17,23 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import MANIFEST_STORE
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/query_manifests.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Query Manifests"
 SUMMARY = (
     "Read-only query of available agent manifests. Without manifest_ref, lists all "
     "manifests; with manifest_ref, returns the full definition including its frozen "
@@ -45,7 +43,9 @@ TAGS = [
     "cluster",
     "discovery",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 _MAX_ABILITIES_PER_MANIFEST = 50
 _MAX_DESCRIPTION_CHARS = 200
@@ -61,6 +61,9 @@ class QueryManifestsInput(BaseModel):
             "(e.g. 'ghrah.designer'). Omit to list all available manifests."
         ),
     )
+
+
+Input = QueryManifestsInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class QueryManifestsAbility(Ability):
@@ -101,11 +104,11 @@ class QueryManifestsAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         manifest_ref = tool_args.get("manifest_ref")
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

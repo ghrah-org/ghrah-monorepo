@@ -1,8 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""真实快照、关系库、Scheme 和 Context 的容器闭环及失败边界。"""
+"""真实快照、关系库、Scheme 和 Context 的内容消费闭环及失败边界。
+
+容器 fixture 使用 ``examples/ability_content/reporting``：一个 v1 单 Skill 内容包
+（``members.operations`` 为空）。外部源包的 Operation 由 P2 的进程内 Provider 提供，
+P1 不执行，因此本文件只断言内容/技能/附件/授权轴/快照/升级/损坏检测；真实文件操作
+执行由 ``test_resource_tree.py``（内建 ``ghrah.fs`` 文件切片）覆盖。
+"""
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -84,7 +91,8 @@ async def container(tmp_path):
         await store.close()
 
 
-async def test_mixed_tree_bytes_context_and_real_operation(container, tmp_path):
+async def test_content_tree_bytes_context_and_no_operations(container):
+    """内容包可读：正文/附件/二进制都进 Context，且没有 Operation 与工具面。"""
     store, host, client, version, source, _ = container
     view = await client.read("alice")
     node = view.abilities[0]
@@ -113,17 +121,11 @@ async def test_mixed_tree_bytes_context_and_real_operation(container, tmp_path):
         result = await provider.read("reports", f"skill/guide/{role}/mark")
         assert result.encoding == "base64"
         assert base64.b64decode(result.content) == expected
+    assert not node.operations
     assert not view.bound_tools
-    script = next(item for item in node.operations if item.key == "render")
-    assert script.availability == "unavailable"
-    assert "operations/render/script" in json.loads(version.manifest_json)
-    with pytest.raises(SchemeError):
-        await client.call("/scheme/ability/reports/operations/render", "render", {})
-    (tmp_path / "note.txt").write_text("real effect")
-    result = await client.call(
-        "/scheme/ability/reports/operations/read_file", "read_file", {"file_path": "note.txt"}
-    )
-    assert result["data"]["content"] == "real effect"
+    assert not any(key.startswith("operations/") for key in json.loads(version.manifest_json))
+    script = next(item for item in node.skill.scripts if item.key == "render")
+    assert script.available is False
     with pytest.raises(AccessError):
         await store.bind_tool(
             ALICE,
@@ -187,7 +189,7 @@ async def test_scope_clipping_revoke_and_old_references(container):
 async def test_snapshot_survives_source_deletion_and_host_restore(container):
     store, host, client, version, source, runs = container
     before = await client.call("/scheme/ability/reports/skill/guide", "read", {})
-    (source / "SKILL.md").write_text("uncommitted")
+    (source / "skills/guide/SKILL.md").write_text("uncommitted")
     assert await client.call("/scheme/ability/reports/skill/guide", "read", {}) == before
     shutil.rmtree(source)
     other = AbilitySchemeHost(store)
@@ -205,15 +207,12 @@ async def test_snapshot_survives_source_deletion_and_host_restore(container):
         await other.close()
 
 
-async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(container, tmp_path):
+async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(container):
+    """示例包本身就是 content-only：无需工作区根即可安装；升级不追溯旧引用。"""
     store, host, client, version, source, runs = container
-    data = yaml.safe_load((source / "ability.yaml").read_text())
-    data["operations"] = {}
-    data["provider_requirements"] = {}
-    raw = yaml.safe_dump(data)
-    content = capture_ability_version(raw, root=source)
-    await store.commit_version(ADMIN, content)
-    await store.select_instance(ADMIN, "content-only", content.digest)
+    # 同一份 content-only 版本装到第二个实例：只给内容，不配置任何文件根。
+    await store.commit_version(ADMIN, version)
+    await store.select_instance(ADMIN, "content-only", version.digest, expected_revision=0)
     await store.grant(
         ADMIN,
         "alice",
@@ -223,8 +222,14 @@ async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(c
     )
     await host.install("content-only")
     before = await client.call("/scheme/ability/guide/skill/guide", "read", {})
-    (source / "assets/template.txt").write_text("new template")
-    updated = capture_ability_version(raw, root=source)
+    data = yaml.safe_load((source / "ability.yaml").read_text())
+    payload = b"new template"
+    (source / "skills/guide/assets/template.txt").write_bytes(payload)
+    entry = data["members"]["skills"]["guide"]["assets"]["template"]
+    entry["size"] = len(payload)
+    entry["digest"] = "sha256:" + hashlib.sha256(payload).hexdigest()
+    updated = capture_ability_version(yaml.safe_dump(data), root=source)
+    assert updated.digest != version.digest
     await store.commit_version(ADMIN, updated)
     assert await client.call("/scheme/ability/guide/skill/guide", "read", {}) == before
     old = await client.acquire("/scheme/ability/guide/skill/guide", actions=frozenset({"read"}))
@@ -301,12 +306,14 @@ async def test_bounded_reads_revoke_and_sqlite_writer_lock(container, tmp_path):
         await store.read_content(ALICE, fence, ContentReadRequest())
 
 
-async def test_operation_backend_failure_does_not_block_content_and_corruption_fails(container):
+async def test_committed_snapshot_ignores_source_change_and_corruption_fails(container):
+    """已提交快照不随来源变化；内容损坏明确失败，不静默回退读旧字节。"""
     store, host, client, version, source, runs = container
-    await host.runtime.manager.withdraw(host._exports["reporting"].provider)
+    before = await client.call("/scheme/ability/reports/skill/guide/assets/template", "read", {})
+    (source / "skills/guide/assets/template.txt").write_text("uncommitted", encoding="utf-8")
     assert (await client.call("/scheme/ability/reports/skill/guide/assets/template", "read", {}))[
         "content"
-    ]
+    ] == before["content"]
     entry = json.loads(version.manifest_json)["skill/guide/assets/template"]
     await store._db.execute(
         "UPDATE ability_content SET data=? WHERE digest=?", (b"corrupt", entry["digest"])
@@ -322,8 +329,7 @@ async def test_operation_backend_failure_does_not_block_content_and_corruption_f
         "parent",
         "symlink",
         "dangling",
-        "top-asset",
-        "unknown",
+        "skill-unknown-field",
         "oversize",
         "bad-digest",
     ],
@@ -332,70 +338,81 @@ def test_import_rejects_invalid_content(tmp_path, mutation):
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
     data = yaml.safe_load((source / "ability.yaml").read_text())
+    skills = data["members"]["skills"]
     limits = CaptureLimits()
     if mutation in {"absolute", "parent"}:
-        data["skills"]["guide"]["body"]["path"] = (
+        skills["guide"]["assets"]["template"]["path"] = (
             "/etc/passwd" if mutation == "absolute" else "../outside"
         )
     elif mutation == "symlink":
-        (source / "assets/template.txt").unlink()
+        link = source / "skills/guide/assets/template.txt"
+        link.unlink()
         try:
-            (source / "assets/template.txt").symlink_to("/etc/passwd")
+            link.symlink_to("/etc/passwd")
         except OSError as exc:  # 无符号链接权限的 Windows 环境跳过该变体
             pytest.skip(f"当前环境不允许创建符号链接: {exc}")
     elif mutation == "dangling":
-        (source / "SKILL.md").write_text(
-            (source / "SKILL.md").read_text() + "\n[missing](references/missing.md)\n"
-        )
-    elif mutation == "top-asset":
-        data["assets"] = {"orphan": {"path": "assets/template.txt"}}
-    elif mutation == "unknown":
-        data["skills"]["guide"]["mystery"] = True
+        body = source / "skills/guide/SKILL.md"
+        body.write_text(body.read_text() + "\n[missing](references/missing.md)\n")
+    elif mutation == "skill-unknown-field":
+        skills["guide"]["mystery"] = True
     elif mutation == "oversize":
         limits = CaptureLimits(file_bytes=1)
     elif mutation == "bad-digest":
-        data["skills"]["guide"]["assets"]["template"]["expected_digest"] = "sha256:wrong"
+        skills["guide"]["assets"]["template"]["digest"] = "sha256:" + "0" * 64
     with pytest.raises((ValueError, OSError, ManifestValidationError)):
         capture_ability_version(yaml.safe_dump(data), root=source, limits=limits)
 
 
-def test_version_captures_metadata_from_body_and_unlinked_resources(tmp_path):
+def test_version_captures_index_metadata_and_unlinked_resources(tmp_path):
+    """索引是成员事实的唯一来源；正文未链接的声明文件也进清单，索引外文件不进。"""
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
+    (source / "skills/guide/assets/orphan.txt").write_text("orphan", encoding="utf-8")
     version = capture_ability_version((source / "ability.yaml").read_text(), root=source)
+    manifest = json.loads(version.manifest_json)
     assert version.definition().skills["guide"].title == "reporting-guide"
-    assert "skill/guide/assets/template" in json.loads(version.manifest_json)
+    # 正文只链接了 references/style.md；template/mark 不是正文链接，但索引声明了
+    # 它们，因此都按索引进清单。
+    assert {"skill/guide/assets/template", "skill/guide/assets/mark"} <= set(manifest)
+    # v1 不再扫描索引外的文件。
+    assert "skill/guide/assets/orphan" not in manifest
     assert version.digest != replace(version, manifest_json="{}").expected_digest()
 
 
-async def test_describe_and_partial_skill_revoke_preserve_operation_selection(container):
+async def test_describe_and_partial_content_revoke_keep_remaining_content(container):
+    """describe 不回传正文；部分内容 revoke 保留其余可见性，且不产生工具选择。"""
     store, host, client, version, source, runs = container
-    view = await store.view(ADMIN, "alice")
-    view = await store.bind_tool(
-        ALICE,
-        "alice",
-        BindToolRequest(
-            alias="reports",
-            member="read_file",
-            tool_name="read_report",
-            expected_revision=view.revision,
-        ),
-    )
     metadata = await client.call("/scheme/ability/reports/skill/guide", "describe", {})
     assert metadata["member"] == "skill/guide"
+    assert metadata["media_type"] == "text/markdown"
     assert "content" not in metadata
-    view = await store.revoke(
+    view = await store.view(ADMIN, "alice")
+    with pytest.raises(AccessError):
+        # 内容成员不是 Operation，不能进工具面。
+        await store.bind_tool(
+            ALICE,
+            "alice",
+            BindToolRequest(
+                alias="reports", member="guide", tool_name="guide", expected_revision=view.revision
+            ),
+        )
+    revoked = await store.revoke(
         ADMIN,
         "alice",
         RevokeAbilityRequest(
-            alias="reports", members=["skill/guide"], expected_revision=view.revision
+            alias="reports",
+            members=["skill/guide/assets/template"],
+            expected_revision=view.revision,
         ),
     )
-    assert view.abilities[0].skill is None
-    assert view.bound_tools[0].name == "read_report"
+    node = revoked.abilities[0]
+    assert node.skill is not None and node.skill.body_allowed
+    assert {item.key for item in node.skill.assets} == {"mark"}
+    assert revoked.bound_tools == []
     projection = await client.project_tools()
     try:
-        assert len(projection.tools) == 1
+        assert projection.tools == []
     finally:
         await projection.close()
 
@@ -419,8 +436,8 @@ def test_capture_handles_path_replacement_without_following_symlink(tmp_path, mo
         # POSIX 传相对文件名，可移植实现传绝对路径：按主文件名匹配，两种口径都覆盖。
         if Path(path).name == "template.txt" and not swapped:
             swapped = True
-            (source / "assets/template.txt").unlink()
-            (source / "assets/template.txt").symlink_to("/etc/passwd")
+            (source / "skills/guide/assets/template.txt").unlink()
+            (source / "skills/guide/assets/template.txt").symlink_to("/etc/passwd")
         return original(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(content.os, "open", replace_before_open)
@@ -429,26 +446,21 @@ def test_capture_handles_path_replacement_without_following_symlink(tmp_path, mo
     assert swapped
 
 
-def test_standard_import_uses_body_metadata_and_rejects_duplicate_yaml(tmp_path):
-    from ghrah.ability.versions import import_skill_package
-
+def test_standard_capture_checks_frontmatter_name_and_rejects_duplicate_yaml(tmp_path):
+    """v1 正文只用于核对 name；重复键 YAML 在解析期就被拒绝。"""
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
-    data = yaml.safe_load((source / "ability.yaml").read_text())
-    skill = data["skills"]["guide"]
-    version = import_skill_package(
-        source,
-        key="guide",
-        identity={"namespace": "reports", "version": "1"},
-        assets=skill["assets"],
-        references=skill["references"],
-    )
+    version = capture_ability_version((source / "ability.yaml").read_text(), root=source)
     assert not version.definition().operations
     assert version.definition().skills["guide"].title == "reporting-guide"
     with pytest.raises(ManifestValidationError, match="重复键"):
         capture_ability_version(
-            (source / "ability.yaml").read_text() + "\nskills: {}\n", root=source
+            (source / "ability.yaml").read_text() + "\nmembers: {}\n", root=source
         )
+    body = source / "skills/guide/SKILL.md"
+    body.write_text(body.read_text().replace("name: guide", "name: other"), encoding="utf-8")
+    with pytest.raises(ValueError, match="不一致"):
+        capture_ability_version((source / "ability.yaml").read_text(), root=source)
 
 
 async def test_manifest_corruption_does_not_read_another_blob(container):
@@ -479,7 +491,7 @@ def test_builtin_source_queries_use_the_prepared_snapshot(monkeypatch):
     assert source.create_operation("ghrah.fs.read_file").name == "read_file"
 
 
-async def test_schema_two_migrates_only_operation_grants(tmp_path):
+async def test_schema_two_requires_explicit_identity_reset(tmp_path):
     from ghrah.ability.versions import capture_file_version
 
     path = tmp_path / "legacy.db"
@@ -511,54 +523,9 @@ async def test_schema_two_migrates_only_operation_grants(tmp_path):
         INSERT INTO ability_tree_schema VALUES(2);
     """)
     await db.close()
-    store = await AbilityAccessStore.open(
-        path, "project", operators=frozenset({"admin"}), runs=lambda _: "alice-run"
-    )
-    host = AbilitySchemeHost(store)
-    try:
-        await host.restore(ADMIN)
-        client = host.session(Principal("project", "alice", "alice-run"))
-        view = await client.read("alice")
-        assert view.revision == 1
-        assert view.abilities[0].skill is None
-        assert [item.key for item in view.abilities[0].operations] == ["read_file"]
-        assert len(await store.changes(ADMIN)) == 1
-        with pytest.raises(SchemeError):
-            await client.call("/scheme/ability/files/skill/guide", "read", {})
-    finally:
-        await host.close()
-        await store.close()
-
-
-async def test_same_operation_key_does_not_select_an_unsupported_backend(container):
-    store, host, client, version, source, runs = container
-    data = yaml.safe_load((source / "ability.yaml").read_text())
-    data["operations"]["read_file"]["implementation"]["provider_slot"] = "script"
-    replacement = capture_ability_version(yaml.safe_dump(data), root=source)
-    await store.commit_version(ADMIN, replacement)
-    await store.select_instance(
-        ADMIN, "reporting", replacement.digest, source.parent, expected_revision=1
-    )
-    await store.grant(
-        ADMIN,
-        "alice",
-        GrantAbilityRequest(
-            alias="reports",
-            instance_id="reporting",
-            whole_container=True,
-            allowed_roots=[str(source.parent)],
-            expected_revision=2,
-        ),
-    )
-    await host.install("reporting")
-    node = (await client.read("alice")).abilities[0]
-    states = {operation.key: operation.availability for operation in node.operations}
-    assert states["read_file"] == "unavailable"
-    assert states["list_directory"] == "ready"
-    assert (await client.call("/scheme/ability/reports/skill/guide", "read", {}))["content"]
-    with pytest.raises(SchemeError):
-        await client.call(
-            "/scheme/ability/reports/operations/read_file", "read_file", {"file_path": "SKILL.md"}
+    with pytest.raises(ValueError, match="稳定 Agent ID"):
+        await AbilityAccessStore.open(
+            path, "project", operators=frozenset({"admin"}), runs=lambda _: "alice-run"
         )
 
 

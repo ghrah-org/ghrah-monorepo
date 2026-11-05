@@ -103,7 +103,7 @@ def test_v1_definition_parses_members(tmp_path: Path) -> None:
     assert operation.effects == ["net:request"]
     assert operation.input_schema["required"] == ["host"]
     assert operation.execution.timeout_ms == 5000
-    assert operation.script is not None and operation.script.path == "operations/ping.py"
+    assert operation.entry is not None and operation.entry.path == "operations/ping.py"
     assert set(definition.skills) == {"alpha", "beta"}
 
 
@@ -161,7 +161,7 @@ def test_catalog_qualifies_multi_skill_names(tmp_path: Path) -> None:
 
 
 def test_capture_includes_every_skill_and_attachment(tmp_path: Path) -> None:
-    """内容捕获覆盖全部技能：正文、references 与 scripts 各自成为成员。"""
+    """内容捕获覆盖全部技能；Operation 源码不入内容清单。"""
     root = _package(tmp_path)
 
     version = capture_ability_version(
@@ -169,7 +169,9 @@ def test_capture_includes_every_skill_and_attachment(tmp_path: Path) -> None:
     )
     members = set(json.loads(version.manifest_json))
 
-    assert {"operations/ping/script", "skill/alpha", "skill/beta"} <= members
+    # v1 的 Operation 源码不是内容成员（P4 的 package_digest 才覆盖整树）
+    assert {"skill/alpha", "skill/beta"} <= members
+    assert "operations/ping/script" not in members
     assert "skill/beta/references/guide" in members
     assert "skill/beta/scripts/run" in members
 

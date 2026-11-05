@@ -9,10 +9,14 @@ import pytest
 from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
 from ghrah.abilities.builtin.read_file import ReadFileAbility
 from ghrah.abilities.builtin.write_file import WriteFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.executor import LocalAbilityExecutor
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
-from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import (
+    InvocationIdentity,
+    MemberReference,
+    OperationCall,
+)
 from ghrah.types.results import ActionResult
 from ghrah_scheme_support import ALICE, BOB, Policy
 from pydantic import Field
@@ -63,13 +67,16 @@ class Gate(Hook):
         self.release = asyncio.Event()
         self.identities: list[tuple[str, str]] = []
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return True
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
-        self.identities.append((context.agent_name, context.invocation.tool_call_id))
+        self.identities.append((call.identity.agent_name, call.tool_call_id))
         self.entered.set()
         await self.release.wait()
         return HookResult.continue_()
@@ -94,14 +101,14 @@ class Notes:
         arguments = {"file_path": str(self.root / call.arguments.file)}
         if isinstance(call.arguments, WriteInput):
             arguments["content"] = call.arguments.content
-        context = AbilityExecutionContext(
-            invocation=AbilityInvocation(
-                ability_name=ability.name, tool_args=arguments, tool_call_id=call.invocation_id
-            ),
-            agent_name=call.principal.agent_id,
+        operation_call = OperationCall(
+            member=MemberReference(member=ability.name),
+            arguments=arguments,
+            tool_call_id=call.invocation_id,
+            identity=InvocationIdentity(agent_name=call.principal.agent_id),
         )
         executor = LocalAbilityExecutor(agent_name=call.principal.agent_id, hooks=self.hooks)
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, operation_call, ExecutionServices())
         return AbilityOutput(outcome=result.outcome.value, data=result.data)
 
 

@@ -20,11 +20,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin._cluster_common import cluster_supervisor_error
+from ghrah.ability.execution.execution_services import MANIFEST_STORE, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ class SpawnAgentAbility(Ability):
     通过 SupervisorActor.spawn_agent() 在集群中创建一个新 Agent。
     新 Agent 与创建者平级，无父子层级关系。
 
-    主路径：``manifest_ref`` 经 AbilityExecutionContext.services 显式
+    主路径：``manifest_ref`` 经 ExecutionServices 显式
     接线的 manifest_store 解析（未接线 → FAILURE 指路，零隐式）；
     新 Agent 的能力面由 manifest 完全冻结。name/description/
     system_prompt 可覆写 manifest 人设（HITL 审批载荷会展示完整
@@ -96,15 +98,15 @@ class SpawnAgentAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        error = cluster_supervisor_error(services.get(SUPERVISOR))
         if error:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": error},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         manifest_ref = tool_args.get("manifest_ref", "")
         name = tool_args.get("name", "")
         description = tool_args.get("description", "")
@@ -116,7 +118,7 @@ class SpawnAgentAbility(Ability):
                 data={"error": "manifest_ref is required"},
             )
 
-        store = context.manifest_store
+        store = services.get(MANIFEST_STORE)
         if store is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -170,7 +172,7 @@ class SpawnAgentAbility(Ability):
             resolved_config = replace(resolved_config, **overrides)
 
         try:
-            agent_name = await context.supervisor.spawn_agent(
+            agent_name = await services.get(SUPERVISOR).spawn_agent(
                 resolved_config,
                 abilities=ability_instances,
             )

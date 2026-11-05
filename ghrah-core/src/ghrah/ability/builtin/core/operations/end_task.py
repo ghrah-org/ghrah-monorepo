@@ -10,7 +10,7 @@
 - 收集累积数据，生成摘要
 
 执行逻辑：
-1. 从 AbilityExecutionContext 取本轮模型可见文本作为最终回复
+1. 从 LOOP 执行服务（``llm_response``）取本轮模型可见文本作为最终回复
 2. 缺省时回退到 toolcall 参数里的 ``summary``
 3. 返回 ActionResult(outcome=SUCCESS)，Agent 的 _build_response 会提取回复
 
@@ -30,36 +30,49 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ghrah.ability.execution.base import Ability
+from ghrah.ability.execution.execution_services import LOOP
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/end_task.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {}
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "End Task"
 SUMMARY = "End the current task and generate a final response"
 TAGS = [
     "core",
     "lifecycle",
 ]
-# --- catalogue 声明结束
+EFFECTS = ["session:end"]
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["EndTaskAbility", "EndTaskDoneHook"]
+
+
+class Input(BaseModel):
+    """end_task 入参契约：可选 summary（额外字段拒绝）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str | None = Field(
+        default=None,
+        description="Optional summary of the task result",
+    )
 
 
 class EndTaskDoneHook(Hook):
@@ -72,12 +85,15 @@ class EndTaskDoneHook(Hook):
 
     hook_point = HookPoint.AFTER_ACTION
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         """只在当前 ability 是 end_task 时触发。"""
-        return context.current_ability_name == "end_task"
+        return call.member.member == "end_task"
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         """终止循环。"""
         return HookResult.stop()
@@ -94,7 +110,7 @@ class EndTaskAbility(Ability):
     - bind_tool(): 当 mode="toolcall" 时返回 end_task 的 function calling schema
 
     特点：
-    - execute() 从上下文中收集数据生成最终回复
+    - execute() 从调用参数与循环数据中收集内容生成最终回复
     - next_action_hint 为 None（明确表示任务结束）
 
     用法::
@@ -156,19 +172,20 @@ class EndTaskAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行任务终止。
 
         优先使用本轮模型可见文本作为最终回复；没有则回退到 toolcall 参数
         里的 ``summary``。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             ActionResult，data 中包含 "response" 字段
         """
-        response = self._collect_response(context)
+        response = self._collect_response(call, services)
 
         logger.debug(f"EndTaskAbility: ending task with response ({len(response)} chars)")
 
@@ -178,13 +195,13 @@ class EndTaskAbility(Ability):
             next_action_hint=None,  # 明确结束
         )
 
-    def _collect_response(self, context: AbilityExecutionContext) -> str:
+    def _collect_response(self, call: OperationCall, services: ExecutionServices) -> str:
         """收集最终回复内容。
 
         优先级：
-        1. ``accumulated_data["llm_response"]``：本轮模型可见文本（终答主体）
-        2. ``tool_args["summary"]``：toolcall 模式下模型显式给出的总结
-        3. ``accumulated_data["response"]``：历史约定的累积响应
+        1. ``LOOP.llm_response``：本轮模型可见文本（终答主体）
+        2. ``call.arguments["summary"]``：toolcall 模式下模型显式给出的总结
+        3. ``LOOP.response``：历史约定的累积响应
         4. 默认的 "Task completed" 消息
 
         **不读取 ``last_action_result``**：toolcall 模式下它是上一个工具的结果
@@ -192,20 +209,21 @@ class EndTaskAbility(Ability):
         把它当最终回复会把"上一轮查询结果"错渲染成模型的最终输出。
 
         Args:
-            context: 执行上下文
+            call: 本次调用的值对象。
+            services: 执行期服务表。
 
         Returns:
             最终回复文本
         """
-        text = context.accumulated_data.get("llm_response", "")
+        text = services.require(LOOP).llm_response
         if isinstance(text, str) and text.strip():
             return text
 
-        summary = (context.tool_args or {}).get("summary")
+        summary = call.arguments.get("summary")
         if isinstance(summary, str) and summary.strip():
             return summary
 
-        response = context.accumulated_data.get("response", "")
+        response = services.require(LOOP).response
         if isinstance(response, str) and response.strip():
             return response
 

@@ -5,7 +5,7 @@
 """能力目录扫描：在目录池上按「能力容器」收集成员，问题不中断整轮。
 
 对外主入口是 :func:`scan_abilities`——**一次调用、一个容器对象列表**，每个容器
-对象自带名字、描述、以及 operations / skills / assets 三类成员与它自己的问题，
+对象自带名字、描述、以及 operations / skills 两类成员与它自己的问题，
 调用方不必自己按容器名聚合。后续新增成员类型（如 mcp）也落在这个对象上。
 
 底层口径（:func:`scan_ability_definitions`）仍保留扁平的“全部条目 + 全部成员 +
@@ -68,7 +68,6 @@ from ghrah.ability.loading.skill_models import (
 )
 
 __all__ = [
-    "AbilityAsset",
     "AbilityContainer",
     "AbilityEntry",
     "AbilityOperation",
@@ -249,14 +248,9 @@ class AbilityOperation:
         return self.definition.description
 
     @property
-    def provider_slot(self) -> str:
-        """实现所在的提供者槽（``fs`` / ``core`` / ``shell`` …）。"""
-        return self.definition.implementation.provider_slot
-
-    @property
     def handler(self) -> str:
-        """槽内的实现动作名（运行时据此定位实现）。"""
-        return self.definition.implementation.operation
+        """实现动作名（v1 等于成员键；运行时据此定位实现脚本）。"""
+        return self.key
 
     @property
     def timeout_ms(self) -> int:
@@ -270,25 +264,10 @@ class AbilityOperation:
 
 
 @dataclass(frozen=True)
-class AbilityAsset:
-    """容器里的一个 asset 成员。
-
-    ``assets`` 在当前 schema 里是自由结构（``dict[str, Any]``），尚无字段级契约：
-    本类只给身份与键，内容原样持有、不解释语义。
-    """
-
-    container: str
-    key: str
-    full_name: str
-    definition: Any
-    """定义面声明的资产内容（自由结构，原样持有）。"""
-
-
-@dataclass(frozen=True)
 class AbilityContainer:
     """一个能力容器（= 一个能力包目录）的全貌。
 
-    这是 :func:`scan_abilities` 的元素类型：名字、描述、三类成员与自身问题都在
+    这是 :func:`scan_abilities` 的元素类型：名字、描述、两类成员与自身问题都在
     这里，调用方不需要再按容器名做第二次聚合。
 
     成员表按成员键升序，容器之间按容器名升序——跨文件系统、跨机器都得到同一顺序，
@@ -325,9 +304,6 @@ class AbilityContainer:
     skills: tuple[AbilitySkill, ...] = ()
     """skill 成员，按成员键升序。"""
 
-    assets: tuple[AbilityAsset, ...] = ()
-    """asset 成员，按成员键升序。"""
-
     issues: tuple[AbilityScanIssue, ...] = ()
     """归属于本容器的问题（同名副本被忽略、正文缺失…）。
 
@@ -342,7 +318,7 @@ class AbilityContainer:
 
     @property
     def kinds(self) -> tuple[str, ...]:
-        """本容器声明了哪几类成员：``operations`` / ``skills`` / ``assets``。
+        """本容器声明了哪几类成员：``operations`` / ``skills``。
 
         用于“这个包是纯工具包还是工具+技能混合包”的判定与展示。新增成员类型
         （如 mcp）时在此追加一项。
@@ -352,8 +328,6 @@ class AbilityContainer:
             kinds.append("operations")
         if self.skills:
             kinds.append("skills")
-        if self.assets:
-            kinds.append("assets")
         return tuple(kinds)
 
     @property
@@ -367,30 +341,23 @@ class AbilityContainer:
         return len(self.skills)
 
     @property
-    def asset_count(self) -> int:
-        """asset 成员数量。"""
-        return len(self.assets)
-
-    @property
     def member_count(self) -> int:
-        """三类成员的总数（不含问题）。"""
-        return self.operation_count + self.skill_count + self.asset_count
+        """两类成员的总数（不含问题）。"""
+        return self.operation_count + self.skill_count
 
     @property
     def is_operation_only(self) -> bool:
         """是否只有 operation 成员（旧口径的纯工具包，如 ``fs`` / ``shell``）。"""
-        return bool(self.operations) and not self.skills and not self.assets
+        return bool(self.operations) and not self.skills
 
     @property
     def is_skill_only(self) -> bool:
         """是否只有 skill 成员（用户目录里的纯技能包）。"""
-        return bool(self.skills) and not self.operations and not self.assets
+        return bool(self.skills) and not self.operations
 
     def __str__(self) -> str:
-        """渲染成 ``名字 (路径池标签) operations=N skills=M assets=K`` 一行。"""
+        """渲染成 ``名字 (路径池标签) operations=N skills=M`` 一行。"""
         counts = f"operations={self.operation_count} skills={self.skill_count}"
-        if self.assets:
-            counts += f" assets={self.asset_count}"
         return f"{self.name} ({self.root.label}) {counts}"
 
 
@@ -536,17 +503,10 @@ def _scan_root(root: AbilityRoot) -> tuple[list[AbilityEntry], list[AbilityScanI
             issues.append(AbilityScanIssue(path=label, reason=str(exc), container=entry.name))
             continue
         if definition.container_name != entry.name:
-            issues.append(
-                AbilityScanIssue(
-                    path=label,
-                    reason=(
-                        f"容器名 {definition.container_name!r} 与目录名 {entry.name!r} 不一致"
-                        "（目录名只作定位，身份以定义面为准，两者必须相等）"
-                    ),
-                    container=entry.name,
-                )
-            )
-            continue
+            # v1 的目录名不参与身份判定（M0 §3.8）：外部包目录名可以不同于
+            # identity.name；容器名以定义面为准，`AbilityEntry.container` 已取
+            # definition.container_name，同名去重由调用方处理。
+            pass
         for key, skill in definition.skills.items():
             problem = _skill_body_problem(entry, key, skill)
             if problem is not None:
@@ -702,8 +662,10 @@ def _catalog_name(entry: AbilityEntry, key: str) -> str:
     return key
 
 
-def _attachments(resources: dict[str, ContentResource] | list[str]) -> tuple[SkillAttachment, ...]:
-    """把定义面的附件表摊成只读成员（列表简写不携带媒体类型，按路径推断）。
+def _attachments(resources: dict[str, ContentResource]) -> tuple[SkillAttachment, ...]:
+    """把定义面声明的具名附件表摊成只读成员。
+
+    v1 只接受映射（键 → 路径/媒体类型）；列表简写属旧格式，解析期已拒绝。
 
     Args:
         resources: ``assets`` / ``references`` / ``scripts`` 的声明值。
@@ -711,11 +673,6 @@ def _attachments(resources: dict[str, ContentResource] | list[str]) -> tuple[Ski
     Returns:
         按附件键升序的附件元组。
     """
-    if isinstance(resources, list):
-        return tuple(
-            SkillAttachment(key=PurePosixPath(path).stem, path=path, media_type=_media_type(path))
-            for path in sorted(resources)
-        )
     return tuple(
         SkillAttachment(
             key=key,
@@ -842,15 +799,6 @@ def _build_container(
             for key, operation in sorted(definition.operations.items())
         ),
         skills=members,
-        assets=tuple(
-            AbilityAsset(
-                container=entry.container,
-                key=key,
-                full_name=definition.full_name_of(key),
-                definition=asset,
-            )
-            for key, asset in sorted(definition.assets.items())
-        ),
         issues=tuple(issues),
     )
 
@@ -858,8 +806,8 @@ def _build_container(
 def scan_abilities(pool: Sequence[AbilityRoot] | None = None) -> tuple[AbilityContainer, ...]:
     """扫描目录池，按「能力容器」返回全貌（对外主入口，每次调用都重新扫盘）。
 
-    一个元素 = 一个能力包：名字、描述、``operations`` / ``skills`` / ``assets``
-    三类成员、以及归属于它的问题。想只要某一类成员或只要数量时直接读属性
+    一个元素 = 一个能力包：名字、描述、``operations`` / ``skills`` 两类成员、
+    以及归属于它的问题。想只要某一类成员或只要数量时直接读属性
     （``container.operation_count`` / ``container.kinds`` …）。
 
     用在「现在这台机器上有哪些能力包、每个包里有什么」的所有场景：外部展示、

@@ -5,7 +5,7 @@
 """Supervisor 协议定义 — core 层仅依赖此协议。
 
 通过 Protocol（structural subtyping）定义 Supervisor 的接口契约，
-使 abilities 层的 AbilityExecutionContext 可以仅依赖此协议
+使能力执行层可以仅依赖此协议（不反向依赖具体实现）
 而非 communication.supervisor.SupervisorActor 的具体实现。
 """
 

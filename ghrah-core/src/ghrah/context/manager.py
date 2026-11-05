@@ -10,7 +10,7 @@
 核心职责：
 - 迭代生命周期：begin_iteration → commit_iteration / rollback_iteration
 - 消息+状态协调：commit 时自动计算 delta、定期存储 snapshot、管理 state 事务
-- 上下文构建：build_execution_context 供 Ability/Hook 使用
+- 执行期服务：以 CONTEXT_MANAGER 服务注入能力执行，不再构造上下文对象
 - 子 Agent 继承：fork_for_sub_agent 创建独立但继承的上下文
 - Session 管理：create_session / activate_session / list_sessions
 - Branch 管理：create_branch / activate_branch / list_branches
@@ -46,9 +46,7 @@ from ghrah.core.window_protocol import MessageFactory
 from ghrah.skills.catalog import digest_catalog, render_catalog_message
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
-    from ghrah.core.message import AgentMessage
-    from ghrah.types.config_types import AgentConfig
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -1045,36 +1043,6 @@ class ContextManager:
                 label=f"rollback to branch {branch.branch_id}",
             )
         return branch
-
-    # ----------------------------------------------------------------
-    # 上下文构建
-    # ----------------------------------------------------------------
-
-    def build_execution_context(
-        self,
-        message: AgentMessage | None = None,
-        config: AgentConfig | None = None,
-        system_prompt: str | None = None,
-        context_filter: Callable | None = None,
-    ) -> AbilityExecutionContext:
-        """构建 AbilityExecutionContext。
-
-        Args:
-            message: 输入消息（可选，保留向后兼容）
-            config: Agent 配置（可选）
-            system_prompt: 覆盖默认 system_prompt（可选）
-            context_filter: 上下文过滤函数（可选）
-
-        Returns:
-            初始化后的 AbilityExecutionContext
-        """
-        from ghrah.abilities.context import AbilityExecutionContext
-
-        return AbilityExecutionContext(
-            current_ability_name="",
-            agent_state=self._state_manager.current,
-            context_manager=self,
-        )
 
     async def get_llm_messages(
         self,
