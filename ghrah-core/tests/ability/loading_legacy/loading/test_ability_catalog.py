@@ -22,34 +22,47 @@ import yaml
 from ghrah.ability.loading import ability_catalog as catalog
 from ghrah.ability.loading import ability_roots as ability_roots
 
-DEFINITION = {
-    "format": "ghrah.ability-definition",
-    "schema_version": "0.1-draft",
-    "identity": {"namespace": "ghrah", "name": "{name}", "version": "0.1.0"},
-    "title": "{name}",
-    "description": "{name} 容器。",
-    "provider_requirements": {"{name}_backend": {"contract": "ghrah.test.v1"}},
-    "operations": {
-        "{name}_op": {
-            "title": "Op",
-            "description": "一个测试成员。",
-            "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "output_schema": {"type": "object", "properties": {}},
-            "implementation": {"provider_slot": "{name}_backend", "operation": "{name}_op"},
-            "execution": {
-                "mode": "request",
-                "timeout_ms": 1000,
-                "cancellation": "unsupported",
-                "on_revoke": "drain",
-                "retry": "never",
-            },
-        }
-    },
-}
+
+def _definition(name: str) -> dict:
+    """造一份合法的 v1 定义面（一个 operation 成员）。
+
+    Args:
+        name: 容器名（同时用作 ``identity.name`` 与成员键前缀）。
+
+    Returns:
+        可直接 ``yaml.safe_dump`` 的 v1 两段式映射。
+    """
+    operation_key = f"{name}_op"
+    return {
+        "format": "ghrah.ability-definition",
+        "schema_version": "1",
+        "identity": {"namespace": "ghrah", "name": name, "version": "0.1.0"},
+        "title": name,
+        "description": f"{name} 容器。",
+        "members": {
+            "operations": {
+                operation_key: {
+                    "title": "Op",
+                    "description": "一个测试成员。",
+                    "entry": f"operations/{operation_key}.py",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                }
+            }
+        },
+    }
 
 
 def _write_container(root: Path, name: str) -> Path:
-    """在给定目录下造一个最小能力容器（定义面 + 实现脚本）。
+    """在给定目录下造一个最小能力容器（v1 定义面 + 实现脚本）。
 
     用于构造「磁盘上出现/消失一个容器」的场景，不依赖真实包树。
 
@@ -64,11 +77,7 @@ def _write_container(root: Path, name: str) -> Path:
     operations = container / "operations"
     operations.mkdir(parents=True)
     (container / "ability.yaml").write_text(
-        yaml.safe_dump(
-            yaml.safe_load(yaml.safe_dump(DEFINITION).replace("{name}", name)),
-            allow_unicode=True,
-            sort_keys=False,
-        ),
+        yaml.safe_dump(_definition(name), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
         newline="\n",
     )
@@ -220,9 +229,3 @@ class TestScanApi:
         cls = catalog.ability_class("read_file")
 
         assert cls.__name__ == "ReadFileAbility"
-
-    def test_c_class_yaml_loader_has_a_fallback(self) -> None:
-        """C loader 与纯 Python loader 语义一致（后者只是慢）。"""
-        raw = "a: 1\nb: [1, 2]\n"
-
-        assert catalog.load_yaml(raw) == {"a": 1, "b": [1, 2]}

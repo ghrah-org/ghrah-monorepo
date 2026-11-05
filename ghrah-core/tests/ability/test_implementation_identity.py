@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""实现标识：每个后端固定自己的版本号，不共用文件切片摘要。"""
+"""实现标识：每个后端固定自己的版本号，不共用文件切片摘要。
+
+v1 的内容包没有 Operation，实现标识固定为 ``content-only:v1``；外部源包的
+Operation 由安装后的进程内 Provider 从包内 ``operations/*.py`` 加载，实现标识
+随该目录的代码变化（P1 只登记，不执行）。
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,12 @@ from ghrah.ability.versions import (
     implementation_identity,
     loaded_file_implementation,
 )
+
+EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "ability_content" / "reporting"
+"""示例包：v1 单 Skill 内容包，``members.operations`` 为空。"""
+
+EXTERNAL_SOURCE = Path(__file__).resolve().parent / "package" / "fixtures" / "multi-skill"
+"""外部源包 fixture：1 个 Operation 与 2 个 Skill；复制到临时目录后 capture。"""
 
 
 def _package_root(package: str) -> Path:
@@ -76,17 +87,34 @@ def test_identity_of_another_backend_does_not_follow_shell_code(tmp_path: Path) 
     assert after_cluster == before_cluster
 
 
-def test_package_with_file_members_stays_on_file_backend_identity() -> None:
-    # 含文件成员时，文件动作的可执行性依赖与进程锁定实现同一版本号；
-    # 包里的其他（尚未实现的）后端由内容清单与定义面表达。
-    root = Path(__file__).resolve().parents[2] / "examples" / "ability_content" / "reporting"
+def test_example_content_package_uses_content_identity() -> None:
+    """示例包只有内容成员：实现标识是 ``content-only:v1``，不是文件后端版本。"""
     version = capture_ability_version(
-        (root / "ability.yaml").read_text(encoding="utf-8"), root=root
+        (EXAMPLE / "ability.yaml").read_text(encoding="utf-8"), root=EXAMPLE
     )
 
-    assert version.implementation_digest == loaded_file_implementation()
-    definition = version.definition()
-    assert implementation_identity(definition, root=root) == loaded_file_implementation()
+    assert not version.definition().operations
+    assert version.implementation_digest == "content-only:v1"
+    assert implementation_identity(version.definition(), root=EXAMPLE) == "content-only:v1"
+
+
+def test_external_source_package_identity_follows_operation_code(tmp_path: Path) -> None:
+    """外部源包的 Operation 由进程内 Provider 加载：实现标识随包内代码变化。"""
+    copy = tmp_path / "multi-skill"
+    shutil.copytree(EXTERNAL_SOURCE, copy)
+    before = capture_ability_version((copy / "ability.yaml").read_text(encoding="utf-8"), root=copy)
+    assert set(before.definition().operations) == {"render"}
+    assert before.implementation_digest != loaded_file_implementation()
+    assert implementation_identity(before.definition(), root=copy) == before.implementation_digest
+
+    operation = copy / "operations" / "render.py"
+    operation.write_text(
+        operation.read_text(encoding="utf-8") + "\n# implementation drift\n", encoding="utf-8"
+    )
+    after = capture_ability_version((copy / "ability.yaml").read_text(encoding="utf-8"), root=copy)
+
+    assert after.implementation_digest != before.implementation_digest
+    assert after.digest != before.digest
 
 
 def test_content_only_package_uses_content_identity() -> None:

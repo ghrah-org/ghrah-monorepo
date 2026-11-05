@@ -37,12 +37,22 @@ def test_fs_member_paths_come_from_contract(tmp_path: Path) -> None:
 
 
 def test_unknown_contract_is_not_admitted(tmp_path: Path) -> None:
-    """契约不匹配或未登记时返回 None，调用方按不可用拒绝。"""
+    """契约不匹配或未登记时返回 None，调用方按不可用拒绝。
+
+    v1 不写 ``provider_requirements``：成员的提供者契约由包来源与身份决定。
+    把内置包的身份改成另一个内置后端（契约不匹配），或改成未登记来源
+    （契约解析失败），都必须 fail-closed。
+    """
     definition = _definition("fs")
-    definition["provider_requirements"]["fs_backend"]["contract"] = "other.fs.v1"
-    assert contract_of(definition, "read_file") == "other.fs.v1"
+    definition["identity"]["name"] = "shell"
+    assert contract_of(definition, "read_file") == "ghrah.shell.v1"
     assert admission_for(definition, "read_file") is None
     assert admission_for(definition, "unknown_member") is None
+
+    unregistered = _definition("fs")
+    unregistered["identity"]["namespace"] = "demo"
+    assert contract_of(unregistered, "read_file") is None
+    assert admission_for(unregistered, "read_file") is None
 
 
 def test_fs_member_accepts_paths_inside_granted_roots(tmp_path: Path) -> None:

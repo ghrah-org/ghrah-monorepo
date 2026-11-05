@@ -144,7 +144,7 @@ def test_scan_loads_every_shape(tmp_path: Path, shape: str) -> None:
         (operation,) = container.operations
         assert operation.container == "demo"
         assert operation.full_name == "acme.demo.ping"
-        assert operation.provider_slot == "script"
+        assert operation.handler == "ping"
         assert operation.effects == ("net:request",)
         assert operation.definition.permissions == {"net_access": True}
         assert operation.definition.input_schema["required"] == ["host"]
@@ -208,7 +208,7 @@ def test_content_capture_reflects_shape(tmp_path: Path, shape: str) -> None:
     members = set(json.loads(version.manifest_json))
 
     if shape == OP_ONLY:
-        assert members == {"operations/ping/script"}
+        assert members == set()
     elif shape == SINGLE:
         assert members == {"skill/alpha"}
     else:

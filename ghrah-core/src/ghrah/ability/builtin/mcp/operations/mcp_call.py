@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import MCP_RUNTIME
@@ -35,12 +35,13 @@ if TYPE_CHECKING:
 
 __all__ = ["McpCallAbility", "McpCallInput"]
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
 PERMISSIONS = {
     # 调用外部 MCP 服务器：网络访问是它的实质，必须在权限面上显式声明。
     "net_access": True,
 }
 HOOKS: dict[str, list[dict[str, object]]] = {}
+TITLE = "MCP Call"
 SUMMARY = (
     "Call a tool on an MCP server. The tools available to you are listed in the MCP "
     "catalog of the skill you loaded; 'server' and 'tool' are case-sensitive."
@@ -49,7 +50,9 @@ TAGS = [
     "mcp",
     "tool",
 ]
-# --- catalogue 声明结束
+EFFECTS = ["net:request"]
+TIMEOUT_MS = 300_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ logger = logging.getLogger(__name__)
 class McpCallInput(BaseModel):
     """mcp_call 工具入参契约（extra=forbid）。"""
 
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid")
 
     server: str = Field(
         description=(
@@ -85,6 +88,9 @@ class McpCallInput(BaseModel):
             "when several loaded skills could own the same server name."
         ),
     )
+
+
+Input = McpCallInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class McpCallAbility(Ability):

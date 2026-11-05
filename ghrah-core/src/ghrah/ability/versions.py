@@ -19,6 +19,7 @@ from ghrah.ability.provider_contracts import (
     CLUSTER_CONTRACT,
     FS_CONTRACT,
     SHELL_CONTRACT,
+    contract_for,
 )
 
 FILE_MEMBERS = frozenset(FILE_OPERATIONS)
@@ -77,25 +78,42 @@ def _contract_identity(contract: str, *, root: Path) -> str:
 
 
 def implementation_identity(definition: AbilityDefinition, *, root: Path) -> str:
-    """按包声明的提供者契约计算实现标识；同一定义在不同后端下不同号。
+    """按包来源与身份计算实现标识；同一定义在不同后端下不同号。
+
+    v1 索引不声明 ``provider_requirements``：内置包按身份 ``ghrah.<name>``
+    映射到各自后端契约（见 :func:`ghrah.ability.provider_contracts.contract_for`）；
+    外部源包没有登记的后端契约，实现标识退到包内 ``operations/*.py`` 的整树摘要
+    ——安装后的 Operation 由进程内 Provider 从该包代码加载，代码变化必须换版本号。
 
     Args:
-        definition: 已解析的包定义（含 ``provider_requirements``）。
+        definition: 已解析的包定义。
         root: 包根目录，用于读取 ``operations/*.py`` 与脚本实现。
 
     Returns:
-        实现摘要；只有文件后端时与 :func:`loaded_file_implementation` 相同，
+        实现摘要；文件后端与 :func:`loaded_file_implementation` 相同，
         内容类包为 ``content-only:v1``。
     """
-    if not definition.operations:
-        return "content-only:v1"
-    contracts = sorted({item.contract for item in definition.provider_requirements.values()})
+    contracts = sorted(
+        {
+            contract
+            for contract in (
+                contract_for(
+                    definition.origin,
+                    definition.identity.namespace,
+                    definition.identity.name,
+                ),
+            )
+            if contract is not None
+        }
+    )
     if not contracts:
-        return "operations:undeclared"
+        sources = _package_operation_sources(root)
+        if not sources:
+            return "content-only:v1"
+        return hashlib.sha256(b"\0".join(path.read_bytes() for path in sources)).hexdigest()
     if FS_CONTRACT in contracts:
-        # 含文件成员时版本号由文件后端（进程锁定实现）主导：文件动作的就绪
-        # 判断依赖与 ``loaded_file_implementation`` 同一版本号；同包里的非
-        # 执行后端（如尚未实现的 script）由内容清单与定义面分别表达。
+        # 文件后端沿用进程锁定的实现摘要：文件动作的就绪判断依赖与
+        # ``capture_file_version`` 同一版本号。
         return loaded_file_implementation()
     parts = [f"{contract}={_contract_identity(contract, root=root)}" for contract in contracts]
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
@@ -139,14 +157,12 @@ def capture_file_version(raw: str | None = None) -> AbilityVersion:
     if raw is None:
         raw = builtin_root().locator.joinpath("fs", "ability.yaml").read_text(encoding="utf-8")
     definition = parse_definition(raw, source="filesystem")
-    if definition.skills or definition.assets:
+    if definition.skills:
         raise ValueError("文件切片不能丢弃内容；请使用 capture_ability_version 并明确包根")
     operations = {key: item for key, item in definition.operations.items() if key in FILE_MEMBERS}
     if set(operations) != FILE_MEMBERS:
         raise ValueError("文件能力必须包含两个确定成员")
-    definition = definition.model_copy(
-        update={"operations": operations, "skills": {}, "assets": {}}
-    )
+    definition = definition.model_copy(update={"operations": operations, "skills": {}})
     data = definition.model_dump(mode="json")
     encoded = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = "sha256:" + hashlib.sha256((encoded + implementation).encode()).hexdigest()
@@ -156,39 +172,10 @@ def capture_file_version(raw: str | None = None) -> AbilityVersion:
 def capture_ability_version(
     raw: str, *, root: Path, limits: CaptureLimits = CaptureLimits()
 ) -> AbilityVersion:
-    """显式捕获完整容器；未知 Operation 后端保留声明并报告不可执行。"""
+    """显式捕获完整容器；实现标识与内容清单都从包来源重新计算。"""
     definition = parse_definition(raw, source=str(root))
     definition, manifest, blobs = capture_content(definition, root, limits)
     encoded = canonical(definition.model_dump(mode="json"))
     implementation = implementation_identity(definition, root=root)
     version = AbilityVersion("", encoded, implementation, manifest, blobs)
     return AbilityVersion(version.expected_digest(), encoded, implementation, manifest, blobs)
-
-
-def import_skill_package(
-    root: Path,
-    *,
-    key: str,
-    identity: dict[str, str],
-    assets: dict[str, dict[str, str]],
-    references: dict[str, dict[str, str]],
-    limits: CaptureLimits = CaptureLimits(),
-) -> AbilityVersion:
-    """显式导入标准 SKILL.md 包，元数据以正文为作者，不要求另写重复 YAML。"""
-    raw = canonical(
-        {
-            "format": "ghrah.ability-definition",
-            "schema_version": "0.2",
-            "identity": identity,
-            "title": identity["namespace"],
-            "description": "Skill content",
-            "skills": {
-                key: {
-                    "body": {"path": "SKILL.md", "media_type": "text/markdown"},
-                    "assets": assets,
-                    "references": references,
-                }
-            },
-        }
-    )
-    return capture_ability_version(raw, root=root, limits=limits)

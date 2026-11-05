@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -37,25 +37,23 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/read_file.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "fs_read_only": True,
 }
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Read File"
 SUMMARY = "Read the content of a file at the specified path"
 TAGS = [
     "filesystem",
     "read",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +63,32 @@ __all__ = ["ReadFileAbility", "ReadFileInput"]
 class ReadFileInput(BaseModel):
     """ReadFile 工具的输入参数。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     file_path: str = Field(description="Path to the file to read")
     encoding: str = Field(default="utf-8", description="Text encoding for the file")
     offset: int = Field(default=0, ge=0, description="0-based line number to start from")
     limit: int = Field(
         default=0, ge=0, description="Max lines to return; 0 = whole file (legacy behavior)"
     )
+
+
+Input = ReadFileInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class ReadFileOutput(BaseModel):
+    """ReadFile 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(description="File content (line-numbered when paginated)")
+    file_path: str = Field(description="Path of the file that was read")
+    total_lines: int = Field(description="Total number of lines in the file")
+    offset: int = Field(default=0, description="Pagination offset (when paginated)")
+    limit: int = Field(default=0, description="Pagination limit (when paginated)")
+
+
+Output = ReadFileOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class ReadFileAbility(Ability):

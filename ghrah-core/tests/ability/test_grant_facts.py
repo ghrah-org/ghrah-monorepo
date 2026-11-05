@@ -26,55 +26,41 @@ ALICE = AccessIdentity("project", "alice", "alice-run")
 
 PACKAGE_YAML = """\
 format: ghrah.ability-definition
-schema_version: '0.2'
+schema_version: '1'
 identity:
   namespace: demo
-  version: '1'
+  version: '0.1.0'
 title: Demo
 description: 授权事实测试包。
-provider_requirements:
-  fs_backend:
-    contract: ghrah.fs.v1
-    contract_digest: null
-    required_capabilities:
-    - request
-operations:
-  read_file:
-    title: Read File
-    description: 读取文件。
-    input_schema:
-      type: object
-      properties:
-        file_path:
-          type: string
-      required:
-      - file_path
-      additionalProperties: false
-    output_schema:
-      type: object
-      additionalProperties: true
-    implementation:
-      provider_slot: fs_backend
-      operation: read_file
-    execution:
-      mode: request
-      timeout_ms: 1000
-      cancellation: unsupported
-      on_revoke: drain
-      retry: never
-skills:
-  guide:
-    body:
-      path: SKILL.md
-      media_type: text/markdown
-    references:
-      style:
-        path: references/style.md
+members:
+  operations:
+    read_file:
+      title: Read File
+      description: 读取文件。
+      entry: operations/read_file.py
+      input_schema:
+        type: object
+        properties:
+          file_path:
+            type: string
+        required:
+        - file_path
+        additionalProperties: false
+  skills:
+    guide:
+      title: 写作指南
+      description: 写作指南。
+      body:
+        path: skills/guide/SKILL.md
         media_type: text/markdown
-    scripts:
-      run:
-        path: scripts/run.py
-        media_type: text/x-python
+      references:
+        style:
+          path: skills/guide/references/style.md
+          media_type: text/markdown
+      scripts:
+        run:
+          path: skills/guide/scripts/run.py
+          media_type: text/x-python
 """
 
 SKILL_MD = """\
@@ -96,12 +82,20 @@ def write_package(root: Path) -> AbilityVersion:
     Returns:
         捕获后的确定版本。
     """
-    (root / "references").mkdir(parents=True)
-    (root / "scripts").mkdir(parents=True)
+    (root / "operations").mkdir(parents=True)
+    (root / "skills" / "guide" / "references").mkdir(parents=True)
+    (root / "skills" / "guide" / "scripts").mkdir(parents=True)
     (root / "ability.yaml").write_text(PACKAGE_YAML, encoding="utf-8", newline="\n")
-    (root / "SKILL.md").write_text(SKILL_MD, encoding="utf-8", newline="\n")
-    (root / "references" / "style.md").write_text("# 风格\n", encoding="utf-8", newline="\n")
-    (root / "scripts" / "run.py").write_text("print('run')\n", encoding="utf-8", newline="\n")
+    (root / "operations" / "read_file.py").write_text(
+        '"""read_file 的测试实现占位。"""\n', encoding="utf-8", newline="\n"
+    )
+    (root / "skills" / "guide" / "SKILL.md").write_text(SKILL_MD, encoding="utf-8", newline="\n")
+    (root / "skills" / "guide" / "references" / "style.md").write_text(
+        "# 风格\n", encoding="utf-8", newline="\n"
+    )
+    (root / "skills" / "guide" / "scripts" / "run.py").write_text(
+        "print('run')\n", encoding="utf-8", newline="\n"
+    )
     return capture_ability_version((root / "ability.yaml").read_text(encoding="utf-8"), root=root)
 
 

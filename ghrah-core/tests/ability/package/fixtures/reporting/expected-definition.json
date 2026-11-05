@@ -10,7 +10,6 @@
   "description": "等价 fixture：一个 Operation 与一个 Skill，附样式参考与模板素材。",
   "origin": "source",
   "mcp": null,
-  "provider_requirements": {},
   "operations": {
     "render": {
       "title": "Render Report",
@@ -50,11 +49,6 @@
         ],
         "type": "object"
       },
-      "errors": {},
-      "implementation": {
-        "provider_slot": "script",
-        "operation": "render"
-      },
       "effects": [],
       "resources": {
         "paths": [
@@ -68,12 +62,11 @@
         "on_revoke": "drain",
         "retry": "never"
       },
-      "script": {
+      "entry": {
         "path": "operations/render.py",
         "media_type": "text/x-python",
         "size": null,
-        "digest": null,
-        "expected_digest": null
+        "digest": null
       },
       "tags": [
         "render",
@@ -94,27 +87,23 @@
       "tags": [
         "reporting"
       ],
-      "references": {
-        "style-guide": {
-          "path": "skills/reporting-guide/references/style-guide.md",
-          "media_type": "text/markdown",
-          "size": 118,
-          "digest": "sha256:5e78d4438ebf21c7950a84ecf0e023719afa58103d58302b16fafcc1b16a17a6",
-          "expected_digest": null
-        }
-      },
       "assets": {
         "template": {
           "path": "skills/reporting-guide/assets/template.txt",
           "media_type": "text/plain",
           "size": 68,
-          "digest": "sha256:e3bcc91525086974b796a4ea8844ca285d4131a5009375ada632716c0d1152fc",
-          "expected_digest": null
+          "digest": "sha256:e3bcc91525086974b796a4ea8844ca285d4131a5009375ada632716c0d1152fc"
         }
       },
-      "scripts": {},
-      "annotations": {}
+      "references": {
+        "style-guide": {
+          "path": "skills/reporting-guide/references/style-guide.md",
+          "media_type": "text/markdown",
+          "size": 118,
+          "digest": "sha256:5e78d4438ebf21c7950a84ecf0e023719afa58103d58302b16fafcc1b16a17a6"
+        }
+      },
+      "scripts": {}
     }
-  },
-  "assets": {}
+  }
 }

@@ -155,8 +155,8 @@ def test_generated_index_matches_expected_definition(tmp_path: Path) -> None:
     differences = _diff(expected, actual)
     assert not differences, "\n".join(differences)
     operation = definition.operations["render"]
-    assert operation.script is not None
-    assert operation.script.path == "operations/render.py"
+    assert operation.entry is not None
+    assert operation.entry.path == "operations/render.py"
     assert operation.input_schema["properties"]["template"]["description"] == "模板名（assets 键）"
     assert definition.skills["reporting-guide"].title == "Reporting Guide"
 
@@ -251,11 +251,17 @@ def test_permissions_value_type_is_validated(tmp_path: Path) -> None:
 
 
 def test_missing_output_warns(tmp_path: Path) -> None:
-    """缺 ``Output`` 时生成 ``{}`` 并返回告警。"""
+    """缺 ``Output`` 时生成空对象 schema 占位并返回告警。"""
     root = _minimal(tmp_path)
     result = build(root)
     assert result.warnings
     assert "Output" in result.warnings[0]
+    member = yaml.safe_load(result.rendered)["members"]["operations"]["plain"]
+    assert member["output_schema"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
 
 
 def test_generated_index_has_no_host_artifacts(tmp_path: Path) -> None:

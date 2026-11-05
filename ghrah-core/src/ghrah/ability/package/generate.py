@@ -394,14 +394,21 @@ def _operation_member(key: str, script: Path, warnings: list[str]) -> dict[str, 
     input_schema = _strip_schema_metadata(
         _validate_schema(key, decl.input_schema or {}, what="Input.model_json_schema()")
     )
-    output_schema: dict[str, Any] = {}
+    # 每次新建字面量：同一个字典对象被多个成员复用时，safe_dump 会写
+    # ``&id001`` / ``*id001`` 锚点，违反“生成物展开”的冻结规则。
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     if decl.output_schema is not None:
         output_schema = _strip_schema_metadata(
             _validate_schema(key, decl.output_schema, what="Output.model_json_schema()")
         )
     else:
         warnings.append(
-            f"operations/{key}.py: 缺 Output 模型，output_schema 占位 {{}}（严格模式将失败）"
+            f"operations/{key}.py: 缺 Output 模型，output_schema 占位空对象 schema"
+            "（P4 严格模式将失败）"
         )
     resources = dict(decl.resources)
     paths = resources.get("paths", [])

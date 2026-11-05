@@ -32,25 +32,23 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/spawn_agent.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "require_hitl": True,
 }
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Spawn Agent"
 SUMMARY = "Spawn a new peer agent in the cluster by instantiating an agent manifest."
 TAGS = [
     "cluster",
     "lifecycle",
 ]
-# --- catalogue 声明结束
+EFFECTS = ["cluster:lifecycle"]
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +73,9 @@ class SpawnAgentInput(BaseModel):
         default="",
         description="Optional system prompt override for the new agent",
     )
+
+
+Input = SpawnAgentInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 async def _assemble_child_abilities(

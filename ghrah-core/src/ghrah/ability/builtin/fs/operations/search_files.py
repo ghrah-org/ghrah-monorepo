@@ -30,7 +30,7 @@ import re
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
@@ -43,19 +43,15 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# scheme 运行时声明（随实现搬迁；定义文件 ability.yaml 不承载这些事实）
-#   来源：ghrah/abilities/builtin/search_files.py
-#   PERMISSIONS <- 旧 manifest 的 metadata.permissions
-# 切换时由 scheme 加载器合并回旧 manifest 形态；在此之前这一项不是权威。
+# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
+# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
 # ---------------------------------------------------------------------------
 PERMISSIONS = {
     "fs_read_only": True,
 }
 
-# --- catalogue 声明（旧 manifest 的元信息，草案格式里暂无字段承载）
-#   SUMMARY <- metadata.description（目录摘要）
-#   TAGS    <- metadata.tags（发现/过滤用）
-# 草案补上对应字段后，这两项应迁回 ability.yaml。
+# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
+TITLE = "Search Files"
 SUMMARY = (
     "Search file contents for a regex pattern using ripgrep, with results including file "
     "paths and line numbers."
@@ -65,7 +61,9 @@ TAGS = [
     "read",
     "search",
 ]
-# --- catalogue 声明结束
+EFFECTS = []
+TIMEOUT_MS = 60_000
+# --- 成员声明结束
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +112,8 @@ def _build_rg_args(
 class SearchFilesInput(BaseModel):
     """SearchFiles 工具的输入参数。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     pattern: str = Field(description="Regular expression to search for")
     path: str = Field(description="Directory or file to search in")
     include: str | None = Field(
@@ -133,6 +133,9 @@ class SearchFilesInput(BaseModel):
         description="Maximum number of matching lines to return",
     )
     ignore_case: bool = Field(default=False, description="Case-insensitive search")
+
+
+Input = SearchFilesInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
 class SearchFilesAbility(Ability):

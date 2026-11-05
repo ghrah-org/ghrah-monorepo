@@ -2,17 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ability 定义面模型：``ability.yaml`` 的类型化契约与解析入口。
+"""Ability 定义面模型：``ability.yaml`` v1 的类型化契约与解析入口。
 
-对应设计草案的 ``ghrah.ability-definition``。约束要点：
+v1 只有两段：作者手写的头段（``format`` / ``schema_version`` / ``identity`` /
+``title`` / ``description`` / ``origin`` / ``mcp``）与生成器写入的成员索引
+``members``（``operations`` / ``skills``）。约束要点：
 
 - 全部子模型 ``extra="forbid"``：未知字段拒绝，不做隐式吸收；
-- 定义只承载契约事实：身份、成员 schema、提供者槽要求、执行约束；
-- **不含**授权结果（``permissions``）与 Hook 编排（``hooks``）——前者属授权
-  记录，后者随实现。二者暂存于 ``operations/<key>.py`` 的模块级常量。
-
-``schema_version`` 支持旧版 ``0.1-draft`` / ``0.2`` 与 v1 ``'1'``；未知版本拒绝。
-v1 为两段式（``members``），旧格式仍兼容读取，最终退役另立任务。
+- 定义只承载契约事实：身份、成员 schema 与执行约束；
+- **不含**授权结果（``permissions`` 只是包声明的申请值）与 Hook 编排；
+- 旧格式 ``0.1-draft`` / ``0.2`` 已退役：build / install / scan 一律拒绝，
+  不提供兼容适配器与 ``--migrate``（见 M0 规范冻结 §3.11）。
 
 解析入口（:func:`load_yaml` / :func:`parse_definition`）也在这里：契约与它的
 解析器是同一件事，放在一起才不会出现"两处各解析一次、规则悄悄分叉"。上层
@@ -40,26 +40,20 @@ __all__ = [
     "DEFINITION_FILE_NAME",
     "EMPTY_SCHEMA",
     "LOCK_FILE_NAME",
-    "SCHEMA_VERSION",
-    "SCRIPT_PROVIDER_SLOT",
     "SKILL_BODY_DIR",
     "SKILL_FILE_NAME",
     "V1_SCHEMA_VERSION",
     "V1_SEMVER_PATTERN",
     "AbilityDefinition",
     "AbilityIdentity",
+    "ContentResource",
     "ExecutionSpec",
     "OperationDefinition",
-    "OperationImplementation",
-    "ProviderRequirement",
     "SkillBody",
     "SkillDefinition",
     "load_yaml",
     "parse_definition",
 ]
-
-SCHEMA_VERSION = "0.1-draft"
-"""历史定义格式版本（``operations`` / ``skills`` 顶层表）。"""
 
 V1_SCHEMA_VERSION = "1"
 """现行定义格式版本：两段式，成员写在 ``members`` 下（可多个 skill）。"""
@@ -70,9 +64,6 @@ V1_SEMVER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[
 它同时是安装路径段，因此不允许前缀、预发布（``-rc.1``）与构建元数据
 （``+build``）；需要时以 ``schema_version`` 变更引入。
 """
-
-SCRIPT_PROVIDER_SLOT = "script"
-"""包内脚本成员的提供者槽名。"""
 
 EMPTY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -94,7 +85,7 @@ DEFINITION_FILE_NAME: str = "ability.yaml"
 """定义面文件名：``<扫描根>/<容器>/ability.yaml``。"""
 
 SKILL_BODY_DIR: str = "skills"
-"""skill 正文目录（相对容器根）：``<容器>/skills/SKILL.md``。"""
+"""skill 正文目录（相对容器根）：``<容器>/skills/<name>/SKILL.md``。"""
 
 SKILL_FILE_NAME: str = "SKILL.md"
 """skill 正文文件名。"""
@@ -159,13 +150,15 @@ def load_yaml(raw: str) -> Any:
     return yaml.load(raw, Loader=_UniqueLoader)
 
 
+_V1_TOP_LEVEL_KEYS = frozenset(
+    {"format", "schema_version", "origin", "identity", "title", "description", "mcp", "members"}
+)
+
 _V1_OPERATION_KEYS = frozenset(
     {
         "title",
         "description",
         "entry",
-        "entry_media_type",
-        "provider",
         "input_schema",
         "output_schema",
         "effects",
@@ -177,89 +170,161 @@ _V1_OPERATION_KEYS = frozenset(
     }
 )
 _V1_SKILL_KEYS = frozenset(
-    {"title", "description", "tags", "body", "assets", "references", "scripts", "annotations"}
+    {"title", "description", "tags", "body", "assets", "references", "scripts"}
 )
 
+_OPERATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SKILL_KEY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_RESOURCE_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+"""资源键由相对路径派生（去后缀、``/`` → ``-``），允许数字开头与点号。"""
 
-def _from_members(data: dict[str, Any]) -> dict[str, Any]:
+
+def _require_object_schema(where: str, schema: Any) -> dict[str, Any]:
+    """校验 Operation 的 in/out schema 是对象形状的 JSON Schema。
+
+    Args:
+        where: 报错前缀（``members.operations.<键>.input_schema`` 之类）。
+        schema: 待校验的值。
+
+    Returns:
+        原样返回校验通过的 schema 映射。
+
+    Raises:
+        ManifestValidationError: 不是映射、类型不是 ``object``，或未关闭
+            ``additionalProperties``。
+    """
+    if not isinstance(schema, dict):
+        raise ManifestValidationError(f"{where} 必须是映射")
+    if schema.get("type") != "object":
+        raise ManifestValidationError(f"{where} 必须是 type: object")
+    if schema.get("additionalProperties") is not False:
+        raise ManifestValidationError(f"{where} 必须显式 additionalProperties: false")
+    return schema
+
+
+def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
     """把 v1 的 ``members`` 两段式展开成运行时成员表。
 
-    v1 只写「作者与生成器共同维护的成员事实」：operations 的 schema/标签/权限/执行
-    约束，skills 的正文与三类附件。历史格式（``0.1-draft`` / ``0.2``）把成员直接放在
-    顶层，这里仅对 v1 做一次结构适配，其余字段原样保留。
+    只做一次结构适配：v1 索引写 ``entry``（实现文件）与成员契约；运行期沿用
+    ``operations`` / ``skills`` 两张表，并把 ``entry`` 归一成 ``script`` 内容资源。
+    旧格式 ``0.1-draft`` / ``0.2`` 在这里明确拒绝——不读、不猜、不迁移。
 
     Args:
         data: YAML 解析出的顶层映射（含 ``members``）。
+        source: 报错时用的来源标签。
 
     Returns:
         运行时形状的映射（``operations`` / ``skills`` 顶层表）。
 
     Raises:
-        ManifestValidationError: ``members`` 或某个成员不是映射、技能缺 ``body``、
-            ``members.skills`` 不是映射（不接受列表简写）、v1 operation 声明
-            ``errors``（冻结裁决：错误表不进 v1）。
+        ManifestValidationError: 不是 v1、缺 ``members``、成员形状非法、
+            未知字段或 ``entry`` 不等于 ``operations/<键>.py``。
     """
-    members = data.get("members") or {}
+    version = data.get("schema_version")
+    if version != V1_SCHEMA_VERSION or not isinstance(version, str):
+        raise ManifestValidationError(
+            f"{source}: 只支持 v1 定义（schema_version: '1'），"
+            f"当前是 {version!r}；旧格式 0.1-draft / 0.2 已退役，"
+            "请按 v1 两段式重写（M0 规范冻结 §3.11），不提供迁移旁路"
+        )
+    unknown_top = set(data) - _V1_TOP_LEVEL_KEYS
+    if unknown_top:
+        raise ManifestValidationError(
+            f"{source}: 顶层未知字段 {sorted(unknown_top)}（契约拒绝未知字段）"
+        )
+    if "members" not in data:
+        raise ManifestValidationError(f"{source}: v1 定义缺少 members")
+    members = data.get("members")
     if not isinstance(members, dict):
-        raise ManifestValidationError("members 必须是映射")
+        raise ManifestValidationError(f"{source}: members 必须是映射")
+    unknown_members = set(members) - {"operations", "skills"}
+    if unknown_members:
+        raise ManifestValidationError(
+            f"{source}: members 未知字段 {sorted(unknown_members)}（只允许 operations / skills）"
+        )
+    raw_operations = members.get("operations") or {}
+    raw_skills = members.get("skills") or {}
+    if not isinstance(raw_operations, dict):
+        raise ManifestValidationError(f"{source}: members.operations 必须是映射")
+    if not isinstance(raw_skills, dict):
+        raise ManifestValidationError(f"{source}: members.skills 必须是映射")
+    if not raw_operations and not raw_skills:
+        raise ManifestValidationError(f"{source}: 包必须至少有一个成员（Operation 或 Skill）")
 
     operations: dict[str, Any] = {}
-    raw_operations = members.get("operations") or {}
-    if not isinstance(raw_operations, dict):
-        raise ManifestValidationError("members.operations 必须是映射")
     for key, raw in raw_operations.items():
+        if not isinstance(key, str) or not _OPERATION_KEY_PATTERN.fullmatch(key):
+            raise ManifestValidationError(f"{source}: 非法 Operation 键 {key!r}")
         if not isinstance(raw, dict):
-            raise ManifestValidationError(f"members.operations.{key} 必须是映射")
+            raise ManifestValidationError(f"{source}: members.operations.{key} 必须是映射")
         unknown = set(raw) - _V1_OPERATION_KEYS
         if unknown:
             raise ManifestValidationError(
-                f"members.operations.{key}: 未知字段 {sorted(unknown)}（契约拒绝未知字段）"
+                f"{source}: members.operations.{key} 未知字段 {sorted(unknown)}（契约拒绝未知字段）"
             )
-        entry = raw.get("entry")
-        slot = raw.get("provider") or SCRIPT_PROVIDER_SLOT
+        missing = {"title", "description", "entry"} - set(raw)
+        if missing:
+            raise ManifestValidationError(
+                f"{source}: members.operations.{key} 缺少必填字段 {sorted(missing)}"
+            )
+        entry = raw["entry"]
+        expected_entry = f"operations/{key}.py"
+        if entry != expected_entry:
+            raise ManifestValidationError(
+                f"{source}: members.operations.{key}.entry 必须是 "
+                f"{expected_entry!r}，当前是 {entry!r}"
+            )
+        input_schema = raw.get("input_schema") or dict(EMPTY_SCHEMA)
+        output_schema = raw.get("output_schema") or dict(EMPTY_SCHEMA)
+        _require_object_schema(f"{source}: members.operations.{key}.input_schema", input_schema)
+        _require_object_schema(f"{source}: members.operations.{key}.output_schema", output_schema)
         operations[key] = {
-            "title": raw.get("title") or key,
-            "description": raw.get("description") or raw.get("title") or key,
-            "input_schema": raw.get("input_schema") or dict(EMPTY_SCHEMA),
-            "output_schema": raw.get("output_schema") or dict(EMPTY_SCHEMA),
-            "implementation": {"provider_slot": slot, "operation": key},
+            "title": raw["title"],
+            "description": raw["description"],
+            "input_schema": input_schema,
+            "output_schema": output_schema,
             "effects": raw.get("effects") or [],
             "resources": raw.get("resources") or {},
             "execution": raw.get("execution") or dict(DEFAULT_EXECUTION),
-            "script": (
-                {"path": entry, "media_type": raw.get("entry_media_type") or "text/x-python"}
-                if isinstance(entry, str) and entry
-                else None
-            ),
+            "entry": {"path": entry, "media_type": "text/x-python"},
             "expose": raw.get("expose", True),
             "tags": raw.get("tags") or [],
             "permissions": raw.get("permissions") or {},
         }
 
     skills: dict[str, Any] = {}
-    raw_skills = members.get("skills") or {}
-    if not isinstance(raw_skills, dict):
-        raise ManifestValidationError("members.skills 必须是映射")
     for key, raw in raw_skills.items():
-        if not isinstance(raw, dict) or not isinstance(key, str):
-            raise ManifestValidationError("members.skills 的每项必须是有键的映射")
+        if not isinstance(key, str) or not _SKILL_KEY_PATTERN.fullmatch(key):
+            raise ManifestValidationError(f"{source}: 非法 Skill 键 {key!r}")
+        if not isinstance(raw, dict):
+            raise ManifestValidationError(f"{source}: members.skills.{key} 必须是映射")
         unknown = set(raw) - _V1_SKILL_KEYS
         if unknown:
             raise ManifestValidationError(
-                f"members.skills.{key}: 未知字段 {sorted(unknown)}（契约拒绝未知字段）"
+                f"{source}: members.skills.{key} 未知字段 {sorted(unknown)}（契约拒绝未知字段）"
             )
-        body = raw.get("body")
+        missing = {"title", "description", "body"} - set(raw)
+        if missing:
+            raise ManifestValidationError(
+                f"{source}: members.skills.{key} 缺少必填字段 {sorted(missing)}"
+            )
+        body = raw["body"]
         if not isinstance(body, dict):
-            raise ManifestValidationError(f"members.skills.{key} 缺少 body")
+            raise ManifestValidationError(f"{source}: members.skills.{key} 缺少 body")
+        expected_body = f"{SKILL_BODY_DIR}/{key}/{SKILL_FILE_NAME}"
+        if body.get("path") != expected_body:
+            raise ManifestValidationError(
+                f"{source}: members.skills.{key}.body.path 必须是 {expected_body!r}，"
+                f"当前是 {body.get('path')!r}"
+            )
         skills[key] = {
-            "title": raw.get("title") or "",
+            "title": raw.get("title") or key,
             "description": raw.get("description") or "",
             "body": body,
             "tags": raw.get("tags") or [],
             "assets": raw.get("assets") or {},
             "references": raw.get("references") or {},
             "scripts": raw.get("scripts") or {},
-            "annotations": raw.get("annotations") or {},
         }
 
     normalized = {key: value for key, value in data.items() if key != "members"}
@@ -271,10 +336,10 @@ def _from_members(data: dict[str, Any]) -> dict[str, Any]:
 def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
     """把 ``ability.yaml`` 文本解析并校验成定义模型。
 
-    除契约（pydantic）外还做跨字段校验：``schema_version`` 受支持、
-    ``implementation.operation`` 必须等于成员键、``provider_slot`` 必须在
-    ``provider_requirements`` 里声明过；v1 额外校验 ``identity.version``
-    为 SemVer core 三段。
+    只接受 v1：旧版（``0.1-draft`` / ``0.2``）在解析期明确拒绝，错误信息指向
+    M0 规范冻结 §3.11；不提供只读适配器，也不做隐式修正。除 pydantic 契约外
+    还做跨字段校验：``entry`` 与成员键一致、``identity.version`` 为 SemVer core
+    三段、成员合计至少一个。
 
     用在扫描期的单个包解析：扫描器只负责定位与收集问题，契约判定全在这里。
 
@@ -286,46 +351,31 @@ def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
         已校验的 :class:`AbilityDefinition`。
 
     Raises:
-        ManifestValidationError: 顶层不是映射、契约不满足、版本不受支持，
-            或上述跨字段校验失败。
+        ManifestValidationError: 顶层不是映射、不是 v1、契约不满足，或上述
+            跨字段校验失败。
     """
     data = load_yaml(raw)
     if not isinstance(data, dict):
         raise ManifestValidationError(f"{source}: {DEFINITION_FILE_NAME} 不是映射")
-    if str(data.get("schema_version")) == V1_SCHEMA_VERSION or "members" in data:
-        data = _from_members(data)
+    data = _from_members(data, source)
     try:
         definition = AbilityDefinition.model_validate(data)
     except ValidationError as exc:
         raise ManifestValidationError(f"{source}: {exc}") from exc
-    if definition.schema_version not in {SCHEMA_VERSION, "0.2", V1_SCHEMA_VERSION}:
+    if definition.schema_version != V1_SCHEMA_VERSION:
         raise ManifestValidationError(
             f"{source}: 不支持的 schema_version {definition.schema_version!r}，"
-            f"期望 {SCHEMA_VERSION!r} / '0.2' / {V1_SCHEMA_VERSION!r}"
+            f"只支持 {V1_SCHEMA_VERSION!r}"
         )
-    if definition.schema_version == V1_SCHEMA_VERSION:
-        if not V1_SEMVER_PATTERN.fullmatch(definition.identity.version):
-            raise ManifestValidationError(
-                f"{source}: v1 的 identity.version 必须是 SemVer core 三段"
-                f"（MAJOR.MINOR.PATCH，每段 1-9 位十进制、无前导零、"
-                f"不带预发布/构建元数据），当前是 {definition.identity.version!r}"
-            )
+    if not V1_SEMVER_PATTERN.fullmatch(definition.identity.version):
+        raise ManifestValidationError(
+            f"{source}: v1 的 identity.version 必须是 SemVer core 三段"
+            f"（MAJOR.MINOR.PATCH，每段 1-9 位十进制、无前导零、"
+            f"不带预发布/构建元数据），当前是 {definition.identity.version!r}"
+        )
     for key, operation in definition.operations.items():
-        if operation.implementation.operation != key:
-            raise ManifestValidationError(
-                f"{source}.{key}: implementation.operation 必须等于成员键"
-            )
-        if definition.schema_version == V1_SCHEMA_VERSION:
-            # v1 不写 provider_requirements：脚本槽由包内脚本实现，其余槽由运行期后端
-            # 按名字解析。缺后端是运行期问题，不在解析期冒充契约错误。
-            continue
-        if operation.implementation.provider_slot not in definition.provider_requirements:
-            raise ManifestValidationError(
-                f"{source}.{key}: provider_slot "
-                f"{operation.implementation.provider_slot!r} 未在 provider_requirements 声明"
-            )
-    if definition.schema_version == "0.2" and definition.assets:
-        raise ManifestValidationError(f"{source}: assets 必须归属 skill，不支持顶层资源")
+        if operation.entry is not None and operation.entry.path != f"operations/{key}.py":
+            raise ManifestValidationError(f"{source}.{key}: entry 必须是 operations/{key}.py")
     return definition
 
 
@@ -354,17 +404,6 @@ class AbilityIdentity(BaseModel):
         return f"{self.namespace}.{self.name}" if self.name else self.namespace
 
 
-class ProviderRequirement(BaseModel):
-    """提供者槽要求：该槽必须履行的接口身份与执行能力。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    contract: str = Field(min_length=1)
-    contract_digest: str | None = None
-    """由发布路径从唯一规范计算填入；作者不自签。"""
-    required_capabilities: list[str] = Field(default_factory=list)
-
-
 class ExecutionSpec(BaseModel):
     """一次调用的执行约束。首版只支持 request 语义。"""
 
@@ -377,17 +416,8 @@ class ExecutionSpec(BaseModel):
     retry: Literal["never"]
 
 
-class OperationImplementation(BaseModel):
-    """成员到提供者的路由：槽 + 该槽接口内的动作名。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider_slot: str = Field(min_length=1)
-    operation: str = Field(min_length=1)
-
-
 class OperationDefinition(BaseModel):
-    """一个可执行成员：参数、结果、错误、副作用与执行约束。"""
+    """一个可执行成员：参数、结果、副作用与执行约束。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -395,14 +425,19 @@ class OperationDefinition(BaseModel):
     description: str = Field(min_length=1)
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
-    errors: dict[str, Any] = Field(default_factory=dict)
-    implementation: OperationImplementation
     effects: list[str] = Field(default_factory=list)
     resources: dict[str, Any] = Field(default_factory=dict)
     execution: ExecutionSpec
-    script: ContentResource | None = None
+    entry: ContentResource | None = None
+    """成员实现文件（v1 ``entry`` 的归一形状）：``operations/<键>.py``。
+
+    v1 索引只写相对路径字符串；运行期需要包根 + 该路径来定位实现。外部包的
+    Operation 由安装后的进程内 Provider 从版本根加载，内置包按目录约定 import。
+    ``origin: mcp`` 的成员没有实现文件，此处为 ``None``（P5）。
+    """
+
     tags: list[str] = Field(default_factory=list)
-    """发现与过滤标签；v1 由实现模块的 ``TAGS`` 生成，旧格式可缺省。"""
+    """发现与过滤标签；v1 由实现模块的 ``TAGS`` 生成。"""
 
     permissions: dict[str, Any] = Field(default_factory=dict)
     """权限**申请值**（``PERMISSIONS``）；授权结果不在这里。"""
@@ -447,19 +482,16 @@ class SkillBody(BaseModel):
 
 
 class ContentResource(BaseModel):
-    """Skill 内显式声明的静态文件；大小与摘要由生成器/捕获方写入。"""
+    """Skill 内显式声明的静态文件；大小与摘要由生成器写入、捕获期核对。"""
 
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1)
     media_type: str = Field(min_length=1)
     size: int | None = Field(default=None)
-    """字节数（生成期写入）；旧格式声明不携带，捕获期现算覆盖。"""
+    """字节数（生成期写入）。"""
 
     digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
-    """内容摘要（生成期写入，``sha256:<hex>``）；旧格式不携带。"""
-
-    expected_digest: str | None = None
-    """旧格式的期望摘要；v1 用 :attr:`digest`，解析后不再使用。"""
+    """内容摘要（生成期写入，``sha256:<hex>``）；捕获期据此核对文件字节。"""
 
 
 class SkillDefinition(BaseModel):
@@ -479,23 +511,23 @@ class SkillDefinition(BaseModel):
     description: str = ""
     body: SkillBody
     tags: list[str] = Field(default_factory=list)
-    references: dict[str, ContentResource] | list[str] = Field(default_factory=dict)
     assets: dict[str, ContentResource] = Field(default_factory=dict)
+    references: dict[str, ContentResource] = Field(default_factory=dict)
     scripts: dict[str, ContentResource] = Field(default_factory=dict)
     """技能委托执行的脚本（``scripts/`` 下的 ``.py``）；不是 operation，不生成 schema。"""
 
-    annotations: dict[str, Any] = Field(default_factory=dict)
-    """作者自定义的附加键（如内容蒸馏来源 ``source_book``）：原样保留，
-    框架不解释语义——避免过早固化它们的含义。"""
-
 
 class AbilityDefinition(BaseModel):
-    """一个 Ability 容器：身份 + 成员表 + 提供者槽要求。"""
+    """一个 Ability 容器：身份 + 成员表。
+
+    v1 头段不承载 ``provider_requirements`` 与顶层 ``assets``；Operation 成员的
+    后端由包来源与 Provider 决定，资源归属各自 Skill。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     format: Literal["ghrah.ability-definition"]
-    schema_version: str
+    schema_version: Literal["1"]
     identity: AbilityIdentity
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -505,25 +537,36 @@ class AbilityDefinition(BaseModel):
     mcp: dict[str, Any] | None = None
     """``origin: mcp`` 时的连接声明（``{"server": <agentconf 名>}``），不含 URL/密钥。"""
 
-    provider_requirements: dict[str, ProviderRequirement] = Field(default_factory=dict)
     operations: dict[str, OperationDefinition] = Field(default_factory=dict)
     skills: dict[str, SkillDefinition] = Field(default_factory=dict)
-    assets: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_members(self) -> AbilityDefinition:
-        """所有入口（包括持久恢复）都核对成员键与附件键。"""
-        import re
-
-        for mapping in (self.operations, self.skills):
-            if any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", key) for key in mapping):
+        """所有入口（包括持久恢复）都核对成员键、成员集与来源字段。"""
+        for key in self.operations:
+            if not _OPERATION_KEY_PATTERN.fullmatch(key):
                 raise ValueError("非法成员键")
+        for key in self.skills:
+            if not _SKILL_KEY_PATTERN.fullmatch(key):
+                raise ValueError("非法技能键")
         for skill in self.skills.values():
             for mapping in (skill.assets, skill.references, skill.scripts):
-                if isinstance(mapping, dict) and any(
-                    not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", key) for key in mapping
-                ):
+                if any(not _RESOURCE_KEY_PATTERN.fullmatch(key) for key in mapping):
                     raise ValueError("非法附件键")
+        if not self.operations and not self.skills:
+            raise ValueError("包必须至少有一个成员（Operation 或 Skill）")
+        if self.origin == "mcp":
+            if self.identity.namespace != "mcp":
+                raise ValueError("origin: mcp 时 identity.namespace 必须是 mcp")
+            server = (self.mcp or {}).get("server")
+            if not isinstance(server, str) or not server:
+                raise ValueError("origin: mcp 时必须声明 mcp.server")
+            if self.operations or self.skills:
+                raise ValueError(
+                    "origin: mcp 时成员由 tools/list 生成，不得声明 operations / skills"
+                )
+        elif self.mcp is not None:
+            raise ValueError("origin: source 时不得声明 mcp")
         return self
 
     @property

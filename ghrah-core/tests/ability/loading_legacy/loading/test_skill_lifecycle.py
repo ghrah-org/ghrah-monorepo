@@ -39,9 +39,8 @@ def _package(
     key: str | None = None,
     body: str | None = BODY,
     description: str = "对关系型数据库执行只读查询。",
-    body_path: str = "skills/SKILL.md",
 ) -> Path:
-    """造一个新格式能力包（``ability.yaml`` + 声明的正文文件）。
+    """造一个 v1 能力包（``ability.yaml`` 的 members + 声明的正文文件）。
 
     Args:
         root: 目录池根。
@@ -49,7 +48,6 @@ def _package(
         key: 技能成员键；None 取包名（"一个包至多一个技能"的约定）。
         body: 正文内容；None 表示故意不写正文文件（用于测缺正文）。
         description: 技能描述。
-        body_path: 定义面声明的正文相对路径（默认本版约定的 ``skills/SKILL.md``）。
 
     Returns:
         新建的包目录。
@@ -59,26 +57,28 @@ def _package(
     (package / "skills").mkdir(parents=True, exist_ok=True)
     payload = {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": {"namespace": name, "version": "0.1.0"},
         "title": name,
         "description": "测试用能力包。",
-        "provider_requirements": {},
-        "operations": {},
-        "skills": {
-            member: {
-                "title": name,
-                "description": description,
-                "body": {"path": body_path, "media_type": "text/markdown"},
+        "members": {
+            "skills": {
+                member: {
+                    "title": name,
+                    "description": description,
+                    "body": {
+                        "path": f"skills/{member}/SKILL.md",
+                        "media_type": "text/markdown",
+                    },
+                }
             }
         },
-        "assets": {},
     }
     (package / "ability.yaml").write_text(
         yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
     if body is not None:
-        target = package.joinpath(*body_path.split("/"))
+        target = package / "skills" / member / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(body, encoding="utf-8")
     return package
@@ -133,7 +133,7 @@ class TestScanAndLookup:
         skill = result.skills[0]
         assert skill.full_name == "db-query"
         assert skill.description == "对关系型数据库执行只读查询。"
-        assert skill.body == tmp_path / "db-query" / "skills" / "SKILL.md"
+        assert skill.body == tmp_path / "db-query" / "skills" / "db-query" / "SKILL.md"
         # 未登记：入口哨兵存在但不算漂移
         assert skill.fingerprint is not None
         assert skill.drifted is False
@@ -196,17 +196,17 @@ class TestReadSkill:
 
         assert document.full_name == "db-query"
         assert document.skill_dir == package
-        assert document.path == package / "skills" / "SKILL.md"
+        assert document.path == package / "skills" / "db-query" / "SKILL.md"
         assert document.content == BODY
 
-    def test_declared_body_path_is_used_not_the_default(self, tmp_path: Path) -> None:
-        """读正文只认声明：正文叫 ``skills/GUIDE.md`` 时就去读那个文件。"""
-        package = _package(tmp_path, "db-query", body_path="skills/GUIDE.md")
+    def test_body_path_is_the_v1_declared_location(self, tmp_path: Path) -> None:
+        """读正文只认定义面声明的路径：v1 固定为 ``skills/<成员键>/SKILL.md``。"""
+        package = _package(tmp_path, "db-query")
 
         document = _provider(tmp_path).read_skill("db-query")
 
-        assert document.path == package / "skills" / "GUIDE.md"
-        assert document.body_path == "skills/GUIDE.md"
+        assert document.path == package / "skills" / "db-query" / "SKILL.md"
+        assert document.body_path == "skills/db-query/SKILL.md"
         assert document.content == BODY
 
     def test_unknown_full_name_raises_not_found(self, tmp_path: Path) -> None:
@@ -217,14 +217,14 @@ class TestReadSkill:
 
     def test_body_with_problem_is_not_readable(self, tmp_path: Path) -> None:
         package = _package(tmp_path, "db-query")
-        (package / "skills" / "SKILL.md").unlink()
+        (package / "skills" / "db-query" / "SKILL.md").unlink()
 
         with pytest.raises(SkillNotFoundError):
             _provider(tmp_path).read_skill("db-query")
 
     def test_non_utf8_body_raises_parse_error(self, tmp_path: Path) -> None:
         package = _package(tmp_path, "db-query")
-        (package / "skills" / "SKILL.md").write_bytes(b"\xff\xfe\x00")
+        (package / "skills" / "db-query" / "SKILL.md").write_bytes(b"\xff\xfe\x00")
 
         with pytest.raises(SkillParseError):
             _provider(tmp_path).read_skill("db-query")
@@ -249,14 +249,14 @@ class TestInitializeAndDrift:
         assert second.scan.skills[0].drifted is False
 
     def test_declared_body_path_registers_and_detects_drift(self, tmp_path: Path) -> None:
-        """哨兵覆盖声明的那份正文：别名正文登记后不误报，改动能被看见。"""
-        package = _package(tmp_path, "db-query", body_path="skills/GUIDE.md")
+        """哨兵覆盖定义面声明的正文（v1 即 ``skills/<键>/SKILL.md``）：登记不误报、改动能看见。"""
+        package = _package(tmp_path, "db-query")
         provider = _provider(tmp_path)
 
         provider.initialize()
 
         assert provider.scan().skills[0].drifted is False
-        (package / "skills" / "GUIDE.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
         assert provider.scan().skills[0].drifted is True
 
     def test_body_change_shows_drift(self, tmp_path: Path) -> None:
@@ -264,7 +264,7 @@ class TestInitializeAndDrift:
         provider = _provider(tmp_path)
         provider.initialize()
 
-        (package / "skills" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
 
         assert provider.scan().skills[0].drifted is True
 
@@ -272,7 +272,7 @@ class TestInitializeAndDrift:
         package = _package(tmp_path, "db-query")
         provider = _provider(tmp_path)
         provider.initialize()
-        (package / "skills" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
 
         record = provider.relock("db-query")
 

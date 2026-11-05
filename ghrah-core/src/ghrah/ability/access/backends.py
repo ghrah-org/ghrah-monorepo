@@ -23,6 +23,7 @@ from ghrah.ability.provider_contracts import (
     FS_CONTRACT,
     MCP_CONTRACT,
     SHELL_CONTRACT,
+    contract_for,
 )
 
 __all__ = [
@@ -231,25 +232,27 @@ for _member in _CORE_ARGUMENTS:
 
 
 def contract_of(definition: Mapping[str, Any], member: str) -> str | None:
-    """由已提交版本定义解析成员的提供者槽契约；未知成员返回 ``None``。"""
+    """由已提交版本定义解析成员的提供者契约；未知来源返回 ``None``。
+
+    v1 索引不写 ``provider_requirements``：契约由包来源与身份决定（内置包
+    ``ghrah.<name>`` 映射到各自后端；MCP 快照走 MCP 契约；外部源包暂由
+    安装后的 Provider 决定，解析层不替它猜后端）。
+    """
     operations = definition.get("operations", {})
     operation = operations.get(member) if isinstance(operations, Mapping) else None
     if not isinstance(operation, Mapping):
         return None
-    implementation = operation.get("implementation", {})
-    if not isinstance(implementation, Mapping):
+    entry = operation.get("entry")
+    if not isinstance(entry, Mapping) or entry.get("path") != f"operations/{member}.py":
         return None
-    if implementation.get("operation") != member:
+    identity = definition.get("identity", {})
+    if not isinstance(identity, Mapping):
         return None
-    slot = implementation.get("provider_slot")
-    requirements = definition.get("provider_requirements", {})
-    if not isinstance(requirements, Mapping):
+    namespace = identity.get("namespace")
+    name = identity.get("name")
+    if not isinstance(namespace, str) or not (name is None or isinstance(name, str)):
         return None
-    requirement = requirements.get(slot, {})
-    if not isinstance(requirement, Mapping):
-        return None
-    contract = requirement.get("contract")
-    return contract if isinstance(contract, str) else None
+    return contract_for(definition.get("origin") or "source", namespace, name)
 
 
 def admission_for(definition: Mapping[str, Any], member: str) -> BackendAdmission | None:

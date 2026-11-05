@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""成员存在性校验：定义面 ``operations`` 键与 ``operations/*.py`` 双向一一对应。
+"""成员存在性校验：定义面 ``members.operations`` 键与 ``operations/*.py`` 双向一一对应。
 
 两条约束都必须在装配期成立，不能拖到第一次调用才暴露：
 
@@ -13,6 +13,9 @@
 
 本用例用临时内置根（换一套内置能力树）构造两个方向的缺口，断言
 ``load_ability_definitions()`` 与装配入口都直接失败。
+
+v1 以生成索引 ``members`` 为成员权威：正常走生成器的包不会出现「有脚本未声明」；
+但索引是手写 YAML，漏声明仍可能发生，装载期的双向校验因此保留。
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ def _write_container(
     Args:
         root: 充当内置树根的目录。
         name: 容器名（也是成员键前缀）。
-        declared: ``ability.yaml`` 的 ``operations`` 键。
+        declared: ``ability.yaml`` 的 ``members.operations`` 键。
         scripts: 实际写入 ``operations/`` 的脚本名（不含 ``.py``）。
 
     Returns:
@@ -52,31 +55,29 @@ def _write_container(
     operations.mkdir(parents=True)
     definition = {
         "format": "ghrah.ability-definition",
-        "schema_version": "0.1-draft",
+        "schema_version": "1",
         "identity": {"namespace": "ghrah", "name": name, "version": "0.1.0"},
         "title": name,
         "description": f"{name} 容器。",
-        "provider_requirements": {f"{name}_backend": {"contract": "ghrah.test.v1"}},
-        "operations": {
-            key: {
-                "title": key,
-                "description": f"{key} 成员。",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-                "output_schema": {"type": "object", "properties": {}},
-                "implementation": {"provider_slot": f"{name}_backend", "operation": key},
-                "execution": {
-                    "mode": "request",
-                    "timeout_ms": 1000,
-                    "cancellation": "unsupported",
-                    "on_revoke": "drain",
-                    "retry": "never",
-                },
+        "members": {
+            "operations": {
+                key: {
+                    "title": key,
+                    "description": f"{key} 成员。",
+                    "entry": f"operations/{key}.py",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                }
+                for key in declared
             }
-            for key in declared
         },
     }
     (container / "ability.yaml").write_text(
@@ -138,7 +139,11 @@ def test_declared_member_without_script_fails(temp_builtin_root: Path) -> None:
 
 
 def test_script_without_declaration_fails(temp_builtin_root: Path) -> None:
-    """有脚本但未在定义面声明：不能再静默存在，装载即失败。"""
+    """有脚本但未在定义面声明：不能再静默存在，装载即失败。
+
+    v1 由生成器写 ``members``，正常流程不会产出这种包；但手写索引漏声明时，
+    装载期仍必须报出，不能把一份永远不会被加载的实现留在树里。
+    """
     _write_container(
         temp_builtin_root,
         "alpha",

@@ -457,11 +457,6 @@ class AbilityAccessStore:
                         raise AccessError("invalid_change")
                     continue
                 expected_members.update(f"skill/{key}/{role}/{item}" for item in resources)
-        expected_members.update(
-            f"operations/{key}/script"
-            for key, item in definition.operations.items()
-            if item.script is not None
-        )
         if set(manifest) != expected_members:
             raise AccessError("invalid_change")
         async with self._tx(write=True):
