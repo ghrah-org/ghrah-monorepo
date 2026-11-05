@@ -115,7 +115,7 @@ def _resolve_ref(ref: Any, scopes: tuple[dict[str, Any], ...]) -> dict[str, Any]
     name = ref[len(prefix) :]
     for scope in reversed(scopes):
         if name in scope:
-            return scope[name]
+            return cast(dict[str, Any], scope[name])
     raise ValueError("$ref 指向未声明的 $defs")
 
 

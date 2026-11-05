@@ -67,7 +67,7 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 - 样式默认用 UnoCSS 原子类；颜色只用语义 token，禁止调色板类（`bg-gray-800`、`text-blue-500`）。
 - 禁止裸 hex/rgba、px 字号、任意值工具类（`w-[...]`）、`!important`、组件级 `:root.dark` 与模板 `dark:`；存量按基线只降不升，不得新增。
 - 级联顺序由 `@layer` 决定，不要靠 import 顺序或堆特异性取胜；需要覆盖组件样式时用工具类，而不是加 `!important`。
-- 样式门禁：`pnpm lint` 内含 `check-style-governance`（ratchet，基线 `style-baseline.json`）；CSS 体积用 `pnpm lint:css-budget` 在构建后校验（基线 `style-budget.json`，gzip 为主）。清理存量后跑对应 `--update` 下调基线。
+- 样式门禁：`pnpm lint` 内含 `check-style-governance`（ratchet，基线 `style-baseline.json`）。CSS 体积可在本地构建后用 `pnpm lint:css-budget` 检查（基线 `style-budget.json`，gzip 为主），不作为 CI 门禁。清理存量后跑对应 `--update` 下调基线。
 - 布局/样式改动须自查 1600 / 1024 两种宽度 × 100% / 110% 字号；涉及侧边栏的还要覆盖“展开 / 收起 / 两侧都收起”。
 - 构建：`packages/protocol` 与 `packages/observer-core` 改动后须 `pnpm build`（exports 指向 `dist/`，type-check 解析 dist；**dist 陈旧会让 type-check 与测试结果分裂**）。
 

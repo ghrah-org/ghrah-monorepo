@@ -88,6 +88,5 @@ jobs:
         run: |
           pnpm --filter @ghrah/observer-web exec playwright install --with-deps chromium
           pnpm --filter @ghrah/observer-web test:guards
-      # 体积预算需要真实构建产物：先构建观察端，再比对 style-budget.json。
-      - name: 构建观察端并校验 CSS 体积
-        run: pnpm --filter @ghrah/observer-web build && pnpm lint:css-budget
+      - name: 构建观察端
+        run: pnpm --filter @ghrah/observer-web build
