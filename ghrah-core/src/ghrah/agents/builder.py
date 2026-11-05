@@ -171,6 +171,7 @@ def _build_context_manager(
     llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
     supervisor: Any = None,
     estimator: TokenEstimator | None = None,
+    ability_content: Any = None,
 ) -> ContextManager:
     """从 AgentConfig 构建 ContextManager（含 WindowManager + Persistence）。
 
@@ -277,6 +278,7 @@ def _build_context_manager(
         # skill-ability：provider 由 supervisor 装配期注入（None = 不接线，
         # 上下文不注入技能目录摘要）
         skill_provider=getattr(supervisor, "skill_provider", None),
+        ability_content=ability_content,
         **compact_kwargs,
     )
 
@@ -325,8 +327,13 @@ class AgentBuilder:
             配置好的 ActorAgent 实例
         """
         resolved_llm_factory = llm_factory or _default_llm_factory
+        ability_content = getattr(abilities, "ability_content", None)
         context_manager = _build_context_manager(
-            config, persistence_factory, llm_factory=resolved_llm_factory, supervisor=supervisor
+            config,
+            persistence_factory,
+            llm_factory=resolved_llm_factory,
+            supervisor=supervisor,
+            ability_content=ability_content,
         )
 
         def _cm_factory() -> ContextManager:
@@ -335,6 +342,7 @@ class AgentBuilder:
                 persistence_factory,
                 llm_factory=resolved_llm_factory,
                 supervisor=supervisor,
+                ability_content=ability_content,
             )
 
         if ability_executor is None:

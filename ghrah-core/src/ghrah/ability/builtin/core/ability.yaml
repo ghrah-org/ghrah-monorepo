@@ -67,7 +67,7 @@ members:
       expose: true
     list_abilities:
       title: List Abilities
-      description: List the abilities available in this deployment (read-only). Every row is marked kind='core-ability' (declared manifests + registry) or kind='skill-ability' (skill catalog). Pass full_name for a single entry's detail.
+      description: List this Agent's granted Operations and Skills from the current authorization view. Pass an exact full_name for one entry. Skill names match load_skill's alias/skill input; Skill details include only granted attachment paths.
       entry: operations/list_abilities.py
       input_schema:
         additionalProperties: false
@@ -77,7 +77,7 @@ members:
             - type: string
             - type: 'null'
             default: null
-            description: Optional full name of a single ability to inspect in detail (e.g. 'ghrah.fs.read_file' or 'research'). Omit to list everything.
+            description: Optional exact entry name returned by this tool; omit to list granted entries.
         type: object
       output_schema:
         type: object
@@ -98,14 +98,21 @@ members:
       expose: true
     load_skill:
       title: Load Skill
-      description: Load the full SKILL.md document of one skill (skill-ability) by its exact full name, returning the document text and its path. Skills are instruction documents, not invocable abilities.
+      description: Load the complete text of a granted Skill by its exact alias/skill catalog name. Pass path to read a granted text attachment relative to that Skill. Content comes from the committed version; returned paths are package-relative.
       entry: operations/load_skill.py
       input_schema:
         additionalProperties: false
         properties:
           full_name:
-            description: The skill's full name exactly as shown in the available-skills catalog (e.g. 'research'). Use list_abilities to see the names.
+            description: Exact alias/skill name from the available-skills catalog or list_abilities.
+            minLength: 1
             type: string
+          path:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Optional registered attachment path relative to the Skill document, for example references/style.md. Omit to load the complete Skill document.
         required:
         - full_name
         type: object

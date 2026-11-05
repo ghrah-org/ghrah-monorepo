@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -79,12 +80,18 @@ class AuthorizedToolTable(list):
     处理继续可用，同时保留“来自边界”的身份。
     """
 
+    def __init__(self, abilities: Iterable[Any] = (), *, ability_content: Any = None) -> None:
+        super().__init__(abilities)
+        self.ability_content = ability_content
+
     def bind_run(self, run: str) -> None:
         """把注册完成的受信代次固定到表内每个投影工具。"""
         for ability in self:
             bind = getattr(ability, "bind_run", None)
             if callable(bind):
                 bind(run)
+        if self.ability_content is not None:
+            self.ability_content.bind_run(run)
 
 
 @dataclass(frozen=True)
@@ -122,10 +129,7 @@ class StartupMaterialization:
 
     def bind_run(self, run: str) -> None:
         """把本次运行的受信 run 绑定到所有投影工具上（Agent 注册完成后调用）。"""
-        for ability in self.abilities:
-            bind = getattr(ability, "bind_run", None)
-            if callable(bind):
-                bind(run)
+        self.abilities.bind_run(run)
 
 
 class ProjectedAbility:
@@ -396,6 +400,13 @@ class StartupGrantMaterializer:
         """运行已停止后解除主体占位；持久授权保留供显式恢复。"""
         await self._store.release_registration(self._actor, agent)
 
+    def content_provider(self, agent: str) -> Any:
+        """为一次 Agent 装配创建独立内容端口；注册完成前不具备读取身份。"""
+        from ghrah.ability.local_content import LocalGrantedContentProvider
+
+        validate_agent_id(agent)
+        return LocalGrantedContentProvider(self._store, agent)
+
     async def materialize(self, *, agent: str, resolved: ResolvedAgent) -> StartupMaterialization:
         """执行一次启动物化。
 
@@ -413,6 +424,24 @@ class StartupGrantMaterializer:
         validate_agent_id(agent)
         catalog = load_ability_definitions()
         control, containers = self._split(catalog, resolved.abilities)
+        if self._policy is not None:
+            # 内容包可以没有 Operation，因而不会出现在模板的工具 ref 中。
+            # 只准备部署策略显式引用的包；登记版本本身不产生授予。
+            for rule in self._policy.for_agent(agent):
+                if rule.package not in {
+                    definition.identity.full_name for definition in catalog.values()
+                }:
+                    raise StartupGrantError(f"策略引用了未解析的包：{rule.package}")
+                containers.setdefault(rule.package, {})
+        else:
+            # 无启动策略时保留管理员已授予的内置内容包；不从磁盘发现新授予。
+            await self._store.ensure_agent(self._actor, agent)
+            records = await self._store.grants(self._actor, agent)
+            content_instances = {record.instance_id for record in records if record.content}
+            for definition in catalog.values():
+                package = definition.identity.full_name
+                if _instance_id(package) in content_instances:
+                    containers.setdefault(package, {})
         if not containers:
             raise StartupGrantError(
                 f"spawn '{agent}' 的模板没有任何能力包成员——builtin 模式不能只靠"
@@ -464,6 +493,7 @@ class StartupGrantMaterializer:
             run=run,
             agent_name=resolved.config.name,
         )
+        abilities.ability_content = self.content_provider(agent)
         return StartupMaterialization(
             abilities=abilities,
             tools=bindings,

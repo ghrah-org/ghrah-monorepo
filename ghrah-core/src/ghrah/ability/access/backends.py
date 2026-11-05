@@ -150,6 +150,7 @@ def _core_list_abilities(arguments: Mapping[str, Any]) -> None:
 
 def _core_load_skill(arguments: Mapping[str, Any]) -> None:
     _required_str(arguments, "full_name")
+    _optional_str(arguments, "path")
 
 
 def _core_recall_context(arguments: Mapping[str, Any]) -> None:

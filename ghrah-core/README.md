@@ -117,3 +117,13 @@ Apache 2.0
 ## 可选 Scheme 资源切片
 
 默认 Core 安装不要求 ghrah-scheme。文件 Ability 的 Scheme 接入属于显式 `scheme` extra，目前使用 workspace 或本地 wheel 组合验证；ghrah-scheme 尚未对外发布。完整示例与边界见[文件 Ability 资源切片](../ghrah-scheme/docs/2026-10-29-ability-resource-slice.md)，现有生产 Agent 通路尚未切换。
+
+## 新版 Ability 的本地获授内容
+
+Subject／CoreUnit 显式选择 `ability_source="builtin"` 后，生产 spawn 会为每个 Agent 创建内容服务，并在注册完成时绑定其运行代次。目录、正文和附件都读取 `AbilityAccessStore` 中的当前授予与已提交快照；运行期间不扫描旧 Skill 根，也不要求启动 Scheme 或新内核。
+
+Agent Manifest 中声明 `ghrah.core.list_abilities` 和 `ghrah.core.load_skill`，部署方再通过 `ability_grant_policy` 显式授予所需 Skill。例如，`GrantRule(package="ghrah.ability-builder", skill="ability-package-development-guide")` 授予内置开发指南；它会与模板申请的工具一起核定。模板本身不产生权限，未配置策略时只保留已有授予。
+
+模型每轮看到 `alias/skill` 形式的名称和摘要。调用 `load_skill(full_name="ability-builder/ability-package-development-guide")` 读取完整正文；传入 `path="references/style.md"` 可读取该 Skill 已登记且获授的相对文本附件。返回的 `path` 是包内路径，`uri` 是逻辑内容地址，不能交给文件工具当作宿主路径。
+
+正文和文本附件单次完整加载最多 1 MiB；二进制附件通过内容服务的分块读取接口返回。来源目录改变或删除不会改变已提交字节。撤销、版本切换、Agent 停止或运行换代后，旧读取引用失效；子 Agent 独立装配内容服务，Context rebase 也须显式提供并核验目标主体的内容服务。读取 Skill 不会自动授予 Operation、绑定工具或启动 MCP。

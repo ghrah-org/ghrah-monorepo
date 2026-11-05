@@ -2,7 +2,8 @@
 """Ability 定义、内容与受控执行的领域入口。
 
 Operation 是现有单动作执行接口的公开名称。扫描、读取或实例化不授予 grant；
-运行时访问由独立 ghrah.scheme 与 Core 的受信接入层核定。
+本地运行时访问由 AbilityAccessStore 与 Core 的受信装配层核定；
+Scheme 资源切片是可选接入，不是本地内容读取的前置。
 """
 
 from ghrah.ability.assembly import (

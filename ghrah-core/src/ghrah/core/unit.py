@@ -791,7 +791,7 @@ class CoreUnit:
             if self._config.skill_root:
                 logger.warning(
                     "CoreUnit: ability_source=builtin ignores skill_root=%r — the granted "
-                    "content reader is not wired yet, so skill content stays unavailable",
+                    "content service is assembled per Agent/run from committed versions",
                     self._config.skill_root,
                 )
             if self._config.default_abilities is not None:
@@ -800,7 +800,7 @@ class CoreUnit:
                     "spawn an agent through a manifest_ref instead",
                     self._config.default_abilities,
                 )
-        # skill-ability 接线：按模式构造读取服务（builtin 模式显式无读取器）。
+        # 旧读取器按模式选择；builtin 的内容端口随每次授权装配创建。
         skill_provider: Any = assembly.skill_provider(self._config.skill_root)
 
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn

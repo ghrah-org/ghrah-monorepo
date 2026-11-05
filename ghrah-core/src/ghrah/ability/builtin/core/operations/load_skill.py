@@ -1,32 +1,16 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
-#
 # SPDX-License-Identifier: Apache-2.0
-
-"""LoadSkillAbility：按 full_name 加载某一个 skill 的 SKILL.md 原文（skill-ability）。
-
-技能目录摘要（每轮注入上下文）只承载「名字 + 一句话描述」，**正文不在注入物里**
-——需要正文时用本能力按需拉取：入参就是给模型的 ``full_name``（与目录摘要里的
-名字逐字一致），返回 SKILL.md 原文与它在磁盘上的路径。
-
-定位口径完全走 ``SkillAbilityProvider``（同一份清单索引）：不自己拼路径、不自己
-解析 frontmatter、不缓存——因此目录热插拔后立刻生效，且不会绕过扫描校验去读一个
-"不在清单里"的文件。
-
-接线语义（零隐式）：provider 经装配期注入
-（``SKILL_PROVIDER`` 执行服务）；未接线时明确 FAILURE 说明缺席，
-**不**静默当成"技能不存在"（那是两件不同的事）。
-"""
+"""按获授目录的精确名称读取完整 Skill 正文或已登记的相对文本附件。"""
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from ghrah.ability.access import AccessError
 from ghrah.ability.execution.base import Ability
-from ghrah.ability.execution.execution_services import SKILL_PROVIDER
-from ghrah.ability.loading.skill_errors import SkillNotFoundError, SkillParseError
+from ghrah.ability.execution.execution_services import ABILITY_CONTENT
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
@@ -34,60 +18,43 @@ if TYPE_CHECKING:
     from ghrah.ability.execution.hooks import Hook
     from ghrah.ability.execution.invocation import OperationCall
 
-
-# ---------------------------------------------------------------------------
-# Operation 声明（v1）：build 从下列常量与 Input/Output 模型生成 ability.yaml 的 members。
-# 旧 manifest 的 metadata.description / tags / permissions 分别落在 SUMMARY / TAGS / PERMISSIONS。
-# ---------------------------------------------------------------------------
 PERMISSIONS = {}
-
-# --- 成员声明（build 生成 members 的唯一来源；改完须重新 build）
 TITLE = "Load Skill"
 SUMMARY = (
-    "Load the full SKILL.md document of one skill (skill-ability) by its exact full name, "
-    "returning the document text and its path. Skills are instruction documents, not "
-    "invocable abilities."
+    "Load the complete text of a granted Skill by its exact alias/skill catalog name. "
+    "Pass path to read a granted text attachment relative to that Skill. "
+    "Content comes from the committed version; returned paths are package-relative."
 )
-TAGS = [
-    "core",
-    "skill",
-]
+TAGS = ["core", "skill"]
 EFFECTS = []
 TIMEOUT_MS = 60_000
-# --- 成员声明结束
 
 __all__ = ["LoadSkillAbility", "LoadSkillInput"]
 
-logger = logging.getLogger(__name__)
-
 
 class LoadSkillInput(BaseModel):
-    """load_skill 工具入参契约（extra=forbid）。"""
+    """正文与附件共用获授 Skill 身份；path 不接受宿主文件路径。"""
 
     model_config = {"extra": "forbid"}
 
     full_name: str = Field(
+        min_length=1,
+        description="Exact alias/skill name from the available-skills catalog or list_abilities.",
+    )
+    path: str | None = Field(
+        default=None,
         description=(
-            "The skill's full name exactly as shown in the available-skills "
-            "catalog (e.g. 'research'). Use list_abilities to see the names."
+            "Optional registered attachment path relative to the Skill document, "
+            "for example references/style.md. Omit to load the complete Skill document."
         ),
     )
 
 
-Input = LoadSkillInput  # v1 生成器入口别名（生成器只读 module.Input）
+Input = LoadSkillInput
 
 
 class LoadSkillAbility(Ability):
-    """加载单个 skill 的正文原文（只读）。
-
-    输出经 ``data`` 返回：
-
-    - SUCCESS：``{"full_name", "body_path", "skill_dir", "path", "content", "note"}``
-      ——``content`` 是正文完整原文，逐字返回；``body_path`` 是定义面声明的相对
-      路径（本版 ``skills/SKILL.md``），``path`` 是它在磁盘上的绝对路径；
-    - FAILURE：``{"error"}``——入参缺失 / provider 未接线 / 技能不存在 /
-      文档读不出来，四种情形文案各自区分。
-    """
+    """只读消费获授快照；成功结果经原工具结果通路进入 Context。"""
 
     @property
     def name(self) -> str:
@@ -97,74 +64,35 @@ class LoadSkillAbility(Ability):
         return {
             "type": "function",
             "function": {
-                "name": "load_skill",
-                "description": (
-                    "Load the full SKILL.md document of one skill from the "
-                    "available-skills catalog, by its exact full name. Returns "
-                    "the document text and its path. Read one when a task "
-                    "matches its description."
-                ),
+                "name": self.name,
+                "description": SUMMARY,
                 "parameters": LoadSkillInput.model_json_schema(),
             },
         }
 
     def to_prompt_description(self) -> str:
-        return "load_skill(full_name: str) -> dict: load one skill's SKILL.md content"
+        """返回工具的简短调用说明。"""
+        return "load_skill(full_name, path=None): read a granted Skill or text attachment"
 
     def get_hooks(self) -> list[Hook]:
         return []
 
     async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
-        tool_args = call.arguments
-        full_name = str(tool_args.get("full_name", "") or "").strip()
-        if not full_name:
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": "full_name is required"},
-            )
-
-        provider = services.get(SKILL_PROVIDER)
+        provider = services.get(ABILITY_CONTENT)
         if provider is None:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
-                data={
-                    "error": (
-                        "SkillAbilityProvider not wired — skill loading is "
-                        "unavailable in this deployment (assembly-time "
-                        "injection, not implicit)"
-                    )
-                },
+                data={"error": "Granted ability content service not wired"},
             )
-
         try:
-            document = provider.read_skill(full_name)
-        except SkillNotFoundError:
+            provider.validate_call(call)
+            request = LoadSkillInput.model_validate(call.arguments)
+            result = await provider.load_skill(request.full_name, path=request.path)
+        except AccessError as exc:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
-                data={
-                    "error": f"Skill not found: '{full_name}'",
-                    "note": ("Use list_abilities to see the available skill full names."),
-                },
+                data={"error": f"Granted content unavailable: {exc.code}"},
             )
-        except SkillParseError as exc:
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": f"Failed to read skill document: {exc}"},
-            )
-        except Exception as exc:
-            logger.warning("skill document read failed for %r", full_name, exc_info=True)
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": f"Failed to read skill document: {exc}"},
-            )
-
-        payload: dict[str, Any] = {
-            "full_name": document.full_name,
-            "body_path": document.body_path,
-            "skill_dir": str(document.skill_dir) if document.skill_dir is not None else "",
-            "path": str(document.path) if document.path is not None else "",
-            "content": document.content,
-            "note": "skill-ability document — instructions to apply",
-        }
-
-        return ActionResult(outcome=ActionOutcome.SUCCESS, data=payload)
+        except ValueError as exc:
+            return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": str(exc)})
+        return ActionResult(outcome=ActionOutcome.SUCCESS, data=result)

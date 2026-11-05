@@ -130,6 +130,9 @@ class ContextManager:
         # 技能目录摘要：provider 装配期显式注入；digest 仅用于文案口径与变化日志
         if skill_provider is not None and ability_content is not None:
             raise ValueError("Skill 来源必须显式选择一个")
+        validate_agent = getattr(ability_content, "validate_agent", None)
+        if validate_agent is not None:
+            validate_agent(agent_name)
         self._ability_content = ability_content
         self._skill_provider = skill_provider
         self._skill_catalog_digest: str | None = None
@@ -1085,6 +1088,9 @@ class ContextManager:
 
         # 技能目录摘要：窗口管理之后追加——不被压缩裁掉，且始终位于队列末尾
         if self._ability_content is not None:
+            validate_context = getattr(self._ability_content, "validate_context", None)
+            if validate_context is not None:
+                validate_context(self._agent_name)
             text = await self._ability_content.catalog_text()
             catalog = (
                 self._message_factory.create_message(
