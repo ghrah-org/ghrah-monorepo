@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+import json
+from pathlib import Path
 
 from .kernel_main import run_kernel
 
@@ -14,6 +16,7 @@ def main() -> int:
         kernel.add_argument(f"--{name}", type=int, required=True)
     for name in ("control-token", "observer-token", "peer-token", "report"):
         kernel.add_argument(f"--{name}", required=True)
+    kernel.add_argument("--config", required=True, help="受信宿主配置文件")
     args = parser.parse_args()
     if args.command == "_kernel":
         asyncio.run(
@@ -25,6 +28,7 @@ def main() -> int:
                 args.report,
                 args.peer_fd,
                 args.peer_token,
+                json.loads(Path(args.config).read_text()),
             )
         )
         return 0

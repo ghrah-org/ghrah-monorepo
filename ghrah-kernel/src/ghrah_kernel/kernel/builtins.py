@@ -1,6 +1,7 @@
 """内核自有契约解释自己的系统参数，不解释用户态业务字典。"""
 
 import asyncio
+import os
 
 from ..abi import ABI_ENTRIES
 from ..payloads import decode_payload, encode_payload
@@ -10,7 +11,11 @@ from .tables import KernelFault
 async def invoke_builtin(kernel, session, scheme, action, payload, source):
     arguments = decode_payload(payload)
     if scheme == "kernel.sys":
-        result = kernel.stats()
+        result = (
+            kernel.stats()
+            if action == "stats"
+            else {"kernel_pid": os.getpid(), "boot_id": kernel.boot_id}
+        )
         result["implemented_abi"] = list(ABI_ENTRIES)
     elif scheme == "kernel.time":
         if action == "now":
@@ -23,6 +28,12 @@ async def invoke_builtin(kernel, session, scheme, action, payload, source):
             raise KernelFault("NOT_SUPPORTED", "未知定时动作")
     elif scheme == "kernel.proc" and session.role == "bootstrap":
         if action == "spawn":
+            if (
+                not isinstance(arguments, dict)
+                or not {"service_key", "kind", "spawn_key"} <= arguments.keys()
+                or arguments.keys() - {"service_key", "kind", "spawn_key", "fixture", "entry_key"}
+            ):
+                raise KernelFault("INVALID_ARGUMENT", "spawn 只接受启动记录选择与实例键")
             result = await kernel.processes.spawn(**arguments)
         elif action == "kill":
             result = await kernel.processes.kill(arguments["domain"])

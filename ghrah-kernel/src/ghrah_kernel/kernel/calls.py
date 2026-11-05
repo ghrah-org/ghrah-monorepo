@@ -4,6 +4,7 @@ import asyncio
 import math
 from dataclasses import asdict, replace
 
+from ..context import ProviderContext
 from ..protocol import ErrorRecord
 from .tables import Invocation, KernelFault
 
@@ -115,6 +116,16 @@ class Calls:
                         "provider_object_id": obj.provider_object_id,
                         "action": invocation.action,
                         "invocation_id": invocation.invocation_id,
+                        "context": ProviderContext(
+                            invocation.owner.principal,
+                            invocation.owner.session_id,
+                            invocation.owner.domain_id,
+                            invocation.owner.resolution_scope,
+                            scheme.scheme_id,
+                            obj.provider_object_id,
+                            invocation.invocation_id,
+                            invocation.deadline,
+                        ).to_dict(),
                     },
                     invocation.payload,
                     prepare=lambda request: self.commit(invocation, request),

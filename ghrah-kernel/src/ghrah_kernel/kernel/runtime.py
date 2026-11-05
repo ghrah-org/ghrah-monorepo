@@ -6,7 +6,9 @@ import os
 import uuid
 from collections import deque
 
+from ..context import CallerBinding, ProviderContext
 from ..endpoint import AsyncEndpoint
+from ..launch import LaunchCatalog
 from ..protocol import Envelope, ErrorRecord, ProtocolError, decode_envelope, encode_envelope
 from ..wire import MessageConnection, MessageTooLarge
 from .calls import Calls
@@ -19,7 +21,7 @@ from .tables import Invocation, KernelFault, ObjectRecord, Scheme, Session
 
 
 class Kernel:
-    def __init__(self):
+    def __init__(self, *, launch_catalog: LaunchCatalog | None = None):
         self.boot_id = uuid.uuid4().hex
         self._ids = itertools.count(1)
         self.sessions: dict[str, Session] = {}
@@ -27,6 +29,7 @@ class Kernel:
         self.objects: dict[str, ObjectRecord] = {}
         self.invocations: dict[str, Invocation] = {}
         self.enrollments: dict[str, str] = {}
+        self.launch_catalog = launch_catalog if launch_catalog is not None else LaunchCatalog()
         self.processes = Processes(self)
         self.references = References(self)
         self.calls = Calls(self)
@@ -120,15 +123,22 @@ class Kernel:
         task.add_done_callback(finished)
 
     def attach_caller(
-        self, connection, credential: str, role: str, domain=None, *, principal=None
+        self,
+        connection,
+        credential: str,
+        role: str,
+        domain=None,
+        *,
+        principal=None,
+        resolution_scope=None,
+        diagnostics=False,
     ) -> None:
+        binding = CallerBinding(principal, resolution_scope, diagnostics)
         endpoint = AsyncEndpoint(MessageConnection(connection))
-        task = asyncio.create_task(
-            self._serve_caller(endpoint, credential, role, domain, principal)
-        )
+        task = asyncio.create_task(self._serve_caller(endpoint, credential, role, domain, binding))
         self._connections.append((endpoint, task))
 
-    async def _serve_caller(self, endpoint, credential, role, domain, principal) -> None:
+    async def _serve_caller(self, endpoint, credential, role, domain, binding) -> None:
         session = None
         requests: set[asyncio.Task] = set()
         last_id = 0
@@ -172,7 +182,9 @@ class Kernel:
                             )
                         )
                         continue
-                    if message.meta.get("requires_ns_root", True) and self.root_ns is None:
+                    if message.meta.get("requires_ns_root", True) and (
+                        self.root_ns is None or binding.resolution_scope is None
+                    ):
                         await endpoint.send(
                             encode_envelope(
                                 Envelope(
@@ -192,9 +204,11 @@ class Kernel:
                         session = self._new_session(
                             role,
                             domain,
-                            principal,
+                            binding.principal,
                             message.meta.get("accept_transfers", False),
                             message.meta.get("accept_channels", False),
+                            resolution_scope=binding.resolution_scope,
+                            diagnostics=binding.diagnostics,
                         )
                     except KernelFault as exc:
                         await endpoint.send(
@@ -233,16 +247,27 @@ class Kernel:
             await endpoint.aclose()
 
     def _new_session(
-        self, role, domain, principal, accept_transfers, accept_channels=False
+        self,
+        role,
+        domain,
+        principal,
+        accept_transfers,
+        accept_channels=False,
+        *,
+        resolution_scope=None,
+        diagnostics=False,
     ) -> Session:
-        needed = 2 + (self.root_ns is not None) + (role == "bootstrap")
+        CallerBinding(principal, resolution_scope, diagnostics)
+        has_root = self.root_ns is not None and resolution_scope is not None
+        needed = 2 + has_root + (role == "bootstrap")
         if len(self.references.nodes) + needed > self.references.max_nodes:
             raise KernelFault("QUOTA_EXCEEDED", "无法为会话保留初始引用")
         session = Session(
             self.new_id("session"),
             role,
             domain,
-            principal=principal or (f"service:{domain}" if domain else role),
+            principal=principal,
+            resolution_scope=resolution_scope,
             accept_transfers=accept_transfers,
             accept_channels=accept_channels,
         )
@@ -252,11 +277,17 @@ class Kernel:
                 "boot_id": self.boot_id,
                 "kernel_pid": os.getpid(),
                 "principal": session.principal,
+                "domain_id": session.domain_id,
                 "system_events": self.new_id("system_events"),
-                "ns_root_handle": self._root_handle(session, self.root_ns, set())
-                if self.root_ns
+                "resolution_scope": resolution_scope,
+                "ns_root_handle": self._install(
+                    session, self.root_ns, resolution_scope, set(), root=True
+                )
+                if has_root
                 else None,
-                "sys_handle": self._root_handle(session, self.sys_id, {"info", "stats"}),
+                "sys_handle": self._root_handle(
+                    session, self.sys_id, {"info", "stats"} if diagnostics else {"info"}
+                ),
                 "time_handle": self._root_handle(
                     session, self.time_id, self.schemes[self.time_id].actions
                 ),
@@ -580,6 +611,14 @@ class Kernel:
                         "provider_object_id": provider_object,
                         "path": path,
                         "principal": session.principal,
+                        "context": ProviderContext(
+                            session.principal,
+                            session.session_id,
+                            session.domain_id,
+                            session.resolution_scope,
+                            scheme.scheme_id,
+                            provider_object,
+                        ).to_dict(),
                     },
                     prepare=prepare,
                 )
@@ -633,7 +672,7 @@ class Kernel:
                 "domain_generation": domain.generation,
                 "contract": scheme.contract,
                 "basis": list(grant["basis"]),
-                "expiry": grant["expiry"],
+                "expiry": session.handles[handle].expiry,
             }
         raise KernelFault("PROTOCOL_ERROR", "命名转交次数超限")
 

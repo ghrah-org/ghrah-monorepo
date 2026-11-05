@@ -1,17 +1,14 @@
 """Kernel 唯一持有子进程创建、信号与等待。"""
 
 import asyncio
+import os
 import secrets
-import sys
 from multiprocessing import Pipe
 
 from ..client import RpcClient
 from ..endpoint import AsyncEndpoint
 from ..wire import MessageConnection
 from .tables import Domain, KernelFault
-
-# 受管服务入口模块：当前由机制回归夹具提供，真实受管入口接入后替换。
-SERVICE_ENTRY_MODULE = "_mechanism.service_main"
 
 
 class Processes:
@@ -23,25 +20,33 @@ class Processes:
         self._spawn_lock = asyncio.Lock()
 
     async def spawn(
-        self, service_key: str, kind: str, spawn_key: str, fixture: str = "normal"
+        self,
+        service_key: str,
+        kind: str,
+        spawn_key: str,
+        fixture: str = "normal",
+        entry_key: str | None = None,
     ) -> dict:
         async with self._spawn_lock:
             if self.kernel._closing or self.kernel.shutdown.active:
                 raise KernelFault("PROVIDER_UNAVAILABLE", "内核正在结束")
-            return await self._spawn(service_key, kind, spawn_key, fixture)
+            return await self._spawn(service_key, kind, spawn_key, fixture, entry_key)
 
-    async def _spawn(self, service_key: str, kind: str, spawn_key: str, fixture: str) -> dict:
-        if kind not in ("namespace", "ability", "agent"):
-            raise KernelFault("INVALID_ARGUMENT", "只支持声明的实验服务种类")
-        if fixture not in ("normal", "exit", "spin", "ignore_term") or (
-            kind != "ability" and fixture != "normal"
-        ):
-            raise KernelFault("INVALID_ARGUMENT", "故障 fixture 仅用于声明的 Ability 替身")
-        if not all(isinstance(value, str) and value for value in (service_key, spawn_key)):
-            raise KernelFault("INVALID_ARGUMENT", "服务身份与启动键必须非空")
+    async def _spawn(
+        self, service_key: str, kind: str, spawn_key: str, fixture: str, entry_key: str | None
+    ) -> dict:
+        if not all(
+            isinstance(value, str) and value for value in (service_key, kind, spawn_key, fixture)
+        ) or (entry_key is not None and (not isinstance(entry_key, str) or not entry_key)):
+            raise KernelFault("INVALID_ARGUMENT", "服务身份、种类与启动键必须非空")
+        selected = entry_key if entry_key is not None else kind
+        try:
+            record = self.kernel.launch_catalog.select(selected, kind, fixture)
+        except ValueError as exc:
+            raise KernelFault("ACCESS_DENIED", str(exc)) from exc
         old = self.spawn_keys.get((service_key, spawn_key))
         if old is not None:
-            if old.kind != kind or old.fixture != fixture:
+            if old.kind != kind or old.fixture != fixture or old.entry_key != selected:
                 raise KernelFault("REGISTRATION_CONFLICT", "同启动键的内容不同")
             if old.reaped:
                 raise KernelFault("DOMAIN_RETIRED", "旧启动键不能复活实例")
@@ -51,11 +56,10 @@ class Processes:
         credential, enrollment = secrets.token_hex(16), secrets.token_hex(16)
         try:
             process = await asyncio.create_subprocess_exec(
-                sys.executable,
+                record.executable,
                 "-m",
-                SERVICE_ENTRY_MODULE,
-                "--kind",
-                kind,
+                record.module,
+                *record.arguments,
                 "--provider-fd",
                 str(provider_child.fileno()),
                 "--caller-fd",
@@ -64,8 +68,9 @@ class Processes:
                 credential,
                 "--enrollment",
                 enrollment,
-                "--fixture",
-                fixture,
+                "--config-json",
+                record.configuration,
+                env={**os.environ, **dict(record.environment)},
                 pass_fds=(provider_child.fileno(), caller_child.fileno()),
                 start_new_session=True,
             )
@@ -87,6 +92,7 @@ class Processes:
             RpcClient(AsyncEndpoint(MessageConnection(provider_parent))),
             fixture=fixture,
             spawn_key=spawn_key,
+            entry_key=selected,
         )
         self.domains[domain.domain_id] = domain
         domain.peer.event_handler = lambda message: self.kernel.events.receive(
@@ -105,7 +111,15 @@ class Processes:
         domain.peer.failure_handler = disconnected
         self.spawn_keys[(service_key, spawn_key)] = domain
         self.kernel.enrollments[domain.domain_id] = enrollment
-        self.kernel.attach_caller(caller_parent, credential, "service", domain.domain_id)
+        self.kernel.attach_caller(
+            caller_parent,
+            credential,
+            "service",
+            domain.domain_id,
+            principal=record.binding.principal,
+            resolution_scope=record.binding.resolution_scope,
+            diagnostics=record.binding.diagnostics,
+        )
         domain.monitor = asyncio.create_task(self._monitor(domain))
         return self.status(domain.domain_id)
 

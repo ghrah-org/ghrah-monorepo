@@ -20,21 +20,26 @@ class ServiceSpec:
     max_restarts: int = 3
     window_seconds: float = 5
     drain_ms: int = 50
+    entry_key: str | None = None
 
     def __post_init__(self):
         if (
             not self.service_key
             or self.restart not in ("never", "on_failure", "always")
             or self.timeout_action not in ("keep", "kill")
-            or self.fixture not in ("normal", "exit", "spin", "ignore_term")
-            or (self.kind != "ability" and self.fixture != "normal")
+            or not isinstance(self.fixture, str)
+            or not self.fixture
+            or (
+                self.entry_key is not None
+                and (not isinstance(self.entry_key, str) or not self.entry_key)
+            )
             or type(self.max_restarts) is not int
             or not 0 <= self.max_restarts <= 3
             or not 1 <= self.window_seconds <= 60
             or type(self.drain_ms) is not int
             or not 0 <= self.drain_ms <= 500
         ):
-            raise ValueError("无效的实验服务策略")
+            raise ValueError("无效的服务策略")
         if self.kind == "namespace" and self.restart != "never":
             raise ValueError("本轮命名根固定为 never，不提供既有会话命名根迁移")
 
@@ -184,6 +189,7 @@ class Supervisor:
                     state.spec.kind,
                     spawn_key=key,
                     fixture=state.spec.fixture,
+                    entry_key=state.spec.entry_key,
                 )
                 if state.desired != "running" or state.epoch != epoch or self._closing:
                     await self._kill_current(state)

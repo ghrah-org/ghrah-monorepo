@@ -192,7 +192,9 @@ class KernelClient:
         finally:
             await self.close(invocation)
 
-    async def spawn(self, service_key: str, kind: str, *, spawn_key: str, fixture="normal") -> dict:
+    async def spawn(
+        self, service_key: str, kind: str, *, spawn_key: str, fixture="normal", entry_key=None
+    ) -> dict:
         return await self.call(
             self.session["proc_handle"],
             "spawn",
@@ -201,6 +203,7 @@ class KernelClient:
                 "kind": kind,
                 "spawn_key": spawn_key,
                 "fixture": fixture,
+                "entry_key": entry_key,
             },
         )
 

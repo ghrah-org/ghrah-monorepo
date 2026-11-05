@@ -7,6 +7,7 @@ import secrets
 import sys
 import tempfile
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from multiprocessing import Pipe
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from ghrah_kernel.endpoint import AsyncEndpoint
 from ghrah_kernel.kernel_client import KernelClient
 from ghrah_kernel.wire import MessageConnection
 
-from .contracts import DEFAULT_SERVICES, SERVICE_SCHEMES
+from .contracts import DEFAULT_SERVICES, SERVICE_SCHEMES, mechanism_catalog
 
 # 子进程入口从 tests 目录解析：内核宿主与其派生的受管服务共享这一环境。
 ENTRY_ENV = {
@@ -75,6 +76,26 @@ async def open_service_chain(*, observer_accepts=False, peer_accepts=False, asse
     host = None
     with tempfile.TemporaryDirectory(prefix="mechanism-chain-") as temporary:
         report_path = Path(temporary) / "kernel.json"
+        config_path = Path(temporary) / "host.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "launches": [asdict(record) for record in mechanism_catalog().records],
+                    "callers": {
+                        name: {
+                            "principal": principal,
+                            "resolution_scope": "root",
+                            "diagnostics": True,
+                        }
+                        for name, principal in (
+                            ("control", "bootstrap"),
+                            ("observer", "observer"),
+                            ("peer", "observer"),
+                        )
+                    },
+                }
+            )
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
@@ -95,6 +116,8 @@ async def open_service_chain(*, observer_accepts=False, peer_accepts=False, asse
                 peer_token,
                 "--report",
                 str(report_path),
+                "--config",
+                str(config_path),
                 pass_fds=(kernel_control.fileno(), kernel_observer.fileno(), kernel_peer.fileno()),
                 env=ENTRY_ENV,
             )

@@ -408,7 +408,7 @@ def test_service_exit_wakes_event_and_stream_waiters_and_expiry_discards_pipe():
 def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
     async def scenario(kind):
         kernel = Kernel()
-        session = kernel._new_session("observer", None, None, False)
+        session = kernel._new_session("observer", None, "observer", False)
         source = kernel.references.nodes[session.hello["sys_handle"]]
         obj = ObjectRecord(
             kernel.new_id("object"), kernel.sys_id, "local-test", root=True, kind=kind
@@ -466,8 +466,8 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
 def test_channel_peer_opt_in_domain_and_notification_reservation_fail_atomically():
     async def scenario():
         kernel = Kernel()
-        owner = kernel._new_session("observer", None, None, False)
-        peer = kernel._new_session("service", "foreign", None, False)
+        owner = kernel._new_session("observer", None, "observer", False)
+        peer = kernel._new_session("service", "foreign", "foreign", False)
         sid = kernel.new_id("scheme")
         kernel.schemes[sid] = Scheme(sid, "provider", "ability", "test", frozenset({"stream"}))
         kernel.processes.domains["provider"] = SimpleNamespace(

@@ -31,6 +31,7 @@ class Domain:
     fixture: str = "normal"
     spawn_key: str = ""
     forced: bool = False
+    entry_key: str = ""
 
     def snapshot(self) -> dict:
         return {
@@ -47,6 +48,7 @@ class Domain:
             "forced": self.forced,
             "fixture": self.fixture,
             "spawn_key": self.spawn_key,
+            "entry_key": self.entry_key,
         }
 
 
@@ -105,6 +107,7 @@ class Session:
     supervision: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=32))
     supervision_gap: bool = False
     waiting_supervision: bool = False
+    resolution_scope: str | None = None
 
 
 @dataclass

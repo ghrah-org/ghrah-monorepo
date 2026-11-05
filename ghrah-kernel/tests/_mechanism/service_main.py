@@ -86,6 +86,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", required=True)
     parser.add_argument("--fixture", default="normal")
+    parser.add_argument("--config-json", default="{}")
     for name in ("provider-fd", "caller-fd"):
         parser.add_argument(f"--{name}", type=int, required=True)
     for name in ("credential", "enrollment"):

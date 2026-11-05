@@ -22,6 +22,12 @@ jobs:
       - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel
       - name: 契约漂移检查
         run: uv run python scripts/export_ability_contracts.py --check
+      - name: Kernel 独立安装与真实命名服务
+        run: |
+          uv build --package ghrah-kernel --out-dir dist/kernel-check
+          for wheel in dist/kernel-check/*.whl; do
+            uv run --isolated --no-project --with "$wheel" python -I scripts/verify_kernel_install.py
+          done
       - name: Scheme 构建与隔离安装
         run: |
           for package in ghrah-plugin ghrah-protocol ghrah-scheme; do

@@ -204,7 +204,9 @@ def test_concurrent_identical_shutdown_joins_one_operation_conflicting_mode_reje
 
 def test_reap_failure_is_reported_without_claiming_clean_shutdown():
     async def scenario():
-        kernel = Kernel()
+        from _mechanism.contracts import mechanism_catalog
+
+        kernel = Kernel(launch_catalog=mechanism_catalog())
         session = kernel._new_session("bootstrap", None, "bootstrap", False)
         domain = await kernel.processes.spawn("unreaped", "ability", "once")
         original = kernel.processes.kill

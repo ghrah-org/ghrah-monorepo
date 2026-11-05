@@ -78,7 +78,7 @@ class References:
             or type(depth) is not int
             or not 0 <= depth <= 4
             or type(expiry) not in (int, float)
-            or not math.isfinite(expiry)
+            or not (math.isfinite(expiry) or expiry == math.inf)
         ):
             raise KernelFault("PROTOCOL_ERROR", "许可身份、期限或深度无效")
         policy = grant["transfer_policy"]

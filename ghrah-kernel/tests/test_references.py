@@ -468,7 +468,7 @@ def test_oversize_provider_envelope_is_rejected_before_dispatch_without_poisonin
 def test_failed_initial_handle_install_does_not_publish_partial_session():
     async def scenario():
         kernel = Kernel()
-        admin = kernel._new_session("bootstrap", None, None, False)
+        admin = kernel._new_session("bootstrap", None, "bootstrap", False)
         # sys 许可根先被撤销，新会话的初始句柄安装应整体失败。
         await kernel.references.revoke(
             admin, {"type": "basis", "scheme_id": kernel.sys_id, "grant_id": "root", "revision": 1}
@@ -476,7 +476,7 @@ def test_failed_initial_handle_install_does_not_publish_partial_session():
         kernel.root_ns = kernel.proc_id
         before = kernel.stats()
         with pytest.raises(KernelFault) as failed:
-            kernel._new_session("observer", None, None, False)
+            kernel._new_session("observer", None, "observer", False)
         assert failed.value.code == "REVOKED"
         after = kernel.stats()
         assert all(before[key] == after[key] for key in ("sessions_active", "handles", "objects"))

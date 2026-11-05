@@ -64,7 +64,7 @@ cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo
 | 目录 | 语言 | 说明 | 发布 |
 | --- | --- | --- | --- |
 | `ghrah-core/` | Python | agent 认知核心（loop/上下文/能力/装配） | PyPI `ghrah-core` |
-| `ghrah-kernel/` | Python | 应用微内核与监督者（14 个基础入口、跨进程句柄／调用事实、结构化消息 SDK）；真实 Provider 尚未接入 | 未发布（未纳入发布白名单） |
+| `ghrah-kernel/` | Python | 应用微内核与监督者（14 个基础入口、受信启动、静态身份/Scope 与真实命名服务）；真实 Agent/Ability 尚未接入 | 未发布（未纳入发布白名单） |
 | `ghrah-plugin/` | Python | 插件基础设施（plugin spec 契约/发现/注册/协商/离线验证） | 未发布（`publish.yml` 白名单未纳入） |
 | `ghrah-protocol/` | Python | 协议类型与消息定义 | PyPI `ghrah-protocol` |
 | `ghrah-subject/` | Python | 效果宿主（工作区/权限/HITL/Project/Room/恢复） | PyPI `ghrah-subject` |
