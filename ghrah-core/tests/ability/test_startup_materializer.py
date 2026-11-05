@@ -128,7 +128,7 @@ async def store(tmp_path: Path):
     db = await AbilityAccessStore.open(
         tmp_path / "project.db",
         "project",
-        operators=frozenset({"deployment"}),
+        operators=frozenset({"deployment", "migration"}),
         runs=lambda agent: f"{agent}-run",
     )
     try:
@@ -453,3 +453,65 @@ async def test_core_member_is_admitted(store, tmp_path):
     outcome = await tool.execute(AbilityExecutionContext(tool_args={}))
     error = str(outcome.data.get("error", ""))
     assert "backend is not supported by the admission layer" not in error
+
+
+async def test_migrated_agent_starts_from_existing_facts_without_policy(store, tmp_path):
+    """已迁移的存量 Agent 在未配置策略时按既有事实启动，不扩权也不撤销。"""
+    from ghrah.ability.access import MigrationGrant, migrate_agent
+
+    await migrate_agent(
+        store,
+        "alice",
+        grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
+        workspace_root=str(tmp_path),
+    )
+    revision_before = await store.agent_revision(DEPLOY, "alice")
+    assembly, resolved = _resolved(AGENT_YAML)
+
+    result = await _materializer(store, assembly, tmp_path, policy=None).materialize(
+        agent="alice", resolved=resolved
+    )
+
+    # 模板还申请了 list_directory，但存量模式不自动扩权
+    assert [binding.member for binding in result.tools] == ["read_file"]
+    assert [item.name for item in result.abilities] == ["conversation", "read_file"]
+    assert result.granted == ()
+    assert result.revoked == ()
+    # 修订仍会因工具选择（bind）推进，但授权事实本身没有被改写
+    assert await store.agent_revision(DEPLOY, "alice") >= revision_before
+    records = await store.grants(DEPLOY, "alice")
+    assert records[0].source == "migration"
+    assert records[0].members == ("read_file",)
+    assert list(await store.tool_names(DEPLOY, "alice")) == ["read_file"]
+
+
+async def test_unconfigured_policy_without_facts_fails_closed(store, tmp_path):
+    """没有策略也没有存量事实：不授予任何能力，启动显式失败。"""
+    assembly, resolved = _resolved(AGENT_YAML)
+
+    with pytest.raises(StartupGrantError, match="未配置启动授权策略"):
+        await _materializer(store, assembly, tmp_path, policy=None).materialize(
+            agent="alice", resolved=resolved
+        )
+
+
+async def test_revoked_migrated_facts_do_not_resurrect_at_startup(store, tmp_path):
+    """迁移后被撤销的授权不会在下次启动时被存量模式补回。"""
+    from ghrah.ability.access import MigrationGrant, migrate_agent
+
+    await migrate_agent(
+        store,
+        "alice",
+        grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
+        workspace_root=str(tmp_path),
+    )
+    revision = await store.agent_revision(DEPLOY, "alice")
+    await store.write_revoke(
+        DEPLOY, "alice", RevokeAbilityRequest(alias="fs", expected_revision=revision)
+    )
+    assembly, resolved = _resolved(AGENT_YAML)
+
+    with pytest.raises(StartupGrantError, match="未配置启动授权策略"):
+        await _materializer(store, assembly, tmp_path, policy=None).materialize(
+            agent="alice", resolved=resolved
+        )

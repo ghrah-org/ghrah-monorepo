@@ -4,10 +4,11 @@
 
 """SpawnAgentAbility：以 manifest 实例化的方式动态创建新的平级 Agent。
 
-能力面治理：LLM 工具面不提供自由 ``abilities`` 参数——新 agent
-的能力集由 manifest 完全冻结，不继承也不由 spawner 现场拼装。程序化
-路径 ``supervisor.spawn_agent(config, abilities=[...])`` 仍可用
-（代码级显式，不经 LLM）。
+能力面治理：LLM 工具面不提供自由 ``abilities`` 参数——新 Agent
+的能力集由 manifest 完全冻结，不继承也不由 spawner 现场拼装。builtin
+模式下子 Agent 与顶层 spawn 走同一条授权装配边界（关系库 + 启动策略 +
+执行接纳）；``supervisor.spawn_agent(config, abilities=[...])`` 只对
+legacy 模式保留，builtin 模式调用方自拼工具表会被拒绝。
 """
 
 from __future__ import annotations
@@ -70,6 +71,65 @@ class SpawnAgentInput(BaseModel):
     system_prompt: str = Field(
         default="",
         description="Optional system prompt override for the new agent",
+    )
+
+
+async def _assemble_child_abilities(
+    *,
+    context: Any,
+    manifest_ref: str,
+    resolved: Any,
+) -> Any:
+    """按装配模式产出子 Agent 的工具表。
+
+    builtin 模式必须经授权装配边界（与顶层 spawn 同一入口）：从 Supervisor
+    取启动核定器，按子 Agent 模板写关系库并实例化；未接线或核定失败直接
+    FAILURE，不回退按模板实例化。legacy 模式保持旧装配路径。
+
+    Args:
+        context: 执行上下文（含 supervisor）。
+        manifest_ref: 本次 spawn 的 manifest 引用（错误信息用）。
+        resolved: 已解析的子 Agent 模板。
+
+    Returns:
+        工具表；失败时返回 ``ActionResult``。
+    """
+    from ghrah.types.results import ActionOutcome, ActionResult
+
+    supervisor = context.supervisor
+    if getattr(supervisor, "_builtin_abilities", False):
+        materializer = getattr(supervisor, "ability_materializer", None)
+        if materializer is None:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={
+                    "error": (
+                        "builtin 模式缺少授权装配边界（启动授权关系库未接线）；"
+                        "拒绝在关系库之外实例化子 Agent 工具"
+                    )
+                },
+            )
+        try:
+            materialized = await materializer.materialize(
+                agent=resolved.config.name, resolved=resolved
+            )
+        except Exception as error:
+            logger.warning(
+                "SpawnAgentAbility: authorized assembly failed for '%s': %s",
+                manifest_ref,
+                error,
+            )
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={"error": f"authorized assembly failed for '{manifest_ref}': {error}"},
+            )
+        return materialized.abilities
+    from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
+
+    return instantiate_resolved_abilities(
+        resolved.abilities,
+        workspace_root=None,
+        auto_approve_abilities=(),
     )
 
 
@@ -151,8 +211,6 @@ class SpawnAgentAbility(Ability):
                 },
             )
 
-        from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
-
         try:
             manifest = store.load_agent(manifest_ref)
             from ghrah.ability.source import BuiltinAbilitySource
@@ -171,11 +229,13 @@ class SpawnAgentAbility(Ability):
                 data={"error": f"manifest resolve failed for '{manifest_ref}': {e}"},
             )
 
-        ability_instances = instantiate_resolved_abilities(
-            resolved.abilities,
-            workspace_root=None,
-            auto_approve_abilities=(),
+        ability_instances = await _assemble_child_abilities(
+            context=context,
+            manifest_ref=manifest_ref,
+            resolved=resolved,
         )
+        if isinstance(ability_instances, ActionResult):
+            return ability_instances
         if not ability_instances:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

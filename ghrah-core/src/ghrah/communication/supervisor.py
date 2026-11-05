@@ -102,6 +102,8 @@ class SupervisorActor:
         skill_provider: Any | None = None,
         llm_factory: Callable[[AgentConfig], Any] | None = None,
         message_manager: MessageManager | None = None,
+        builtin_abilities: bool = False,
+        ability_materializer: Any | None = None,
     ) -> None:
         """初始化 Supervisor。
 
@@ -129,10 +131,19 @@ class SupervisorActor:
                 spawn_agent 的 per-spawn kwarg 可覆盖；集群类工具
                 （spawn_agent ability）继承此默认——否则经工具创建的
                 agent 将回落 agentconf，破坏部署方注入的 LLM 出口。
+            builtin_abilities: 是否处于 builtin 能力来源模式。True 时
+                spawn 只接受授权装配边界产出的工具表，拒绝调用方自行拼装
+                的 abilities（绕过关系库、策略与执行接纳）。
+            ability_materializer: 授权装配边界（启动核定器）；builtin 模式
+                下由 CoreUnit 装配期构造并注入，子 Agent spawn 工具经它
+                取得同一套授权事实。None = 未接线（builtin spawn 显式失败）。
         """
         if message_manager is not None and not message_manager.session_routing:
             raise ValueError("Supervisor messaging requires session_routing=True")
         self.message_manager = message_manager
+        # builtin 模式的授权装配边界：只接受边界产出的工具表。
+        self._builtin_abilities = builtin_abilities
+        self.ability_materializer = ability_materializer
         self._event_publisher = event_publisher
         self._cluster_id = cluster_id
         # RoomBridgeProtocol | None（send 工具用；duck-typed，避免反向依赖）
@@ -239,6 +250,19 @@ class SupervisorActor:
             )
 
         supervisor_handle = self
+
+        # builtin 模式只有一条装配路径：授权装配边界。普通 list 说明调用方
+        # 自行拼装工具，会绕过关系库、启动策略与执行接纳——显式拒绝。
+        if self._builtin_abilities:
+            from ghrah.ability.access.startup import AuthorizedToolTable
+
+            if not isinstance(abilities, AuthorizedToolTable):
+                raise RegistryError(
+                    f"Agent '{config.name}' spawned with caller-assembled abilities in "
+                    f"builtin mode — abilities must come from the authorized assembly "
+                    f"boundary (spawn via manifest_ref or the spawn_agent tool); "
+                    f"refusing to bypass the grant relation store"
+                )
 
         # 能力语义 fail-closed 判定（四态收敛，单一 chokepoint）
         if abilities is not None and len(abilities) == 0:

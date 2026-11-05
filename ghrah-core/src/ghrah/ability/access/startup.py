@@ -12,6 +12,7 @@
 - 工具 schema 与描述来自**已提交版本的定义面**，不从实现脚本二次读取；
 - 执行实例仍由本地 builtin 装配构造，执行上下文接线属于后续工作包；
 - 未配置策略时不授予任何能力；模板只决定“申请哪些成员”，不自行生效。
+  已配置迁移或管理员事实的存量 Agent，在未配置策略时按既有事实启动（不扩权）。
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from ghrah.protocol.ability_tree import BindToolRequest, TreeId, TreeKey, Unbind
 from pydantic import TypeAdapter
 
 from ghrah.ability.access.backends import file_member_paths
-from ghrah.ability.access.facts import GrantFacts
+from ghrah.ability.access.facts import GrantFacts, stored_facts
 from ghrah.ability.access.policy import GrantPolicy
 from ghrah.ability.access.reconcile import (
     GrantInstance,
@@ -62,6 +63,16 @@ class StartupGrantError(RuntimeError):
     """启动物化失败；失败即失败，不回退到模板自动授予。"""
 
 
+class AuthorizedToolTable(list):
+    """由授权装配边界产出的工具表。
+
+    builtin 模式下 ``SupervisorActor.spawn_agent`` 只接受这一种表：普通
+    ``list`` 意味着调用方在边界之外自行拼装工具，绕过关系库、策略与执行
+    接纳。继承 ``list`` 是为了让环境快照注入、``session_info`` 回填等原地
+    处理继续可用，同时保留“来自边界”的身份。
+    """
+
+
 @dataclass(frozen=True)
 class StartupToolBinding:
     """一次启动选定的工具与成员映射。
@@ -89,7 +100,7 @@ class StartupMaterialization:
         revoked: 实际撤销的 alias。
     """
 
-    abilities: list[Any]
+    abilities: AuthorizedToolTable
     tools: tuple[StartupToolBinding, ...]
     revision: int
     granted: tuple[str, ...]
@@ -209,6 +220,97 @@ class _MemberNamedContext:
         return getattr(self._inner, item)
 
 
+@dataclass(frozen=True)
+class RegisteredPackage:
+    """一次启动捕获并登记后的包实例事实。
+
+    Attributes:
+        alias: 包在 Agent 内的能力别名（容器名）。
+        package: 包身份全名。
+        instance: 启动核定与关系库写入使用的实例事实。
+        version: 已提交的包版本，含定义面与实现摘要。
+    """
+
+    alias: str
+    package: str
+    instance: GrantInstance
+    version: AbilityVersion
+
+
+async def register_package_instance(
+    *,
+    store: AbilityAccessStore,
+    actor: AccessIdentity,
+    catalog: Any,
+    package: str,
+    members: set[str],
+    workspace_root: str | None,
+) -> RegisteredPackage:
+    """捕获包版本并登记实例；启动核定与迁移 bootstrap 共用这一条登记路径。
+
+    模板与迁移只提供身份（包名与成员键）；版本、内容与定义以捕获结果为准，
+    之后核定只读这些已提交事实。同一版本重复提交是幂等的。
+
+    Args:
+        store: 授权关系库。
+        actor: 操作员身份（启动核定用 deployment，迁移用 migration）。
+        catalog: ``load_ability_definitions()`` 的目录面。
+        package: 包身份全名（``ghrah.fs``）。
+        members: 本次需要的成员键集合，用于校验文件类成员需要工作区。
+        workspace_root: 工作区根；文件类成员必须显式给出。
+
+    Returns:
+        已登记实例与版本。
+
+    Raises:
+        StartupGrantError: 包未找到、内置树不可读、文件类成员缺工作区。
+    """
+    entry = next(
+        ((key, item) for key, item in catalog.items() if item.identity.full_name == package),
+        None,
+    )
+    if entry is None:
+        raise StartupGrantError(f"未找到内置能力包：{package}")
+    container, container_definition = entry
+    root = builtin_root().path
+    if root is None:
+        raise StartupGrantError("内置能力树不是可读目录，无法捕获版本")
+    package_root = root / container
+    version = capture_ability_version(
+        (package_root / "ability.yaml").read_text(encoding="utf-8"), root=package_root
+    )
+    definition = version.definition().model_dump(mode="json")
+    file_members = sorted(member for member in members if file_member_paths(definition, member))
+    if not workspace_root and file_members:
+        raise StartupGrantError(
+            f"包 {package} 的文件类成员需要显式 workspace_root 才能授予：{file_members}"
+        )
+    await store.commit_version(actor, version)
+    instance_id = _instance_id(package)
+    expected_revision = 0
+    try:
+        expected_revision = int((await store.instance(instance_id))["revision"])
+    except AccessError:
+        expected_revision = 0
+    await store.select_instance(
+        actor,
+        instance_id,
+        version.digest,
+        Path(workspace_root) if workspace_root else None,
+        expected_revision=expected_revision,
+    )
+    alias = TypeAdapter(TreeKey).validate_python(container_definition.container_name)
+    instance = GrantInstance(
+        alias=alias,
+        package=package,
+        instance_id=instance_id,
+        version_digest=version.digest,
+        definition=definition,
+        allowed_roots=((str(Path(workspace_root).resolve()),) if workspace_root else ()),
+    )
+    return RegisteredPackage(alias=alias, package=package, instance=instance, version=version)
+
+
 class StartupGrantMaterializer:
     """按模板与策略物化一次 spawn 的授权与工具表。"""
 
@@ -266,12 +368,22 @@ class StartupGrantMaterializer:
             registered[instance.alias] = (instance, version, members)
         instances = [item[0] for item in registered.values()]
         template = {item[0].alias: set(item[2]) for item in registered.values()}
-        desired = self._desired(instances, template, agent)
-        if not desired:
-            raise StartupGrantError(
-                f"spawn '{agent}' 的启动授权为空——策略与模板没有授予任何成员；"
-                "请检查授权策略或 manifest 模板"
-            )
+        if self._policy is None:
+            # 未配置策略的存量模式：只认已写入关系库的既有事实（一次性迁移或
+            # 管理员写入），启动不自动扩权也不撤销；没有事实即不授予、启动失败。
+            desired = await self._existing_desired(agent, instances)
+            if not desired:
+                raise StartupGrantError(
+                    f"spawn '{agent}' 未配置启动授权策略且没有存量授权事实——"
+                    "不授予任何能力；请配置启动策略，或对已部署 Agent 执行一次性迁移"
+                )
+        else:
+            desired = self._desired(instances, template, agent)
+            if not desired:
+                raise StartupGrantError(
+                    f"spawn '{agent}' 的启动授权为空——策略与模板没有授予任何成员；"
+                    "请检查授权策略或 manifest 模板"
+                )
         try:
             result = await apply_grants(
                 self._store,
@@ -326,53 +438,18 @@ class StartupGrantMaterializer:
         """捕获并登记包实例，返回启动核定所需的实例事实。
 
         模板只提供身份；版本、内容与成员定义以捕获结果为准，之后核定只读
-        这些已提交事实。同一版本重复提交是幂等的。
+        这些已提交事实。同一版本重复提交是幂等的。登记路径与迁移 bootstrap
+        共用 :func:`register_package_instance`，不存在第二条写版本/实例的路。
         """
-        entry = next(
-            ((key, item) for key, item in catalog.items() if item.identity.full_name == package),
-            None,
-        )
-        if entry is None:
-            raise StartupGrantError(f"未找到内置能力包：{package}")
-        container, container_definition = entry
-        root = builtin_root().path
-        if root is None:
-            raise StartupGrantError("内置能力树不是可读目录，无法捕获版本")
-        package_root = root / container
-        version = capture_ability_version(
-            (package_root / "ability.yaml").read_text(encoding="utf-8"), root=package_root
-        )
-        definition = version.definition().model_dump(mode="json")
-        file_members = sorted(member for member in members if file_member_paths(definition, member))
-        if not self._workspace_root and file_members:
-            raise StartupGrantError(
-                f"包 {package} 的文件类成员需要显式 workspace_root 才能授予：{file_members}"
-            )
-        await self._store.commit_version(self._actor, version)
-        instance_id = _instance_id(package)
-        expected_revision = 0
-        try:
-            expected_revision = int((await self._store.instance(instance_id))["revision"])
-        except AccessError:
-            expected_revision = 0
-        await self._store.select_instance(
-            self._actor,
-            instance_id,
-            version.digest,
-            Path(self._workspace_root) if self._workspace_root else None,
-            expected_revision=expected_revision,
-        )
-        instance = GrantInstance(
-            alias=TypeAdapter(TreeKey).validate_python(container_definition.container_name),
+        registered = await register_package_instance(
+            store=self._store,
+            actor=self._actor,
+            catalog=catalog,
             package=package,
-            instance_id=instance_id,
-            version_digest=version.digest,
-            definition=definition,
-            allowed_roots=(
-                (str(Path(self._workspace_root).resolve()),) if self._workspace_root else ()
-            ),
+            members=members,
+            workspace_root=self._workspace_root,
         )
-        return instance, version
+        return registered.instance, registered.version
 
     def _desired(
         self,
@@ -390,6 +467,27 @@ class StartupGrantMaterializer:
             )
         except GrantReconcileError as error:
             raise StartupGrantError(str(error)) from error
+
+    async def _existing_desired(
+        self, agent: str, instances: list[GrantInstance]
+    ) -> dict[str, GrantFacts]:
+        """未配置策略时的存量事实：只取关系库已有事实，不读模板、不自动扩权。
+
+        迁移 bootstrap 与管理员写入写进关系库的获授，是这些 Agent 继续启动的
+        依据；本次启动只把它作为目标事实原样保留（撤销后不会复活：事实已不在
+        库里）。不在本次模板包集合里的 alias 不进入目标，由核定按陈旧关系撤销。
+        """
+        await self._store.ensure_agent(self._actor, agent)
+        records = {record.alias: record for record in await self._store.grants(self._actor, agent)}
+        catalog = {instance.alias for instance in instances}
+        desired: dict[str, GrantFacts] = {}
+        for alias, record in records.items():
+            if alias not in catalog:
+                continue
+            facts = stored_facts(list(record.members), list(record.content), record.axes)
+            if not facts.empty:
+                desired[alias] = facts
+        return dict(sorted(desired.items()))
 
     async def _bind(
         self,
@@ -431,7 +529,7 @@ class StartupGrantMaterializer:
         desired: dict[str, GrantFacts],
         bindings: tuple[StartupToolBinding, ...],
         sources: dict[str, dict[str, ResolvedAbility]],
-    ) -> list[Any]:
+    ) -> AuthorizedToolTable:
         """把选定成员实例化成工具，并把固定 schema、权限范围与接纳绑到包装层。"""
         definitions = {instance.alias: instance for instance in instances}
         abilities: list[Any] = instantiate_resolved_abilities(
@@ -487,7 +585,7 @@ class StartupGrantMaterializer:
                     admission=self._admission(agent, binding, instance.version_digest),
                 )
             )
-        return abilities
+        return AuthorizedToolTable(abilities)
 
     def _admission(self, agent: str, binding: StartupToolBinding, version_digest: str) -> Any:
         """按启动时固定的成员与版本在当前关系中复核；撤销或改绑立即生效。

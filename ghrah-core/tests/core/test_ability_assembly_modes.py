@@ -161,6 +161,41 @@ def _manifest_payload(name: str, manifest_ref: str) -> dict[str, Any]:
     }
 
 
+async def _open_deployment_store(tmp_path: Path) -> Any:
+    """打开最小部署关系库：部署操作员 + 运行实例权威。"""
+    from ghrah.ability.access import AbilityAccessStore
+
+    return await AbilityAccessStore.open(
+        tmp_path / "ability.db",
+        "default",
+        operators=frozenset({"deployment"}),
+        runs=lambda agent: f"{agent}-run",
+    )
+
+
+async def _authorized_builtin_unit(
+    tmp_path: Path,
+    *,
+    manifest_store: Any,
+    policy: Any = None,
+) -> tuple[Any, Any]:
+    """构造带授权装配边界的 builtin CoreUnit（关系库 + 策略 + 工作区）。"""
+    from ghrah.ability.access import GrantPolicy
+
+    store = await _open_deployment_store(tmp_path)
+    unit = create_core_unit(
+        CoreUnitConfig(
+            project_id="default",
+            manifest_store=manifest_store,
+            ability_source="builtin",
+            workspace_root=str(tmp_path / "workspace"),
+            ability_store=store,
+            ability_grant_policy=policy if policy is not None else GrantPolicy(rules=()),
+        )
+    )
+    return unit, store
+
+
 # ----------------------------------------------------------------
 # 模式选择本身
 # ----------------------------------------------------------------
@@ -245,7 +280,26 @@ class TestLegacyMode:
 
 
 class TestBuiltinMode:
-    async def test_manifest_ref_spawn_uses_new_operations(self) -> None:
+    async def test_manifest_ref_spawn_uses_new_operations(self, tmp_path: Path) -> None:
+        store = _consumer_store()
+        unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)
+        try:
+            receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+
+            assert receipt["success"], receipt.get("error")
+            modules = await _abilities_of(unit, "consumer")
+            # 工具实例经授权装配边界包装：执行实现来自新版容器，schema 与接纳
+            # 固定在投影层，不再直接暴露旧注册表类模块。
+            assert modules["read_file"] == "ghrah.ability.access.startup"
+            assert modules["write_file"] == "ghrah.ability.access.startup"
+            # mcp_call 只在新版容器定义里存在：命中它即证明 ref/type 都走新来源
+            assert modules["mcp_call"] == "ghrah.ability.access.startup"
+            # 声明存储里的能力库没有被读（同一模式不混第二套目录）
+            assert store.ability_reads == []
+        finally:
+            await ability_store.close()
+
+    async def test_spawn_without_ability_store_fails_closed(self) -> None:
         store = _consumer_store()
         unit = create_core_unit(
             CoreUnitConfig(project_id="default", manifest_store=store, ability_source="builtin")
@@ -253,14 +307,9 @@ class TestBuiltinMode:
 
         receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
 
-        assert receipt["success"], receipt.get("error")
-        modules = await _abilities_of(unit, "consumer")
-        assert modules["read_file"].startswith("ghrah.ability.")
-        assert modules["write_file"].startswith("ghrah.ability.")
-        # mcp_call 只在新版容器定义里存在：命中它即证明 ref/type 都走新来源
-        assert modules["mcp_call"].startswith("ghrah.ability.")
-        # 声明存储里的能力库没有被读（同一模式不混第二套目录）
-        assert store.ability_reads == []
+        # 已移除“按模板实例化”的过渡退路：未接线关系库时显式失败
+        assert receipt["success"] is False
+        assert "启动授权关系库" in receipt["error"]
 
     async def test_unknown_ref_fails_without_store_fallback(self) -> None:
         store = _consumer_store()
@@ -297,11 +346,9 @@ class TestBuiltinMode:
         assert receipt["success"] is False
         assert "default ability set" in receipt["error"]
 
-    async def test_register_and_unregister_are_refused(self) -> None:
+    async def test_register_and_unregister_are_refused(self, tmp_path: Path) -> None:
         store = _consumer_store()
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", manifest_store=store, ability_source="builtin")
-        )
+        unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)
         await unit.init(FakeCtx())
         spawn = await unit.handle_command(
             "spawn_agent", _manifest_payload("consumer", "w0.consumer"), None
@@ -334,8 +381,9 @@ class TestBuiltinMode:
         assert "access store" in register["error"]
         assert unregister["success"] is False
         assert "access store" in unregister["error"]
-        # 拒绝发生在改动之前：工具表保持 manifest 投影
+        # 拒绝发生在改动之前：工具表保持 manifest 投影（撤销成员不在其中）
         assert "read_file" in await _abilities_of(unit, "consumer")
+        await ability_store.close()
 
     async def test_skill_root_is_not_read(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -362,27 +410,24 @@ class TestBuiltinMode:
 
 async def test_builtin_operation_runs_through_the_agent_executor(tmp_path: Path) -> None:
     store = _consumer_store()
-    unit = create_core_unit(
-        CoreUnitConfig(
-            project_id="default",
-            manifest_store=store,
-            ability_source="builtin",
-            workspace_root=str(tmp_path),
+    unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)
+    try:
+        receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
+        assert receipt["success"], receipt.get("error")
+        handle = await unit.supervisor.get_agent_handle("consumer")
+
+        target = tmp_path / "workspace" / "note.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("builtin source content", encoding="utf-8")
+        result = await handle._ability_executor.execute_ability(
+            handle._abilities["read_file"],
+            AbilityExecutionContext(tool_args={"file_path": str(target)}),
         )
-    )
-    receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
-    assert receipt["success"], receipt.get("error")
-    handle = await unit.supervisor.get_agent_handle("consumer")
 
-    target = tmp_path / "note.txt"
-    target.write_text("builtin source content", encoding="utf-8")
-    result = await handle._ability_executor.execute_ability(
-        handle._abilities["read_file"],
-        AbilityExecutionContext(tool_args={"file_path": str(target)}),
-    )
-
-    assert result.outcome is ActionOutcome.SUCCESS
-    assert result.data["content"] == "builtin source content"
+        assert result.outcome is ActionOutcome.SUCCESS
+        assert result.data["content"] == "builtin source content"
+    finally:
+        await ability_store.close()
 
 
 # ----------------------------------------------------------------
@@ -501,6 +546,107 @@ class TestBuiltinGrantMaterialization:
             receipt = await _spawn(unit, _manifest_payload("consumer", "w0.consumer"))
 
             assert receipt["success"] is False
-            assert "启动授权为空" in receipt["error"]
+            assert "未配置启动授权策略" in receipt["error"]
         finally:
             await store.close()
+
+
+# ----------------------------------------------------------------
+# 子 Agent spawn：与顶层 spawn 汇合到同一授权装配边界
+# ----------------------------------------------------------------
+
+
+async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
+    from ghrah.ability.access import AccessIdentity, GrantPolicy, GrantRule
+    from ghrah.ability.access.startup import AuthorizedToolTable
+    from ghrah.ability.builtin.cluster.operations.spawn_agent import _assemble_child_abilities
+    from ghrah.ability.execution.context import AbilityExecutionContext
+
+    manifest_store = _consumer_store()
+    # 策略按包声明生效：子 Agent 模板里只有 fs 包（引用未解析包会失败）
+    policy = GrantPolicy(rules=(GrantRule(package="ghrah.fs"),))
+    unit, ability_store = await _authorized_builtin_unit(
+        tmp_path, manifest_store=manifest_store, policy=policy
+    )
+    try:
+        await unit.init(FakeCtx())
+        assert unit.supervisor is not None
+        assembly = unit._require_assembly()
+        resolved = assembly.manifest_resolver().resolve(
+            manifest_store.load_agent("w0.fs-consumer"), runtime_name="child"
+        )
+        context = AbilityExecutionContext(supervisor=unit.supervisor)
+
+        table = await _assemble_child_abilities(
+            context=context, manifest_ref="w0.fs-consumer", resolved=resolved
+        )
+
+        assert isinstance(table, AuthorizedToolTable)
+        assert any(getattr(ability, "name", "") == "read_file" for ability in table)
+
+        # 子 Agent 的授权事实写在关系库，与顶层 spawn 同一套事实
+        deployment = AccessIdentity("default", "deployment", "deployment", True, "deployment")
+        records = await ability_store.grants(deployment, resolved.config.name)
+        assert [record.alias for record in records] == ["fs"]
+
+        await unit.supervisor.spawn_agent(resolved.config, abilities=table)
+        handle = await unit.supervisor.get_agent_handle(resolved.config.name)
+        target = tmp_path / "workspace" / "child.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("child ok", encoding="utf-8")
+        result = await handle._ability_executor.execute_ability(
+            handle._abilities["read_file"],
+            AbilityExecutionContext(tool_args={"file_path": str(target)}),
+        )
+        assert result.outcome is ActionOutcome.SUCCESS
+        assert result.data["content"] == "child ok"
+    finally:
+        await ability_store.close()
+
+
+async def test_subagent_spawn_without_boundary_fails_closed() -> None:
+    from ghrah.ability.builtin.cluster.operations.spawn_agent import _assemble_child_abilities
+    from ghrah.ability.execution.context import AbilityExecutionContext
+    from ghrah.types.results import ActionResult
+
+    manifest_store = _consumer_store()
+    unit = create_core_unit(
+        CoreUnitConfig(
+            project_id="default", manifest_store=manifest_store, ability_source="builtin"
+        )
+    )
+    await unit.init(FakeCtx())
+    assembly = unit._require_assembly()
+    resolved = assembly.manifest_resolver().resolve(
+        manifest_store.load_agent("w0.fs-consumer"), runtime_name="child"
+    )
+
+    result = await _assemble_child_abilities(
+        context=AbilityExecutionContext(supervisor=unit.supervisor),
+        manifest_ref="w0.fs-consumer",
+        resolved=resolved,
+    )
+
+    assert isinstance(result, ActionResult)
+    assert result.outcome is ActionOutcome.FAILURE
+    assert "授权装配边界" in result.data["error"]
+
+
+async def test_builtin_supervisor_rejects_caller_assembled_tools() -> None:
+    from ghrah.communication.errors import RegistryError
+
+    manifest_store = _consumer_store()
+    unit = create_core_unit(
+        CoreUnitConfig(
+            project_id="default", manifest_store=manifest_store, ability_source="builtin"
+        )
+    )
+    await unit.init(FakeCtx())
+    assembly = unit._require_assembly()
+    resolved = assembly.manifest_resolver().resolve(
+        manifest_store.load_agent("w0.fs-consumer"), runtime_name="direct"
+    )
+    plain_list = assembly.instantiate(resolved.abilities, workspace_root=None)
+
+    with pytest.raises(RegistryError, match="authorized assembly"):
+        await unit.supervisor.spawn_agent(resolved.config, abilities=plain_list)

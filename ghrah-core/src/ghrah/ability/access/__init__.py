@@ -1,7 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Ability 实例、获授关联、授权策略与工具选择的领域入口。"""
 
+from ghrah.ability.access.boundary import AuthorizedToolTable, build_startup_materializer
 from ghrah.ability.access.facts import GrantFacts
+from ghrah.ability.access.migration import (
+    MIGRATION_SOURCE,
+    MigrationError,
+    MigrationGrant,
+    MigrationResult,
+    migrate_agent,
+    migrate_agents,
+)
 from ghrah.ability.access.policy import GrantEffect, GrantMode, GrantPolicy, GrantRule
 from ghrah.ability.access.reconcile import (
     GrantInstance,
@@ -35,6 +44,7 @@ __all__ = [
     "EffectivePermission",
     "AbilityAccessStore",
     "AccessError",
+    "AuthorizedToolTable",
     "GrantEffect",
     "GrantFacts",
     "GrantInstance",
@@ -43,7 +53,11 @@ __all__ = [
     "GrantReconcileError",
     "GrantRecord",
     "GrantRule",
+    "MIGRATION_SOURCE",
     "MemberFence",
+    "MigrationError",
+    "MigrationGrant",
+    "MigrationResult",
     "ProjectedAbility",
     "ReconciliationResult",
     "StartupGrantError",
@@ -51,7 +65,10 @@ __all__ = [
     "StartupMaterialization",
     "StartupToolBinding",
     "apply_grants",
+    "build_startup_materializer",
     "command_in_scope",
     "desired_grants",
+    "migrate_agent",
+    "migrate_agents",
     "resolve_effective_permission",
 ]

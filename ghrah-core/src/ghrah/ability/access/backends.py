@@ -17,6 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from ghrah.ability.access.errors import AccessError
+from ghrah.ability.provider_contracts import (
+    CLUSTER_CONTRACT,
+    CORE_CONTRACT,
+    FS_CONTRACT,
+    MCP_CONTRACT,
+    SHELL_CONTRACT,
+)
 
 __all__ = [
     "BackendAdmission",
@@ -24,12 +31,6 @@ __all__ = [
     "contract_of",
     "file_member_paths",
 ]
-
-FS_CONTRACT = "ghrah.fs.v1"
-SHELL_CONTRACT = "ghrah.shell.v1"
-CLUSTER_CONTRACT = "ghrah.cluster.v1"
-CORE_CONTRACT = "ghrah.core.v1"
-MCP_CONTRACT = "ghrah.mcp.v1"
 
 AdmissionCheck = Callable[[str, Mapping[str, Any], tuple[str, ...], str], None]
 """``(成员键, 参数, 授予根, 实例根) -> None``；不合法时抛 ``AccessError``。"""

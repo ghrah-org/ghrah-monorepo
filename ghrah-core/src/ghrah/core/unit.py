@@ -233,8 +233,8 @@ class CoreUnitConfig:
     surface_search_limit: int = DEFAULT_SEARCH_LIMIT
     surface_loaded_limit: int = DEFAULT_LOADED_LIMIT
     # 启动授权关系库（装配方打开/关闭，duck-typed AbilityAccessStore）。
-    # None = 未接线：builtin 模式暂时保留「按模板实例化工具」的过渡退路并记
-    # 警告；注入后启动工具表只认授权事实（模板只决定申请哪些成员）。
+    # None = 未接线：builtin 模式 spawn 直接失败，不再回退到按模板实例化；
+    # 注入后启动工具表只认授权事实（模板只决定申请哪些成员）。
     ability_store: Any = None
     # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
     ability_grant_policy: Any = None
@@ -679,6 +679,8 @@ class CoreUnit:
         self._hitl_promises = HITLPromiseRegistry()
         # 装配模式在 init(ctx) 时确定（需要 manifest_store 等装配期输入）。
         self._assembly: AbilityAssembly | None = None
+        # 授权装配边界（builtin 模式唯一入口）；None = 未接线或 legacy 模式。
+        self._startup_materializer: Any = None
 
         self._handlers: dict[str, _CommandHandler] = {
             CommandType.SPAWN_AGENT.value: self._handle_spawn_agent,
@@ -794,6 +796,27 @@ class CoreUnit:
         # skill-ability 接线：按模式构造读取服务（builtin 模式显式无读取器）。
         skill_provider: Any = assembly.skill_provider(self._config.skill_root)
 
+        # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
+        # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
+        # （不再回退按模板实例化）。
+        startup_materializer: Any = None
+        if assembly.is_builtin and self._config.ability_store is not None:
+            from ghrah.ability.access import build_startup_materializer
+
+            startup_materializer = build_startup_materializer(
+                store=self._config.ability_store,
+                source=assembly.source,
+                project_id=self._config.project_id,
+                policy=self._config.ability_grant_policy,
+                workspace_root=self._config.workspace_root,
+                auto_approve_abilities=self._config.auto_approve_abilities,
+                require_approval_by_default=self._config.require_approval_by_default,
+                command_runner=self._config.command_runner,
+                safe_extra_commands=self._config.safe_extra_commands,
+                safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+            )
+        self._startup_materializer = startup_materializer
+
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
             cluster_id=self._config.cluster_id,
@@ -809,6 +832,8 @@ class CoreUnit:
             skill_provider=skill_provider,
             llm_factory=self._config.llm_factory,
             message_manager=self._config.message_manager,
+            builtin_abilities=assembly.is_builtin,
+            ability_materializer=startup_materializer,
         )
         self._supervisor = supervisor
 
@@ -1082,6 +1107,8 @@ class CoreUnit:
                 return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
             if sp.validate_model:
                 self._validate_model_config(resolved.config.endpoint_name)
+            # builtin：授权装配边界；legacy：旧装配实例化。builtin 未接线关系库
+            # 时抛 StartupGrantError，不再回退按模板实例化。
             ability_instances = await self._materialize_builtin_abilities(
                 resolved.config.name, resolved
             )
@@ -1257,53 +1284,35 @@ class CoreUnit:
             }
         )
 
-    async def _materialize_builtin_abilities(
-        self, agent: str, resolved: Any
-    ) -> list[AbilityProtocol] | None:
-        """builtin 模式：按启动授权关系库物化工具表。
+    async def _materialize_builtin_abilities(self, agent: str, resolved: Any) -> Any | None:
+        """builtin 模式：经授权装配边界物化工具表。
 
-        未注入关系库时返回 None，由调用方保留过渡退路（按模板实例化）并记
-        警告；注入后失败即失败，不回退模板自动授予。legacy 模式不适用。
+        边界在 ``init`` 装配期构造一次；未注入启动授权关系库时直接失败，
+        不再保留“按模板实例化工具”的过渡退路。legacy 模式返回 None，由调用
+        方按旧装配实例化。
 
         Args:
             agent: 正在启动的 Agent 名称。
             resolved: 已解析的 Agent 模板。
 
         Returns:
-            工具实例列表；未接线时返回 None。
+            授权边界产出的工具表；legacy 模式返回 None。
+
+        Raises:
+            StartupGrantError: builtin 模式未接线授权关系库，或核定失败。
         """
         assembly = self._require_assembly()
         if not assembly.is_builtin:
             return None
-        store = self._config.ability_store
-        if store is None:
-            logger.warning(
-                "builtin spawn 未注入启动授权关系库：仍按模板实例化工具（过渡路径）",
-            )
-            return None
-        if not self._config.project_id:
-            raise ValueError("builtin spawn 需要 project_id 才能写入启动授权")
-        from ghrah.ability.access import AccessIdentity
-        from ghrah.ability.access.startup import StartupGrantMaterializer
+        from ghrah.ability.access import StartupGrantError
 
-        materializer = StartupGrantMaterializer(
-            store=store,
-            source=assembly.source,
-            actor=AccessIdentity(
-                self._config.project_id,
-                "deployment",
-                "deployment",
-                True,
-                "deployment",
-            ),
-            policy=self._config.ability_grant_policy,
-            workspace_root=self._config.workspace_root,
-            auto_approve_abilities=self._config.auto_approve_abilities,
-            require_approval_by_default=self._config.require_approval_by_default,
-            command_runner=self._config.command_runner,
-            safe_extra_commands=self._config.safe_extra_commands,
-            safe_extra_sub_commands=self._config.safe_extra_sub_commands,
-        )
+        materializer = self._startup_materializer
+        if materializer is None:
+            raise StartupGrantError(
+                "builtin spawn 需要注入启动授权关系库（CoreUnitConfig.ability_store）；"
+                "已移除按模板实例化的过渡退路——关系库是授权唯一权威，"
+                "模板只表达申请，不能自行生效"
+            )
         materialized = await materializer.materialize(agent=agent, resolved=resolved)
         logger.info(
             "builtin spawn 授权核定完成：agent=%s tools=%s granted=%s revoked=%s",

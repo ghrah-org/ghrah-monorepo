@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import inspect
 import json
 from dataclasses import dataclass
@@ -14,8 +15,22 @@ from ghrah.ability.file_members import FILE_OPERATIONS
 from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.loading.ability_schema import AbilityDefinition, parse_definition
 from ghrah.ability.permissions import fs_permissions
+from ghrah.ability.provider_contracts import (
+    CLUSTER_CONTRACT,
+    FS_CONTRACT,
+    SHELL_CONTRACT,
+)
 
 FILE_MEMBERS = frozenset(FILE_OPERATIONS)
+
+_CONTRACT_SUPPORT_MODULES: dict[str, tuple[str, ...]] = {
+    SHELL_CONTRACT: (
+        "ghrah.ability.permissions.command_safety",
+        "ghrah.ability.permissions.command_scope",
+    ),
+    CLUSTER_CONTRACT: ("ghrah.ability._cluster_common",),
+}
+"""契约实现共用的支持模块；这些代码变化必须改变该后端的实现标识。"""
 
 
 def _implementation_digest() -> str:
@@ -34,6 +49,56 @@ _RUNNING_IMPLEMENTATION = _implementation_digest()
 def loaded_file_implementation() -> str:
     """返回当前进程锁定的文件后端版本，不扫描来源。"""
     return _RUNNING_IMPLEMENTATION
+
+
+def _package_operation_sources(root: Path) -> list[Path]:
+    """包内 ``operations/*.py`` 的实现源；没有操作目录时为空。"""
+    directory = root / "operations"
+    if not directory.is_dir():
+        return []
+    return sorted(path for path in directory.glob("*.py") if path.name != "__init__.py")
+
+
+def _contract_identity(contract: str, *, root: Path) -> str:
+    """一个提供者契约的实现标识。
+
+    文件后端沿用进程锁定的实现摘要（与 ``capture_file_version`` 同一版本
+    号）；其他后端按包内操作模块 + 该契约的支持模块取摘要，未登记契约退到
+    包内操作模块摘要，保证不同后端不再共享同一个文件切片版本号。
+    """
+    if contract == FS_CONTRACT:
+        return loaded_file_implementation()
+    sources = _package_operation_sources(root)
+    for module_name in _CONTRACT_SUPPORT_MODULES.get(contract, ()):
+        sources.append(Path(inspect.getfile(importlib.import_module(module_name))))
+    if not sources:
+        return "content-only:v1"
+    return hashlib.sha256(b"\0".join(path.read_bytes() for path in sources)).hexdigest()
+
+
+def implementation_identity(definition: AbilityDefinition, *, root: Path) -> str:
+    """按包声明的提供者契约计算实现标识；同一定义在不同后端下不同号。
+
+    Args:
+        definition: 已解析的包定义（含 ``provider_requirements``）。
+        root: 包根目录，用于读取 ``operations/*.py`` 与脚本实现。
+
+    Returns:
+        实现摘要；只有文件后端时与 :func:`loaded_file_implementation` 相同，
+        内容类包为 ``content-only:v1``。
+    """
+    if not definition.operations:
+        return "content-only:v1"
+    contracts = sorted({item.contract for item in definition.provider_requirements.values()})
+    if not contracts:
+        return "operations:undeclared"
+    if FS_CONTRACT in contracts:
+        # 含文件成员时版本号由文件后端（进程锁定实现）主导：文件动作的就绪
+        # 判断依赖与 ``loaded_file_implementation`` 同一版本号；同包里的非
+        # 执行后端（如尚未实现的 script）由内容清单与定义面分别表达。
+        return loaded_file_implementation()
+    parts = [f"{contract}={_contract_identity(contract, root=root)}" for contract in contracts]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -95,7 +160,7 @@ def capture_ability_version(
     definition = parse_definition(raw, source=str(root))
     definition, manifest, blobs = capture_content(definition, root, limits)
     encoded = canonical(definition.model_dump(mode="json"))
-    implementation = loaded_file_implementation() if definition.operations else "content-only:v1"
+    implementation = implementation_identity(definition, root=root)
     version = AbilityVersion("", encoded, implementation, manifest, blobs)
     return AbilityVersion(version.expected_digest(), encoded, implementation, manifest, blobs)
 

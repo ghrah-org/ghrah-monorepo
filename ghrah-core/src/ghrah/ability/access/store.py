@@ -79,6 +79,9 @@ CREATE INDEX IF NOT EXISTS idx_ability_changes_project_seq ON ability_changes(pr
 GrantSource = Literal["admin", "deployment", "agent-default", "migration"]
 """关系库写入来源：管理员写入、启动核定、Agent 默认集、一次性迁移。"""
 
+MIGRATION_SOURCE = "migration"
+"""一次性迁移的写入来源；也是“已迁移”的幂等标记。"""
+
 _GRANT_SOURCES = frozenset({"admin", "deployment", "agent-default", "migration"})
 
 
@@ -458,6 +461,30 @@ class AbilityAccessStore:
             if row is None:
                 raise AccessError("not_found")
             return int(row["revision"])
+
+    async def migrated(self, actor: AccessIdentity, agent: str) -> bool:
+        """该 Agent 是否已完成一次性迁移；迁移幂等标记，不随撤销消失。
+
+        标记读的是变更历史里的 ``source='migration'`` 行，而不是当前获授行：
+        操作员撤销迁移写入的授权后标记仍在，迁移不会被重放补回。
+
+        Args:
+            actor: 操作员身份。
+            agent: Agent 标识。
+
+        Returns:
+            ``True`` = 已有迁移历史。
+
+        Raises:
+            AccessError: 调用方不是操作员。
+        """
+        self._require_operator(actor)
+        async with self._tx():
+            async with self._db.execute(
+                "SELECT 1 FROM ability_changes WHERE project=? AND agent=? AND source=? LIMIT 1",
+                (self.project_id, agent, MIGRATION_SOURCE),
+            ) as cursor:
+                return await cursor.fetchone() is not None
 
     async def tool_names(self, actor: AccessIdentity, agent: str) -> tuple[str, ...]:
         """读取已选工具名；操作员专用，启动核定用它清理陈旧选择。
