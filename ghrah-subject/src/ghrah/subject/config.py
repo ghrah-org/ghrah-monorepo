@@ -308,7 +308,9 @@ class SubjectConfig:
         transport: transport kind 配置（websocket/ipc/grpc）
         enabled_third_party_units: 第三方 Unit allowlist
         ability_source: 能力来源装配模式（``legacy`` / ``builtin``）；决定 Core
-            同时使用哪套声明目录、工具实例与 Skill 读取服务
+            同时使用哪套声明目录、工具实例与 Skill 读取服务。``legacy``
+            **已废弃**：仅保留旧部署兼容，不在权限治理范围内（有效权限、
+            只读、权限位与危险命令白名单只在 ``builtin`` 生效）。
         default_spawn_abilities: 无 manifest 快速 spawn 的默认能力集（仅 legacy）
         ability_grant_policy: 启动期 Ability 授权策略；None 表示不授予任何能力，
             策略只在 spawn 时物化进关系库，运行期读取不重算
@@ -340,9 +342,9 @@ class SubjectConfig:
     transport: TransportKindConfig = field(default_factory=TransportKindConfig)
     enabled_third_party_units: list[str] = field(default_factory=list)
     # 能力来源装配模式：显式值决定 CoreUnit 同时用哪套「声明目录 / 工具实例 /
-    # Skill 读取服务」（legacy = 旧注册表 + 旧 Skill 读取器；builtin = 新版
-    # ghrah.ability）。未选择时保持现有运行方式；非法值在 __post_init__ 直接
-    # 报错，不猜测成 legacy。
+    # Skill 读取服务」。legacy 已废弃：仅旧部署兼容，不在权限治理范围内
+    # （有效权限、只读、权限位与危险命令白名单只在 builtin 生效）。未选择时
+    # 保持 legacy 仅为兼容；非法值在 __post_init__ 直接报错，不猜测成 legacy。
     ability_source: str = "legacy"
     # spawn 默认能力集——部署方的显式声明（fail-closed 兼容通道）：
     # Observer 无 abilities 快速 spawn 经 CoreUnitConfig.default_abilities
@@ -492,7 +494,8 @@ class SubjectConfig:
         - GHRAH_SUBJECT_TASKSTORE_DB（任务归因内核 sqlite 路径）
         - GHRAH_SUBJECT_SKILL_ROOT（skill 存储根路径，装配期自举 + 补 lock）
         - GHRAH_SUBJECT_ABILITY_SOURCE（能力来源装配模式：legacy|builtin；
-          选择 builtin 后声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
+          legacy 已废弃、仅旧部署兼容且不在权限治理范围内，选择 builtin 后
+          声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
         - GHRAH_SUBJECT_ABILITY_GRANT_POLICY（启动期授权策略的 JSON 文本；
           空 = 不授予任何能力，非法内容直接报错）
         - GHRAH_SUBJECT_ROOM_FILTER_ENABLED

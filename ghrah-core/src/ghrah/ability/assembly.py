@@ -10,12 +10,15 @@
 状态。本模块把三者收束到同一个 ``AbilitySourceMode``：
 
 ``legacy``
-    保持现有运行方式：``ghrah.manifest.materialize`` 从旧注册表
+    **已废弃**，仅保留旧部署兼容：``ghrah.manifest.materialize`` 从旧注册表
     ``ghrah.abilities`` 实例化工具，``ghrah.skills.SkillAbilityProvider``
-    读取 Skill 目录。
+    读取 Skill 目录。它不参与权限治理——有效权限合并、只读约束、权限位检查
+    与危险命令白名单等保证只在 ``builtin`` 路径生效，不要把它当作受治理或
+    安全的装配方式。旧模式按原总纲的退役路线处理，不再扩展。
 ``builtin``
-    三者都来自新版 ``ghrah.ability``：``BuiltinAbilitySource`` 提供声明与工具
-    实例，本地获授内容读取适配（尚未接线）提供 Skill 正文与附件。
+    受支持且受治理的路径：三者都来自新版 ``ghrah.ability``，
+    ``BuiltinAbilitySource`` 提供声明与工具实例，本地获授内容读取适配
+    （尚未接线）提供 Skill 正文与附件。
 
 选择 ``builtin`` 后，解析失败直接报错：不回退旧注册表，不回退旧 Skill 读取器，
 也不接受只属于旧模式的可写入口（直接传 wire 能力定义、默认能力集、运行期
@@ -26,6 +29,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, NoReturn
@@ -40,6 +44,8 @@ __all__ = [
     "AbilitySourceMode",
 ]
 
+logger = logging.getLogger(__name__)
+
 
 class AbilityAssemblyError(ValueError):
     """装配模式与所选入口冲突（新旧混装或模式值非法）。"""
@@ -49,8 +55,11 @@ class AbilitySourceMode(StrEnum):
     """能力来源装配模式。
 
     Attributes:
-        LEGACY: 现有运行方式（旧注册表 + 旧 Skill 读取器）。
-        BUILTIN: 新版 ``ghrah.ability`` 来源（新声明、新工具实例、新读取服务）。
+        LEGACY: 旧运行方式（旧注册表 + 旧 Skill 读取器）；**已废弃**，仅兼容
+            旧部署，不参与权限治理（有效权限、只读、权限位与危险命令
+            白名单保证只在 ``builtin`` 生效）。
+        BUILTIN: 受支持的治理路径：新版 ``ghrah.ability`` 来源（新声明、新工具
+            实例、新读取服务）。
     """
 
     LEGACY = "legacy"
@@ -131,6 +140,12 @@ class AbilityAssembly:
             AbilityAssemblyError: 模式值非法。
         """
         parsed = AbilitySourceMode.parse(mode)
+        if parsed is AbilitySourceMode.LEGACY:
+            logger.warning(
+                "ability_source=legacy 已废弃：仅保留旧部署兼容，不在权限治理范围内"
+                "（有效权限合并、只读约束、权限位检查与危险命令白名单等保证只在 "
+                "builtin 路径生效）；请迁移到 ability_source=builtin"
+            )
         source = (
             BuiltinAbilitySource(agent_store=agent_store)
             if parsed is AbilitySourceMode.BUILTIN
@@ -145,7 +160,7 @@ class AbilityAssembly:
 
     @property
     def is_legacy(self) -> bool:
-        """是否保持现有运行方式。"""
+        """是否保持旧运行方式（已废弃，不参与权限治理）。"""
         return self.mode is AbilitySourceMode.LEGACY
 
     def require_store(self) -> Any:
@@ -204,6 +219,10 @@ class AbilityAssembly:
     ) -> list[AbilityProtocol]:
         """按模式把已解析成员实例化为工具。
 
+        ``builtin`` 分支经有效权限合并（``EffectivePermission``）装配全部
+        检查器；``legacy`` 分支保留旧物化行为，**不参与权限治理**（无只读、
+        权限位与 ``denied_*`` 执行），只用于旧部署兼容。
+
         Args:
             resolved_abilities: 解析器产出的成员列表。
             workspace_root: 权限模板基准与路径解析基准（None = 不限制）。
@@ -235,9 +254,10 @@ class AbilityAssembly:
     def skill_provider(self, root: str | None) -> Any:
         """按模式给出 Skill 读取服务。
 
-        legacy 模式按根目录构造旧读取器；builtin 模式当前没有本地获授内容
-        读取适配（尚未接线），因此**不构造**旧读取器，返回 None 由消费方
-        显式说明缺席——同一 Agent 不允许一边用新来源一边读旧目录。
+        legacy 模式（已废弃，仅旧部署兼容）按根目录构造旧读取器；builtin 模式
+        当前没有本地获授内容读取适配（尚未接线），因此**不构造**旧读取器，
+        返回 None 由消费方显式说明缺席——同一 Agent 不允许一边用新来源一边
+        读旧目录。
 
         Args:
             root: 配置里的 Skill 根目录。
