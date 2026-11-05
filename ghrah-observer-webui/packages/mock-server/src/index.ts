@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export { createAbilityTreeFixture } from "./ability-tree-fixture.js";
+export { createMockHttpServer, type MockHttpServer, type MockHttpServerOptions } from "./http.js";
 export {
   demoScenario,
   getScenario,

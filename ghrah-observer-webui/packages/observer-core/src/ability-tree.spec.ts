@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import fixture from "../../protocol/src/__fixtures__/ability-tree.json";
-import { createAbilityTreeClient } from "./ability-tree.js";
+import { createAbilityTreeClient, createRestAbilityTreeTransport } from "./ability-tree.js";
 
 describe("AbilityTreeClient", () => {
   it("uses explicit resources and consumes authoritative mutation responses", async () => {
@@ -57,4 +57,55 @@ it("checks content version and member while preserving an explicit read request"
   await expect(
     client.readContent("alice", "reports", "skill/guide/../secret", "x"),
   ).rejects.toThrow("Invalid content member");
+});
+
+describe("REST transport adapter", () => {
+  function controlClient() {
+    const result = {
+      format: "ghrah.ability-control.change.v1" as const,
+      view: fixture.selected,
+      revision: 2,
+    };
+    return {
+      status: vi.fn(),
+      tree: vi.fn().mockResolvedValue(fixture.initial),
+      admin: vi.fn(),
+      changes: vi.fn(),
+      content: vi.fn().mockResolvedValue(fixture.text),
+      putGrant: vi.fn().mockResolvedValue(result),
+      revokeGrant: vi.fn().mockResolvedValue(result),
+      bindTool: vi.fn().mockResolvedValue(result),
+      unbindTool: vi.fn().mockResolvedValue(result),
+    };
+  }
+
+  it("maps scheme paths and actions to REST resources", async () => {
+    const control = controlClient();
+    const transport = createRestAbilityTreeTransport(control, "project");
+    await expect(transport.read("/scheme/view/alice")).resolves.toEqual(fixture.initial);
+    await expect(
+      transport.submit("/scheme/agent/alice", "grant", { alias: "files" }, "key"),
+    ).resolves.toEqual({ view: fixture.selected, error: null });
+    await expect(
+      transport.submit("/scheme/agent/alice", "bind_tool", { tool_name: "read_file" }, "key"),
+    ).resolves.toEqual({ view: fixture.selected, error: null });
+    await expect(
+      transport.submit(
+        "/scheme/agent/alice/ability/reports/skill/guide",
+        "read",
+        { offset: 3 },
+        "k",
+      ),
+    ).resolves.toEqual(fixture.text);
+    expect(control.content).toHaveBeenCalledWith("alice", "reports", "skill/guide", 3);
+    expect(control.putGrant).toHaveBeenCalledWith("alice", { alias: "files" });
+  });
+
+  it("rejects unsupported paths instead of guessing a target", async () => {
+    const transport = createRestAbilityTreeTransport(controlClient(), "project");
+    await expect(transport.read("/scheme/elsewhere/x")).rejects.toThrow("Unsupported");
+    await expect(transport.submit("/scheme/agent/alice", "read", {}, "key")).rejects.toThrow(
+      "Unsupported",
+    );
+  });
 });

@@ -4,9 +4,27 @@
 
 export {
   createAbilityTreeClient,
+  createRestAbilityTreeTransport,
   type AbilityTreeClient,
   type AbilityTreeTransport,
 } from "./ability-tree.js";
+export {
+  AbilityConflictError,
+  createAbilityControlClient,
+  type AbilityAdminQuery,
+  type AbilityChangesQuery,
+  type AbilityControlClient,
+  type AbilityControlClientOptions,
+} from "./ability-control.js";
+export {
+  deriveHttpBase,
+  HttpClient,
+  HttpError,
+  type HttpClientOptions,
+  type HttpQuery,
+  type HttpQueryValue,
+  type HttpRequestOptions,
+} from "./http.js";
 export { type ConnectStoresOptions, connectStores } from "./bind.js";
 export { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 export {

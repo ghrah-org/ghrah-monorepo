@@ -4,12 +4,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import { createMockHttpServer, type MockHttpServer } from "./http.js";
 import { getScenario, listScenarios, runScenario } from "./scenarios/index.js";
 import { MockServer } from "./server.js";
 import { MockState } from "./state.js";
 
 interface CliOptions {
   port: number;
+  httpPort: number | null;
   scenario: string;
   hitlTimeoutMs: number;
   chains: boolean;
@@ -19,6 +21,7 @@ interface CliOptions {
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     port: 4113,
+    httpPort: null,
     scenario: "demo",
     hitlTimeoutMs: 30_000,
     chains: true,
@@ -30,6 +33,9 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case "--port":
         opts.port = Number(next());
+        break;
+      case "--http-port":
+        opts.httpPort = Number(next());
         break;
       case "--scenario":
         opts.scenario = next();
@@ -47,7 +53,7 @@ function parseArgs(argv: string[]): CliOptions {
       case "-h":
         console.log(
           [
-            "Usage: ghrah-mock-server [--port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains] [--replay-on-connect]",
+            "Usage: ghrah-mock-server [--port N] [--http-port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains] [--replay-on-connect]",
             "",
             "--replay-on-connect: 新连接也回放已缓冲事件（演示/视觉测试用；默认只回放带 last_seq_id 的增量）",
             "",
@@ -69,6 +75,10 @@ function parseArgs(argv: string[]): CliOptions {
     console.error(`invalid --port: ${opts.port}`);
     process.exit(2);
   }
+  if (opts.httpPort !== null && (!Number.isInteger(opts.httpPort) || opts.httpPort < 0)) {
+    console.error(`invalid --http-port: ${opts.httpPort}`);
+    process.exit(2);
+  }
   return opts;
 }
 
@@ -87,6 +97,14 @@ async function main(): Promise<void> {
     logger: (l) => console.log(`[mock] ${l}`),
   });
   await server.start();
+  let httpServer: MockHttpServer | undefined;
+  if (opts.httpPort !== null) {
+    httpServer = createMockHttpServer({
+      port: opts.httpPort,
+      logger: (l) => console.log(`[mock] ${l}`),
+    });
+    await httpServer.start();
+  }
 
   const cancel = runScenario(scenario, {
     state,
@@ -94,10 +112,14 @@ async function main(): Promise<void> {
       state.handleCommand(type, payload);
     },
   });
-  console.log(`[mock] scenario "${scenario.name}" started (port ${server.port})`);
+  console.log(
+    `[mock] scenario "${scenario.name}" started (port ${server.port})` +
+      (httpServer ? ` http=${httpServer.port}` : ""),
+  );
 
   const shutdown = async () => {
     cancel();
+    await httpServer?.close();
     await server.close();
     process.exit(0);
   };
