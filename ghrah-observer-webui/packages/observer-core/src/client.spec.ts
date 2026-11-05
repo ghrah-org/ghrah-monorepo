@@ -76,6 +76,28 @@ describe("ObserverClient", () => {
     expect(request.mock.calls[1][0].payload).toEqual({ agent_full_name: "audit.helper" });
   });
 
+  it("sends the Ability source baseline only for conditional updates", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "ability", success: true });
+    await client.putAbility("audit.fs.read_file", "source", true, "sha256:base");
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.MANIFEST_PUT_ABILITY,
+      payload: {
+        full_name: "audit.fs.read_file",
+        content: "source",
+        overwrite: true,
+        expected_source_hash: "sha256:base",
+      },
+    });
+    await client.putAbility("audit.fs.new_file", "new", false);
+    expect(request.mock.calls[1][0].payload).toEqual({
+      full_name: "audit.fs.new_file",
+      content: "new",
+      overwrite: false,
+    });
+  });
+
   describe("subscribe", () => {
     it("sends subscribe command with correct payload", async () => {
       await connectClient(client, mockWs);

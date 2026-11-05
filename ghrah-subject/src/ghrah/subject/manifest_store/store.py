@@ -99,13 +99,39 @@ class ManifestStore:
         """ManifestStoreProtocol.load_ability 委托给 get_ability。"""
         return self.get_ability(full_name)
 
-    def put_ability(self, full_name: str, content: str, overwrite: bool = False) -> None:
-        """创建或更新 Ability Manifest（先校验后写盘）。"""
-        self._put_entry(full_name, content, "abilities", overwrite)
+    def get_ability_source_hash(self, full_name: str) -> str:
+        """返回 Ability Manifest 原文的权威并发基线。"""
+        with _WRITE_LOCK:
+            return _source_hash(self.get_ability_source(full_name))
+
+    def put_ability(
+        self,
+        full_name: str,
+        content: str,
+        overwrite: bool = False,
+        expected_source_hash: str | None = None,
+    ) -> None:
+        """创建或更新 Ability；指定基线时，原文变化或文件缺失均拒绝写入。"""
+        _validate_full_name(full_name)
+        with _WRITE_LOCK:
+            path = self._ability_path(full_name)
+            if expected_source_hash is not None:
+                try:
+                    current_hash = _source_hash(path.read_text(encoding="utf-8"))
+                except FileNotFoundError as exc:
+                    raise ManifestConflictError(
+                        "Manifest deleted on the server; reload before saving"
+                    ) from exc
+                if current_hash != expected_source_hash:
+                    raise ManifestConflictError(
+                        "Manifest changed on the server; reload the current source before saving"
+                    )
+            self._put_entry(full_name, content, "abilities", overwrite)
 
     def delete_ability(self, full_name: str) -> None:
         """删除 Ability Manifest 文件。"""
-        self._delete_entry(full_name, "abilities")
+        with _WRITE_LOCK:
+            self._delete_entry(full_name, "abilities")
 
     def validate_ability(self, content: str) -> tuple[bool, list[str]]:
         """仅校验 Ability Manifest 内容（不写盘）。"""

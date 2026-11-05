@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from ghrah.manifest.errors import (
     DuplicateManifestError,
+    ManifestConflictError,
     ManifestNotFoundError,
     ManifestValidationError,
 )
@@ -198,6 +201,44 @@ class TestManifestStoreAbilityCRUD:
         store.put_ability("ghrah.fs.read_file", modified, overwrite=True)
         manifest = store.get_ability("ghrah.fs.read_file")
         assert manifest.metadata.description == "Read file contents v2"
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_expected_hash_requires_existing_ability(
+        self, store: ManifestStore, overwrite: bool
+    ) -> None:
+        with pytest.raises(ManifestConflictError):
+            store.put_ability(
+                "ghrah.fs.read_file",
+                VALID_ABILITY_YAML,
+                overwrite=overwrite,
+                expected_source_hash=source_hash(VALID_ABILITY_YAML),
+            )
+        assert store.list_abilities() == []
+
+    def test_concurrent_ability_updates_allow_only_one_writer(self, store: ManifestStore) -> None:
+        full_name = "ghrah.fs.read_file"
+        store.put_ability(full_name, VALID_ABILITY_YAML)
+        baseline = store.get_ability_source_hash(full_name)
+        assert baseline == source_hash(VALID_ABILITY_YAML)
+        barrier = Barrier(2)
+        contents = [VALID_ABILITY_YAML + f"# Writer {i}\n" for i in range(2)]
+
+        def save(content: str) -> str | None:
+            editor_store = ManifestStore(store._root)
+            barrier.wait(timeout=5)
+            try:
+                editor_store.put_ability(
+                    full_name, content, overwrite=True, expected_source_hash=baseline
+                )
+            except ManifestConflictError:
+                return None
+            return content
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(save, contents))
+        winners = [content for content in results if content is not None]
+        assert len(winners) == 1
+        assert store.get_ability_source(full_name) == winners[0]
 
     def test_put_ability_invalid_content_raises(self, store: ManifestStore) -> None:
         with pytest.raises(ManifestValidationError):
@@ -599,6 +640,128 @@ class TestManifestServiceCommand:
             store,
         )
         assert result["success"] is True
+
+    def test_ability_concurrency_and_permissions_persist(self, store: ManifestStore) -> None:
+        full_name = "ghrah.fs.read_file"
+        original = "# Keep this comment.\n" + VALID_ABILITY_YAML
+        created = handle_manifest_command(
+            "manifest_put_ability", {"full_name": full_name, "content": original}, store
+        )
+        assert created["success"], created
+        baseline = handle_manifest_command("manifest_get_ability", {"full_name": full_name}, store)
+        assert baseline["data"]["source_hash"] == source_hash(original)
+        edited = original.replace(
+            "    fs_read_only: true",
+            "    fs_read_only: false\n    fs_write: true\n    require_hitl: true\n"
+            "    allowed_paths: [/workspace]\n    denied_paths: [/workspace/secrets]",
+        )
+        saved = handle_manifest_command(
+            "manifest_put_ability",
+            {
+                "full_name": full_name,
+                "content": edited,
+                "overwrite": True,
+                "expected_source_hash": baseline["data"]["source_hash"],
+            },
+            store,
+        )
+        assert saved["success"], saved
+        assert saved["data"]["source"] == edited
+        assert saved["data"]["source_hash"] == source_hash(edited)
+        rejected = handle_manifest_command(
+            "manifest_put_ability",
+            {
+                "full_name": full_name,
+                "content": original,
+                "overwrite": True,
+                "expected_source_hash": baseline["data"]["source_hash"],
+            },
+            store,
+        )
+        assert rejected["success"] is False
+        assert rejected["error_detail"] == (
+            "code=manifest_conflict; "
+            f"expected_source_hash={source_hash(original)}; "
+            f"current_source_hash={source_hash(edited)}"
+        )
+        reconnected = ManifestStore(store._root)
+        read = handle_manifest_command(
+            "manifest_get_ability", {"full_name": full_name}, reconnected
+        )
+        assert read["success"], read
+        assert read["data"] == {k: v for k, v in saved["data"].items() if k != "full_name"}
+        permissions = read["data"]["manifest"]["metadata"]["permissions"]
+        assert permissions["fs_read_only"] is False
+        assert permissions["fs_write"] is True
+        assert permissions["require_hitl"] is True
+        assert permissions["allowed_paths"] == ["/workspace"]
+        assert permissions["denied_paths"] == ["/workspace/secrets"]
+        listed = handle_manifest_command("manifest_list_abilities", {}, reconnected)
+        assert listed["success"], listed
+        assert listed["data"]["errors"] == []
+        summary = listed["data"]["abilities"][0]
+        assert summary["permissions"] == permissions
+        assert summary["has_hitl"] is True
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_put_ability_rejects_deleted_baseline(
+        self, store: ManifestStore, overwrite: bool
+    ) -> None:
+        full_name = "ghrah.fs.read_file"
+        created = handle_manifest_command(
+            "manifest_put_ability",
+            {"full_name": full_name, "content": VALID_ABILITY_YAML},
+            store,
+        )
+        assert created["success"], created
+        deleted = handle_manifest_command(
+            "manifest_delete_ability", {"full_name": full_name}, store
+        )
+        assert deleted["success"], deleted
+        rejected = handle_manifest_command(
+            "manifest_put_ability",
+            {
+                "full_name": full_name,
+                "content": VALID_ABILITY_YAML,
+                "overwrite": overwrite,
+                "expected_source_hash": created["data"]["source_hash"],
+            },
+            store,
+        )
+        assert rejected["success"] is False
+        assert rejected["error_detail"] == (
+            "code=manifest_conflict; "
+            f"expected_source_hash={source_hash(VALID_ABILITY_YAML)}; current_source_hash=None"
+        )
+        assert not store._ability_path(full_name).exists()
+
+    @pytest.mark.parametrize("missing_error", [ManifestNotFoundError, FileNotFoundError])
+    def test_ability_conflict_detail_tolerates_deleted_source(
+        self, store: ManifestStore, monkeypatch: pytest.MonkeyPatch, missing_error: type[Exception]
+    ) -> None:
+        full_name = "ghrah.fs.read_file"
+        store.put_ability(full_name, VALID_ABILITY_YAML)
+
+        def deleted_before_hash_lookup(name: str) -> str:
+            store.delete_ability(name)
+            raise missing_error("Manifest deleted before conflict detail lookup")
+
+        monkeypatch.setattr(store, "get_ability_source_hash", deleted_before_hash_lookup)
+        rejected = handle_manifest_command(
+            "manifest_put_ability",
+            {
+                "full_name": full_name,
+                "content": VALID_ABILITY_YAML,
+                "overwrite": True,
+                "expected_source_hash": "sha256:stale",
+            },
+            store,
+        )
+        assert rejected["success"] is False
+        assert rejected["error_detail"] == (
+            "code=manifest_conflict; expected_source_hash=sha256:stale; current_source_hash=None"
+        )
+        assert not store._ability_path(full_name).exists()
 
     def test_delete_ability(self, store: ManifestStore) -> None:
         store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)

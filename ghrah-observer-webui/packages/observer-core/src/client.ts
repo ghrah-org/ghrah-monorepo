@@ -654,9 +654,11 @@ export class ObserverClient extends ServerClient {
     fullName: string,
     content: string,
     overwrite?: boolean,
+    expectedSourceHash?: string,
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { full_name: fullName, content };
     if (overwrite != null) payload["overwrite"] = overwrite;
+    if (expectedSourceHash != null) payload["expected_source_hash"] = expectedSourceHash;
 
     const msg: ServerMessage = {
       type: CommandType.MANIFEST_PUT_ABILITY,

@@ -125,3 +125,21 @@ describe("manifest response integration", () => {
     expect(observer.manifests.isValidating).toBe(false);
   });
 });
+
+it("passes Ability source hashes through the Observer wrapper", async () => {
+  const observer = useObserver();
+  const putAbility = vi.fn().mockResolvedValue({ success: true, data: fixture.ability });
+  observer.client.value = { putAbility } as unknown as NonNullable<typeof observer.client.value>;
+  await observer.putAbility(
+    "audit.fs.read_file",
+    fixture.ability.source,
+    true,
+    fixture.ability.source_hash,
+  );
+  expect(putAbility).toHaveBeenCalledWith(
+    "audit.fs.read_file",
+    fixture.ability.source,
+    true,
+    fixture.ability.source_hash,
+  );
+});

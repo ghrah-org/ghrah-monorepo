@@ -388,8 +388,15 @@ export function useObserver() {
     return cacheManifestResult(result, "ability", fullName);
   }
 
-  async function putAbility(fullName: string, content: string, overwrite?: boolean) {
-    const result = await withClient((c) => c.putAbility(fullName, content, overwrite));
+  async function putAbility(
+    fullName: string,
+    content: string,
+    overwrite?: boolean,
+    expectedSourceHash?: string,
+  ) {
+    const result = await withClient((c) =>
+      c.putAbility(fullName, content, overwrite, expectedSourceHash),
+    );
     return cacheManifestResult(result, "ability", fullName);
   }
 

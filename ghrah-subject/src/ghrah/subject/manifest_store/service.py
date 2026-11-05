@@ -120,7 +120,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             content = payload.get("content", "")
             overwrite = payload.get("overwrite", False)
-            store.put_ability(full_name, content, overwrite=overwrite)
+            expected_source_hash = payload.get("expected_source_hash")
+            store.put_ability(
+                full_name,
+                content,
+                overwrite=overwrite,
+                expected_source_hash=expected_source_hash,
+            )
             manifest = store.get_ability(full_name)
             source = store.get_ability_source(full_name)
             return {
@@ -271,8 +277,17 @@ def handle_manifest_command(
     except ManifestConflictError as e:
         logger.warning("Manifest conflict: %s", e)
         current_source_hash = None
-        if command == "manifest_put_agent":
-            current_source_hash = store.get_agent_source_hash(payload.get("full_name", ""))
+        if command in {"manifest_put_ability", "manifest_put_agent"}:
+            full_name = payload.get("full_name", "")
+            try:
+                current_source_hash = (
+                    store.get_ability_source_hash(full_name)
+                    if command == "manifest_put_ability"
+                    else store.get_agent_source_hash(full_name)
+                )
+            except ManifestNotFoundError, FileNotFoundError:
+                # 冲突发生后文件仍可能被删除；诊断读取不得覆盖原始冲突。
+                pass
         return {
             "success": False,
             "error": str(e),
@@ -280,7 +295,7 @@ def handle_manifest_command(
                 "code=manifest_conflict; "
                 f"expected_source_hash={payload.get('expected_source_hash')}; "
                 f"current_source_hash={current_source_hash}"
-                if command == "manifest_put_agent"
+                if command in {"manifest_put_ability", "manifest_put_agent"}
                 else None
             ),
         }
