@@ -52,6 +52,7 @@ export interface ManifestDetail {
   full_name: string;
   manifest: Record<string, unknown>;
   source: string;
+  source_hash: string;
 }
 
 export type ManifestEntry =
@@ -113,7 +114,7 @@ export function extractManifestEntry(
 ): ManifestEntry | null {
   const parsed = ManifestGetAbilityResponsePayloadSchema.safeParse(data);
   if (!parsed.success) return null;
-  const { manifest, source } = parsed.data;
+  const { manifest, source, source_hash } = parsed.data;
   const metadata = manifest.metadata;
   if (
     !isRecord(metadata) ||
@@ -129,7 +130,7 @@ export function extractManifestEntry(
   if (expected && (expected.kind !== manifest.manifest || expected.fullName !== fullName)) {
     return null;
   }
-  const detail: ManifestDetail = { full_name: fullName, manifest, source };
+  const detail: ManifestDetail = { full_name: fullName, manifest, source, source_hash };
   const common = {
     full_name: fullName,
     namespace: metadata.namespace,

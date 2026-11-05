@@ -420,8 +420,15 @@ export function useObserver() {
     return cacheManifestResult(result, "agent", fullName);
   }
 
-  async function putAgent(fullName: string, content: string, overwrite?: boolean) {
-    const result = await withClient((c) => c.putAgent(fullName, content, overwrite));
+  async function putAgent(
+    fullName: string,
+    content: string,
+    overwrite?: boolean,
+    expectedSourceHash?: string,
+  ) {
+    const result = await withClient((c) =>
+      c.putAgent(fullName, content, overwrite, expectedSourceHash),
+    );
     return cacheManifestResult(result, "agent", fullName);
   }
 

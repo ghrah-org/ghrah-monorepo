@@ -14,6 +14,7 @@ vi.mock("@/composables/usePlugins", () => ({ usePlugins: vi.fn() }));
 const fullName = "audit.helper";
 let wrapper: VueWrapper | undefined;
 let serverSource: string;
+let serverSourceHash: string;
 let serverManifest: typeof fixture.agent.manifest;
 
 function setupClient() {
@@ -21,11 +22,15 @@ function setupClient() {
   const client = {
     getAgent: vi.fn().mockImplementation(async () => ({
       success: true,
-      data: { manifest: serverManifest, source: serverSource },
+      data: { manifest: serverManifest, source: serverSource, source_hash: serverSourceHash },
     })),
     putAgent: vi.fn().mockImplementation(async (_name: string, source: string) => {
       serverSource = source;
-      return { success: true, data: { manifest: serverManifest, source } };
+      serverSourceHash = `sha256:${source}`;
+      return {
+        success: true,
+        data: { manifest: serverManifest, source, source_hash: serverSourceHash },
+      };
     }),
     validateManifest: vi
       .fn()
@@ -56,6 +61,7 @@ function button(text: string) {
 beforeEach(() => {
   setActivePinia(createPinia());
   serverSource = fixture.agent.source;
+  serverSourceHash = fixture.agent.source_hash;
   serverManifest = structuredClone(fixture.agent.manifest);
   const observer = useObserver();
   observer.client.value = null;
@@ -89,7 +95,7 @@ describe("Agent Manifest editor", () => {
     await button("Validate and save").trigger("click");
     await flushPromises();
     expect(client.validateManifest).toHaveBeenCalledWith(draft, "agent");
-    expect(client.putAgent).toHaveBeenCalledWith(fullName, draft, true);
+    expect(client.putAgent).toHaveBeenCalledWith(fullName, draft, true, fixture.agent.source_hash);
     expect(client.getAgent).toHaveBeenCalledTimes(2);
     expect(client.validateManifest.mock.invocationCallOrder[0]).toBeLessThan(
       client.putAgent.mock.invocationCallOrder[0],
@@ -140,6 +146,24 @@ describe("Agent Manifest editor", () => {
     expect(wrapper!.get('[role="alert"]').text()).toContain("identity must match");
     expect(wrapper!.get("textarea").element).toHaveProperty("value", draft);
     expect(wrapper!.text()).not.toContain("Saved and verified");
+  });
+
+  it("keeps the draft when the server source changed before saving", async () => {
+    const { client } = setupClient();
+    client.putAgent.mockResolvedValue({
+      success: false,
+      error: "Manifest changed on the server; reload the current source before saving",
+      error_detail: `code=manifest_conflict; expected_source_hash=${fixture.agent.source_hash}; current_source_hash=sha256:different`,
+    });
+    await open();
+    const draft = serverSource + "# Concurrent edit\n";
+    await wrapper!.get("textarea").setValue(draft);
+    await button("Validate and save").trigger("click");
+    await flushPromises();
+    expect(client.putAgent).toHaveBeenCalledWith(fullName, draft, true, fixture.agent.source_hash);
+    expect(wrapper!.get('[role="alert"]').text()).toContain("changed on the server");
+    expect(wrapper!.get("textarea").element).toHaveProperty("value", draft);
+    expect(client.getAgent).toHaveBeenCalledTimes(1);
   });
 
   it("retries read-back without writing twice when the save was accepted", async () => {
@@ -366,6 +390,7 @@ describe("new Agent Manifest validation", () => {
         "audit.helper",
         client.validateManifest.mock.calls[0][0],
         false,
+        undefined,
       );
       expect(client.validateManifest.mock.invocationCallOrder[0]).toBeLessThan(
         client.putAgent.mock.invocationCallOrder[0],

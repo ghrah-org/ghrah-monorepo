@@ -14,6 +14,7 @@ export const ManifestPutPayloadSchema = z.object({
   full_name: z.string(),
   content: z.string(),
   overwrite: z.boolean().optional().default(false),
+  expected_source_hash: z.string().nullable().optional(),
 });
 
 export const ManifestDeletePayloadSchema = z.object({
@@ -36,6 +37,7 @@ export const ManifestResolvePayloadSchema = z.object({
 export const ManifestGetAbilityResponsePayloadSchema = z.object({
   manifest: z.record(z.unknown()),
   source: z.string(),
+  source_hash: z.string(),
 });
 
 export const ManifestGetAgentResponsePayloadSchema = ManifestGetAbilityResponsePayloadSchema;

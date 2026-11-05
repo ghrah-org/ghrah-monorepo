@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -71,6 +72,12 @@ system_prompt: You are a dev agent.
 abilities:
   - type: conversation
 """
+
+
+def source_hash(content: str) -> str:
+    """与服务端一致的原文哈希。"""
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
 
 VALID_AGENT_YAML_2 = """\
 manifest: agent
@@ -628,6 +635,47 @@ class TestManifestServiceCommand:
         assert result["success"] is True
         assert "manifest" in result["data"]
         assert "source" in result["data"]
+
+    def test_put_agent_rejects_stale_source_hash(self, store: ManifestStore) -> None:
+        assert handle_manifest_command(
+            "manifest_put_agent",
+            {"full_name": "my_project.dev_agent", "content": VALID_AGENT_YAML},
+            store,
+        )["success"]
+        latest = VALID_AGENT_YAML.replace("You are a dev agent.", "You are the authority.")
+        assert handle_manifest_command(
+            "manifest_put_agent",
+            {
+                "full_name": "my_project.dev_agent",
+                "content": latest,
+                "overwrite": True,
+                "expected_source_hash": source_hash(VALID_AGENT_YAML),
+            },
+            store,
+        )["success"]
+        stale = VALID_AGENT_YAML.replace("You are a dev agent.", "You are a stale editor.")
+        rejected = handle_manifest_command(
+            "manifest_put_agent",
+            {
+                "full_name": "my_project.dev_agent",
+                "content": stale,
+                "overwrite": True,
+                "expected_source_hash": source_hash(VALID_AGENT_YAML),
+            },
+            store,
+        )
+        assert rejected["success"] is False
+        assert "code=manifest_conflict" in rejected["error_detail"]
+        assert f"current_source_hash={source_hash(latest)}" in rejected["error_detail"]
+        assert store.get_agent_source("my_project.dev_agent") == latest
+
+    def test_get_agent_returns_concurrency_baseline(self, store: ManifestStore) -> None:
+        content = "# Baseline comment\n" + VALID_AGENT_YAML
+        store.put_agent("my_project.dev_agent", content)
+        result = handle_manifest_command(
+            "manifest_get_agent", {"full_name": "my_project.dev_agent"}, store
+        )
+        assert result["data"]["source_hash"] == source_hash(content)
 
     def test_delete_agent(self, store: ManifestStore) -> None:
         store.put_agent("my_project.dev_agent", VALID_AGENT_YAML)

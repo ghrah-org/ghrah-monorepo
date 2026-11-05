@@ -30,6 +30,7 @@ class ManifestPutPayload(BaseModel):
     full_name: str
     content: str
     overwrite: bool = False
+    expected_source_hash: str | None = None
 
 
 class ManifestDeletePayload(BaseModel):
@@ -61,6 +62,7 @@ class ManifestGetAbilityResponsePayload(BaseModel):
 
     manifest: dict[str, Any]
     source: str
+    source_hash: str
 
 
 class ManifestGetAgentResponsePayload(BaseModel):
@@ -68,6 +70,7 @@ class ManifestGetAgentResponsePayload(BaseModel):
 
     manifest: dict[str, Any]
     source: str
+    source_hash: str
 
 
 class ManifestListErrorPayload(BaseModel):

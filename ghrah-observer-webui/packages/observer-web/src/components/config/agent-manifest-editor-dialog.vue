@@ -26,6 +26,7 @@ const {
 } = useObserver();
 const editing = ref(props.initialMode === "edit");
 const original = ref<string | null>(null);
+const sourceHash = ref<string | null>(null);
 const draft = ref("");
 const phase = ref<"loading" | "validating" | "saving" | "verifying" | "resolving" | null>(null);
 const error = ref("");
@@ -60,12 +61,12 @@ function failure(fallback: string, message?: string | null): Error {
   return new Error(message ?? observerError.value ?? t(fallback));
 }
 
-async function readSource(): Promise<string> {
+async function readSource(): Promise<{ source: string; sourceHash: string }> {
   const result = await getAgent(props.fullName);
   if (!result?.success) throw failure("config.editor.loadFailed", result?.error);
   const entry = extractManifestEntry(result.data, { kind: "agent", fullName: props.fullName });
   if (!entry) throw new Error(t("common.invalidResponse"));
-  return entry.detail.source;
+  return { source: entry.detail.source, sourceHash: entry.detail.source_hash };
 }
 
 async function load() {
@@ -74,10 +75,11 @@ async function load() {
   phase.value = "loading";
   error.value = "";
   try {
-    const source = await readSource();
+    const loaded = await readSource();
     if (current !== epoch) return;
-    draft.value = source;
-    original.value = source;
+    draft.value = loaded.source;
+    original.value = loaded.source;
+    sourceHash.value = loaded.sourceHash;
     saved.value = false;
     phase.value = null;
     await nextTick();
@@ -147,17 +149,19 @@ async function verify(current = epoch) {
   phase.value = "verifying";
   error.value = "";
   try {
-    const source = await readSource();
+    const loaded = await readSource();
     if (current !== epoch) return;
-    if (source !== submitted.value) {
-      original.value = source;
+    if (loaded.source !== submitted.value) {
+      original.value = loaded.source;
+      sourceHash.value = loaded.sourceHash;
       needsVerification.value = false;
       validation.value = null;
       error.value = t("config.editor.differentSource");
       return;
     }
-    draft.value = source;
-    original.value = source;
+    draft.value = loaded.source;
+    original.value = loaded.source;
+    sourceHash.value = loaded.sourceHash;
     needsVerification.value = false;
     await nextTick();
     if (current === epoch) saved.value = true;
@@ -179,12 +183,15 @@ async function save() {
     if (!(await check(source, current))) return;
     phase.value = "saving";
     submitted.value = source;
-    const result = await putAgent(props.fullName, source, true);
+    const result = await putAgent(props.fullName, source, true, sourceHash.value ?? undefined);
     if (current !== epoch) return;
     if (!result) {
       needsVerification.value = true;
       error.value = t("config.editor.saveUncertain");
       return;
+    }
+    if (!result.success && result.error_detail?.includes("code=manifest_conflict")) {
+      throw new Error(t("config.editor.conflict"));
     }
     if (!result.success) throw failure("config.editor.saveFailed", result.error);
     needsVerification.value = true;

@@ -7,6 +7,7 @@ from typing import Any
 from ghrah.ability.assembly import AbilityAssembly, AbilityAssemblyError
 from ghrah.manifest.errors import (
     DuplicateManifestError,
+    ManifestConflictError,
     ManifestError,
     ManifestNotFoundError,
     ManifestValidationError,
@@ -23,7 +24,7 @@ from ghrah.protocol.types import (  # type: ignore[import-untyped]
 )
 from yaml import YAMLError, safe_load
 
-from ghrah.subject.manifest_store.store import ManifestStore
+from ghrah.subject.manifest_store.store import ManifestStore, _source_hash
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ def handle_manifest_command(
                 "data": {
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -127,6 +129,7 @@ def handle_manifest_command(
                     "full_name": full_name,
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -165,11 +168,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             manifest = store.get_agent(full_name)
             source = store.get_agent_source(full_name)
+            source_hash = _source_hash(source)
             return {
                 "success": True,
                 "data": {
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": source_hash,
                 },
             }
 
@@ -177,7 +182,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             content = payload.get("content", "")
             overwrite = payload.get("overwrite", False)
-            store.put_agent(full_name, content, overwrite=overwrite)
+            expected_source_hash = payload.get("expected_source_hash")
+            store.put_agent(
+                full_name,
+                content,
+                overwrite=overwrite,
+                expected_source_hash=expected_source_hash,
+            )
             manifest = store.get_agent(full_name)
             source = store.get_agent_source(full_name)
             return {
@@ -186,6 +197,7 @@ def handle_manifest_command(
                     "full_name": full_name,
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -256,6 +268,22 @@ def handle_manifest_command(
     except DuplicateManifestError as e:
         logger.warning("Duplicate manifest: %s", e)
         return {"success": False, "error": str(e)}
+    except ManifestConflictError as e:
+        logger.warning("Manifest conflict: %s", e)
+        current_source_hash = None
+        if command == "manifest_put_agent":
+            current_source_hash = store.get_agent_source_hash(payload.get("full_name", ""))
+        return {
+            "success": False,
+            "error": str(e),
+            "error_detail": (
+                "code=manifest_conflict; "
+                f"expected_source_hash={payload.get('expected_source_hash')}; "
+                f"current_source_hash={current_source_hash}"
+                if command == "manifest_put_agent"
+                else None
+            ),
+        }
     except ManifestValidationError as e:
         logger.warning("Manifest validation error: %s", e)
         return {"success": False, "error": str(e)}

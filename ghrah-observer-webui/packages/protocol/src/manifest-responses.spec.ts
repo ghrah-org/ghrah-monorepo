@@ -4,6 +4,7 @@ import {
   ManifestGetAbilityResponsePayloadSchema,
   ManifestGetAgentResponsePayloadSchema,
   ManifestListAbilitiesResponsePayloadSchema,
+  ManifestPutPayloadSchema,
   ManifestValidateResponsePayloadSchema,
   ManifestResolvePayloadSchema,
   ManifestResolveAgentResponsePayloadSchema,
@@ -36,5 +37,13 @@ describe("Manifest response alignment", () => {
     expect(
       ManifestValidateResponsePayloadSchema.safeParse({ is_valid: true, errors: [] }).success,
     ).toBe(false);
+  });
+
+  it("keeps the optimistic concurrency field optional on writes", () => {
+    expect(ManifestPutPayloadSchema.parse({ full_name: "audit.helper", content: "x" })).toEqual({
+      full_name: "audit.helper",
+      content: "x",
+      overwrite: false,
+    });
   });
 });

@@ -7,6 +7,7 @@ from ghrah.protocol.payloads.manifest import (
     ManifestGetAbilityResponsePayload,
     ManifestGetAgentResponsePayload,
     ManifestListAbilitiesResponsePayload,
+    ManifestPutPayload,
     ManifestResolveAgentResponsePayload,
     ManifestResolvePayload,
     ManifestValidateResponsePayload,
@@ -33,6 +34,12 @@ def test_shared_manifest_responses() -> None:
         ManifestResolvePayload.model_validate(fixture["resolve_request"]).model_dump(mode="json")
         == fixture["resolve_request"]
     )
+    assert ManifestPutPayload.model_validate({"full_name": "a", "content": "b"}).model_dump() == {
+        "full_name": "a",
+        "content": "b",
+        "overwrite": False,
+        "expected_source_hash": None,
+    }
 
 
 def test_list_read_errors_are_explicit() -> None:

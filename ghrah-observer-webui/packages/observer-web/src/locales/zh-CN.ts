@@ -666,6 +666,7 @@ export default {
       verifySave: "检查保存结果",
       verifyFailed: "服务端已接受写入，但回读失败。请先检查保存结果，再继续编辑。",
       saveUncertain: "暂时无法确认保存结果，草稿已保留。请先检查服务端文件，再决定是否重试。",
+      conflict: "服务端 Manifest 已被他人更新。草稿已保留；请重新读取当前内容，再合并修改。",
       differentSource: "服务端文件与提交的草稿不同。草稿已保留，请核对后再保存。",
     },
     preview: {

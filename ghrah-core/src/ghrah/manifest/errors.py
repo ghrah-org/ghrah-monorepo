@@ -23,3 +23,7 @@ class ManifestNotFoundError(ManifestError):
 
 class DuplicateManifestError(ManifestError):
     pass
+
+
+class ManifestConflictError(ManifestError):
+    """Manifest authority changed before an optimistic update was applied."""

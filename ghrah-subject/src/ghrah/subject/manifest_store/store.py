@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import threading
 from pathlib import Path
 
 import yaml
@@ -9,6 +11,7 @@ from ghrah.manifest.ability import AbilityManifest
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import (
     DuplicateManifestError,
+    ManifestConflictError,
     ManifestNotFoundError,
     ManifestValidationError,
 )
@@ -36,6 +39,7 @@ def _full_name_to_path_parts(full_name: str) -> tuple[str, str]:
 
 _NAMESPACE_PATTERN = re.compile(r"^[a-z][a-z0-9_.]*[a-z0-9]$")
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+_WRITE_LOCK = threading.Lock()
 
 
 def _validate_full_name(full_name: str) -> None:
@@ -45,6 +49,11 @@ def _validate_full_name(full_name: str) -> None:
         raise ManifestValidationError(f"Invalid namespace in full_name: {namespace!r}")
     if not _NAME_PATTERN.match(name):
         raise ManifestValidationError(f"Invalid name in full_name: {name!r}")
+
+
+def _source_hash(content: str) -> str:
+    """返回原文哈希；编辑器以它作为乐观并发基线。"""
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 class ManifestStore:
@@ -123,13 +132,32 @@ class ManifestStore:
             raise ManifestNotFoundError(f"Agent manifest not found: {full_name}")
         return path.read_text(encoding="utf-8")
 
+    def get_agent_source_hash(self, full_name: str) -> str:
+        """返回 Agent Manifest 原文的权威并发基线。"""
+        with _WRITE_LOCK:
+            return _source_hash(self.get_agent_source(full_name))
+
     def load_agent(self, full_name: str) -> AgentManifest:
         """ManifestStoreProtocol.load_agent 委托给 get_agent。"""
         return self.get_agent(full_name)
 
-    def put_agent(self, full_name: str, content: str, overwrite: bool = False) -> None:
-        """创建或更新 Agent Manifest（先校验后写盘）。"""
-        self._put_entry(full_name, content, "agents", overwrite)
+    def put_agent(
+        self,
+        full_name: str,
+        content: str,
+        overwrite: bool = False,
+        expected_source_hash: str | None = None,
+    ) -> None:
+        """创建或更新 Agent Manifest（先校验后在写入锁内比较基线）。"""
+        with _WRITE_LOCK:
+            path = self._agent_path(full_name)
+            if expected_source_hash is not None and path.exists():
+                current_hash = _source_hash(path.read_text(encoding="utf-8"))
+                if current_hash != expected_source_hash:
+                    raise ManifestConflictError(
+                        "Manifest changed on the server; reload the current source before saving"
+                    )
+            self._put_entry(full_name, content, "agents", overwrite)
 
     def delete_agent(self, full_name: str) -> None:
         """删除 Agent Manifest 文件。"""

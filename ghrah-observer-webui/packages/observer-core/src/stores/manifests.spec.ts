@@ -431,7 +431,11 @@ describe("extractManifestEntry", () => {
     expect(entry).toEqual({
       kind: "ability",
       summary: fixture.ability_list.abilities[0],
-      detail: { full_name: "audit.fs.read_file", ...fixture.ability },
+      detail: {
+        full_name: "audit.fs.read_file",
+        manifest: fixture.ability.manifest,
+        source: fixture.ability.source,
+      },
     });
   });
 
@@ -444,7 +448,11 @@ describe("extractManifestEntry", () => {
       ability_refs: ["audit.fs.read_file", "end_task"],
       system_prompt: fixture.agent.manifest.system_prompt,
     });
-    expect(entry?.detail).toEqual({ full_name: "audit.helper", ...fixture.agent });
+    expect(entry?.detail).toEqual({
+      full_name: "audit.helper",
+      manifest: fixture.agent.manifest,
+      source: fixture.agent.source,
+    });
   });
 
   it.each(["agent", "ability"] as const)(

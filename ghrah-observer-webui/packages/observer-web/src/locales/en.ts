@@ -700,6 +700,8 @@ export default {
         "The write was accepted, but reading it back failed. Check the saved file before editing again.",
       saveUncertain:
         "The save result could not be confirmed. Your draft is kept. Check the saved file before retrying.",
+      conflict:
+        "This manifest changed on the server. Your draft is kept; reload the current source, then reapply your changes.",
       differentSource:
         "The server file differs from the submitted draft. Your draft is kept; review it before saving again.",
     },
