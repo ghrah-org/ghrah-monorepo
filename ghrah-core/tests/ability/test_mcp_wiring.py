@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 from contextlib import asynccontextmanager
@@ -83,8 +84,10 @@ class Endpoint:
         )
 
 
-@pytest.fixture
-async def wired(tmp_path):
+@asynccontextmanager
+async def _wiring(tmp_path, *, mock=None):
+    """搭出受信 MCP 接线；``mock`` 非空时改走本地真实端点与生产 open_client。"""
+    live = mock is not None
     # 显式提交一个仅供此测试使用的成员定义，不依赖安装或工具面装配。
     root = tmp_path / "source"
     shutil.copytree(EXAMPLE, root)
@@ -104,7 +107,7 @@ async def wired(tmp_path):
     with AgentsConfig(tmp_path / "agentconf.db") as cfg:
         provider = cfg.create_mcp_provider(
             "remote",
-            api_key=SECRET,
+            api_key=mock.token if live else SECRET,
             default_binding={
                 "target": "http_header",
                 "name": "Authorization",
@@ -115,10 +118,12 @@ async def wired(tmp_path):
             cfg.create_mcp_server(
                 name,
                 "streamable_http",
-                {"url": f"https://example.invalid/{name}"},
+                {"url": mock.url if live else f"https://example.invalid/{name}"},
                 auth={"mode": "provider", "provider_id": provider.id, "binding_mode": "inherit"},
             )
-    endpoint = Endpoint()
+    endpoint = None if live else Endpoint()
+    connector = None if live else endpoint.connect
+    tool_name = "query" if live else "remote-query"
     try:
         await store.commit_version(ADMIN, version)
         await store.select_instance(ADMIN, "reporting", version.digest, tmp_path)
@@ -156,7 +161,7 @@ async def wired(tmp_path):
                 McpMemberBinding(
                     reference,
                     McpToolSpec(
-                        "remote-query",
+                        tool_name,
                         "查询测试服务",
                         SCHEMA,
                     ),
@@ -167,7 +172,7 @@ async def wired(tmp_path):
             McpDeploymentConfig(
                 (binding, replace(binding, agent_id=BOB, server_ref="server-b")),
                 source=source,
-                connector=endpoint.connect,
+                connector=connector,
             ),
             store,
             "cluster",
@@ -182,12 +187,24 @@ async def wired(tmp_path):
             agent=ALICE,
             run=runs[ALICE],
         ).with_member(reference)
-        yield store, provider, owner, endpoint, call, binding, runs
+        yield store, provider, owner, mock if live else endpoint, call, binding, runs
     finally:
         if "owner" in locals():
             await owner.close()
         source.close()
         await store.close()
+
+
+@pytest.fixture
+async def wired(tmp_path):
+    async with _wiring(tmp_path) as value:
+        yield value
+
+
+@pytest.fixture
+async def wired_live(tmp_path, mock_mcp_endpoint):
+    async with _wiring(tmp_path, mock=mock_mcp_endpoint) as value:
+        yield value
 
 
 async def test_load_is_offline_then_complete_member_call_and_unload(wired, monkeypatch):
@@ -424,3 +441,17 @@ async def test_inline_connection_is_deferred_and_echo_is_redacted(wired):
     assert endpoint.connections == []
     result = await execute_mcp_member(call, make_services(mcp_runtime=provider.mcp_service))
     assert result.outcome == ActionOutcome.SUCCESS and SECRET not in str(result.data)
+
+
+async def test_complete_member_call_over_local_mcp_endpoint(wired_live):
+    """真实 Streamable HTTP 端点上的完整受信调用：配置、激活、调用与结果脱敏。"""
+    _, provider, _, endpoint, call, _, _ = wired_live
+    await provider.load_skill("reports/guide")
+    result = await execute_mcp_member(call, make_services(mcp_runtime=provider.mcp_service))
+    assert result.outcome == ActionOutcome.SUCCESS
+    assert "query result for cannot-switch-scope" in result.data["content"]
+    assert endpoint.token not in str(result.data)
+    stats = endpoint.stats()
+    assert stats["calls"] == ["query"]
+    expected = hashlib.sha256(f"Bearer {endpoint.token}".encode()).hexdigest()[:12]
+    assert expected in stats["authorizations"]
