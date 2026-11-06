@@ -4,12 +4,21 @@
 """Ability 工具表面契约。
 
 本包提供表面条目、工具名算法、阈值默认值、per-Agent 覆盖类型与授权面
-投影：形状和纯函数不读关系库，投影只消费已有的关系库投影（``AbilityTreeView``）。
-静态集裁切与搜索索引属于表面装配在后续实现中的接线。
+投影、预算装配与授权域内的搜索索引。所有目录从关系库单向派生，不保存第二份授权。
 """
 
 from __future__ import annotations
 
+from ghrah.ability.surface.assembly import (
+    DEFAULT_SURFACE_CONTEXT_LENGTH,
+    SurfaceAssembly,
+    SurfaceAssemblyError,
+    SurfaceThresholds,
+    assemble_agent_surface,
+    assemble_surface,
+    definition_tokens,
+)
+from ghrah.ability.surface.catalog import SurfaceCatalog, SurfaceTool
 from ghrah.ability.surface.config import (
     DEFAULT_DEFINITION_TOKEN_RATIO,
     DEFAULT_HARD_CAP,
@@ -31,6 +40,7 @@ from ghrah.ability.surface.naming import (
     assign_tool_names,
 )
 from ghrah.ability.surface.projection import project_grants, project_surface
+from ghrah.ability.surface.search import AgentToolSearch, SearchDocument, ToolSearchIndex
 from ghrah.ability.surface.types import MemberRef, SurfaceEntry
 
 __all__ = [
@@ -39,6 +49,7 @@ __all__ = [
     "DEFAULT_LOADED_LIMIT",
     "DEFAULT_MAX_STATIC",
     "DEFAULT_SEARCH_LIMIT",
+    "DEFAULT_SURFACE_CONTEXT_LENGTH",
     "META_TOOL_NAMES",
     "RESERVED_TOOL_NAMES",
     "RUN_SCRIPT_TOOL_NAME",
@@ -48,10 +59,21 @@ __all__ = [
     "TOOL_NAME_PATTERN",
     "MemberRef",
     "NamedMember",
+    "AgentToolSearch",
+    "SearchDocument",
+    "SurfaceAssembly",
+    "SurfaceAssemblyError",
+    "SurfaceCatalog",
     "SurfaceConfig",
     "SurfaceEntry",
+    "SurfaceThresholds",
+    "SurfaceTool",
+    "ToolSearchIndex",
     "ToolNameError",
     "assign_tool_names",
+    "assemble_agent_surface",
+    "assemble_surface",
+    "definition_tokens",
     "project_grants",
     "project_surface",
 ]

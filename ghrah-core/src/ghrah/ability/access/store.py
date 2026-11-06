@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import aiosqlite
@@ -46,6 +46,9 @@ from ghrah.ability.content import (
 from ghrah.ability.contracts import operation_result_schema
 from ghrah.ability.provider_contracts import PYTHON_CONTRACT
 from ghrah.ability.versions import AbilityVersion
+
+if TYPE_CHECKING:
+    from ghrah.ability.surface.catalog import SurfaceCatalog
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=5));
@@ -1216,6 +1219,27 @@ class AbilityAccessStore:
         async with self._tx():
             await self._agent(actor, agent)
             return await self._view(agent)
+
+    async def surface_snapshot(self, actor: AccessIdentity, agent: str) -> SurfaceCatalog:
+        """在同一读事务内读取授权、选择与确定版本的工具契约。
+
+        与 ``view`` 使用相同的身份边界；返回目录只含共用授权投影选中的成员。
+        标签、effects 与输入契约取已提交版本，查询不会扫描安装目录或改写授权。
+        """
+        from ghrah.ability.loading.ability_schema import AbilityDefinition
+        from ghrah.ability.surface.catalog import catalog_from_view
+
+        async with self._tx():
+            await self._agent(actor, agent)
+            view = await self._view(agent)
+            definitions = {}
+            for node in view.abilities:
+                if node.version_digest not in definitions:
+                    version = await self._row("ability_versions", "digest=?", node.version_digest)
+                    definitions[node.version_digest] = AbilityDefinition.model_validate_json(
+                        version["definition"]
+                    )
+            return catalog_from_view(view, definitions)
 
     async def resolve(
         self,
