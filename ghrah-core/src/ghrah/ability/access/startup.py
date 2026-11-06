@@ -22,11 +22,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 from ghrah.protocol.ability_tree import BindToolRequest, TreeId, TreeKey, UnbindToolRequest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from ghrah.ability.access.backends import file_member_paths
 from ghrah.ability.access.facts import GrantFacts, stored_facts
@@ -41,6 +42,7 @@ from ghrah.ability.access.reconcile import (
 from ghrah.ability.access.store import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hooks import Hook, HookResult, HookScope
 from ghrah.ability.execution.invocation import (
     InvocationIdentity,
     MemberReference,
@@ -49,7 +51,8 @@ from ghrah.ability.execution.invocation import (
 from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.permissions.hitl import HITLRequiredAbility, PermissionDeniedAbility
 from ghrah.ability.permissions.scope import resolve_effective_permission
-from ghrah.ability.surface.naming import assign_tool_names
+from ghrah.ability.surface.assembly import SurfaceThresholds
+from ghrah.ability.surface.naming import META_TOOL_NAMES, assign_tool_names
 from ghrah.ability.surface.projection import project_surface
 from ghrah.ability.surface.types import SurfaceEntry
 from ghrah.ability.versions import AbilityVersion, capture_ability_version
@@ -87,6 +90,7 @@ class AuthorizedToolTable(list):
     def __init__(self, abilities: Iterable[Any] = (), *, ability_content: Any = None) -> None:
         super().__init__(abilities)
         self.ability_content = ability_content
+        self.tool_surface = None
         self._bound_run = ""
 
     @property
@@ -104,6 +108,8 @@ class AuthorizedToolTable(list):
                 bind(run)
         if self.ability_content is not None:
             self.ability_content.bind_run(run)
+        if self.tool_surface is not None:
+            self.tool_surface.bind_run(run)
         self._bound_run = run
 
 
@@ -145,6 +151,29 @@ class StartupMaterialization:
         self.abilities.bind_run(run)
 
 
+class _ProjectedHook(Hook):
+    """把执行对象的 Hook 固定到同一实例/成员，避免不同工具的权限相互污染。"""
+
+    def __init__(self, inner: Hook, member: MemberReference) -> None:
+        self.inner, self.member = inner, member
+        self.scope = HookScope(
+            points=inner.scope.points if inner.scope is not None else frozenset({inner.hook_point}),
+            target_abilities=frozenset({member.member}),
+        )
+
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member == self.member and (
+            self.inner.scope is not None or await self.inner.should_trigger(call, services)
+        )
+
+    async def execute(
+        self, call: OperationCall, services: ExecutionServices, result: ActionResult | None = None
+    ) -> HookResult:
+        if not await self.should_trigger(call, services):
+            return HookResult.continue_()
+        return await self.inner.execute(call, services, result)
+
+
 class ProjectedAbility:
     """把执行实例包装成固定工具名与定义面 schema 的模型工具。
 
@@ -169,6 +198,7 @@ class ProjectedAbility:
         identity: InvocationIdentity | None = None,
         admission: Any = None,
         current_run: Any = None,
+        input_model: Any = None,
     ) -> None:
         self._inner = inner
         self._tool_name = tool_name
@@ -178,6 +208,7 @@ class ProjectedAbility:
         self._identity = identity or InvocationIdentity()
         self._admission = admission
         self._run_resolver = current_run
+        self._input_model = input_model
 
     @property
     def name(self) -> str:
@@ -240,6 +271,14 @@ class ProjectedAbility:
                     data={"error": "Tool belongs to an earlier run of this Agent"},
                 )
         check = getattr(self._inner, "check_call", None)
+        if self._input_model is not None:
+            try:
+                self._input_model.model_validate(call.arguments)
+            except ValidationError:
+                return ActionResult(
+                    ActionOutcome.FAILURE,
+                    {"error": "Invalid arguments; check describe_tool's input_schema"},
+                )
         return check(call, services) if callable(check) else None
 
     async def execute(self, call: OperationCall, services: ExecutionServices) -> Any:
@@ -268,12 +307,11 @@ class ProjectedAbility:
         return self._tool_schema
 
     def get_hooks(self) -> list[Any]:
-        """沿用执行实例的 Hook。
+        """沿用执行实例的 Hook，并绑定到实际物化的实例和成员。
 
-        调用对象在执行前已固定成员身份，Hook 按 ``call.member.member`` 裁决
-        与选择，不需要再包一层名字映射。
+        同一 Agent 的其他文件工具不能拿自己的权限检查器审查本成员。
         """
-        return list(self._inner.get_hooks())
+        return [_ProjectedHook(hook, self._member_reference) for hook in self._inner.get_hooks()]
 
     def get_default_state(self) -> dict[str, Any]:
         """沿用执行实例的默认状态。"""
@@ -396,6 +434,9 @@ class StartupGrantMaterializer:
         safe_extra_commands: tuple[str, ...] = (),
         safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
         mcp_deployment: Any = None,
+        surface_thresholds: SurfaceThresholds | None = None,
+        surface_search_limit: int = 8,
+        surface_loaded_limit: int = 8,
     ) -> None:
         if policy is not None and not isinstance(policy, GrantPolicy):
             raise TypeError("policy 必须是 GrantPolicy 或 None")
@@ -412,6 +453,10 @@ class StartupGrantMaterializer:
         self._safe_extra_sub_commands = safe_extra_sub_commands
         self._mcp_deployment = mcp_deployment
         self._content_services: dict[str, list[Any]] = {}
+        self._surface_services: dict[str, list[Any]] = {}
+        self._surface_thresholds = surface_thresholds
+        self._surface_search_limit = surface_search_limit
+        self._surface_loaded_limit = surface_loaded_limit
 
     def registration(self, agent: str) -> Any:
         """返回从授权核定到运行绑定的库级独占范围。"""
@@ -430,6 +475,8 @@ class StartupGrantMaterializer:
 
     async def close_agent_resources(self, agent: str) -> None:
         """先停止本次主体资源接纳，再释放其会话；不关闭共享配置源或关系库。"""
+        for surface in self._surface_services.pop(agent, []):
+            await surface.close()
         providers = self._content_services.pop(agent, [])
         services = [p.mcp_service for p in providers if p.mcp_service is not None]
         for service in services:
@@ -526,6 +573,27 @@ class StartupGrantMaterializer:
                     f"spawn '{agent}' 的启动授权为空——策略与模板没有授予任何成员；"
                     "请检查授权策略或 manifest 模板"
                 )
+        # 系统元工具只在普通授权已成立之后加入；不能让空策略靠元工具启动。
+        core = next((item for item in registered.values() if item[0].package == "ghrah.core"), None)
+        if core is None:
+            instance, version = await self._register(catalog, "ghrah.core", set())
+            if instance.alias in registered:
+                raise StartupGrantError("内置 core 系统包与已有能力包局部别名冲突")
+            registered[instance.alias] = (instance, version, {})
+            instances.append(instance)
+        else:
+            instance = core[0]
+        facts = desired.get(instance.alias, GrantFacts())
+        revoked = set()
+        if self._policy is not None:
+            for rule in self._policy.for_agent(agent):
+                if rule.package == "ghrah.core" and rule.effect == "revoke":
+                    revoked.update(META_TOOL_NAMES if rule.member is None else {rule.operation})
+        for member in sorted(META_TOOL_NAMES - revoked):
+            if member not in facts.members:
+                facts = facts.with_member(member)
+        if not facts.empty:
+            desired[instance.alias] = facts
         try:
             result = await apply_grants(
                 self._store,
@@ -551,6 +619,21 @@ class StartupGrantMaterializer:
             agent_name=resolved.config.name,
         )
         abilities.ability_content = self.content_provider(agent)
+        from ghrah.ability.surface.runtime import RunScriptTool, ToolSurfaceRuntime
+
+        surface = ToolSurfaceRuntime(
+            store=self._store,
+            source=self._source,
+            agent=agent,
+            table=abilities,
+            config=resolved.surface,
+            thresholds=self._surface_thresholds,
+            search_limit=self._surface_search_limit,
+            loaded_limit=self._surface_loaded_limit,
+        )
+        abilities.tool_surface = surface
+        abilities.append(RunScriptTool(surface))
+        self._surface_services.setdefault(agent, []).append(surface)
         return StartupMaterialization(
             abilities=abilities,
             tools=bindings,
@@ -716,9 +799,11 @@ class StartupGrantMaterializer:
     ) -> tuple[tuple[StartupToolBinding, ...], int]:
         """按唯一命名规则选定工具并清理陈旧选择。"""
         pairs = [(alias, key) for alias, facts in desired.items() for key in sorted(facts.members)]
+        if any(key in META_TOOL_NAMES and alias != "core" for alias, key in pairs):
+            raise StartupGrantError("只有内置 core 包可以装配元工具保留名")
         bindings = tuple(
             StartupToolBinding(item.package, item.member, item.tool_name)
-            for item in assign_tool_names(pairs)
+            for item in assign_tool_names(pairs, allow_reserved=META_TOOL_NAMES)
         )
         wanted = {binding.tool_name for binding in bindings}
         for stale in sorted(set(await self._store.tool_names(self._actor, agent)) - wanted):
@@ -844,6 +929,18 @@ class StartupGrantMaterializer:
                     },
                     admission=self._admission(agent, binding, instance.version_digest),
                     current_run=lambda agent=agent: self._store.current_run(agent),
+                    input_model=(
+                        getattr(
+                            import_module(
+                                f"ghrah.ability.builtin.{instance.package.rsplit('.', 1)[-1]}"
+                                f".operations.{binding.member}"
+                            ),
+                            "Input",
+                            None,
+                        )
+                        if resolved.implementation.type == "builtin"
+                        else None
+                    ),
                 )
             )
         return AuthorizedToolTable(abilities)

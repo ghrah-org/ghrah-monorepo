@@ -33,6 +33,7 @@ __all__ = [
     "MESSAGE_FACTORY",
     "SKILL_PROVIDER",
     "SUPERVISOR",
+    "TOOL_SURFACE",
     "ExecutionServices",
     "ServiceKey",
     "build_execution_services",
@@ -99,6 +100,7 @@ SKILL_PROVIDER = ServiceKey[Any]("skill_provider")
 MCP_RUNTIME = ServiceKey[Any]("mcp_runtime")
 # 获授内容读取服务（正文/附件）；None = 未接线（内容类工具显式报缺席）。
 ABILITY_CONTENT = ServiceKey[Any]("ability_content")
+TOOL_SURFACE = ServiceKey[Any]("tool_surface")
 # duck-typed MessageFactory（策略构造消息用）；None = 未接线。
 MESSAGE_FACTORY = ServiceKey[Any]("message_factory")
 
@@ -112,6 +114,7 @@ def build_execution_services(
     skill_provider: Any = None,
     mcp_runtime: Any = None,
     ability_content: Any = None,
+    tool_surface: Any = None,
     message_factory: Any = None,
 ) -> ExecutionServices:
     """按统一形状组装一次执行的服务表。
@@ -127,6 +130,7 @@ def build_execution_services(
         skill_provider: 旧 Skill 读取器（仅旧模式接线）。
         mcp_runtime: MCP 运行时。
         ability_content: 获授内容读取服务。
+        tool_surface: 当前受信 Agent/run 的工具面服务。
         message_factory: 消息构造器。
 
     Returns:
@@ -148,6 +152,8 @@ def build_execution_services(
         services.set(MCP_RUNTIME, mcp_runtime)
     if ability_content is not None:
         services.set(ABILITY_CONTENT, ability_content)
+    if tool_surface is not None:
+        services.set(TOOL_SURFACE, tool_surface)
     if message_factory is not None:
         services.set(MESSAGE_FACTORY, message_factory)
     return services

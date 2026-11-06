@@ -212,6 +212,9 @@ _CLUSTER_OPTIONAL: dict[str, tuple[str, ...]] = {
 }
 
 _CORE_ARGUMENTS: dict[str, Any] = {
+    "search_tools": lambda args: _required_str(args, "query"),
+    "describe_tool": lambda args: _required_str(args, "name"),
+    "execute_tool": lambda args: _required_str(args, "name"),
     "list_abilities": _core_list_abilities,
     "load_skill": _core_load_skill,
     "recall_context": _core_recall_context,

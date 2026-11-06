@@ -87,6 +87,7 @@ def assemble_surface(
     config: SurfaceConfig | None = None,
     thresholds: SurfaceThresholds | None = None,
     max_context_length: int | None = None,
+    reserved_definition_tokens: int = 0,
 ) -> SurfaceAssembly:
     """将已过滤的可执行授权目录分为常驻与长尾，不读取或扩大授权。
 
@@ -104,7 +105,7 @@ def assemble_surface(
         and max_context_length > 0
         else DEFAULT_SURFACE_CONTEXT_LENGTH
     )
-    budget = int(window * thresholds.definition_token_ratio)
+    budget = max(0, int(window * thresholds.definition_token_ratio) - reserved_definition_tokens)
     maximum = config.max_static if config.max_static is not None else thresholds.max_static
     candidates = sorted(tools, key=lambda tool: tool.entry.tool_name)
     names = [tool.entry.tool_name for tool in candidates]

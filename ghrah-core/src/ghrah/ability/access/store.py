@@ -1067,7 +1067,9 @@ class AbilityAccessStore:
             )
             return revision
 
-    async def _view(self, agent: str) -> AbilityTreeView:
+    async def _view(
+        self, agent: str, *, include_unavailable_bindings: bool = False
+    ) -> AbilityTreeView:
         row = await self._row("ability_agents", "id=?", agent)
         abilities = []
         available_aliases: set[str] = set()
@@ -1133,7 +1135,7 @@ class AbilityAccessStore:
         visible = {
             node.alias: {item.key for item in node.operations}
             for node in abilities
-            if node.alias in available_aliases
+            if include_unavailable_bindings or node.alias in available_aliases
         }
         return AbilityTreeView(
             project_id=self.project_id,
@@ -1231,7 +1233,7 @@ class AbilityAccessStore:
 
         async with self._tx():
             await self._agent(actor, agent)
-            view = await self._view(agent)
+            view = await self._view(agent, include_unavailable_bindings=True)
             definitions = {}
             for node in view.abilities:
                 if node.version_digest not in definitions:

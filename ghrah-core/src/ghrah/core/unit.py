@@ -69,6 +69,7 @@ from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilitySourceMode,
 )
+from ghrah.ability.surface.assembly import SurfaceThresholds
 from ghrah.ability.surface.config import (
     DEFAULT_DEFINITION_TOKEN_RATIO,
     DEFAULT_HARD_CAP,
@@ -848,6 +849,9 @@ class CoreUnit:
                 safe_extra_commands=self._config.safe_extra_commands,
                 safe_extra_sub_commands=self._config.safe_extra_sub_commands,
                 mcp_deployment=self._mcp_deployment,
+                surface_thresholds=SurfaceThresholds.from_core_config(self._config),
+                surface_search_limit=self._config.surface_search_limit,
+                surface_loaded_limit=self._config.surface_loaded_limit,
             )
         self._startup_materializer = startup_materializer
 

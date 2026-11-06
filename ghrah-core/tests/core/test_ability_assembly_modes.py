@@ -707,7 +707,7 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         # 子 Agent 的授权事实写在关系库，与顶层 spawn 同一套事实
         deployment = AccessIdentity("default", "deployment", "deployment", True, "deployment")
         records = await ability_store.grants(deployment, resolved.config.agent_id)
-        assert [record.alias for record in records] == ["fs"]
+        assert [record.alias for record in records] == ["core", "fs"]
 
         await unit.supervisor.spawn_agent(
             resolved.config,
@@ -800,6 +800,11 @@ async def test_actor_tool_table_follows_revoke_without_restart(tmp_path: Path) -
         def tool_names() -> set[str]:
             return {item["function"]["name"] for item in handle._bound_tools}
 
+        from ghrah.ability.surface.config import SurfaceConfig
+
+        # 本用例只验证授权投影；阈值与首次模型窗口装配由独立用例覆盖。
+        handle._tool_surface.config = SurfaceConfig(mode="static")
+        await handle.refresh_tool_projection()
         assert {"read_file", "write_file", "mcp_call"} <= tool_names()
 
         actor = AccessIdentity("default", "deployment", "control", True, "deployment")
@@ -1042,7 +1047,7 @@ async def test_real_spawn_tool_assigns_child_own_id_and_bound_run(tmp_path):
         assert identity.run == f"{child.config.agent_id}-run"
         actor = AccessIdentity("default", "deployment", "control", True, "deployment")
         grants = await db.grants(actor, child.config.agent_id)
-        assert [grant.alias for grant in grants] == ["fs"]
+        assert [grant.alias for grant in grants] == ["core", "fs"]
         assert "spawn_agent" not in child._abilities
     finally:
         await unit.stop()

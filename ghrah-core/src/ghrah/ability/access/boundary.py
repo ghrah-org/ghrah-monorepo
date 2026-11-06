@@ -41,6 +41,9 @@ def build_startup_materializer(
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
     mcp_deployment: Any = None,
+    surface_thresholds: Any = None,
+    surface_search_limit: int = 8,
+    surface_loaded_limit: int = 8,
 ) -> StartupGrantMaterializer:
     """构造本次部署唯一的启动核定器（授权装配边界）。
 
@@ -72,4 +75,7 @@ def build_startup_materializer(
         safe_extra_commands=safe_extra_commands,
         safe_extra_sub_commands=safe_extra_sub_commands,
         mcp_deployment=mcp_deployment,
+        surface_thresholds=surface_thresholds,
+        surface_search_limit=surface_search_limit,
+        surface_loaded_limit=surface_loaded_limit,
     )

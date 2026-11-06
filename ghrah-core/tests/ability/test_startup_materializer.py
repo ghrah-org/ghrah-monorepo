@@ -27,6 +27,7 @@ from ghrah.ability.access import (
     StartupGrantMaterializer,
 )
 from ghrah.ability.assembly import AbilityAssembly
+from ghrah.ability.surface.naming import META_TOOL_NAMES
 from ghrah.manifest.parser import parse_agent_manifest
 
 AGENT_YAML = """\
@@ -160,33 +161,58 @@ def _materializer(db, assembly, tmp_path: Path | None, policy=GrantPolicy(), **k
     )
 
 
+def _business_tools(result):
+    """普通成员断言与系统元工具分开；系统授予在工具面集成用例独立验证。"""
+    return [item for item in result.tools if item.member not in META_TOOL_NAMES]
+
+
+def _business_abilities(result):
+    return [item for item in result.abilities if item.name not in META_TOOL_NAMES | {"run_script"}]
+
+
+def _without_system(names):
+    return tuple(name for name in names if name not in META_TOOL_NAMES)
+
+
 async def test_template_grants_requested_members_and_projects_tools(store, tmp_path):
     """模板申请的两个成员被授予并选定；工具 schema 来自定义面。"""
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
-    assert [binding.member for binding in result.tools] == ["list_directory", "read_file"]
-    assert [binding.tool_name for binding in result.tools] == ["list_directory", "read_file"]
-    assert [item.name for item in result.abilities] == [
+    assert [binding.member for binding in _business_tools(result)] == [
+        "list_directory",
+        "read_file",
+    ]
+    assert [binding.tool_name for binding in _business_tools(result)] == [
+        "list_directory",
+        "read_file",
+    ]
+    assert [item.name for item in _business_abilities(result)] == [
         "conversation",
         "list_directory",
         "read_file",
     ]
-    read_file = result.abilities[-1]
+    read_file = next(item for item in result.abilities if item.name == "read_file")
     schema = read_file.bind_tool()
     assert schema["function"]["name"] == "read_file"
     assert schema["function"]["parameters"]["properties"]["file_path"]["type"] == "string"
 
     records = await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    assert [record.alias for record in records] == ["fs"]
-    assert records[0].members == ("list_directory", "read_file")
-    assert records[0].source == "deployment"
-    assert list(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == [
+    assert [record.alias for record in records] == ["core", "fs"]
+    assert set(next(item for item in records if item.alias == "core").members) == META_TOOL_NAMES
+    assert next(item for item in records if item.alias == "fs").members == (
+        "list_directory",
+        "read_file",
+    )
+    assert next(item for item in records if item.alias == "fs").source == "deployment"
+    assert list(
+        _without_system(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+    ) == [
         "list_directory",
         "read_file",
     ]
-    assert (await store.list_instances(DEPLOY)) == ["ghrah-fs"]
+    assert (await store.list_instances(DEPLOY)) == ["ghrah-core", "ghrah-fs"]
 
 
 async def test_projected_ability_executes_read_file(store, tmp_path):
@@ -215,7 +241,11 @@ async def test_replace_policy_grants_whole_package(store, tmp_path):
     names = {item.name for item in result.abilities}
     assert {"read_file", "write_file", "edit_file", "list_directory"} <= names
     assert "conversation" in names
-    record = (await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))[0]
+    record = next(
+        item
+        for item in await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        if item.alias == "fs"
+    )
     assert "write_file" in record.members
 
 
@@ -228,10 +258,10 @@ async def test_merge_policy_revokes_a_requested_member(store, tmp_path):
     materializer = _materializer(store, assembly, tmp_path, policy)
     agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     result = await materializer.materialize(agent=agent, resolved=resolved)
-    assert [binding.member for binding in result.tools] == ["read_file"]
-    assert [item.name for item in result.abilities] == ["conversation", "read_file"]
+    assert [binding.member for binding in _business_tools(result)] == ["read_file"]
+    assert [item.name for item in _business_abilities(result)] == ["conversation", "read_file"]
     projector = materializer.tool_table_projector(agent, result)
-    assert await projector() == ("read_file",)
+    assert _without_system(await projector()) == ("read_file",)
 
 
 async def test_materialize_is_idempotent(store, tmp_path):
@@ -258,7 +288,7 @@ async def test_next_manifest_revokes_stale_package_and_unbinds_tools(store, tmp_
     assembly, resolved = _resolved(AGENT_YAML)
     materializer = _materializer(store, assembly, tmp_path)
     await materializer.materialize(agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved)
-    assert await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == (
+    assert _without_system(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == (
         "list_directory",
         "read_file",
     )
@@ -271,7 +301,9 @@ async def test_next_manifest_revokes_stale_package_and_unbinds_tools(store, tmp_
     assert [
         record.alias for record in await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     ] == ["core"]
-    assert await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == ("list_abilities",)
+    assert _without_system(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == (
+        "list_abilities",
+    )
 
 
 async def test_control_only_manifest_fails_closed(store, tmp_path):
@@ -308,7 +340,11 @@ async def test_selected_member_schema_matches_captured_definition(store, tmp_pat
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
-    version = (await store.list_versions(DEPLOY))[0]
+    version = next(
+        item
+        for item in await store.list_versions(DEPLOY)
+        if "read_file" in item.definition().operations
+    )
     definition = json.loads(version.definition_json)
     schema = next(item for item in result.abilities if item.name == "read_file").bind_tool()
     assert schema["function"]["parameters"] == definition["operations"]["read_file"]["input_schema"]
@@ -363,10 +399,12 @@ async def test_manifest_scope_narrows_auto_approval_and_keeps_hitl_outside(store
     hook = read_file.get_hooks()[0]
 
     inside = make_call(member="read_file", arguments={"file_path": str(tmp_path / "src" / "a.txt")})
+    inside = read_file.prepare_call(inside)
     assert await hook.should_trigger(inside, make_services()) is True
     assert (await hook.execute(inside, make_services(), None)).should_continue is True
 
     outside = make_call(member="read_file", arguments={"file_path": str(tmp_path / "other.txt")})
+    outside = read_file.prepare_call(outside)
     pending = await hook.execute(outside, make_services(), None)
     assert pending.should_continue is False
     assert pending.requires_hitl is True
@@ -467,9 +505,9 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
         ),
     )
     projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
-    assert await projector() == ("list_directory",)
+    assert _without_system(await projector()) == ("list_directory",)
     outcome = await read_file.execute(
-        make_call(arguments={"file_path": str(target), "dir_path": str(tmp_path)}),
+        make_call(arguments={"file_path": str(target)}),
         make_services(),
     )
     assert outcome.outcome.value == "failure"
@@ -506,16 +544,18 @@ async def test_migrated_agent_starts_from_existing_facts_without_policy(store, t
     )
 
     # 模板还申请了 list_directory，但存量模式不自动扩权
-    assert [binding.member for binding in result.tools] == ["read_file"]
-    assert [item.name for item in result.abilities] == ["conversation", "read_file"]
-    assert result.granted == ()
+    assert [binding.member for binding in _business_tools(result)] == ["read_file"]
+    assert [item.name for item in _business_abilities(result)] == ["conversation", "read_file"]
+    assert result.granted == ("core",)
     assert result.revoked == ()
     # 修订仍会因工具选择（bind）推进，但授权事实本身没有被改写
     assert await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") >= revision_before
     records = await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    assert records[0].source == "migration"
-    assert records[0].members == ("read_file",)
-    assert list(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == ["read_file"]
+    assert next(item for item in records if item.alias == "fs").source == "migration"
+    assert next(item for item in records if item.alias == "fs").members == ("read_file",)
+    assert list(
+        _without_system(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+    ) == ["read_file"]
 
 
 async def test_unconfigured_policy_without_facts_fails_closed(store, tmp_path):
@@ -576,7 +616,7 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
         target.write_text("run content", encoding="utf-8")
         read_file = next(item for item in result.abilities if item.name == "read_file")
         projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
-        assert await projector() == ("list_directory", "read_file")
+        assert _without_system(await projector()) == ("list_directory", "read_file")
 
         first = await read_file.execute(
             make_call(arguments={"file_path": str(target)}), make_services()
@@ -585,7 +625,7 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
 
         current["run"] = "alice-run-2"
 
-        assert await projector() == ()
+        assert _without_system(await projector()) == ()
         stale = await read_file.execute(
             make_call(arguments={"file_path": str(target)}), make_services()
         )
@@ -604,7 +644,7 @@ async def test_tool_table_projector_tracks_revoke(store, tmp_path):
     )
     projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
 
-    assert await projector() == ("list_directory", "read_file")
+    assert _without_system(await projector()) == ("list_directory", "read_file")
 
     revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_revoke(
@@ -615,7 +655,7 @@ async def test_tool_table_projector_tracks_revoke(store, tmp_path):
         ),
     )
 
-    assert set(await projector()) == {"list_directory"}
+    assert set(_without_system(await projector())) == {"list_directory"}
 
 
 async def test_tool_table_projector_excludes_unselected_and_unavailable(store, tmp_path):
@@ -632,7 +672,7 @@ async def test_tool_table_projector_excludes_unselected_and_unavailable(store, t
         agent,
         UnbindToolRequest(tool_name="list_directory", expected_revision=revision),
     )
-    assert await projector() == ("read_file",)
+    assert _without_system(await projector()) == ("read_file",)
 
     revision = await store.write_grant(
         DEPLOY,
@@ -659,7 +699,7 @@ async def test_tool_table_projector_excludes_unselected_and_unavailable(store, t
             ),
         )
 
-    assert await projector() == ("list_directory",)
+    assert _without_system(await projector()) == ("list_directory",)
 
 
 async def test_restored_member_without_execution_object_stays_out_of_projection(store, tmp_path):
@@ -673,9 +713,12 @@ async def test_restored_member_without_execution_object_stays_out_of_projection(
     result = await materializer.materialize(agent=agent, resolved=resolved)
     projector = materializer.tool_table_projector(agent, result)
 
-    assert {binding.member for binding in result.tools} == {"list_directory", "read_file"}
+    assert {binding.member for binding in _business_tools(result)} == {
+        "list_directory",
+        "read_file",
+    }
     assert "read_file" not in {ability.name for ability in result.abilities}
-    assert await projector() == ("list_directory",)
+    assert _without_system(await projector()) == ("list_directory",)
 
     revision = await store.agent_revision(DEPLOY, agent)
     revision = await store.write_grant(
@@ -701,7 +744,7 @@ async def test_restored_member_without_execution_object_stays_out_of_projection(
             ),
         )
 
-    assert await projector() == ("list_directory",)
+    assert _without_system(await projector()) == ("list_directory",)
 
 
 @pytest.mark.parametrize("auto_approve", [(), ("write_file",)])

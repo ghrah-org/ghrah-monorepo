@@ -30,6 +30,8 @@ class SurfaceTool:
     tags: tuple[str, ...]
     effects: tuple[str, ...]
     input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
+    skills: tuple[str, ...] = ()
 
     def definition(self) -> dict[str, Any]:
         """生成与生产工具表相同形状的函数定义，供 token 估算与后续注入。"""
@@ -78,6 +80,10 @@ def catalog_from_view(
                 tags=tuple(operation.tags),
                 effects=tuple(operation.effects),
                 input_schema=operation.input_schema,
+                output_schema=operation.output_schema,
+                skills=tuple(
+                    f"{node.alias}/{skill.key}" for skill in node.skills if skill.body_allowed
+                ),
             )
         )
     return SurfaceCatalog(view.project_id, view.agent_id, view.run_id, view.revision, tuple(tools))

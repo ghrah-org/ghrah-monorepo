@@ -433,7 +433,13 @@ def _render(root: Path, *, builtin: bool) -> tuple[str, dict[str, Any], list[str
     for key in sorted(op_files):
         if not _OPERATION_KEY_PATTERN.fullmatch(key):
             raise BuildError(f"operations/ 成员键非法（^a-z[a-z0-9_]{{0,63}}$）: {key!r}")
-        if key in _RESERVED_TOOL_NAMES:
+        system_meta = (
+            builtin
+            and header["identity"]["namespace"] == "ghrah"
+            and header["identity"]["name"] == "core"
+            and key in {"search_tools", "describe_tool", "execute_tool"}
+        )
+        if key in _RESERVED_TOOL_NAMES and not system_meta:
             raise BuildError(f"operations/{key}.py: 保留名（生成期拒绝一次，表面投影再拒绝一次）")
         operations[key] = _operation_member(key, op_files[key])
     skills: dict[str, Any] = {}

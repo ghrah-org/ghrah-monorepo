@@ -39,6 +39,68 @@ members:
         on_revoke: drain
         retry: never
       expose: false
+    describe_tool:
+      title: Describe Tool
+      description: Describe a granted tool's schema, effects and availability; load its definition for the next turn.
+      entry: operations/describe_tool.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          name:
+            description: Exact tool name returned by search_tools.
+            minLength: 1
+            type: string
+        required:
+        - name
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          name:
+            type: string
+          package:
+            type: string
+          description:
+            type: string
+          input_schema:
+            additionalProperties: true
+            type: object
+          output_schema:
+            additionalProperties: true
+            type: object
+          effects:
+            items:
+              type: string
+            type: array
+          available:
+            type: boolean
+          skills:
+            items:
+              type: string
+            type: array
+        required:
+        - name
+        - package
+        - description
+        - input_schema
+        - output_schema
+        - effects
+        - available
+        - skills
+        type: object
+      tags:
+      - core
+      - discovery
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
     end_task:
       title: End Task
       description: End the current task and generate a final response
@@ -67,6 +129,43 @@ members:
       - lifecycle
       effects:
       - session:end
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    execute_tool:
+      title: Execute Tool
+      description: Execute a granted tool by exact name and arguments. Inspect its schema with describe_tool first.
+      entry: operations/execute_tool.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          name:
+            description: Exact tool name returned by search_tools.
+            minLength: 1
+            type: string
+          arguments:
+            additionalProperties: true
+            description: Arguments matching the target input schema.
+            type: object
+        required:
+        - name
+        - arguments
+        type: object
+      output_schema:
+        additionalProperties: false
+        patternProperties:
+          .*: {}
+        type: object
+      tags:
+      - core
+      - execution
+      effects: []
       permissions: {}
       resources: {}
       execution:
@@ -575,6 +674,65 @@ members:
       tags:
       - context
       - core
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    search_tools:
+      title: Search Tools
+      description: Search granted tools when the visible tools are insufficient. Use English keywords if needed.
+      entry: operations/search_tools.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          query:
+            description: Keywords; English keywords may improve matches.
+            minLength: 1
+            type: string
+          limit:
+            default: 8
+            description: Maximum number of results, at most 20.
+            maximum: 20
+            minimum: 1
+            type: integer
+        required:
+        - query
+        type: object
+      output_schema:
+        $defs:
+          SearchItem:
+            additionalProperties: false
+            description: 可返回给模型的一行搜索摘要。
+            properties:
+              name:
+                type: string
+              description:
+                type: string
+              package:
+                type: string
+            required:
+            - name
+            - description
+            - package
+            type: object
+        additionalProperties: false
+        properties:
+          tools:
+            items:
+              $ref: '#/$defs/SearchItem'
+            type: array
+        required:
+        - tools
+        type: object
+      tags:
+      - core
+      - discovery
       effects: []
       permissions: {}
       resources: {}

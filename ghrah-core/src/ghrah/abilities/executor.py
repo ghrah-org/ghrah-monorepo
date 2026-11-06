@@ -19,7 +19,7 @@ import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -246,7 +246,7 @@ class LocalAbilityExecutor(AbilityExecutor):
             hitl_degraded_timeout: 熔断降级后的 HITL 等待秒数
         """
         self._agent_name = agent_name
-        self._deferred_invocations: dict[str, tuple[OperationCall, ExecutionServices]] = {}
+        self._deferred_invocations: dict[str, list[tuple[OperationCall, ExecutionServices]]] = {}
         self._hook_store = HookStore()
         if hooks:
             self._hook_store.add_hooks(HookStore.AGENT_OWNER, hooks)
@@ -417,7 +417,9 @@ class LocalAbilityExecutor(AbilityExecutor):
         pending = action_result.data.get("await_reply")
         if pending:
             pending["tool_args"] = dict(call.arguments)
-            self._deferred_invocations[pending["message_id"]] = (call, services)
+            self._deferred_invocations.setdefault(pending["message_id"], []).append(
+                (call, services)
+            )
             return action_result
 
         # POST_EXECUTE hook（ability 级）
@@ -433,16 +435,24 @@ class LocalAbilityExecutor(AbilityExecutor):
         result: ActionResult,
     ) -> None:
         """持久同步回复确定后执行原 POST_EXECUTE，恢复时不重跑 PRE/工具。"""
-        original_call, original_services = self._deferred_invocations.pop(
-            message_id, (call, services)
-        )
-        await self._hook_runner.run(
-            HookPoint.POST_EXECUTE, original_call, original_services, result
-        )
+        originals = self._deferred_invocations.pop(message_id, [(call, services)])
+        for original_call, original_services in originals:
+            await self._hook_runner.run(
+                HookPoint.POST_EXECUTE, original_call, original_services, result
+            )
 
     def clear_deferred(self) -> None:
         """接收作用域结束时释放未完成 Hook 上下文，持久检查点仍可恢复。"""
         self._deferred_invocations.clear()
+
+    async def execute_routed(
+        self, ability: AbilityProtocol, call: OperationCall, services: ExecutionServices
+    ) -> ActionResult:
+        """包装入口按目标成员解析路径，再走与原生工具相同的执行及审批。"""
+        arguments = self._resolve_paths(
+            call.arguments, getattr(ability, "member", "") or ability.name
+        )
+        return await self.execute_ability(ability, replace(call, arguments=arguments), services)
 
     async def execute_tool_calls(
         self,

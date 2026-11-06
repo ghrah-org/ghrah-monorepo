@@ -363,10 +363,14 @@ class AgentBuilder:
             event_publisher=event_publisher,
             llm_factory=resolved_llm_factory,
             tool_table_projector=tool_table_projector,
+            tool_surface=getattr(abilities, "tool_surface", None),
         )
 
         if abilities is not None:
             for ability in abilities:
                 agent.register_ability(ability)
+        if getattr(abilities, "tool_surface", None) is not None:
+            # 首次生成前从当前授权和模型窗口装配，不把全量定义先配置给模型。
+            agent._bound_tools = []
 
         return agent

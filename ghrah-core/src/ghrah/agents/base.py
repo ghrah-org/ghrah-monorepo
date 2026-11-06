@@ -54,6 +54,7 @@ from ghrah.ability.execution.execution_services import (
 )
 from ghrah.ability.execution.invocation import InvocationIdentity, MemberReference, OperationCall
 from ghrah.ability.execution.loop_data import LoopData
+from ghrah.ability.surface.assembly import SurfaceAssemblyError
 from ghrah.agents.runner import AgentRunner
 from ghrah.chat.content import ContentBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
@@ -169,10 +170,14 @@ class ActorAgent:
         event_publisher: EventPublisher | None = None,
         llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
         tool_table_projector: Callable[[], Any] | None = None,
+        tool_surface: Any = None,
     ) -> None:
         self.config = config
         self._supervisor = supervisor
         self._tool_table_projector = tool_table_projector
+        self._tool_surface = tool_surface
+        if tool_surface is not None:
+            tool_surface.executor = ability_executor
         self._context_manager = context_manager
         self._context_manager_factory = context_manager_factory
         self._ability_executor = ability_executor
@@ -439,6 +444,31 @@ class ActorAgent:
         静态工具表。投影失败时保留上一轮工具表（执行接纳仍会拒绝越权调用），
         不因一次读失败把工具面清空。
         """
+        if self._tool_surface is not None:
+            capabilities = getattr(self._llm, "model_capabilities", None)
+            window = (
+                capabilities.get("max_context_length") if isinstance(capabilities, dict) else None
+            )
+            try:
+                tools = await self._tool_surface.refresh(window)
+            except SurfaceAssemblyError:
+                # 显式配置错误不能被包装成一次瞬时读取失败。
+                raise
+            except Exception:
+                logger.warning(
+                    "Tool surface refresh failed; retaining only loop controls", exc_info=True
+                )
+                self._tool_surface.progressive = False
+                tools = [
+                    ability.bind_tool()
+                    for ability in self._abilities.values()
+                    if ability.name in {"conversation", "end_task"}
+                    and ability.bind_tool() is not None
+                ]
+            if tools != self._bound_tools:
+                self._bound_tools = tools
+                self._refresh_bound_tools()
+            return
         if self._tool_table_projector is None or not self._abilities:
             return
         try:
@@ -1330,6 +1360,16 @@ class ActorAgent:
         if self.config.window is not None:
             await self._publish_context_usage("pre_call")
         messages = await cm.get_llm_messages()
+        if self._tool_surface is not None and self._tool_surface.progressive:
+            from ghrah.ability.surface.runtime import DISCLOSURE_GUIDANCE
+
+            messages = list(messages)
+            insert_at = next(
+                (i for i, message in enumerate(messages) if message.role != "system"), len(messages)
+            )
+            messages.insert(
+                insert_at, ChatMessage.system(DISCLOSURE_GUIDANCE, source="system:runtime")
+            )
         llm_response: LLMResponseProtocol = await llm.generate(messages)
         llm_responses: list[LLMResponseProtocol] = [llm_response]
 
@@ -1513,6 +1553,10 @@ class ActorAgent:
             len(results),
             ", ".join(outcomes) or "none",
         )
+        if self._tool_surface is not None:
+            audit = self._tool_surface.drain_audit()
+            if audit:
+                llm_meta["tool_surface_calls"] = audit
         return {"results": results, "llm_metadata": llm_meta}
 
     async def _await_tool_results(self, results: list[dict[str, Any]]) -> None:
@@ -1732,6 +1776,7 @@ class ActorAgent:
             manifest_store=getattr(self._supervisor, "manifest_store", None),
             skill_provider=getattr(self._supervisor, "skill_provider", None),
             ability_content=getattr(self._context_manager, "ability_content", None),
+            tool_surface=getattr(self, "_tool_surface", None),
             mcp_runtime=getattr(
                 getattr(self._context_manager, "ability_content", None), "mcp_service", None
             ),

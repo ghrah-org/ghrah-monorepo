@@ -144,15 +144,27 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
     response = await tool.execute(OperationCall(tool_call_id="call-one"), ExecutionServices())
     assert response.outcome == ActionOutcome.SUCCESS
     assert response.data == {"text": "real installed result"}
-    assert await materializer.tool_table_projector(AGENT, result)() == ("render",)
+    assert set(await materializer.tool_table_projector(AGENT, result)()) == {
+        "render",
+        "search_tools",
+        "describe_tool",
+        "execute_tool",
+    }
 
     installer.uninstall("acme.reports", "1.0.0")
     response = await tool.execute(OperationCall(), ExecutionServices())
     assert response.outcome == ActionOutcome.FAILURE
     assert "not available" in response.data["error"]
-    assert await materializer.tool_table_projector(AGENT, result)() == ()
+    assert set(await materializer.tool_table_projector(AGENT, result)()) == {
+        "search_tools",
+        "describe_tool",
+        "execute_tool",
+    }
     view = await store.view(ACTOR, AGENT)
-    assert view.abilities[0].operations[0].availability == "unavailable"
+    assert (
+        next(node for node in view.abilities if node.alias == "reports").operations[0].availability
+        == "unavailable"
+    )
     assert await store.grants(ACTOR, AGENT)  # 授予事实和审计保留。
     with pytest.raises(ManifestValidationError, match="版本不存在"):
         await materializer.materialize(

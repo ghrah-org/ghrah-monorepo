@@ -30,7 +30,7 @@ from ghrah.manifest.agent import (
 from ghrah.manifest.builtins import load_all_builtin_manifests
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import AbilityCatalogPort, ManifestStoreProtocol
-from ghrah.manifest.types import ImplementationDef, PermissionFlags, ToolSchema
+from ghrah.manifest.types import ImplementationDef, PermissionFlags, SurfaceConfig, ToolSchema
 from ghrah.types.config_types import AgentConfig, ContextConfig, WindowConfig
 
 __all__ = [
@@ -122,6 +122,7 @@ class ResolvedAgent:
 
     config: AgentConfig
     abilities: list[ResolvedAbility]
+    surface: SurfaceConfig | None = None
 
 
 class ManifestResolver:
@@ -157,7 +158,7 @@ class ManifestResolver:
         """
         config = self._build_config(manifest, runtime_name)
         abilities = self._resolve_abilities(manifest.abilities)
-        return ResolvedAgent(config=config, abilities=abilities)
+        return ResolvedAgent(config=config, abilities=abilities, surface=manifest.surface)
 
     def _build_config(self, manifest: AgentManifest, runtime_name: str | None) -> AgentConfig:
         """从 AgentManifest 构建 AgentConfig。"""

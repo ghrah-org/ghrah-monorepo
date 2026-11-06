@@ -21,6 +21,7 @@ from ghrah.abilities.executor import LocalAbilityExecutor
 from ghrah.ability.access import AbilityAccessStore, GrantPolicy, StartupGrantMaterializer
 from ghrah.ability.execution.execution_services import LOOP
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.surface.naming import META_TOOL_NAMES
 from ghrah.agents.base import ActorAgent
 from ghrah.types.results import ActionOutcome, ActionResult
 
@@ -115,8 +116,12 @@ async def test_same_name_different_stable_subjects_keep_independent_grants(tmp_p
         await materialize(
             second, tmp_path, AGENT_YAML.replace("  - ref: ghrah.fs.read_file\n", ""), "b" * 32
         )
-        assert (await first.grants(DEPLOY, "a" * 32))[0].members == ("read_file",)
-        assert (await second.grants(DEPLOY, "b" * 32))[0].members == ("list_directory",)
+        assert next(
+            row for row in await first.grants(DEPLOY, "a" * 32) if row.alias == "fs"
+        ).members == ("read_file",)
+        assert next(
+            row for row in await second.grants(DEPLOY, "b" * 32) if row.alias == "fs"
+        ).members == ("list_directory",)
         tool = next(t for t in ta.abilities if t.name == "read_file")
         target = tmp_path / "a.txt"
         target.write_text("still authorized")
@@ -372,7 +377,10 @@ async def test_shared_database_project_grants_stay_isolated(tmp_path):
             other_actor, "a" * 32, RevokeAbilityRequest(alias="fs", expected_revision=revision)
         )
         assert await a.grants(DEPLOY, "a" * 32)
-        assert not await b.grants(other_actor, "a" * 32)
+        assert all(
+            row.alias == "core" and set(row.members) == META_TOOL_NAMES
+            for row in await b.grants(other_actor, "a" * 32)
+        )
     finally:
         await b.close()
         await a.close()
@@ -557,7 +565,10 @@ async def test_failed_startup_does_not_undo_concurrent_admin_revoke(tmp_path, in
                         RevokeAbilityRequest(alias="fs", expected_revision=revision),
                     )
                 )
-        assert not await b.grants(DEPLOY, "a" * 32)
+        assert all(
+            row.alias == "core" and set(row.members) == META_TOOL_NAMES
+            for row in await b.grants(DEPLOY, "a" * 32)
+        )
         with pytest.raises(AccessError, match="conflict"):
             async with b.startup_registration(DEPLOY, "a" * 32):
                 pytest.fail("conflicted startup must require explicit recovery")
