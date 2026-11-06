@@ -19,6 +19,7 @@ from ghrah.protocol.types import RecoveryAction
 
 if TYPE_CHECKING:
     from ghrah.ability.access.policy import GrantPolicy
+    from ghrah.ability.mcp_wiring import McpDeploymentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +356,8 @@ class SubjectConfig:
     # 策略只在 Agent spawn 时被核定并物化进关系库，运行期读取只认关系库事实，
     # 不重新读取本配置，也不把 manifest 模板当授权来源。
     ability_grant_policy: GrantPolicy | None = None
+    # 仅进程内受信部署代码设置；不从 Skill 正文、annotations 或模型输入解析。
+    mcp: McpDeploymentConfig | None = None
 
     # private backing（init=False，__post_init__ 后必有值；保证 property 非 Optional）。
     _persistence: PersistenceConfig = field(init=False)

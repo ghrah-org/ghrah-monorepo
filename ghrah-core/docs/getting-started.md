@@ -20,7 +20,7 @@ uv sync
 
 ghrah 使用 agentconf 管理 Provider、模型端点和静态能力。运行时通过显式 `endpoint_name` 选择端点，请求参数由 ghrah 的 `ModelOverrides` 持有。
 
-使用 agentconf 0.3 的 TUI 配置 Provider 与端点：
+使用 agentconf 0.4 的 TUI 配置 Provider 与端点：
 
 ```bash
 uv run agentconf
@@ -28,7 +28,7 @@ uv run agentconf
 
 端点必须声明实际请求模型名和接口格式：`openai.chat_completions`、`openai.responses` 或 `anthropic.messages`。DeepSeek 使用 `provider_type=deepseek` 与 `openai.chat_completions`，以保留推理内容回传。
 
-也可以用 SDK 显式创建配置（需要先安装兼容的 agentconf 0.3）：
+也可以用 SDK 显式创建配置（需要先安装兼容的 agentconf 0.4）：
 
 ```python
 import os

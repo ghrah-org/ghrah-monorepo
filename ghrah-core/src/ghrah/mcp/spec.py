@@ -230,6 +230,9 @@ class McpServerSpec:
     tools: tuple[McpToolSpec, ...] = ()
     """白名单。空元组表示「声明了服务器但不暴露任何工具」。"""
 
+    connection_identity: tuple[str, int, str | None, int | None] | None = None
+    inline_headers: bool = False
+
     transport: Transport = Transport.STREAMABLE_HTTP
     protocol: ProtocolPreference = ProtocolPreference.MODERN_FIRST
 

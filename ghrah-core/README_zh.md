@@ -16,13 +16,13 @@ uv sync
 
 ### (推荐) 配置 Agentconf
 
-使用 Agentconf 0.3 的 TUI 配置 Provider 与模型端点。ghrah 通过显式 `endpoint_name` 引用端点，请求参数由自身保存。
+使用 Agentconf 0.4 的 TUI 配置 Provider 与模型端点。ghrah 通过显式 `endpoint_name` 引用端点，请求参数由自身保存。
 
 ```bash
 uv run agentconf
 ```
 
-旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。本分支依赖 agentconf 0.3.0（低于 0.4），同步依赖后使用显式端点配置；旧库与旧配置须先完成迁移。
+旧配置迁移、接口格式与调用参数见 [模型端点与配置迁移](docs/model-endpoints.md)。当前依赖 `agentconf>=0.4.0,<0.5`（独立 MCP Provider／schema 6），使用显式端点配置；旧库与旧配置须先完成迁移。
 
 ### 直接配置（无需 agentconf）
 

@@ -2,32 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""凭据解析：从「MCP 服务器地址」到「密钥明文」。
-
-**密钥存在 agentconf 里，不存在本模块、也不存在技能的 yaml 里。**
-
-关联方式是**地址**：在 agentconf 中登记一条 provider 记录，把 MCP 服务器的 url 填进
-``base_url``、把密钥填进 ``api_key``。本模块按地址把它们对上：
-
-```
-agentconf.providers                      MCP 模块
-┌──────────────────────────────┐        ┌────────────────────────┐
-│ name: sentry-mcp             │        │ spec.url               │
-│ base_url: https://…/mcp   ←──┼───────→│ spec.headers 里的       │
-│ api_key:  sntrys_xxx         │  地址   │ {{auth}} 占位符         │
-└──────────────────────────────┘  相等   └────────────────────────┘
-```
-
-这样做的三个结果：
-
-* **技能包里没有密钥**。yaml 只有 ``{{auth}}`` 占位符，技能可以被自由分发与提交。
-* **凭据轮换不动技能**。改 agentconf 即可，所有引用该地址的技能立即生效。
-* **地址即边界**。一个技能想拿到某个密钥，必须声明与它完全相同的目的地址——而请求
-  也正是发往那个地址，所以密钥不可能被送到别处。
-
-代价是：如果两个不同技能指向**同一个** MCP 地址，它们会共用同一条凭据。这是把地址
-作为关联键的直接后果，在"一台服务器一套凭据"的常规场景下没有问题。
-"""
+"""显式凭据解析工具；生产配置使用 MCP Provider 稳定身份读取。"""
 
 from __future__ import annotations
 
@@ -96,8 +71,7 @@ def no_credentials(url: str) -> None:  # noqa: ARG001 - 形状固定的默认实
 class StaticCredentials:
     """内存中的凭据表，键为**服务器地址**。
 
-    供测试与嵌入场景使用。生产环境应使用 :class:`AgentconfCredentialResolver`，
-    让密钥只存在于 agentconf 中。
+    供测试与嵌入场景使用。生产环境使用 AgentconfMcpSource 按 MCP Provider 稳定身份读取。
     """
 
     def __init__(self, mapping: dict[str, str] | None = None) -> None:
@@ -116,16 +90,7 @@ class StaticCredentials:
 
 
 class AgentconfCredentialResolver:
-    """从 agentconf 的 provider 记录里按地址取密钥。
-
-    匹配规则：provider 的 ``base_url`` 与 MCP 服务器的 url 相等（忽略尾部斜杠）。
-
-    首次取值时才打开 agentconf 数据库，因此构造本对象没有副作用；随后的取值复用同一个
-    连接。用完请调用 :meth:`close`，或把它当作上下文管理器使用。
-
-    读取失败（数据库损坏、schema 不符）只记 warning 并当作「没配」——凭据读取不该让
-    整个 agent 起不来，而缺失会在建连时以明确错误暴露。
-    """
+    """退役兼容占位；拒绝用 URL 从模型 Provider 推断 MCP 凭据。"""
 
     def __init__(
         self,
@@ -137,39 +102,11 @@ class AgentconfCredentialResolver:
         self._db_path = db_path
         self._owns_config = config is None
 
-    def _ensure_config(self) -> AgentsConfig | None:
-        if self._config is not None:
-            return self._config
-        try:
-            from agentconf import AgentsConfig
-
-            self._config = AgentsConfig(self._db_path) if self._db_path else AgentsConfig()
-        except Exception:  # noqa: BLE001 - 读取失败按「没配」处理
-            logger.warning("cannot open agentconf database for MCP credentials", exc_info=True)
-            return None
-        return self._config
-
     def __call__(self, url: str) -> str | None:
-        config = self._ensure_config()
-        if config is None:
-            return None
+        """旧的 URL／模型 Provider 推断入口明确退役。"""
+        from ghrah.mcp.errors import McpConfigError
 
-        wanted = _normalize_url(url)
-        try:
-            providers = config.list_providers()
-        except Exception:  # noqa: BLE001
-            logger.warning("cannot list agentconf providers", exc_info=True)
-            return None
-
-        for provider in providers:
-            # base_url / api_key 都是 SecretStr：必须解包后再比较。
-            base_url = _secret_str(getattr(provider, "base_url", None))
-            if base_url is None or _normalize_url(base_url) != wanted:
-                continue
-            secret = _secret_str(getattr(provider, "api_key", None))
-            if secret:
-                return secret
-        return None
+        raise McpConfigError("URL 凭据推断已退役；请使用 MCP Provider 的确定服务引用")
 
     def close(self) -> None:
         """关闭本对象打开的 agentconf 连接（外部传入的 config 不关）。"""

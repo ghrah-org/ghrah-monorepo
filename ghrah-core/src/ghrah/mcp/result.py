@@ -24,9 +24,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mcp import types
+if TYPE_CHECKING:
+    from mcp import types
 
 __all__ = ["ToolOutcome", "project_result", "structured_as_text"]
 
@@ -87,6 +88,8 @@ def _resource_link_block(block: types.ResourceLink) -> str:
 
 def _embedded_resource_block(block: types.EmbeddedResource) -> tuple[str, str | None]:
     """内嵌资源：文本内联，二进制降级。返回 ``(正文, 诊断)``。"""
+    from mcp import types
+
     resource = block.resource
     if isinstance(resource, types.TextResourceContents):
         return resource.text, None
@@ -113,6 +116,8 @@ def _blob_size(blob: object) -> int:
 
 def project_result(result: types.CallToolResult) -> ToolOutcome:
     """把 ``CallToolResult`` 投影成 :class:`ToolOutcome`。"""
+    from mcp import types
+
     texts: list[str] = []
     diagnostics: list[str] = []
 

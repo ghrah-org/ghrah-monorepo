@@ -22,7 +22,7 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 - Python ≥ 3.15.1 + [uv](https://docs.astral.sh/uv/)；Node.js ≥ 26 + pnpm ≥ 11
 - 许可 Apache-2.0
 
-模型连接通过 agentconf 0.3 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
+模型连接通过 agentconf 0.4 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
 
 ## 快速开始
 

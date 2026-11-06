@@ -1244,6 +1244,12 @@ class AbilityAccessStore:
         async with self._tx():
             return await self._check(actor, fence)
 
+    async def authorize_many(self, actor: AccessIdentity, fences: tuple[MemberFence, ...]) -> None:
+        """在同一个读取事务中核对相关成员；不签发许可，也不替代后端参数接纳。"""
+        async with self._tx():
+            for fence in fences:
+                await self._check(actor, fence)
+
     async def admit(
         self, actor: AccessIdentity, fence: MemberFence, arguments: dict[str, Any]
     ) -> tuple[str, None]:

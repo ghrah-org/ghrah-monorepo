@@ -29,9 +29,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import mcp
 from ghrah.mcp.diagnostics import enrich_request_error
 from ghrah.mcp.errors import (
     FailureKind,
@@ -44,8 +43,10 @@ from ghrah.mcp.errors import (
 )
 from ghrah.mcp.result import ToolOutcome, project_result
 from ghrah.mcp.spec import AUTH_PLACEHOLDER, McpServerSpec, ProtocolPreference
-from mcp import types
-from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+
+if TYPE_CHECKING:
+    import mcp
+    from mcp import types
 
 Connector = Callable[..., AbstractAsyncContextManager[Any]]
 """建连函数的形状。
@@ -115,6 +116,12 @@ async def open_client(
     连接失败、握手失败都会被翻译成 :class:`McpError` 的子类，``CancelledError``
     原样穿透。
     """
+    try:
+        import mcp
+        from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+    except ImportError:
+        raise McpProtocolError("MCP SDK unavailable; install ghrah-core[mcp]") from None
+
     headers = resolve_headers(spec, credential)
     http_client = create_mcp_http_client(headers=headers or None)
 
@@ -167,6 +174,11 @@ def translate_exception(exc: Exception) -> McpError:
 
     if isinstance(exc, McpError):
         return exc
+
+    try:
+        import mcp
+    except ImportError:
+        return McpRequestError("MCP transport failed", kind=FailureKind.TRANSIENT)
 
     if isinstance(exc, mcp.MCPError):
         if is_session_terminated(code=exc.code, message=str(exc.message)):

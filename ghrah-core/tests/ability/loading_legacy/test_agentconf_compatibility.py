@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""新驱动通过现行 Manifest 消费 agentconf 0.3 端点。"""
+"""新驱动通过现行 Manifest 消费 agentconf 0.4 模型端点。"""
 
 from __future__ import annotations
 

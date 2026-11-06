@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
-from ghrah.ability.execution.execution_services import MCP_RUNTIME
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
@@ -154,120 +153,8 @@ class McpCallAbility(Ability):
         return []
 
     async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
-        """执行一次 MCP 工具调用。
-
-        失败一律转成 FAILURE 结果而非抛异常：工具边界不泄漏异常给模型循环。
-        服务器声明的工具级失败也报 FAILURE——包装成「成功但带 error 字段」会让
-        模型以为调用成功并沿错误前提继续推理。
-
-        Args:
-            call: 本次调用的值对象；``arguments`` 取 ``server`` / ``tool`` /
-                ``arguments`` / ``skill``。
-            services: 执行期服务表；``MCP_RUNTIME`` 是装配期注入的运行时。
-
-        Returns:
-            SUCCESS（``content`` / ``server`` / ``tool``）或 FAILURE
-            （``error`` 及必要的 ``note``）。
-        """
-        tool_args = call.arguments
-        server = str(tool_args.get("server", "") or "").strip()
-        tool = str(tool_args.get("tool", "") or "").strip()
-        skill = str(tool_args.get("skill", "") or "").strip()
-
-        if not server or not tool:
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={
-                    "error": "both 'server' and 'tool' are required",
-                    "note": "Read the skill's MCP catalog for the exact names.",
-                },
-            )
-
-        runtime = services.get(MCP_RUNTIME)
-        if runtime is None:
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={
-                    "error": (
-                        "McpRuntime not wired — MCP calling is unavailable in this "
-                        "deployment (assembly-time injection, not implicit)"
-                    )
-                },
-            )
-
-        # MCP SDK 是可选依赖：模块级导入会让内置树在未安装 SDK 时无法装配。
-        # 只有运行时真的接线（``MCP_RUNTIME`` 服务非 None）才需要这些错误类型。
-        from ghrah.mcp.errors import (
-            McpCredentialMissingError,
-            McpError,
-            McpNotActivatedError,
-            McpRequestError,
-            McpToolMissingError,
-        )
-        from ghrah.mcp.identity import format_unknown_tool_message
-
-        raw_arguments = tool_args.get("arguments")
-        arguments = raw_arguments if isinstance(raw_arguments, dict) else {}
-
-        try:
-            outcome = await runtime.call(
-                agent_scope=call.identity.agent_name,
-                server=server,
-                tool=tool,
-                arguments=arguments,
-                skill=skill or None,
-            )
-        except McpNotActivatedError as exc:
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={
-                    "error": str(exc),
-                    "note": (
-                        "Load the skill that declares this server first, so its MCP "
-                        "catalog becomes available."
-                    ),
-                },
-            )
-        except McpToolMissingError as exc:
-            # 名字写错是最常见的失败，回灌候选让模型自我纠正而不是盲试。
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": format_unknown_tool_message(exc.server, exc.tool, exc.available)},
-            )
-        except McpCredentialMissingError as exc:
-            return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": str(exc)})
-        except McpRequestError as exc:
-            payload: dict[str, Any] = {"error": str(exc)}
-            if exc.uncertain:
-                # 写操作可能已在服务器生效：必须明确要求先核验，不能重试。
-                payload["note"] = (
-                    "This call may or may not have taken effect on the server. "
-                    "Do not retry it blindly — verify the external state first."
-                )
-            return ActionResult(outcome=ActionOutcome.FAILURE, data=payload)
-        except McpError as exc:
-            return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": str(exc)})
-        except Exception as exc:  # noqa: BLE001 - 兜底：绝不让异常逃出工具边界
-            logger.warning("mcp_call failed for %s.%s", server, tool, exc_info=True)
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": f"Unexpected MCP failure: {exc}"},
-            )
-
-        rendered = outcome.render_for_model()
-        if outcome.is_error:
-            # 服务器声明的工具级失败必须变成真失败：包装成「成功但带 error 字段」
-            # 会让模型以为调用成功，继续沿着错误前提推理。
-            return ActionResult(
-                outcome=ActionOutcome.FAILURE,
-                data={"error": rendered, "server": server, "tool": tool},
-            )
-
+        """退役入口明确失败；MCP 执行由受信配置固定到各自成员。"""
         return ActionResult(
-            outcome=ActionOutcome.SUCCESS,
-            data={
-                "content": rendered,
-                "server": server,
-                "tool": tool,
-            },
+            outcome=ActionOutcome.FAILURE,
+            data={"error": "mcp_call is retired; use a granted MCP member through tool discovery"},
         )

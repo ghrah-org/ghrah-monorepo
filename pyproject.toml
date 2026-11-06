@@ -5,7 +5,7 @@ description = "ghrah monorepo workspace root"
 readme = "README.md"
 requires-python = ">=3.15.1"
 dependencies = [
-    "ghrah-core",
+    "ghrah-core[mcp]",
     "ghrah-kernel",
     "ghrah-plugin",
     "ghrah-protocol",
@@ -13,9 +13,8 @@ dependencies = [
     "ghrah-subject",
     "ghrah-taskstore",
     "aiohttp>=3.13.5",
-    "agentconf>=0.3.0,<0.4",
+    "agentconf>=0.4.0,<0.5",
     "openai>=3.6.0",
-    "mcp>=2.3.0",
 ]
 
 [tool.uv.workspace]

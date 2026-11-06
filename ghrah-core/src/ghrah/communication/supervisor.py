@@ -537,6 +537,8 @@ class SupervisorActor:
     async def _abort_registration(self, name: str) -> None:
         """失败启动只回收新建 checkpoint，不覆盖恢复前已存在的 Context。"""
         info = self._registry.get_info(name)
+        if self._builtin_abilities and self.ability_materializer is not None:
+            await self.ability_materializer.close_agent_resources(info.config.agent_id)
         cm = info.actor_handle._context_manager
         await info.actor_handle.stop_receiving()
         await cm.wait_for_persist()
@@ -560,6 +562,8 @@ class SupervisorActor:
             AgentNotFoundError: 如果 Agent 未注册
         """
         info = self._registry.get_info(name)
+        if self._builtin_abilities and self.ability_materializer is not None:
+            await self.ability_materializer.close_agent_resources(info.config.agent_id)
         if self.message_manager is not None:
             await self.message_manager.unbind(info.config.effective_agent_id)
         await info.actor_handle.stop_receiving()

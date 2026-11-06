@@ -241,6 +241,8 @@ class CoreUnitConfig:
     ability_store: Any = None
     # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
     ability_grant_policy: Any = None
+    # 受信 MCP 装配配置；None = 关闭，不读取 agentconf、不发现端点。
+    mcp: Any = None
 
 
 # ----------------------------------------------------------------
@@ -688,6 +690,7 @@ class CoreUnit:
         self._assembly: AbilityAssembly | None = None
         # 授权装配边界（builtin 模式唯一入口）；None = 未接线或 legacy 模式。
         self._startup_materializer: Any = None
+        self._mcp_deployment: Any = None
 
         self._handlers: dict[str, _CommandHandler] = {
             CommandType.SPAWN_AGENT.value: self._handle_spawn_agent,
@@ -747,6 +750,15 @@ class CoreUnit:
     # ----------------------------------------------------------------
 
     async def init(self, ctx: Any) -> None:
+        """初始化失败时释放本 Unit 已创建的 MCP 资源，不关闭借用的关系库。"""
+        try:
+            await self._init(ctx)
+        except BaseException:
+            if self._mcp_deployment is not None:
+                await self._mcp_deployment.close()
+            raise
+
+    async def _init(self, ctx: Any) -> None:
         """初始化 Unit：构造 Supervisor（实例自持，不向宿主注册服务）。
 
         Args:
@@ -785,6 +797,16 @@ class CoreUnit:
             self._config.ability_source, agent_store=self._config.manifest_store
         )
         self._assembly = assembly
+        if self._config.mcp is not None:
+            from ghrah.ability.mcp_wiring import McpDeployment, McpDeploymentConfig
+
+            if not isinstance(self._config.mcp, McpDeploymentConfig):
+                raise TypeError("mcp 必须是 McpDeploymentConfig 或 None")
+            if not assembly.is_builtin or self._config.ability_store is None:
+                raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
+            self._mcp_deployment = McpDeployment(
+                self._config.mcp, self._config.ability_store, self._config.cluster_id
+            )
         if assembly.is_builtin:
             # 旧模式的目录与默认能力集在新模式下不生效：显式告警而不是
             # 静默沿用（沿用就是新旧混装，静默忽略就是让工具面无声缺口）。
@@ -821,6 +843,7 @@ class CoreUnit:
                 command_runner=self._config.command_runner,
                 safe_extra_commands=self._config.safe_extra_commands,
                 safe_extra_sub_commands=self._config.safe_extra_sub_commands,
+                mcp_deployment=self._mcp_deployment,
             )
         self._startup_materializer = startup_materializer
 
@@ -860,6 +883,8 @@ class CoreUnit:
 
         supervisor = self._supervisor
         if supervisor is None:
+            if self._mcp_deployment is not None:
+                await self._mcp_deployment.close()
             return
 
         # 先清理 executor 层 pending HITL futures，再终止 agents
@@ -879,7 +904,11 @@ class CoreUnit:
         except Exception:
             logger.warning("CoreUnit.stop: 枚举 agents 失败")
 
-        await supervisor.shutdown()
+        try:
+            await supervisor.shutdown()
+        finally:
+            if self._mcp_deployment is not None:
+                await self._mcp_deployment.close()
         logger.info("CoreUnit stopped")
 
     # ----------------------------------------------------------------
