@@ -6,7 +6,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
 import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
 
-const api = vi.hoisted(() => ({ getAgentInfo: vi.fn(), registerAbility: vi.fn() }));
+const api = vi.hoisted(() => ({
+  getAgentInfo: vi.fn(),
+  registerAbility: vi.fn(),
+  unregisterAbility: vi.fn(),
+}));
 vi.mock("@/composables/useObserver", () => ({ useObserver: () => ({ ...api, error: ref(null) }) }));
 const target = { projectId: "p1", agentId: "a1", agentName: "worker" };
 function createDialog() {
@@ -146,4 +150,50 @@ it("does not fall back to a hardcoded type list if discovery is unavailable", as
   expect(wrapper.text()).toContain("Unable to load available ability types");
   expect(wrapper.find("select").attributes("disabled")).toBeDefined();
   expect(wrapper.find('[type="submit"]').attributes("disabled")).toBeDefined();
+});
+
+it("confirms unregistering a runtime ability and rereads the actual list", async () => {
+  api.unregisterAbility.mockResolvedValue({ success: true });
+  const w = createDialog();
+  await flushPromises();
+  const first = w.findAll("button").find((b) => b.text() === "Unregister runtime ability")!;
+  await first.trigger("click");
+  expect(api.unregisterAbility).not.toHaveBeenCalled();
+  api.getAgentInfo.mockResolvedValue({
+    success: true,
+    data: { abilities: ["end_task"], available_ability_types: ["conversation", "end_task"] },
+  });
+  await w
+    .findAll('[role="dialog"]')
+    .at(-1)!
+    .findAll("button")
+    .find((b) => b.text() === "Unregister runtime ability")!
+    .trigger("click");
+  await flushPromises();
+  expect(api.unregisterAbility).toHaveBeenCalledWith(target, "conversation");
+  expect(w.text()).toContain("verified its registered list");
+  expect(w.findAll("code").map((b) => b.text())).toEqual(["end_task"]);
+  w.unmount();
+});
+it("shows builtin refusal and keeps the registered list", async () => {
+  api.unregisterAbility.mockResolvedValue({
+    success: false,
+    error: "builtin source rejects unregister_ability",
+  });
+  const w = createDialog();
+  await flushPromises();
+  await w
+    .findAll("button")
+    .find((b) => b.text() === "Unregister runtime ability")!
+    .trigger("click");
+  await w
+    .findAll('[role="dialog"]')
+    .at(-1)!
+    .findAll("button")
+    .find((b) => b.text() === "Unregister runtime ability")!
+    .trigger("click");
+  await flushPromises();
+  expect(w.text()).toContain("builtin source rejects");
+  expect(w.findAll("code").map((b) => b.text())).toContain("conversation");
+  w.unmount();
 });

@@ -67,7 +67,10 @@ function mountPanel(options: { archived?: boolean; rooms?: boolean } = {}) {
     useRoomsStore().replaceProjectRooms("p1", [room("r1", "active")], "active");
     useRoomsStore().replaceProjectRooms("p1", [room("r2", "archived")], "archived");
   }
-  return mount(ProjectSettingsPanel, { props: { projectId: "p1" } });
+  return mount(ProjectSettingsPanel, {
+    props: { projectId: "p1" },
+    global: { stubs: { WorkspaceManagement: true } },
+  });
 }
 
 function confirmButton(wrapper: ReturnType<typeof mount>, label: string) {
@@ -101,7 +104,7 @@ describe("ProjectSettingsPanel", () => {
     expect(listRooms).toHaveBeenCalledWith("p1", "active");
     expect(listRooms).toHaveBeenCalledWith("p1", "archived");
     expect(wrapper.text()).toContain("Frozen Room");
-    expect(wrapper.findAll("dd").map((node) => node.text())).toEqual([
+    expect(wrapper.findAll(".project-storage-summary dd").map((node) => node.text())).toEqual([
       "/private/p1",
       "1",
       "1",

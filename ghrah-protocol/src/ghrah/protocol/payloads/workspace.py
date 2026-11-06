@@ -123,3 +123,18 @@ class WorkspaceRolledBackPayload(BaseModel):
     cluster_id: str = ""
     agent_name: str
     snapshot_id: str
+
+
+class WorkspaceGetResponsePayload(BaseModel):
+    """登记记录与提供方只读状态；状态探测失败不丢弃记录。"""
+
+    workspace_id: str
+    name: str
+    provider_type: str
+    subject_id: str
+    locator: str
+    created_at: str
+    updated_at: str
+    exists: bool | None = None
+    writable: bool | None = None
+    status_error: str | None = None

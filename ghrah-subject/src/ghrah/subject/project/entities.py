@@ -322,6 +322,15 @@ class AgentEntityManager:
             incarnation = op.get("expected_incarnation_id")
             if incarnation is not None and incarnation != runtime.get("incarnation_id"):
                 raise StableError("agent_incarnation_conflict")
+            if kind == "prompt.configure":
+                if agent.desired_state != "stopped" or runtime["availability"] != "offline":
+                    raise StableError("agent_must_be_stopped")
+                if agent.manifest_ref:
+                    raise StableError("prompt_managed_by_manifest")
+                project, agent = await self._save(
+                    project, agent, {"system_prompt": op["system_prompt"]}
+                )
+                return await self._snapshot(project, agent)
             if kind == "model.configure":
                 if agent.desired_state != "stopped" or runtime["availability"] != "offline":
                     raise StableError("agent_must_be_stopped")
@@ -330,7 +339,16 @@ class AgentEntityManager:
                 self.validate_model_name(op["endpoint_name"])
                 changes: dict[str, Any] = {"endpoint_name": op["endpoint_name"]}
                 if op.get("model_overrides") is not None:
-                    changes["model_overrides"] = op["model_overrides"]
+                    from ghrah.core.config.builders import build_model_overrides_from_dict
+                    from ghrah.manifest.agent import ModelConfig
+
+                    build_model_overrides_from_dict(op["model_overrides"])
+                    validated = ModelConfig.model_validate(
+                        {**op["model_overrides"], "endpoint_name": op["endpoint_name"]}, strict=True
+                    )
+                    changes["model_overrides"] = validated.model_dump(
+                        exclude={"endpoint_name"}, exclude_unset=True
+                    )
                 project, agent = await self._save(project, agent, changes)
                 return await self._snapshot(project, agent)
             if kind == "abilities.configure":

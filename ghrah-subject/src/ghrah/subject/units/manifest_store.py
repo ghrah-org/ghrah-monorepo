@@ -116,7 +116,9 @@ class ManifestStoreUnit(SubjectUnit):
         payload: dict[str, Any],
         cmd_ctx: CommandContext,
     ) -> dict[str, Any]:
-        result = handle_manifest_command(command, payload, self.service)
+        result = handle_manifest_command(
+            command, payload, self.service, ability_source=self._config.ability_source
+        )
         if result.get("success"):
             await self._emit_manifest_change(command, payload, result)
         return result

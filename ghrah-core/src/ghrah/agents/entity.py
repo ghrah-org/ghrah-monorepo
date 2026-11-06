@@ -122,6 +122,14 @@ class AgentEntity(_EntityPort):
         """读取实体规格及各子系统的当前观测，不缓存第二份事实。"""
         return AgentSnapshot.model_validate(await self._call("snapshot"))
 
+    async def configure_prompt(
+        self, system_prompt: str, *, expected_revision: int
+    ) -> dict[str, Any]:
+        """停止后修改本地规格提示词，下次启动生效，不改已有会话。"""
+        return await self._call(
+            "prompt.configure", system_prompt=system_prompt, expected_revision=expected_revision
+        )
+
     async def configure_model(
         self,
         endpoint_name: str,

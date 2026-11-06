@@ -3,6 +3,7 @@ import { type AgentTarget, useConnectionStore, useProjectsStore } from "@ghrah/o
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
+import ConfirmDialog from "./ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 
 const props = defineProps<{ target: AgentTarget }>();
@@ -10,7 +11,7 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const connection = useConnectionStore();
 const projects = useProjectsStore();
-const { getAgentInfo, registerAbility, error: observerError } = useObserver();
+const { getAgentInfo, registerAbility, unregisterAbility, error: observerError } = useObserver();
 const abilities = ref<string[]>([]);
 const availableTypes = ref<string[]>([]);
 const definitions = ref<unknown[]>([]);
@@ -21,6 +22,8 @@ const saving = ref(false);
 const error = ref("");
 const success = ref("");
 const abilityType = ref("");
+const removeTarget = ref<string | null>(null);
+const mutationUncertain = ref(false);
 const paramsText = ref("{}");
 const params = computed<Record<string, unknown> | null>(() => {
   try {
@@ -35,6 +38,7 @@ const params = computed<Record<string, unknown> | null>(() => {
 const canRegister = computed(
   () =>
     loaded.value &&
+    !mutationUncertain.value &&
     !stopped.value &&
     !loading.value &&
     !saving.value &&
@@ -81,6 +85,7 @@ async function refresh() {
     availableTypes.value = stopped.value ? [] : (data.available_ability_types as string[]);
     if (!availableTypes.value.includes(abilityType.value)) abilityType.value = "";
     loaded.value = true;
+    mutationUncertain.value = false;
   } catch (cause) {
     error.value = String(cause);
   } finally {
@@ -110,6 +115,42 @@ async function register() {
     saving.value = false;
   }
 }
+async function unregister() {
+  const ability = removeTarget.value;
+  removeTarget.value = null;
+  if (
+    !ability ||
+    mutationUncertain.value ||
+    !loaded.value ||
+    stopped.value ||
+    saving.value ||
+    loading.value ||
+    connection.state !== "connected"
+  )
+    return;
+  saving.value = true;
+  mutationUncertain.value = true;
+  error.value = "";
+  success.value = "";
+  try {
+    const result = await unregisterAbility(props.target, ability);
+    if (!result?.success) {
+      if (result) mutationUncertain.value = false;
+      error.value = result?.error ?? observerError.value ?? t("commonConfig.unregisterFailed");
+      return;
+    }
+    await refresh();
+    if (!loaded.value || abilities.value.includes(ability)) {
+      error.value = t("commonConfig.unregisterVerify");
+      return;
+    }
+    success.value = t("commonConfig.unregistered", { ability });
+  } catch (cause) {
+    error.value = String(cause);
+  } finally {
+    saving.value = false;
+  }
+}
 onMounted(refresh);
 </script>
 
@@ -122,13 +163,20 @@ onMounted(refresh);
       <template #subtitle
         ><p>{{ target.agentId }}</p></template
       >
-      <div class="base-modal-body agent-abilities-body">
-        <p>{{ t("agentAbilities.runtimeHint") }}</p>
+      <div class="agent-abilities-body">
+        <div class="abilities-toolbar">
+          <p class="abilities-hint">{{ t("agentAbilities.runtimeHint") }}</p>
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="loading || saving"
+            @click="refresh"
+          >
+            {{ t("agentAbilities.refresh") }}
+          </button>
+        </div>
         <p v-if="error" role="alert">{{ error }}</p>
         <p v-if="success" role="status">{{ success }}</p>
-        <button type="button" class="btn-secondary" :disabled="loading || saving" @click="refresh">
-          {{ t("agentAbilities.refresh") }}
-        </button>
         <p v-if="loading">{{ t("common.loading") }}</p>
         <template v-else-if="loaded">
           <h3>{{ t(stopped ? "agentAbilities.definitions" : "agentAbilities.registeredList") }}</h3>
@@ -139,6 +187,19 @@ onMounted(refresh);
           <ul v-else-if="abilities.length" class="agent-abilities-list">
             <li v-for="ability in abilities" :key="ability">
               <code>{{ ability }}</code>
+              <button
+                class="btn ability-remove text-red-600 dark:text-red-400"
+                :disabled="
+                  saving ||
+                  mutationUncertain ||
+                  loading ||
+                  connection.state !== 'connected' ||
+                  projects.projects.get(target.projectId)?.status !== 'active'
+                "
+                @click="removeTarget = ability"
+              >
+                {{ t("commonConfig.unregister") }}
+              </button>
             </li>
           </ul>
           <p v-else>{{ t("agentAbilities.empty") }}</p>
@@ -166,24 +227,82 @@ onMounted(refresh);
         </form>
       </div>
     </BaseModal>
+    <ConfirmDialog
+      v-if="removeTarget"
+      :title="t('commonConfig.unregister')"
+      :message="t('commonConfig.unregisterHint', { ability: removeTarget })"
+      :confirm-label="t('commonConfig.unregister')"
+      danger
+      @cancel="removeTarget = null"
+      @confirm="unregister"
+    />
   </Teleport>
 </template>
 
 <style scoped>
 .agent-abilities-body {
+  display: grid;
+  gap: var(--spacing-4);
   font-size: var(--font-ui-body);
+  min-width: 0;
+}
+p,
+h3,
+pre {
+  margin: 0;
+}
+h3 {
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+}
+.abilities-toolbar {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+.abilities-hint {
+  flex: 1 1 60%;
+  color: var(--ac-node-subtext);
+  line-height: 1.6;
+}
+.abilities-toolbar button {
+  flex-shrink: 0;
 }
 .agent-abilities-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: var(--spacing-2);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 .agent-abilities-list li {
-  border: 1px solid currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  border: 1px solid var(--ac-node-border);
   border-radius: var(--radius-md);
-  padding: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  background: var(--ac-node-bg);
+}
+.agent-abilities-list code {
+  font-size: var(--font-ui-code);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.ability-remove {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+  background: transparent;
+  border: 1px solid var(--ac-node-border);
+  font-size: var(--font-ui-note);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.ability-remove:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-color: currentColor;
 }
 form,
 label {
@@ -192,16 +311,31 @@ label {
   gap: var(--spacing-2);
 }
 form {
-  margin-block-start: var(--spacing-4);
+  gap: var(--spacing-3);
+  padding-block-start: var(--spacing-4);
+  border-top: 1px solid var(--ac-node-border);
+}
+form p {
+  color: var(--ac-node-subtext);
+  line-height: 1.6;
+}
+form button {
+  align-self: flex-start;
 }
 select,
 textarea {
   color: inherit;
   background: transparent;
-  border: 1px solid currentColor;
+  border: 1px solid var(--ac-node-border);
   border-radius: var(--radius-md);
   padding: var(--spacing-2);
   min-width: 0;
+  font: inherit;
+}
+textarea,
+pre {
+  font-size: var(--font-ui-code);
+  line-height: 1.6;
 }
 pre {
   white-space: pre-wrap;

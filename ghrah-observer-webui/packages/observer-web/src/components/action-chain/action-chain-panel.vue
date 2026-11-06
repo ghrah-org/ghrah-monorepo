@@ -16,6 +16,7 @@ import ActionChainBranchBar from "./action-chain-branch-bar.vue";
 import ActionChainCanvas from "./action-chain-canvas.vue";
 import ActionChainDetail from "./action-chain-detail.vue";
 import ActionChainSessionPicker from "./action-chain-session-picker.vue";
+import CreateSessionDialog from "../create-session-dialog.vue";
 import { createLayoutCache } from "./layout-cache.js";
 import { layoutGraph } from "./layout-graph.js";
 
@@ -32,7 +33,6 @@ const branches = useBranchesStore();
 const {
   activateSession,
   activateBranch,
-  createSession,
   createBranch,
   archiveSession,
   deleteSession,
@@ -156,23 +156,15 @@ async function confirmActivateBranch() {
   }
 }
 
-async function startSession() {
-  const agent = agentTarget.value;
-  if (!agent) return;
-  switching.value = "new-session";
-  actionError.value = null;
-  try {
-    const result = await createSession(agent);
-    if (!result?.success) {
-      actionError.value = failureOf(result);
-      return;
-    }
-    const data = result.data as { session_id?: string } | null;
-    // 新建 Session 只把展示切过去，不隐式激活运行态（D6 裁决）。
-    if (data?.session_id) sessions.viewSession(agent, data.session_id);
-  } finally {
-    switching.value = null;
-  }
+const showSessionCreate = ref(false);
+watch(
+  () => [props.agent.projectId, props.agent.agentId],
+  () => {
+    showSessionCreate.value = false;
+  },
+);
+function sessionCreated(sessionId: string) {
+  sessions.viewSession(agentTarget.value, sessionId);
 }
 
 async function startBranch() {
@@ -424,7 +416,7 @@ const selectBranchValue = computed(() => {
         @activate="confirmActivateSession"
         @archive="confirmArchiveSession"
         @remove="confirmDeleteSession"
-        @create="startSession"
+        @create="showSessionCreate = true"
       />
       <ActionChainBranchBar
         v-if="viewedSessionTarget"
@@ -501,5 +493,13 @@ const selectBranchValue = computed(() => {
         </div>
       </div>
     </div>
+    <CreateSessionDialog
+      v-if="showSessionCreate"
+      :key="`${agentTarget.projectId}:${agentTarget.agentId}`"
+      :agent="agentTarget"
+      route="chain"
+      @created="sessionCreated"
+      @close="showSessionCreate = false"
+    />
   </div>
 </template>

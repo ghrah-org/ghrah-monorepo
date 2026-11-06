@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   resume: vi.fn(),
   configure: vi.fn(),
   configureModel: vi.fn(),
+  configurePrompt: vi.fn(),
   create: vi.fn(),
   list: vi.fn(),
 }));
@@ -40,6 +41,7 @@ function snapshot(online = false) {
       desired_state: online ? "running" : "stopped",
       abilities: ["send_message"],
       manifest_ref: "",
+      system_prompt: "",
       runtime_error: "",
     },
     specification_revision: 5,
@@ -272,6 +274,235 @@ it("saves a model binding independently from the entity name", async () => {
   await w.find('[data-testid="model-config"]').setValue("shared-model");
   await button(w, "Save model binding").trigger("click");
   await flushPromises();
-  expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5);
+  expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5, {});
+  w.unmount();
+});
+it.each([false, true])(
+  "shows the complete saved specification prompt (online=%s) without mutations",
+  async (online) => {
+    const state = snapshot(online);
+    const prompt =
+      "  Keep leading spaces.\n" + "Full specification line.\n".repeat(100) + "PROMPT_END_MARKER\n";
+    state.specification.system_prompt = prompt;
+    api.snapshot.mockResolvedValue(state);
+    const w = render();
+    await flushPromises();
+    const field = w.get('[data-testid="specification-prompt"]');
+    expect(field.element).toHaveProperty("value", prompt);
+    expect(field.element).toHaveProperty("readOnly", true);
+    expect(w.text()).toContain("specification.system_prompt");
+    expect(w.text()).toContain("not the final prompt sent to the model");
+    expect(api.start).not.toHaveBeenCalled();
+    expect(api.configure).not.toHaveBeenCalled();
+    expect(api.createSession).not.toHaveBeenCalled();
+    w.unmount();
+  },
+);
+it("distinguishes an empty specification field from a referenced Manifest and runtime prompt", async () => {
+  const state = snapshot();
+  state.specification.manifest_ref = "audit.helper";
+  api.snapshot.mockResolvedValue(state);
+  const w = render();
+  await flushPromises();
+  expect(w.find('[data-testid="specification-prompt"]').exists()).toBe(false);
+  expect(w.get('[data-testid="specification-prompt-empty"]').text()).toContain(
+    "system_prompt is empty",
+  );
+  expect(w.text()).toContain("audit.helper");
+  expect(w.text()).toContain("not a read of that Manifest file");
+  w.unmount();
+});
+it("shows a nonempty specification field independently of its Manifest reference", async () => {
+  const state = snapshot();
+  state.specification.manifest_ref = "audit.helper";
+  state.specification.system_prompt = "Saved specification prompt";
+  api.snapshot.mockResolvedValue(state);
+  const w = render();
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Saved specification prompt",
+  );
+  expect(w.text()).toContain("audit.helper");
+  expect(w.text()).toContain("not a read of that Manifest file");
+  const updated = snapshot();
+  updated.specification.system_prompt = "Updated authority value";
+  api.snapshot.mockResolvedValue(updated);
+  await button(w, "Refresh state").trigger("click");
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Updated authority value",
+  );
+  expect(w.text()).not.toContain("audit.helper");
+  w.unmount();
+});
+it("discards the previous prompt on target changes and ignores late snapshots", async () => {
+  const first = snapshot();
+  first.specification.system_prompt = "First target prompt";
+  api.snapshot.mockResolvedValueOnce(first);
+  const w = render();
+  await flushPromises();
+  let finishOld!: (value: ReturnType<typeof snapshot>) => void;
+  api.snapshot.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+  );
+  await button(w, "Refresh state").trigger("click");
+  const second = snapshot();
+  second.identity.agent_id = "a2";
+  second.specification.system_prompt = "Second target prompt";
+  api.snapshot.mockResolvedValueOnce(second);
+  await w.setProps({ agentId: "a2" });
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Second target prompt",
+  );
+  finishOld(first);
+  await flushPromises();
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty(
+    "value",
+    "Second target prompt",
+  );
+  w.unmount();
+});
+
+it("opens the shared session creator for this stable entity without creating immediately", async () => {
+  api.snapshot.mockResolvedValue(snapshot(true));
+  const w = mount(AgentEntityDialog, {
+    props: { projectId: "p1", agentId: "a1" },
+    global: {
+      stubs: {
+        Teleport: true,
+        CreateSessionDialog: {
+          name: "CreateSessionDialog",
+          props: ["agent", "route"],
+          template: '<div data-testid="session-creator" />',
+        },
+      },
+    },
+  });
+  await flushPromises();
+  await button(w, "Sessions & history").trigger("click");
+  await flushPromises();
+  await button(w, "Create session").trigger("click");
+  const creator = w.findComponent({ name: "CreateSessionDialog" });
+  expect(creator.props()).toMatchObject({
+    agent: { projectId: "p1", agentId: "a1", agentName: "Designer" },
+    route: "entity",
+  });
+  expect(api.createSession).not.toHaveBeenCalled();
+  w.unmount();
+});
+
+it("opens deletion with the snapshot revision and refreshes its parent after verification", async () => {
+  const w = mount(AgentEntityDialog, {
+    props: { projectId: "p1", agentId: "a1" },
+    global: {
+      stubs: {
+        Teleport: true,
+        DeleteAgentDialog: {
+          name: "DeleteAgentDialog",
+          props: ["agent", "expectedVersion"],
+          emits: ["deleted", "close"],
+          template: "<div />",
+        },
+      },
+    },
+  });
+  await flushPromises();
+  await button(w, "Delete agent entity").trigger("click");
+  const dialog = w.getComponent({ name: "DeleteAgentDialog" });
+  expect(dialog.props()).toMatchObject({
+    agent: { projectId: "p1", agentId: "a1", agentName: "Designer" },
+    expectedVersion: 5,
+  });
+  expect(w.emitted("changed")).toBeUndefined();
+  dialog.vm.$emit("deleted");
+  expect(w.emitted("changed")).toHaveLength(1);
+  expect(w.emitted("close")).toHaveLength(1);
+  w.unmount();
+});
+
+it("saves an exact specification prompt with the snapshot revision and rereads authority", async () => {
+  const w = render();
+  await flushPromises();
+  const field = w
+    .findAll("textarea")
+    .find(
+      (x) =>
+        !x.attributes("data-testid") &&
+        x.element.parentElement?.textContent?.includes("Edit specification prompt"),
+    )!;
+  const content = "  New role\nFinal line\n";
+  await field.setValue(content);
+  const updated = {
+    ...snapshot(),
+    specification: { ...snapshot().specification, system_prompt: content },
+  };
+  api.snapshot.mockResolvedValue(updated);
+  api.configurePrompt.mockResolvedValue(updated);
+  await button(w, "Save specification prompt").trigger("click");
+  await flushPromises();
+  expect(api.configurePrompt).toHaveBeenCalledWith(content, 5);
+  expect(w.get('[data-testid="specification-prompt"]').element).toHaveProperty("value", content);
+  w.unmount();
+});
+it("validates model overrides before saving and preserves zero values", async () => {
+  const w = render();
+  await flushPromises();
+  await w.get('[data-testid="model-config"]').setValue("shared-model");
+  const field = w
+    .findAll("textarea")
+    .find((x) => x.element.parentElement?.textContent?.includes("Model request overrides"))!;
+  await field.setValue('{"unexpected":true}');
+  await button(w, "Save model binding").trigger("click");
+  await flushPromises();
+  expect(api.configureModel).not.toHaveBeenCalled();
+  const params = { temperature: 0, max_tokens: 128, top_p: null, extra_params: { seed: 0 } };
+  await field.setValue(JSON.stringify(params));
+  await button(w, "Save model binding").trigger("click");
+  await flushPromises();
+  expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5, params);
+  w.unmount();
+});
+it("preserves a prompt draft after rejection and requires confirmation to discard", async () => {
+  api.configurePrompt.mockRejectedValue(new Error("agent_specification_conflict"));
+  const w = render();
+  await flushPromises();
+  const field = w
+    .findAll("textarea")
+    .find((x) => x.element.parentElement?.textContent?.includes("Edit specification prompt"))!;
+  await field.setValue("Keep draft");
+  await button(w, "Save specification prompt").trigger("click");
+  await flushPromises();
+  expect(w.text()).toContain("agent_specification_conflict");
+  expect(field.element).toHaveProperty("value", "Keep draft");
+  await w.get(".base-modal-close").trigger("click");
+  expect(w.findAll('[role="dialog"]')).toHaveLength(2);
+  w.unmount();
+});
+
+it("keeps the other settings draft when saving a prompt", async () => {
+  const w = render();
+  await flushPromises();
+  const prompt = w
+    .findAll("textarea")
+    .find((x) => x.element.parentElement?.textContent?.includes("Edit specification prompt"))!;
+  const model = w
+    .findAll("textarea")
+    .find((x) => x.element.parentElement?.textContent?.includes("Model request overrides"))!;
+  await model.setValue('{"temperature":0}');
+  await prompt.setValue("Saved prompt");
+  api.snapshot.mockResolvedValue({
+    ...snapshot(),
+    specification: { ...snapshot().specification, system_prompt: "Saved prompt" },
+  });
+  await button(w, "Save specification prompt").trigger("click");
+  await flushPromises();
+  expect(model.element).toHaveProperty("value", '{"temperature":0}');
   w.unmount();
 });

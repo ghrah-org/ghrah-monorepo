@@ -63,6 +63,71 @@ describe("ObserverClient", () => {
     }
   });
 
+  it("sends explicit draft content for preview and preserves stored-preview calls", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "preview", success: true });
+    await client.resolveAgent("audit.helper", null, "manifest: agent\n");
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.MANIFEST_RESOLVE_AGENT,
+      payload: { agent_full_name: "audit.helper", content: "manifest: agent\n" },
+    });
+    await client.resolveAgent("audit.helper");
+    expect(request.mock.calls[1][0].payload).toEqual({ agent_full_name: "audit.helper" });
+  });
+
+  it("sends the Ability source baseline only for conditional updates", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "ability", success: true });
+    await client.putAbility("audit.fs.read_file", "source", true, "sha256:base");
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.MANIFEST_PUT_ABILITY,
+      payload: {
+        full_name: "audit.fs.read_file",
+        content: "source",
+        overwrite: true,
+        expected_source_hash: "sha256:base",
+      },
+    });
+    await client.putAbility("audit.fs.new_file", "new", false);
+    expect(request.mock.calls[1][0].payload).toEqual({
+      full_name: "audit.fs.new_file",
+      content: "new",
+      overwrite: false,
+    });
+  });
+
+  it("removes an Agent by stable project identity with an explicit project version", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "remove", success: true });
+    await client.removeProjectAgent(AGENT_TARGET, 7);
+    expect(request.mock.calls[0][0]).toMatchObject({
+      type: CommandType.PROJECT_REMOVE_AGENT,
+      payload: { project_id: "p1", agent_id: "a1", agent_name: "agent-1", expected_version: 7 },
+    });
+  });
+
+  it("registers and reads Workspace records without using destructive workspace commands", async () => {
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValue({ request_id: "workspace", success: true });
+    await client.registerWorkspace("file:///approved", "Approved");
+    await client.listWorkspaces();
+    await client.getWorkspace("w1");
+    expect(
+      request.mock.calls.map(([message]) => ({ type: message.type, payload: message.payload })),
+    ).toEqual([
+      {
+        type: CommandType.WORKSPACE_REGISTER,
+        payload: { locator: "file:///approved", name: "Approved" },
+      },
+      { type: CommandType.WORKSPACE_LIST, payload: {} },
+      { type: CommandType.WORKSPACE_GET, payload: { workspace_id: "w1" } },
+    ]);
+  });
+
   describe("subscribe", () => {
     it("sends subscribe command with correct payload", async () => {
       await connectClient(client, mockWs);

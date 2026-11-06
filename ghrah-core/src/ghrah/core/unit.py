@@ -1514,7 +1514,7 @@ class CoreUnit:
         up = UnregisterAbilityPayload.model_validate(payload)
         self._validate_agent(up.project_id, up.agent_id, up.agent_name)
         agent_handle = await supervisor.get_agent_handle(up.agent_name)
-        await agent_handle.unregister_ability(up.ability_name)
+        agent_handle.unregister_ability(up.ability_name)
         return self._ok(
             {
                 "agent_name": up.agent_name,

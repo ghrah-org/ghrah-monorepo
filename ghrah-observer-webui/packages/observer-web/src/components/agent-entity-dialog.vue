@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { useProjectsStore } from "@ghrah/observer-core";
 import { type AgentSnapshot, AgentSnapshotSchema } from "@ghrah/protocol";
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { z } from "zod";
 import BaseModal from "./ui/base-modal.vue";
+import CreateSessionDialog from "./create-session-dialog.vue";
+import DeleteAgentDialog from "./delete-agent-dialog.vue";
+import ConfirmDialog from "./ui/confirm-dialog.vue";
 import { useAgentEntityRequest } from "@/composables/useAgentEntity";
 
 const props = defineProps<{ projectId: string; agentId?: string }>();
@@ -13,11 +16,30 @@ const { t } = useI18n();
 const projects = useProjectsStore();
 const { client, connected, busy, error, uncertain, run, stopWaiting } = useAgentEntityRequest();
 const snapshot = ref<AgentSnapshot | null>(null);
+const showDelete = ref(false);
 const tab = ref<"overview" | "context" | "mailbox" | "abilities">("overview");
 const tabs = ["overview", "context", "mailbox", "abilities"] as const;
 const types = ref<string[]>([]);
 const selectedTypes = ref<string[]>([]);
 const modelName = ref("");
+const modelParams = ref("{}");
+const promptDraft = ref("");
+const parameterError = ref("");
+const discardSettings = ref(false);
+const settingsDirty = computed(
+  () =>
+    !!snapshot.value &&
+    !snapshot.value.specification.manifest_ref &&
+    (promptDraft.value !== snapshot.value.specification.system_prompt ||
+      modelName.value !== (snapshot.value.specification.endpoint_name ?? "") ||
+      modelParams.value !==
+        JSON.stringify(snapshot.value.specification.model_overrides ?? {}, null, 2)),
+);
+function requestClose() {
+  if (busy.value) return;
+  if (settingsDirty.value) discardSettings.value = true;
+  else emit("close");
+}
 const modelNames = ref<string[]>([]);
 const modelCatalogError = ref("");
 const name = ref("");
@@ -35,6 +57,7 @@ const writable = computed(() => connected.value && !busy.value && !uncertain.val
 const canContext = computed(
   () =>
     writable.value &&
+    !settingsDirty.value &&
     active.value &&
     snapshot.value?.runtime.availability === "online" &&
     !snapshot.value.runtime.busy &&
@@ -91,7 +114,7 @@ const catalogSchema = z.object({
 const catalog = ref<z.infer<typeof catalogSchema> | null>(null);
 const sessionId = ref("");
 const branchId = ref("");
-const sessionName = ref("");
+const showSessionCreate = ref(false);
 const branches = computed(
   () => catalog.value?.branches.filter((b) => b.session_id === sessionId.value) ?? [],
 );
@@ -135,6 +158,9 @@ const deliveryStates = new Set([
 
 function applySnapshot(value: AgentSnapshot) {
   snapshot.value = value;
+  modelParams.value = JSON.stringify(value.specification.model_overrides ?? {}, null, 2);
+  promptDraft.value = value.specification.system_prompt;
+  parameterError.value = "";
   modelName.value = value.specification.endpoint_name ?? "";
   modelNames.value = stringArrayOrNull(value.abilities.model_config_names) ?? [];
   modelCatalogError.value =
@@ -178,7 +204,20 @@ async function refresh() {
     );
     return;
   }
-  await run(() => entity().snapshot(), applySnapshot);
+  const keep = settingsDirty.value
+    ? { prompt: promptDraft.value, params: modelParams.value, model: modelName.value }
+    : null;
+  await run(
+    () => entity().snapshot(),
+    (value) => {
+      applySnapshot(value);
+      if (keep) {
+        promptDraft.value = keep.prompt;
+        modelParams.value = keep.params;
+        modelName.value = keep.model;
+      }
+    },
+  );
 }
 async function loadContext() {
   await run(
@@ -304,10 +343,49 @@ async function create() {
     true,
   );
 }
-function saveModel() {
-  return mutate(() =>
-    entity().configureModel(modelName.value, snapshot.value!.specification_revision),
-  );
+async function saveModel() {
+  if (!canConfigure.value || !snapshot.value) return;
+  let params: Record<string, unknown>;
+  try {
+    params = z
+      .object({
+        temperature: z.number().finite().nullable().optional(),
+        max_tokens: z.number().int().nullable().optional(),
+        top_p: z.number().finite().nullable().optional(),
+        top_k: z.number().int().nullable().optional(),
+        extra_params: z.record(z.unknown()).optional(),
+      })
+      .strict()
+      .parse(JSON.parse(modelParams.value));
+  } catch {
+    parameterError.value = t("commonConfig.invalidModel");
+    return;
+  }
+  parameterError.value = "";
+  const revision = snapshot.value.specification_revision;
+  const otherPrompt =
+    promptDraft.value !== snapshot.value.specification.system_prompt ? promptDraft.value : null;
+  const owner = `${props.projectId}:${props.agentId}`;
+  await mutate(() => entity().configureModel(modelName.value, revision, params));
+  if (otherPrompt !== null && owner === `${props.projectId}:${props.agentId}`)
+    promptDraft.value = otherPrompt;
+}
+async function savePrompt() {
+  if (!canConfigure.value || !snapshot.value) return;
+  const revision = snapshot.value.specification_revision;
+  const content = promptDraft.value;
+  const otherModel =
+    modelParams.value !==
+      JSON.stringify(snapshot.value.specification.model_overrides ?? {}, null, 2) ||
+    modelName.value !== (snapshot.value.specification.endpoint_name ?? "")
+      ? { params: modelParams.value, name: modelName.value }
+      : null;
+  const owner = `${props.projectId}:${props.agentId}`;
+  await mutate(() => entity().configurePrompt(content, revision));
+  if (otherModel && owner === `${props.projectId}:${props.agentId}`) {
+    modelParams.value = otherModel.params;
+    modelName.value = otherModel.name;
+  }
 }
 function startAgent() {
   return mutate(() => entity().start(snapshot.value!.specification_revision));
@@ -320,12 +398,32 @@ function saveAbilities() {
 function activateSession() {
   return mutate(() => entity().context.activateSession(sessionId.value));
 }
-function createSession() {
-  return mutate(() => entity().context.createSession(sessionName.value || undefined));
+async function sessionCreated() {
+  await loadContext();
+}
+watch(
+  () => [props.projectId, props.agentId],
+  () => {
+    if (busy.value) stopWaiting();
+    snapshot.value = null;
+    showDelete.value = false;
+    showSessionCreate.value = false;
+    tab.value = "overview";
+    success.value = "";
+    void refresh();
+  },
+);
+function beforeUnloadSettings(event: BeforeUnloadEvent) {
+  if (settingsDirty.value) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
 }
 onMounted(() => {
+  window.addEventListener("beforeunload", beforeUnloadSettings);
   void refresh();
 });
+onBeforeUnmount(() => window.removeEventListener("beforeunload", beforeUnloadSettings));
 </script>
 
 <template>
@@ -337,7 +435,7 @@ onMounted(() => {
           : t('agentEntity.create')
       "
       size="lg"
-      @request-close="emit('close')"
+      @request-close="requestClose"
     >
       <div class="entity-body">
         <div class="entity-actions">
@@ -431,6 +529,7 @@ onMounted(() => {
           </nav>
           <div v-if="confirmation" class="entity-card" role="alert">
             <p>{{ confirmation.label }}</p>
+            <p v-if="settingsDirty">{{ t("commonConfig.unsavedSettings") }}</p>
             <div class="entity-actions">
               <button
                 class="btn-primary"
@@ -474,6 +573,7 @@ onMounted(() => {
                 class="btn-primary"
                 :disabled="
                   !writable ||
+                  settingsDirty ||
                   !active ||
                   snapshot.runtime.availability === 'unknown' ||
                   (snapshot.specification.desired_state === 'running' &&
@@ -486,6 +586,7 @@ onMounted(() => {
                 class="btn-secondary"
                 :disabled="
                   !writable ||
+                  settingsDirty ||
                   snapshot.runtime.availability === 'unknown' ||
                   (snapshot.specification.desired_state === 'stopped' &&
                     snapshot.runtime.availability === 'offline')
@@ -495,6 +596,58 @@ onMounted(() => {
                 {{ t("agentEntity.stop") }}
               </button>
             </div>
+            <section
+              class="entity-card entity-stack entity-prompt"
+              :aria-label="t('agentEntity.specPromptTitle')"
+            >
+              <h3 class="entity-prompt-heading">{{ t("agentEntity.specPromptTitle") }}</h3>
+              <p>{{ t("agentEntity.specPromptHint") }}</p>
+              <p>
+                {{ t("agentEntity.specPromptSource") }}
+              </p>
+              <template v-if="snapshot.specification.manifest_ref">
+                <p>
+                  {{ t("agentEntity.manifest") }}:
+                  <code>{{ snapshot.specification.manifest_ref }}</code>
+                </p>
+                <p>{{ t("agentEntity.specPromptManifestHint") }}</p>
+              </template>
+              <label v-if="snapshot.specification.system_prompt.length">
+                {{ t("agentEntity.specPromptContent") }}
+                <textarea
+                  :value="snapshot.specification.system_prompt"
+                  readonly
+                  rows="12"
+                  spellcheck="false"
+                  data-testid="specification-prompt"
+                />
+              </label>
+              <p v-else data-testid="specification-prompt-empty">
+                {{ t("agentEntity.specPromptEmpty") }}
+              </p>
+            </section>
+            <section v-if="!snapshot.specification.manifest_ref" class="entity-card entity-stack">
+              <label
+                >{{ t("commonConfig.promptDraft")
+                }}<textarea v-model="promptDraft" rows="8" :disabled="!canConfigure" />
+              </label>
+              <p>{{ t("commonConfig.promptHint") }}</p>
+              <button
+                class="btn-secondary"
+                :disabled="!canConfigure || promptDraft === snapshot.specification.system_prompt"
+                @click="savePrompt"
+              >
+                {{ t("commonConfig.savePrompt") }}
+              </button>
+            </section>
+            <p v-else>{{ t("commonConfig.promptManifest") }}</p>
+            <button
+              class="btn-danger"
+              :disabled="!writable || settingsDirty"
+              @click="showDelete = true"
+            >
+              {{ t("agentDelete.title") }}
+            </button>
             <p>{{ t("agentEntity.lifecycleHint") }}</p>
             <p>{{ t("agentEntity.modelHint") }}</p>
             <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.modelManifest") }}</p>
@@ -510,6 +663,17 @@ onMounted(() => {
               </label>
               <p v-if="!modelNames.length">{{ t("agentEntity.noModelConfigs") }}</p>
               <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
+              <label
+                >{{ t("commonConfig.modelParams")
+                }}<textarea
+                  v-model="modelParams"
+                  rows="8"
+                  :disabled="!canConfigure"
+                  spellcheck="false"
+                />
+              </label>
+              <p>{{ t("commonConfig.modelHint") }}</p>
+              <p v-if="parameterError" role="alert">{{ parameterError }}</p>
               <button
                 class="btn-secondary"
                 :disabled="!canConfigure || !modelName"
@@ -544,7 +708,7 @@ onMounted(() => {
             </fieldset>
             <button
               class="btn-primary"
-              :disabled="!canConfigure || !selectedTypes.length"
+              :disabled="!canConfigure || settingsDirty || !selectedTypes.length"
               @click="saveAbilities"
             >
               {{ t("agentEntity.saveAbilities") }}
@@ -608,14 +772,9 @@ onMounted(() => {
                 </button>
               </div>
             </template>
-            <form class="entity-actions" @submit.prevent="createSession">
-              <label
-                >{{ t("agentEntity.sessionName")
-                }}<input v-model="sessionName" :disabled="!canContext" /></label
-              ><button class="btn-secondary" type="submit" :disabled="!canContext">
-                {{ t("agentEntity.createSession") }}
-              </button>
-            </form>
+            <button class="btn-secondary" :disabled="!canContext" @click="showSessionCreate = true">
+              {{ t("agentEntity.createSession") }}
+            </button>
             <p>{{ t("agentEntity.historyHint") }}</p>
             <p v-if="historyLoaded && !nodes.length">{{ t("agentEntity.noHistory") }}</p>
             <details v-for="node in nodes" :key="node.id" class="entity-card">
@@ -689,6 +848,7 @@ onMounted(() => {
                     class="btn-secondary"
                     :disabled="
                       !writable ||
+                      settingsDirty ||
                       !active ||
                       snapshot.runtime.availability !== 'online' ||
                       snapshot.specification.desired_state !== 'running'
@@ -701,6 +861,7 @@ onMounted(() => {
                     class="btn-secondary"
                     :disabled="
                       !writable ||
+                      settingsDirty ||
                       !active ||
                       snapshot.runtime.availability !== 'online' ||
                       snapshot.specification.desired_state !== 'running'
@@ -724,6 +885,33 @@ onMounted(() => {
         </template>
       </div>
     </BaseModal>
+    <CreateSessionDialog
+      v-if="showSessionCreate && agentId"
+      :key="`${projectId}:${agentId}`"
+      :agent="{ projectId, agentId, agentName: snapshot?.specification.name ?? agentId }"
+      route="entity"
+      @created="sessionCreated"
+      @close="showSessionCreate = false"
+    />
+    <DeleteAgentDialog
+      v-if="showDelete && snapshot && agentId"
+      :key="`${projectId}:${agentId}`"
+      :agent="{ projectId, agentId, agentName: snapshot.specification.name }"
+      :expected-version="snapshot.specification_revision"
+      @close="showDelete = false"
+      @deleted="
+        emit('changed');
+        emit('close');
+      "
+    />
+    <ConfirmDialog
+      v-if="discardSettings"
+      :title="t('config.unsavedTitle')"
+      :message="t('config.unsavedConfirm')"
+      :confirm-label="t('config.discardChanges')"
+      @cancel="discardSettings = false"
+      @confirm="emit('close')"
+    />
   </Teleport>
 </template>
 
@@ -783,6 +971,20 @@ pre {
 }
 .entity-content {
   white-space: pre-wrap;
+}
+.entity-prompt p {
+  margin: 0;
+}
+.entity-prompt-heading {
+  margin: 0;
+  font-size: var(--font-ui-body);
+}
+textarea[data-testid="specification-prompt"] {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-ui-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .entity-error {
   color: var(--ac-write);

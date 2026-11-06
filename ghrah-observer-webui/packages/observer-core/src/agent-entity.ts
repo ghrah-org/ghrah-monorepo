@@ -56,6 +56,13 @@ export class AgentEntity {
       }),
     );
   }
+  configurePrompt(systemPrompt: string, expectedRevision: number) {
+    return this.call({
+      type: "prompt.configure",
+      system_prompt: systemPrompt,
+      expected_revision: expectedRevision,
+    });
+  }
   configureModel(
     endpointName: string,
     expectedRevision: number,

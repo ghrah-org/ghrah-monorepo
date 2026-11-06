@@ -1,4 +1,12 @@
-import type { ManifestAbilityEventPayload, ManifestAgentEventPayload } from "@ghrah/protocol";
+import {
+  type ManifestAbilityEventPayload,
+  type ManifestAgentEventPayload,
+  ManifestGetAbilityResponsePayloadSchema,
+  ManifestListAbilitiesResponsePayloadSchema,
+  type ManifestListErrorPayload,
+  type ManifestValidateResponsePayload,
+  ManifestValidateResponsePayloadSchema,
+} from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
@@ -37,16 +45,60 @@ export interface AgentManifestInfo {
   max_iterations: number;
 }
 
-export interface ValidationResult {
-  is_valid: boolean;
-  errors: string[];
+export type ValidationResult = ManifestValidateResponsePayload;
+
+/** 原文与完整文档都是服务端权威的缓存，不从摘要重建或独立修改。 */
+export interface ManifestDetail {
+  full_name: string;
+  manifest: Record<string, unknown>;
+  source: string;
+  source_hash: string;
 }
 
-export function extractAbilityList(data: unknown): AbilityManifestInfo[] | null {
-  if (data == null || typeof data !== "object") return null;
-  const d = data as Record<string, unknown>;
-  if (!Array.isArray(d.abilities)) return null;
-  return d.abilities as AbilityManifestInfo[];
+export type ManifestEntry =
+  | { kind: "ability"; detail: ManifestDetail; summary: AbilityManifestInfo }
+  | { kind: "agent"; detail: ManifestDetail; summary: AgentManifestInfo };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isAbilityInfo(
+  value: Record<string, unknown>,
+): value is AbilityManifestInfo & Record<string, unknown> {
+  const permissions = value.permissions;
+  return (
+    ["full_name", "namespace", "name", "title", "description", "implementation_type"].every(
+      (key) => typeof value[key] === "string",
+    ) &&
+    typeof value.has_hitl === "boolean" &&
+    isStringArray(value.tags) &&
+    isRecord(permissions) &&
+    ["require_hitl", "fs_read_only", "fs_write", "net_access", "shell_access"].every(
+      (key) => typeof permissions[key] === "boolean",
+    ) &&
+    ["allowed_paths", "denied_paths", "allowed_commands", "denied_commands"].every(
+      (key) => permissions[key] === undefined || isStringArray(permissions[key]),
+    )
+  );
+}
+
+export function extractAbilityList(data: unknown): {
+  abilities: AbilityManifestInfo[];
+  errors: ManifestListErrorPayload[];
+} | null {
+  const parsed = ManifestListAbilitiesResponsePayloadSchema.safeParse(data);
+  if (!parsed.success) return null;
+  const abilities: AbilityManifestInfo[] = [];
+  for (const item of parsed.data.abilities) {
+    if (!isAbilityInfo(item)) return null;
+    abilities.push(item);
+  }
+  return { abilities, errors: parsed.data.errors };
 }
 
 export function extractAgentList(data: unknown): AgentManifestInfo[] | null {
@@ -58,26 +110,90 @@ export function extractAgentList(data: unknown): AgentManifestInfo[] | null {
 
 export function extractManifestEntry(
   data: unknown,
-): AbilityManifestInfo | AgentManifestInfo | null {
-  if (data == null || typeof data !== "object") return null;
-  const d = data as Record<string, unknown>;
-  if (d.manifest == null || typeof d.manifest !== "object") return null;
-  return d.manifest as AbilityManifestInfo | AgentManifestInfo;
+  expected?: { kind: "ability" | "agent"; fullName: string },
+): ManifestEntry | null {
+  const parsed = ManifestGetAbilityResponsePayloadSchema.safeParse(data);
+  if (!parsed.success) return null;
+  const { manifest, source, source_hash } = parsed.data;
+  const metadata = manifest.metadata;
+  if (
+    !isRecord(metadata) ||
+    typeof metadata.namespace !== "string" ||
+    !metadata.namespace ||
+    typeof metadata.name !== "string" ||
+    !metadata.name ||
+    typeof metadata.title !== "string" ||
+    !isStringArray(metadata.tags)
+  )
+    return null;
+  const fullName = `${metadata.namespace}.${metadata.name}`;
+  if (expected && (expected.kind !== manifest.manifest || expected.fullName !== fullName)) {
+    return null;
+  }
+  const detail: ManifestDetail = { full_name: fullName, manifest, source, source_hash };
+  const common = {
+    full_name: fullName,
+    namespace: metadata.namespace,
+    name: metadata.name,
+    title: metadata.title,
+    tags: metadata.tags,
+  };
+  if (manifest.manifest === "ability") {
+    if (!isRecord(manifest.implementation) || !isRecord(metadata.permissions)) return null;
+    const summary = {
+      ...common,
+      description: metadata.description,
+      permissions: metadata.permissions,
+      implementation_type: manifest.implementation.type,
+      has_hitl: metadata.permissions.require_hitl,
+    };
+    return isAbilityInfo(summary) ? { kind: "ability", detail, summary } : null;
+  }
+  if (manifest.manifest !== "agent" || !isRecord(manifest.model)) return null;
+  if (
+    typeof manifest.model.endpoint_name !== "string" ||
+    typeof manifest.description !== "string" ||
+    typeof manifest.system_prompt !== "string" ||
+    typeof manifest.max_iterations !== "number" ||
+    !Number.isInteger(manifest.max_iterations) ||
+    !Array.isArray(manifest.abilities)
+  )
+    return null;
+  const refs: string[] = [];
+  for (const ability of manifest.abilities) {
+    if (!isRecord(ability)) return null;
+    const ref = ability.ref ?? ability.type;
+    if (typeof ref !== "string" || !ref) return null;
+    refs.push(ref);
+  }
+  return {
+    kind: "agent",
+    detail,
+    summary: {
+      ...common,
+      description: manifest.description,
+      endpoint_name: manifest.model.endpoint_name,
+      system_prompt: manifest.system_prompt,
+      ability_refs: refs,
+      max_iterations: manifest.max_iterations,
+    },
+  };
 }
 
 export function extractValidationResult(data: unknown): ValidationResult | null {
-  if (data == null || typeof data !== "object") return null;
-  const d = data as Record<string, unknown>;
-  if (typeof d.is_valid !== "boolean" || !Array.isArray(d.errors)) return null;
-  return data as ValidationResult;
+  const parsed = ManifestValidateResponsePayloadSchema.safeParse(data);
+  return parsed.success ? parsed.data : null;
 }
 
 export const useManifestsStore = defineStore("ghrah-manifests", () => {
   const abilities = ref<Map<string, AbilityManifestInfo>>(new Map());
   const abilitiesLoading = ref(false);
+  const abilityErrors = ref<ManifestListErrorPayload[]>([]);
+  const abilityDetails = ref<Map<string, ManifestDetail>>(new Map());
 
   const agents = ref<Map<string, AgentManifestInfo>>(new Map());
   const agentsLoading = ref(false);
+  const agentDetails = ref<Map<string, ManifestDetail>>(new Map());
 
   const selectedAbilityFullName = ref<string | null>(null);
   const selectedAgentFullName = ref<string | null>(null);
@@ -118,8 +234,12 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
     return map;
   });
 
-  function setAbilities(list: AbilityManifestInfo[]) {
+  function setAbilities(list: AbilityManifestInfo[], errors: ManifestListErrorPayload[] = []) {
     abilities.value = new Map(list.map((a) => [a.full_name, a]));
+    abilityErrors.value = errors;
+    for (const key of abilityDetails.value.keys()) {
+      if (!abilities.value.has(key)) abilityDetails.value.delete(key);
+    }
   }
 
   function upsertAbility(info: AbilityManifestInfo) {
@@ -129,6 +249,8 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
   }
 
   function removeAbility(fullName: string) {
+    abilityDetails.value.delete(fullName);
+    abilityErrors.value = abilityErrors.value.filter((item) => item.full_name !== fullName);
     const next = new Map(abilities.value);
     next.delete(fullName);
     abilities.value = next;
@@ -139,6 +261,9 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
 
   function setAgents(list: AgentManifestInfo[]) {
     agents.value = new Map(list.map((a) => [a.full_name, a]));
+    for (const key of agentDetails.value.keys()) {
+      if (!agents.value.has(key)) agentDetails.value.delete(key);
+    }
   }
 
   function upsertAgent(info: AgentManifestInfo) {
@@ -148,6 +273,7 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
   }
 
   function removeAgent(fullName: string) {
+    agentDetails.value.delete(fullName);
     const next = new Map(agents.value);
     next.delete(fullName);
     agents.value = next;
@@ -156,11 +282,25 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
     }
   }
 
+  function upsertManifestEntry(entry: ManifestEntry) {
+    if (entry.kind === "ability") {
+      upsertAbility(entry.summary);
+      abilityDetails.value.set(entry.detail.full_name, entry.detail);
+      abilityErrors.value = abilityErrors.value.filter(
+        (item) => item.full_name !== entry.detail.full_name,
+      );
+    } else {
+      upsertAgent(entry.summary);
+      agentDetails.value.set(entry.detail.full_name, entry.detail);
+    }
+  }
+
   function onManifestAbilityCreated(_payload: ManifestAbilityEventPayload) {
     // UI notification — caller should re-fetch list if interested
   }
 
   function onManifestAbilityInvalidated(payload: ManifestAbilityEventPayload) {
+    abilityDetails.value.delete(payload.full_name);
     const next = new Map(abilities.value);
     next.delete(payload.full_name);
     abilities.value = next;
@@ -178,6 +318,7 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
   }
 
   function onManifestAgentInvalidated(payload: ManifestAgentEventPayload) {
+    agentDetails.value.delete(payload.full_name);
     const next = new Map(agents.value);
     next.delete(payload.full_name);
     agents.value = next;
@@ -209,10 +350,13 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
   return {
     abilities,
     abilitiesLoading,
+    abilityErrors,
+    abilityDetails,
     abilityList,
     abilitiesByNamespace,
     agents,
     agentsLoading,
+    agentDetails,
     agentList,
     agentsByNamespace,
     selectedAbilityFullName,
@@ -226,6 +370,7 @@ export const useManifestsStore = defineStore("ghrah-manifests", () => {
     removeAbility,
     setAgents,
     upsertAgent,
+    upsertManifestEntry,
     removeAgent,
     onManifestAbilityCreated,
     onManifestAbilityInvalidated,

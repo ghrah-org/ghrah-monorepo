@@ -4,6 +4,8 @@ import type { RoomInfoPayload } from "@ghrah/protocol";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
+import ProjectIsolationView from "./project-isolation-view.vue";
+import WorkspaceManagement from "./workspace-management.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 
@@ -200,6 +202,17 @@ async function runPendingAction() {
   }
 }
 
+async function refreshConfiguration() {
+  if (busy.value) return;
+  busy.value = "configuration";
+  try {
+    const result = await listProjects({ archived: project.value?.archived_at != null });
+    if (!result?.success) setFailure(result, t("projectSettings.refreshFailed"));
+  } finally {
+    busy.value = null;
+  }
+}
+
 async function refreshAfterConflict() {
   if (busy.value) return;
   const preserved = {
@@ -314,6 +327,15 @@ async function refreshAfterConflict() {
         <p>{{ t("projectSettings.workspaceBoundary") }}</p>
       </section>
 
+      <section class="project-settings-section">
+        <button class="btn-secondary" :disabled="busy !== null" @click="refreshConfiguration">
+          {{ t("commonConfig.refreshProject") }}
+        </button>
+        <ProjectIsolationView :project="project" />
+      </section>
+      <section class="project-settings-section">
+        <WorkspaceManagement :key="projectId" :project="project" />
+      </section>
       <section class="project-settings-section archived-room-section">
         <div class="project-settings-section-heading">
           <div>

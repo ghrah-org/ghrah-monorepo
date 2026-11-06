@@ -106,6 +106,9 @@ importers:
       '@ghrah/protocol':
         specifier: workspace:*
         version: link:../protocol
+      js-yaml:
+        specifier: ^4.3.2
+        version: 4.3.2
       markdown-it:
         specifier: ^14.3.0
         version: 14.3.1

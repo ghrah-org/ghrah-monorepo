@@ -126,6 +126,24 @@
         "expected_revision": 1,
         "model_overrides": null
       }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "prompt.configure",
+        "system_prompt": "  Saved prompt\n",
+        "expected_revision": 3
+      }
+    },
+    {
+      "project_id": "p1",
+      "agent_id": "a1",
+      "operation": {
+        "type": "prompt.configure",
+        "system_prompt": "",
+        "expected_revision": 3
+      }
     }
   ],
   "create": {
@@ -217,6 +235,15 @@
     },
     {
       "type": "arbitrary_method"
+    },
+    {
+      "type": "prompt.configure",
+      "system_prompt": "No revision"
+    },
+    {
+      "type": "prompt.configure",
+      "system_prompt": null,
+      "expected_revision": 2
     }
   ]
 }

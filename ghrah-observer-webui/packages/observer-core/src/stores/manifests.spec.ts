@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
+import fixture from "../../../protocol/src/__fixtures__/manifest-responses.json";
 import {
   type AbilityManifestInfo,
   type AgentManifestInfo,
@@ -346,14 +347,14 @@ describe("useManifestsStore", () => {
 
   it("setValidationResult updates validation state", () => {
     const store = useManifestsStore();
-    store.setValidationResult({ is_valid: false, errors: ["Invalid YAML"] });
-    expect(store.validationResult?.is_valid).toBe(false);
+    store.setValidationResult({ valid: false, errors: ["Invalid YAML"] });
+    expect(store.validationResult?.valid).toBe(false);
     expect(store.validationResult?.errors).toEqual(["Invalid YAML"]);
   });
 
   it("setValidationResult(null) resets validation state", () => {
     const store = useManifestsStore();
-    store.setValidationResult({ is_valid: false, errors: ["Invalid YAML"] });
+    store.setValidationResult({ valid: false, errors: ["Invalid YAML"] });
     expect(store.validationResult).not.toBeNull();
 
     store.setValidationResult(null);
@@ -374,9 +375,19 @@ describe("useManifestsStore", () => {
 
 describe("extractAbilityList", () => {
   it("returns abilities array from valid data", () => {
-    const data = { abilities: [{ full_name: "a" }] };
-    const result = extractAbilityList(data);
-    expect(result).toEqual([{ full_name: "a" }]);
+    expect(extractAbilityList(fixture.ability_list)).toEqual(fixture.ability_list);
+  });
+
+  it("keeps read errors separate from summaries", () => {
+    const data = {
+      ...fixture.ability_list,
+      errors: [{ full_name: "audit.broken", error: "Invalid YAML" }],
+    };
+    expect(extractAbilityList(data)).toEqual(data);
+  });
+
+  it("rejects incomplete summaries rather than asserting they are complete", () => {
+    expect(extractAbilityList({ abilities: [{ full_name: "audit.broken" }] })).toBeNull();
   });
 
   it("returns null for null data", () => {
@@ -413,11 +424,82 @@ describe("extractAgentList", () => {
 });
 
 describe("extractManifestEntry", () => {
-  it("returns manifest from valid data", () => {
-    const manifest = { full_name: "a", namespace: "ns" };
-    const data = { manifest };
-    const result = extractManifestEntry(data);
-    expect(result).toEqual(manifest);
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("maps nested ability metadata to its list summary without discarding the document", () => {
+    const entry = extractManifestEntry(fixture.ability);
+    expect(entry).toEqual({
+      kind: "ability",
+      summary: fixture.ability_list.abilities[0],
+      detail: {
+        full_name: "audit.fs.read_file",
+        manifest: fixture.ability.manifest,
+        source: fixture.ability.source,
+        source_hash: fixture.ability.source_hash,
+      },
+    });
+  });
+
+  it("preserves an agent's model, ability references, original source and extra fields", () => {
+    const entry = extractManifestEntry(fixture.agent);
+    expect(entry?.summary).toMatchObject({
+      full_name: "audit.helper",
+      endpoint_name: "test-model",
+      description: "Runtime description",
+      ability_refs: ["audit.fs.read_file", "end_task"],
+      system_prompt: fixture.agent.manifest.system_prompt,
+    });
+    expect(entry?.detail).toEqual({
+      full_name: "audit.helper",
+      manifest: fixture.agent.manifest,
+      source: fixture.agent.source,
+      source_hash: fixture.agent.source_hash,
+    });
+  });
+
+  it.each(["agent", "ability"] as const)(
+    "updates %s details without creating a second list key",
+    (kind) => {
+      const store = useManifestsStore();
+      const fullName = kind === "agent" ? "audit.helper" : "audit.fs.read_file";
+      if (kind === "agent") store.setAgents([makeAgent(fullName)]);
+      else store.setAbilities([makeAbility(fullName)]);
+      const entry = extractManifestEntry(fixture[kind], { kind, fullName });
+      expect(entry).not.toBeNull();
+      store.upsertManifestEntry(entry!);
+      const summaries = kind === "agent" ? store.agents : store.abilities;
+      const details = kind === "agent" ? store.agentDetails : store.abilityDetails;
+      expect([...summaries.keys()]).toEqual([fullName]);
+      expect(details.get(fullName)?.source).toBe(fixture[kind].source);
+      if (kind === "agent")
+        store.onManifestAgentInvalidated({ full_name: fullName, namespace: "audit" });
+      else store.onManifestAbilityInvalidated({ full_name: fullName, namespace: "audit.fs" });
+      expect(details.has(fullName)).toBe(false);
+      expect((kind === "agent" ? store.agents : store.abilities).has(fullName)).toBe(false);
+    },
+  );
+
+  it.each(["agent", "ability"] as const)("drops %s details when its summary is removed", (kind) => {
+    const store = useManifestsStore();
+    const entry = extractManifestEntry(fixture[kind])!;
+    store.upsertManifestEntry(entry);
+    if (kind === "agent") store.removeAgent(entry.detail.full_name);
+    else store.removeAbility(entry.detail.full_name);
+    expect(store.agentDetails.size + store.abilityDetails.size).toBe(0);
+  });
+
+  it("rejects target and type mismatches", () => {
+    expect(
+      extractManifestEntry(fixture.agent, { kind: "agent", fullName: "other.agent" }),
+    ).toBeNull();
+    expect(
+      extractManifestEntry(fixture.agent, { kind: "ability", fullName: "audit.helper" }),
+    ).toBeNull();
+  });
+
+  it("rejects missing source or metadata instead of inventing defaults", () => {
+    expect(extractManifestEntry({ manifest: fixture.agent.manifest })).toBeNull();
+    expect(extractManifestEntry({ ...fixture.agent, manifest: { manifest: "agent" } })).toBeNull();
   });
 
   it("returns null for null data", () => {
@@ -439,26 +521,28 @@ describe("extractManifestEntry", () => {
 
 describe("extractValidationResult", () => {
   it("returns ValidationResult from valid data", () => {
-    const data = { is_valid: true, errors: [] };
+    const data = { valid: true, errors: [] };
     const result = extractValidationResult(data);
-    expect(result).toEqual({ is_valid: true, errors: [] });
+    expect(result).toEqual({ valid: true, errors: [] });
   });
 
   it("returns ValidationResult with errors", () => {
-    const data = { is_valid: false, errors: ["err1", "err2"] };
+    const data = { valid: false, errors: ["err1", "err2"] };
     const result = extractValidationResult(data);
-    expect(result).toEqual({ is_valid: false, errors: ["err1", "err2"] });
+    expect(result).toEqual({ valid: false, errors: ["err1", "err2"] });
   });
 
   it("returns null for null data", () => {
     expect(extractValidationResult(null)).toBeNull();
   });
 
-  it("returns null when is_valid is not boolean", () => {
-    expect(extractValidationResult({ is_valid: "yes", errors: [] })).toBeNull();
+  it("rejects the old mismatched field and a non-boolean valid field", () => {
+    expect(extractValidationResult({ is_valid: true, errors: [] })).toBeNull();
+    expect(extractValidationResult({ valid: "yes", errors: [] })).toBeNull();
   });
 
   it("returns null when errors is not an array", () => {
-    expect(extractValidationResult({ is_valid: true, errors: "not-array" })).toBeNull();
+    expect(extractValidationResult({ valid: true, errors: "not-array" })).toBeNull();
+    expect(extractValidationResult({ valid: false, errors: [42] })).toBeNull();
   });
 });

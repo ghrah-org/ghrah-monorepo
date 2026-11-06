@@ -494,6 +494,28 @@ export class ObserverClient extends ServerClient {
     return this.request(msg, 30_000);
   }
 
+  async registerWorkspace(locator: string, name = ""): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_REGISTER,
+      client_type: ClientType.OBSERVER,
+      payload: { locator, name },
+    });
+  }
+  async listWorkspaces(): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_LIST,
+      client_type: ClientType.OBSERVER,
+      payload: {},
+    });
+  }
+  async getWorkspace(workspaceId: string): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.WORKSPACE_GET,
+      client_type: ClientType.OBSERVER,
+      payload: { workspace_id: workspaceId },
+    });
+  }
+
   async createWorkspace(target: AgentTarget): Promise<CommandResultPayload> {
     const msg: ServerMessage = {
       type: CommandType.CREATE_WORKSPACE,
@@ -654,9 +676,11 @@ export class ObserverClient extends ServerClient {
     fullName: string,
     content: string,
     overwrite?: boolean,
+    expectedSourceHash?: string,
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { full_name: fullName, content };
     if (overwrite != null) payload["overwrite"] = overwrite;
+    if (expectedSourceHash != null) payload["expected_source_hash"] = expectedSourceHash;
 
     const msg: ServerMessage = {
       type: CommandType.MANIFEST_PUT_ABILITY,
@@ -704,9 +728,11 @@ export class ObserverClient extends ServerClient {
     fullName: string,
     content: string,
     overwrite?: boolean,
+    expectedSourceHash?: string,
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { full_name: fullName, content };
     if (overwrite != null) payload["overwrite"] = overwrite;
+    if (expectedSourceHash != null) payload["expected_source_hash"] = expectedSourceHash;
 
     const msg: ServerMessage = {
       type: CommandType.MANIFEST_PUT_AGENT,
@@ -730,9 +756,11 @@ export class ObserverClient extends ServerClient {
   async resolveAgent(
     agentFullName: string,
     runtimeName?: string | null,
+    content?: string | null,
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { agent_full_name: agentFullName };
     if (runtimeName != null) payload["runtime_name"] = runtimeName;
+    if (content != null) payload["content"] = content;
 
     const msg: ServerMessage = {
       type: CommandType.MANIFEST_RESOLVE_AGENT,
@@ -957,6 +985,22 @@ export class ObserverClient extends ServerClient {
       client_type: ClientType.OBSERVER,
     };
     return this.request(msg, 30_000);
+  }
+
+  async removeProjectAgent(
+    target: AgentTarget,
+    expectedVersion: number,
+  ): Promise<CommandResultPayload> {
+    return this.request({
+      type: CommandType.PROJECT_REMOVE_AGENT,
+      client_type: ClientType.OBSERVER,
+      payload: {
+        project_id: target.projectId,
+        agent_id: target.agentId,
+        agent_name: target.agentName,
+        expected_version: expectedVersion,
+      },
+    });
   }
 
   async getProject(projectId: string): Promise<CommandResultPayload> {

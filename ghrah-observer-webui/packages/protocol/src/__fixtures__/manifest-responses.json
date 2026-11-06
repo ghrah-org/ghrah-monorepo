@@ -1,0 +1,235 @@
+{
+  "ability": {
+    "manifest": {
+      "manifest": "ability",
+      "version": "1",
+      "metadata": {
+        "namespace": "audit.fs",
+        "name": "read_file",
+        "title": "Read files",
+        "description": "Read permitted files",
+        "tags": ["files"],
+        "icon": "",
+        "deprecated": false,
+        "since": "",
+        "permissions": {
+          "require_hitl": true,
+          "fs_read_only": true,
+          "fs_write": false,
+          "net_access": false,
+          "shell_access": false,
+          "allowed_paths": ["/workspace/docs"],
+          "denied_paths": [],
+          "allowed_commands": [],
+          "denied_commands": []
+        }
+      },
+      "tool": null,
+      "implementation": {
+        "type": "builtin",
+        "handler": "read_file",
+        "entrypoint": null,
+        "source": null,
+        "module_ref": null
+      },
+      "hooks": {
+        "pre_execute": [],
+        "post_execute": [],
+        "on_error": []
+      }
+    },
+    "source": "# Preserve this author comment and original whitespace.\n{\n  \"manifest\": \"ability\",\n  \"version\": \"1\",\n  \"metadata\": {\n    \"namespace\": \"audit.fs\",\n    \"name\": \"read_file\",\n    \"title\": \"Read files\",\n    \"description\": \"Read permitted files\",\n    \"tags\": [\n      \"files\"\n    ],\n    \"icon\": \"\",\n    \"deprecated\": false,\n    \"since\": \"\",\n    \"permissions\": {\n      \"require_hitl\": true,\n      \"fs_read_only\": true,\n      \"fs_write\": false,\n      \"net_access\": false,\n      \"shell_access\": false,\n      \"allowed_paths\": [\n        \"/workspace/docs\"\n      ],\n      \"denied_paths\": [],\n      \"allowed_commands\": [],\n      \"denied_commands\": []\n    }\n  },\n  \"tool\": null,\n  \"implementation\": {\n    \"type\": \"builtin\",\n    \"handler\": \"read_file\",\n    \"entrypoint\": null,\n    \"source\": null,\n    \"module_ref\": null\n  },\n  \"hooks\": {\n    \"pre_execute\": [],\n    \"post_execute\": [],\n    \"on_error\": []\n  }\n}\n",
+    "source_hash": "sha256:db2f024c0d6fb63580e838b1da56d94f44fb18a05681789a94f8c4d36b7dff64"
+  },
+  "agent": {
+    "manifest": {
+      "manifest": "agent",
+      "version": "2",
+      "metadata": {
+        "namespace": "audit",
+        "name": "helper",
+        "title": "Helper",
+        "description": "Display description",
+        "tags": ["helper"],
+        "icon": "",
+        "deprecated": false
+      },
+      "model": {
+        "endpoint_name": "test-model",
+        "temperature": 0.2,
+        "max_tokens": 256,
+        "top_p": null,
+        "top_k": null,
+        "extra_params": {
+          "seed": 42
+        }
+      },
+      "system_prompt": "Keep the entire prompt.\n第二行提示词。",
+      "max_iterations": 10,
+      "communication_timeout": 300,
+      "description": "Runtime description",
+      "abilities": [
+        {
+          "ref": "audit.fs.read_file",
+          "type": null,
+          "permissions": null
+        },
+        {
+          "ref": null,
+          "type": "end_task",
+          "permissions": null
+        }
+      ],
+      "context": null,
+      "hooks": {
+        "before_action": [],
+        "after_action": [],
+        "pre_llm_call": [],
+        "post_llm_call": [],
+        "pre_tool_execute": [],
+        "post_tool_execute": [],
+        "on_error": [],
+        "on_max_iterations": []
+      },
+      "surface": null
+    },
+    "source": "# Preserve this author comment and original whitespace.\n{\n  \"manifest\": \"agent\",\n  \"version\": \"2\",\n  \"metadata\": {\n    \"namespace\": \"audit\",\n    \"name\": \"helper\",\n    \"title\": \"Helper\",\n    \"description\": \"Display description\",\n    \"tags\": [\n      \"helper\"\n    ],\n    \"icon\": \"\",\n    \"deprecated\": false\n  },\n  \"model\": {\n    \"endpoint_name\": \"test-model\",\n    \"temperature\": 0.2,\n    \"max_tokens\": 256,\n    \"top_p\": null,\n    \"top_k\": null,\n    \"extra_params\": {\n      \"seed\": 42\n    }\n  },\n  \"system_prompt\": \"Keep the entire prompt.\\n第二行提示词。\",\n  \"max_iterations\": 10,\n  \"communication_timeout\": 300,\n  \"description\": \"Runtime description\",\n  \"abilities\": [\n    {\n      \"ref\": \"audit.fs.read_file\",\n      \"type\": null,\n      \"permissions\": null\n    },\n    {\n      \"ref\": null,\n      \"type\": \"end_task\",\n      \"permissions\": null\n    }\n  ],\n  \"context\": null,\n  \"hooks\": {\n    \"before_action\": [],\n    \"after_action\": [],\n    \"pre_llm_call\": [],\n    \"post_llm_call\": [],\n    \"pre_tool_execute\": [],\n    \"post_tool_execute\": [],\n    \"on_error\": [],\n    \"on_max_iterations\": []\n  }\n}\n",
+    "source_hash": "sha256:b0e5c87c2cf99f58c2d5889d511fb54485a30777a9f3f7a29d630bfdb7808b3a"
+  },
+  "ability_list": {
+    "abilities": [
+      {
+        "full_name": "audit.fs.read_file",
+        "namespace": "audit.fs",
+        "name": "read_file",
+        "title": "Read files",
+        "description": "Read permitted files",
+        "tags": ["files"],
+        "permissions": {
+          "require_hitl": true,
+          "fs_read_only": true,
+          "fs_write": false,
+          "net_access": false,
+          "shell_access": false,
+          "allowed_paths": ["/workspace/docs"],
+          "denied_paths": [],
+          "allowed_commands": [],
+          "denied_commands": []
+        },
+        "implementation_type": "builtin",
+        "has_hitl": true
+      }
+    ],
+    "errors": []
+  },
+  "validation_valid": {
+    "valid": true,
+    "errors": []
+  },
+  "validation_invalid": {
+    "valid": false,
+    "errors": ["Unknown manifest type"]
+  },
+  "resolve_request": {
+    "agent_full_name": "audit.helper",
+    "runtime_name": "preview_helper",
+    "content": "# Preserve this author comment and original whitespace.\n{\n  \"manifest\": \"agent\",\n  \"version\": \"2\",\n  \"metadata\": {\n    \"namespace\": \"audit\",\n    \"name\": \"helper\",\n    \"title\": \"Helper\",\n    \"description\": \"Display description\",\n    \"tags\": [\n      \"helper\"\n    ],\n    \"icon\": \"\",\n    \"deprecated\": false\n  },\n  \"model\": {\n    \"endpoint_name\": \"test-model\",\n    \"temperature\": 0.2,\n    \"max_tokens\": 256,\n    \"top_p\": null,\n    \"top_k\": null,\n    \"extra_params\": {\n      \"seed\": 42\n    }\n  },\n  \"system_prompt\": \"Keep the entire prompt.\\n第二行提示词。\",\n  \"max_iterations\": 10,\n  \"communication_timeout\": 300,\n  \"description\": \"Runtime description\",\n  \"abilities\": [\n    {\n      \"ref\": \"audit.fs.read_file\",\n      \"type\": null,\n      \"permissions\": null\n    },\n    {\n      \"ref\": null,\n      \"type\": \"end_task\",\n      \"permissions\": null\n    }\n  ],\n  \"context\": null,\n  \"hooks\": {\n    \"before_action\": [],\n    \"after_action\": [],\n    \"pre_llm_call\": [],\n    \"post_llm_call\": [],\n    \"pre_tool_execute\": [],\n    \"post_tool_execute\": [],\n    \"on_error\": [],\n    \"on_max_iterations\": []\n  }\n}\n"
+  },
+  "resolved_agent": {
+    "agent_full_name": "audit.helper",
+    "ability_source": "legacy",
+    "input_source": "draft",
+    "config": {
+      "name": "preview_helper",
+      "endpoint_name": "test-model",
+      "description": "Runtime description",
+      "system_prompt": "Keep the entire prompt.\n第二行提示词。",
+      "max_iterations": 10,
+      "communication_timeout": 300.0,
+      "window": null,
+      "context": null,
+      "model_overrides": {
+        "temperature": 0.2,
+        "max_tokens": 256,
+        "top_p": null,
+        "top_k": null,
+        "extra_params": {
+          "seed": 42
+        }
+      }
+    },
+    "abilities": [
+      {
+        "ability_name": "audit.fs.read_file",
+        "tool_schema": null,
+        "permissions": {
+          "require_hitl": true,
+          "fs_read_only": true,
+          "fs_write": false,
+          "net_access": false,
+          "shell_access": false,
+          "allowed_paths": ["/workspace/docs"],
+          "denied_paths": [],
+          "allowed_commands": [],
+          "denied_commands": []
+        },
+        "implementation": {
+          "type": "builtin",
+          "handler": "read_file",
+          "entrypoint": null,
+          "source": null,
+          "module_ref": null
+        },
+        "hooks": {
+          "pre_execute": [],
+          "post_execute": [],
+          "on_error": []
+        }
+      },
+      {
+        "ability_name": "ghrah.core.end_task",
+        "tool_schema": {
+          "name": "end_task",
+          "description": "End the current task and generate a final response",
+          "strict": false,
+          "parameters": {
+            "summary": {
+              "type": "string",
+              "description": "Optional summary of the task result",
+              "required": false,
+              "default": null,
+              "enum": null,
+              "minimum": null,
+              "maximum": null,
+              "items": null,
+              "sensitive": false
+            }
+          }
+        },
+        "permissions": {
+          "require_hitl": false,
+          "fs_read_only": false,
+          "fs_write": false,
+          "net_access": false,
+          "shell_access": false,
+          "allowed_paths": [],
+          "denied_paths": [],
+          "allowed_commands": [],
+          "denied_commands": []
+        },
+        "implementation": {
+          "type": "builtin",
+          "handler": "end_task",
+          "entrypoint": null,
+          "source": null,
+          "module_ref": null
+        },
+        "hooks": {
+          "pre_execute": [],
+          "post_execute": [],
+          "on_error": []
+        }
+      }
+    ]
+  }
+}

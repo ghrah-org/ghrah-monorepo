@@ -228,6 +228,7 @@ function openAgent(row: (typeof rows.value)[number]) {
     />
     <AgentAbilitiesDialog
       v-if="abilitiesTarget"
+      :key="`${abilitiesTarget.projectId}:${abilitiesTarget.agentId}`"
       :target="abilitiesTarget"
       @close="abilitiesTarget = null"
     />

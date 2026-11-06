@@ -4,18 +4,27 @@ import dataclasses
 import logging
 from typing import Any
 
+from ghrah.ability.assembly import AbilityAssembly, AbilityAssemblyError
 from ghrah.manifest.errors import (
     DuplicateManifestError,
+    ManifestConflictError,
     ManifestError,
     ManifestNotFoundError,
     ManifestValidationError,
 )
-from ghrah.manifest.resolver import ManifestResolver
+from ghrah.manifest.parser import parse_agent_manifest
+from ghrah.protocol.payloads.manifest import (
+    ManifestListAbilitiesResponsePayload,
+    ManifestListErrorPayload,
+    ManifestResolveAgentResponsePayload,
+    ManifestResolvePayload,
+)
 from ghrah.protocol.types import (  # type: ignore[import-untyped]
     MANIFEST_COMMANDS as _MANIFEST_COMMANDS,
 )
+from yaml import YAMLError, safe_load
 
-from ghrah.subject.manifest_store.store import ManifestStore
+from ghrah.subject.manifest_store.store import ManifestStore, _source_hash
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +58,8 @@ def handle_manifest_command(
     command: str,
     payload: dict[str, Any],
     store: ManifestStore,
+    *,
+    ability_source: str = "legacy",
 ) -> dict[str, Any]:
     """分发 manifest 命令，返回响应 dict。
 
@@ -56,6 +67,7 @@ def handle_manifest_command(
         command: 命令类型，如 'manifest_list_abilities'
         payload: 命令载荷
         store: ManifestStore 实例
+        ability_source: 由宿主配置提供的能力来源，与 CoreUnit 使用同一装配选择器。
 
     Returns:
         响应 dict，包含 success 字段
@@ -65,6 +77,7 @@ def handle_manifest_command(
             namespace = payload.get("namespace")
             names = store.list_abilities(namespace=namespace)
             abilities = []
+            errors = []
             for name in names:
                 try:
                     m = store.get_ability(name)
@@ -74,16 +87,21 @@ def handle_manifest_command(
                             "namespace": m.metadata.namespace,
                             "name": m.metadata.name,
                             "title": m.metadata.title,
-                            "description": m.description,
+                            "description": m.metadata.description,
                             "tags": m.metadata.tags,
-                            "permissions": m.permissions.model_dump(mode="python"),
+                            "permissions": m.metadata.permissions.model_dump(mode="python"),
                             "implementation_type": m.implementation.type,
-                            "has_hitl": m.permissions.require_hitl,
+                            "has_hitl": m.metadata.permissions.require_hitl,
                         }
                     )
-                except Exception:
-                    abilities.append({"full_name": name})
-            return {"success": True, "data": {"abilities": abilities}}
+                except (ManifestError, ValueError, OSError, YAMLError) as exc:
+                    errors.append(ManifestListErrorPayload(full_name=name, error=str(exc)))
+            return {
+                "success": True,
+                "data": ManifestListAbilitiesResponsePayload(
+                    abilities=abilities, errors=errors
+                ).model_dump(mode="python"),
+            }
 
         elif command == "manifest_get_ability":
             full_name = payload.get("full_name", "")
@@ -94,6 +112,7 @@ def handle_manifest_command(
                 "data": {
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -101,7 +120,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             content = payload.get("content", "")
             overwrite = payload.get("overwrite", False)
-            store.put_ability(full_name, content, overwrite=overwrite)
+            expected_source_hash = payload.get("expected_source_hash")
+            store.put_ability(
+                full_name,
+                content,
+                overwrite=overwrite,
+                expected_source_hash=expected_source_hash,
+            )
             manifest = store.get_ability(full_name)
             source = store.get_ability_source(full_name)
             return {
@@ -110,6 +135,7 @@ def handle_manifest_command(
                     "full_name": full_name,
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -148,11 +174,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             manifest = store.get_agent(full_name)
             source = store.get_agent_source(full_name)
+            source_hash = _source_hash(source)
             return {
                 "success": True,
                 "data": {
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": source_hash,
                 },
             }
 
@@ -160,7 +188,13 @@ def handle_manifest_command(
             full_name = payload.get("full_name", "")
             content = payload.get("content", "")
             overwrite = payload.get("overwrite", False)
-            store.put_agent(full_name, content, overwrite=overwrite)
+            expected_source_hash = payload.get("expected_source_hash")
+            store.put_agent(
+                full_name,
+                content,
+                overwrite=overwrite,
+                expected_source_hash=expected_source_hash,
+            )
             manifest = store.get_agent(full_name)
             source = store.get_agent_source(full_name)
             return {
@@ -169,6 +203,7 @@ def handle_manifest_command(
                     "full_name": full_name,
                     "manifest": manifest.model_dump(mode="python"),
                     "source": source,
+                    "source_hash": _source_hash(source),
                 },
             }
 
@@ -178,16 +213,31 @@ def handle_manifest_command(
             return {"success": True, "data": {"full_name": full_name}}
 
         elif command == "manifest_resolve_agent":
-            agent_full_name = payload.get("agent_full_name", "")
-            runtime_name = payload.get("runtime_name")
-            manifest = store.get_agent(agent_full_name)
-            resolver = ManifestResolver(store)
-            resolved = resolver.resolve(manifest, runtime_name=runtime_name)
+            request = ManifestResolvePayload.model_validate(payload)
+            assembly = AbilityAssembly.select(ability_source, agent_store=store)
+            if request.content is None:
+                manifest = assembly.load_agent(request.agent_full_name)
+            else:
+                try:
+                    manifest = parse_agent_manifest(request.content)
+                except (YAMLError, ValueError) as exc:
+                    raise ManifestValidationError(str(exc)) from exc
+                if manifest.full_name != request.agent_full_name:
+                    raise ManifestValidationError(
+                        "Manifest metadata identity must match preview target "
+                        f"'{request.agent_full_name}'"
+                    )
+            resolved = assembly.manifest_resolver().resolve(
+                manifest, runtime_name=request.runtime_name
+            )
             return {
                 "success": True,
-                "data": {
-                    "config": _config_to_payload_dict(resolved.config),
-                    "abilities": [
+                "data": ManifestResolveAgentResponsePayload(
+                    agent_full_name=manifest.full_name,
+                    ability_source=assembly.mode.value,
+                    input_source="stored" if request.content is None else "draft",
+                    config=_config_to_payload_dict(resolved.config),
+                    abilities=[
                         {
                             "ability_name": a.ability_name,
                             "tool_schema": (
@@ -201,12 +251,18 @@ def handle_manifest_command(
                         }
                         for a in resolved.abilities
                     ],
-                },
+                ).model_dump(mode="python"),
             }
 
         elif command == "manifest_validate":
             content = payload.get("content", "")
             is_valid, errors = store.validate_manifest(content)
+            expected_type = payload.get("manifest_type")
+            if is_valid and expected_type is not None:
+                actual_type = safe_load(content)["manifest"]
+                if expected_type not in {"agent", "ability"} or actual_type != expected_type:
+                    is_valid = False
+                    errors = [f"Expected manifest type '{expected_type}', got {actual_type!r}"]
             return {"success": True, "data": {"valid": is_valid, "errors": errors}}
 
         else:
@@ -218,10 +274,35 @@ def handle_manifest_command(
     except DuplicateManifestError as e:
         logger.warning("Duplicate manifest: %s", e)
         return {"success": False, "error": str(e)}
+    except ManifestConflictError as e:
+        logger.warning("Manifest conflict: %s", e)
+        current_source_hash = None
+        if command in {"manifest_put_ability", "manifest_put_agent"}:
+            full_name = payload.get("full_name", "")
+            try:
+                current_source_hash = (
+                    store.get_ability_source_hash(full_name)
+                    if command == "manifest_put_ability"
+                    else store.get_agent_source_hash(full_name)
+                )
+            except ManifestNotFoundError, FileNotFoundError:
+                # 冲突发生后文件仍可能被删除；诊断读取不得覆盖原始冲突。
+                pass
+        return {
+            "success": False,
+            "error": str(e),
+            "error_detail": (
+                "code=manifest_conflict; "
+                f"expected_source_hash={payload.get('expected_source_hash')}; "
+                f"current_source_hash={current_source_hash}"
+                if command in {"manifest_put_ability", "manifest_put_agent"}
+                else None
+            ),
+        }
     except ManifestValidationError as e:
         logger.warning("Manifest validation error: %s", e)
         return {"success": False, "error": str(e)}
-    except ManifestError as e:
+    except (ManifestError, AbilityAssemblyError) as e:
         logger.error("Manifest error: %s", e)
         return {"success": False, "error": str(e)}
     except Exception as e:
