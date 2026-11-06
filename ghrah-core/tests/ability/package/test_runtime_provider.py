@@ -75,6 +75,7 @@ async def execute(call, services):
 def _install(
     tmp_path: Path, module: str = MODULE, version: str = "1.0.0", *, helpers: dict | None = None
 ):
+    """生成并安装一个最小包；源文本显式以 LF 写盘（生成器拒绝 CRLF）。"""
     source = tmp_path / f"source-{version}"
     (source / "operations").mkdir(parents=True)
     (source / "ability.yaml").write_text(
@@ -82,10 +83,11 @@ def _install(
         f"identity: {{namespace: acme, name: reports, version: {version}}}\n"
         "title: Reports\ndescription: Installed reports\n",
         encoding="utf-8",
+        newline="\n",
     )
-    (source / "operations" / "render.py").write_text(module, encoding="utf-8")
+    (source / "operations" / "render.py").write_text(module, encoding="utf-8", newline="\n")
     for name, text in (helpers or {}).items():
-        (source / "operations" / name).write_text(text, encoding="utf-8")
+        (source / "operations" / name).write_text(text, encoding="utf-8", newline="\n")
     build(source)
     installer = AbilityInstaller(tmp_path / "installed")
     installer.install(source)
@@ -393,7 +395,11 @@ async def test_external_package_cannot_shadow_builtin_alias(store, tmp_path):
 
     installer, source = _install(tmp_path)
     definition = source / "ability.yaml"
-    definition.write_text(definition.read_text().replace("name: reports", "name: fs"))
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace("name: reports", "name: fs"),
+        encoding="utf-8",
+        newline="\n",
+    )
     build(source)
     installer.install(source)
     assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
