@@ -9,7 +9,7 @@
 本用例在子进程里屏蔽 ``mcp`` 包，验证：
 
 1. 内置树能完成投影与实例化；
-2. ``mcp_call`` 在运行时缺席时给出明确的「未接线」失败，而不是 ImportError。
+2. ``mcp_call`` 给出明确的「已退役」失败，而不是 ImportError。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ result = asyncio.run(
     )
 )
 assert result.outcome.value == "failure", result
-assert "not wired" in result.data["error"], result.data
+assert "retired" in result.data["error"], result.data
 print("ok")
 """
 

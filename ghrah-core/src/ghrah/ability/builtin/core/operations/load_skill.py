@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ghrah.ability.access import AccessError
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import ABILITY_CONTENT
+from ghrah.mcp.errors import McpError
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
@@ -117,4 +118,9 @@ class LoadSkillAbility(Ability):
             )
         except ValueError as exc:
             return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": str(exc)})
+        except McpError:
+            return ActionResult(
+                outcome=ActionOutcome.FAILURE,
+                data={"error": "MCP activation failed; check trusted deployment configuration"},
+            )
         return ActionResult(outcome=ActionOutcome.SUCCESS, data=result)

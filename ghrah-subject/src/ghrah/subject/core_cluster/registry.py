@@ -475,6 +475,7 @@ def default_core_unit_factory(
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_source=config.ability_source,
             ability_install_root=config.ability.install_root,
+            mcp=config.mcp,
             llm_factory=llm_factory,
             # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
             # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。

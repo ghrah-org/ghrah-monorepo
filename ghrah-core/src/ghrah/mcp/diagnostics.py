@@ -24,9 +24,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx2
+if TYPE_CHECKING:
+    import httpx2
 
 from ghrah.mcp.errors import McpError, McpRequestError
 from ghrah.mcp.spec import McpServerSpec
@@ -135,6 +136,8 @@ async def probe_endpoint(
     if headers:
         request_headers.update(headers)
 
+    import httpx2
+
     try:
         async with httpx2.AsyncClient(
             timeout=timeout_s,
@@ -143,10 +146,10 @@ async def probe_endpoint(
         ) as http:
             response = await http.post(url, json=payload, headers=request_headers)
     except httpx2.HTTPError:
-        logger.debug("MCP endpoint probe failed to reach %s", url, exc_info=True)
+        logger.debug("MCP endpoint probe failed")
         return None
 
-    body = _redact(_truncate(response.text or ""), secrets)
+    body = _truncate(_redact(response.text or "", secrets))
     return HttpProbe(
         status_code=response.status_code,
         content_type=response.headers.get("content-type", ""),

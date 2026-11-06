@@ -25,13 +25,17 @@ class LocalGrantedContentProvider:
     """一次 Agent 运行独占的内容端口；授权与版本每次从领域库核验。
 
     装配时创建，注册成功后只允许绑定一次 run。停止或换代后旧对象永久失效，
-    不借用同一主体的新运行。服务不拥有数据库连接，也不授予、选工具或激活 MCP。
+    不借用同一主体的新运行。服务不拥有数据库连接，也不授予或选择工具；只有显式
+    注入 MCP 端口时，成功读取正文才交给该端口核验部署关联并离线激活。
     """
 
-    def __init__(self, store: AbilityAccessStore, agent_id: str) -> None:
+    def __init__(
+        self, store: AbilityAccessStore, agent_id: str, *, mcp_service: Any = None
+    ) -> None:
         self.store = store
         self.agent_id = agent_id
         self._identity = AccessIdentity(store.project_id, agent_id, "")
+        self.mcp_service = mcp_service
 
     def bind_run(self, run: str) -> None:
         """由注册装配者绑定当前代次；旧服务不能重新绑定到新运行。"""
@@ -42,6 +46,8 @@ class LocalGrantedContentProvider:
         ):
             raise ValueError("内容服务不能绑定另一运行代次")
         self._identity = replace(self._identity, run_id=run)
+        if self.mcp_service is not None:
+            self.mcp_service.bind_run(run)
 
     def validate_context(self, agent_id: str) -> None:
         """Context 显式复用服务时，核验稳定主体与当前运行。"""
@@ -70,6 +76,8 @@ class LocalGrantedContentProvider:
 
     async def view(self) -> AbilityTreeView:
         """读取当前获授投影；不扫描包源，也不缓存许可结论。"""
+        if self.mcp_service is not None:
+            await self.mcp_service.refresh()
         return await self.store.view(self._identity, self.agent_id)
 
     async def skills(self) -> list[dict[str, Any]]:
@@ -191,7 +199,15 @@ class LocalGrantedContentProvider:
             raise AccessError("access_denied")
         result = await self._read_text(fence)
         await self.store.authorize(self._identity, body)
+        if path is None and self.mcp_service is not None:
+            await self.mcp_service.skill_loaded(body)
         return {"full_name": full_name, **result}
+
+    async def unload_skill(self, full_name: str) -> None:
+        """显式卸载正文对应的 MCP 激活；不修改持久授权。"""
+        alias, skill = full_name.split("/")
+        if self.mcp_service is not None:
+            await self.mcp_service.unload_skill(alias, f"skill/{skill}")
 
     async def load_into_context(
         self, context: ContextManager, alias: str, member: str, *, max_bytes: int = 1024 * 1024
@@ -203,6 +219,8 @@ class LocalGrantedContentProvider:
         fence = await self.store.resolve(self._identity, alias, member)
         result = await self._read_text(fence, max_bytes=max_bytes)
         self.validate_context(context.agent_name)
+        if member.count("/") == 1 and self.mcp_service is not None:
+            await self.mcp_service.skill_loaded(fence)
         message = context.message_factory.create_message(
             role="user", text=result["content"], source=result["uri"]
         )

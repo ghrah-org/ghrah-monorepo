@@ -16,15 +16,15 @@ members = [
 
 [[package]]
 name = "agentconf"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "textual" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/18/94f9fac444f92e44dd3419d86d7658f6083278d46621f274db60e486aad1/agentconf-0.3.0.tar.gz", hash = "sha256:2ad981f82215038bf59e21c8230dd087a9c999d541b13e365ec26bdf427ee085", size = 163722, upload-time = "2026-10-28T16:21:42.475Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/1d/ec5cda0fce70cbc46c2155e9d6257df47859e2b73c348727d9c5017dbb60/agentconf-0.4.0.tar.gz", hash = "sha256:5bc4ffc9d4b478a22d2c27d2f278efef1352cf32a642631376f7e121adb1226b", size = 188639, upload-time = "2026-11-06T03:51:57.4Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/30/8d3965620560da867fbb27319ebf3b3e5fc892cc74ba2cccff322c6a168b/agentconf-0.3.0-py3-none-any.whl", hash = "sha256:085d63a84f5b024a47f457a06e3130e84be725551889101e38ddd56d19a9f5ad", size = 124017, upload-time = "2026-10-28T16:21:40.957Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/64/1f964809cd474d61711024afb5352285a2dff80505e400d474a6401188fd/agentconf-0.4.0-py3-none-any.whl", hash = "sha256:63b58df8dd0792d01be4983b99834b2818e52a29307aeac740479505f20dc93b", size = 143854, upload-time = "2026-11-06T03:51:55.966Z" },
 ]
 
 [[package]]
@@ -415,17 +415,21 @@ dev = [
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
+mcp = [
+    { name = "mcp" },
+]
 scheme = [
     { name = "ghrah-scheme" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
+    { name = "agentconf", specifier = ">=0.4.0,<0.5" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "anthropic", specifier = ">=0.40" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "ghrah-scheme", marker = "extra == 'scheme'", editable = "ghrah-scheme" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.1" },
     { name = "openai", specifier = ">=3.6.0" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -435,7 +439,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.3" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
 ]
-provides-extras = ["scheme", "dev"]
+provides-extras = ["mcp", "scheme", "dev"]
 
 [[package]]
 name = "ghrah-kernel"
@@ -464,14 +468,13 @@ source = { virtual = "." }
 dependencies = [
     { name = "agentconf" },
     { name = "aiohttp" },
-    { name = "ghrah-core" },
+    { name = "ghrah-core", extra = ["mcp"] },
     { name = "ghrah-kernel" },
     { name = "ghrah-plugin" },
     { name = "ghrah-protocol" },
     { name = "ghrah-scheme" },
     { name = "ghrah-subject" },
     { name = "ghrah-taskstore" },
-    { name = "mcp" },
     { name = "openai" },
 ]
 
@@ -485,16 +488,15 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
+    { name = "agentconf", specifier = ">=0.4.0,<0.5" },
     { name = "aiohttp", specifier = ">=3.13.5" },
-    { name = "ghrah-core", editable = "ghrah-core" },
+    { name = "ghrah-core", extras = ["mcp"], editable = "ghrah-core" },
     { name = "ghrah-kernel", editable = "ghrah-kernel" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "ghrah-scheme", editable = "ghrah-scheme" },
     { name = "ghrah-subject", editable = "ghrah-subject" },
     { name = "ghrah-taskstore", editable = "ghrah-taskstore" },
-    { name = "mcp", specifier = ">=2.3.0" },
     { name = "openai", specifier = ">=3.6.0" },
 ]
 
@@ -594,7 +596,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentconf", specifier = ">=0.3.0,<0.4" },
+    { name = "agentconf", specifier = ">=0.4.0,<0.5" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "cordis-ouroboros", specifier = ">=0.2.0" },
     { name = "fastapi", specifier = ">=0.136.1" },

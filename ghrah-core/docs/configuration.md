@@ -156,7 +156,7 @@ backend = context_config.create_persistence()  # 返回 JsonFileBackend 实例
 
 ## agentconf 配置
 
-agentconf 0.3 管理 Provider 连接、模型端点、能力档案，以及独立的 MCP 连接。模型端点保存实际请求模型名、用途、接口格式和可选能力引用；请求参数留在 ghrah。
+agentconf 0.4 管理 Provider 连接、模型端点、能力档案，以及独立的 MCP 连接。模型端点保存实际请求模型名、用途、接口格式和可选能力引用；请求参数留在 ghrah。
 
 无能力引用的 LLM 默认上下文为 1M，支持工具与推理。`resolved.capabilities` 是有效能力，`capability_sources` 表示逐字段来源，`metadata` 保存档案来源与版本，也可以为空。最大输出能力是模型上限，`ModelOverrides.max_tokens` 才是本次请求预算。
 
@@ -185,7 +185,7 @@ llm = LLMFactory.create(resolved, ModelOverrides(temperature=0, max_tokens=2048)
 # resolved.capabilities、capability_sources 和 metadata 保留有效能力及来源。
 ```
 
-本消费契约要求 agentconf>=0.3.0,<0.4。根依赖与锁文件统一解析正式包，不使用本机 SDK path。运行 `uv sync --all-packages --group dev` 同步实际环境。
+本消费契约要求 agentconf>=0.4.0,<0.5。根依赖与锁文件统一解析正式包，不使用本机 SDK path。运行 `uv sync --all-packages --group dev` 同步实际环境。
 
 ## 直接构造 ChatFormat（Fallback）
 

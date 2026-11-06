@@ -395,6 +395,7 @@ class StartupGrantMaterializer:
         command_runner: Any = None,
         safe_extra_commands: tuple[str, ...] = (),
         safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
+        mcp_deployment: Any = None,
     ) -> None:
         if policy is not None and not isinstance(policy, GrantPolicy):
             raise TypeError("policy 必须是 GrantPolicy 或 None")
@@ -409,10 +410,32 @@ class StartupGrantMaterializer:
         self._command_runner = command_runner
         self._safe_extra_commands = safe_extra_commands
         self._safe_extra_sub_commands = safe_extra_sub_commands
+        self._mcp_deployment = mcp_deployment
+        self._content_services: dict[str, list[Any]] = {}
 
     def registration(self, agent: str) -> Any:
         """返回从授权核定到运行绑定的库级独占范围。"""
-        return self._store.startup_registration(self._actor, agent)
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def reserved() -> Any:
+            async with self._store.startup_registration(self._actor, agent) as registration:
+                try:
+                    yield registration
+                except BaseException:
+                    await self.close_agent_resources(agent)
+                    raise
+
+        return reserved()
+
+    async def close_agent_resources(self, agent: str) -> None:
+        """先停止本次主体资源接纳，再释放其会话；不关闭共享配置源或关系库。"""
+        providers = self._content_services.pop(agent, [])
+        services = [p.mcp_service for p in providers if p.mcp_service is not None]
+        for service in services:
+            service.stop_admission()
+        for service in services:
+            await service.close()
 
     def resolve_agent(self, manifest: Any, *, runtime_name: str | None = None) -> ResolvedAgent:
         """使用同一包来源解析子 Agent，保留显式安装根与已选版本。"""
@@ -420,6 +443,7 @@ class StartupGrantMaterializer:
 
     async def release_registration(self, agent: str) -> None:
         """运行已停止后解除主体占位；持久授权保留供显式恢复。"""
+        await self.close_agent_resources(agent)
         await self._store.release_registration(self._actor, agent)
 
     def content_provider(self, agent: str) -> Any:
@@ -427,7 +451,16 @@ class StartupGrantMaterializer:
         from ghrah.ability.local_content import LocalGrantedContentProvider
 
         validate_agent_id(agent)
-        return LocalGrantedContentProvider(self._store, agent)
+        provider = LocalGrantedContentProvider(
+            self._store,
+            agent,
+            mcp_service=(
+                self._mcp_deployment.for_agent(agent) if self._mcp_deployment is not None else None
+            ),
+        )
+        if self._mcp_deployment is not None:
+            self._content_services.setdefault(agent, []).append(provider)
+        return provider
 
     async def materialize(self, *, agent: str, resolved: ResolvedAgent) -> StartupMaterialization:
         """执行一次启动物化。

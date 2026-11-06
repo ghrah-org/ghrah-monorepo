@@ -272,3 +272,103 @@ async def test_same_agent_name_and_uuid_in_two_projects_use_separate_content_ser
             assert providers[0]._identity.run_id != providers[1]._identity.run_id
         finally:
             await registry.stop()
+
+
+async def test_mcp_service_is_shared_by_direct_and_tool_call_and_closed_on_terminate(
+    tmp_path, monkeypatch
+):
+    from ghrah.ability.builtin.core.operations.load_skill import LoadSkillAbility
+    from ghrah.ability.execution.execution_services import MCP_RUNTIME
+    from ghrah.ability.mcp_wiring import McpDeploymentConfig
+
+    class UnusedSource:
+        def __getattr__(self, name):
+            raise AssertionError("没有显式关联时不能读取或关闭借用的配置源")
+
+    cfg = config(tmp_path)
+    cfg.mcp = McpDeploymentConfig((), source=UnusedSource())
+    llm = ContentLLM(
+        [[ToolCallBlock(id="load", name="load_skill", arguments={"full_name": GUIDE})]]
+    )
+    seen = []
+    original = LoadSkillAbility.execute
+
+    async def observe(self, call, services):
+        service = services.get(MCP_RUNTIME)
+        seen.append((service, call.identity))
+        return await original(self, call, services)
+
+    monkeypatch.setattr(LoadSkillAbility, "execute", observe)
+    factory = default_core_unit_factory(cfg, ManifestStore(), lambda _: llm)
+    registry = CoreClusterRegistry(unit_factory=factory)
+    async with Context() as ctx:
+        registry.bind(ctx)
+        try:
+            cluster = await registry.ensure_cluster(
+                "cluster", project_id="project", project_root_locator=str(tmp_path / "project")
+            )
+            unit = cluster._unit
+            actor = await spawn(unit)
+            service = actor._context_manager.ability_content.mcp_service
+            receipt = await unit.handle_command(
+                "execute_ability",
+                {
+                    "request_id": "mcp-direct",
+                    "agent_name": "reader",
+                    "ability_name": "load_skill",
+                    "tool_args": {"full_name": GUIDE},
+                },
+                None,
+            )
+            assert receipt["success"] and receipt["data"]["success"], receipt
+            await unit.supervisor.send("reader", "load the guide")
+            assert len(seen) == 2
+            assert all(s is service and identity.agent == AGENT for s, identity in seen)
+            assert {identity.run for _, identity in seen} == {
+                unit.supervisor.incarnation_id("reader")
+            }
+            assert service._active == {}  # 读取本身不产生任何新授权或服务器关联。
+            await unit.supervisor.terminate_agent("reader")
+            assert service._closed and not unit._mcp_deployment._agents
+        finally:
+            await registry.stop()
+
+
+async def test_mcp_spawn_rollback_releases_only_failed_agent_resources(tmp_path, monkeypatch):
+    from ghrah.ability.mcp_wiring import McpDeploymentConfig
+
+    cfg = config(tmp_path)
+    cfg.mcp = McpDeploymentConfig(())
+    factory = default_core_unit_factory(cfg, ManifestStore(), lambda _: ContentLLM())
+    registry = CoreClusterRegistry(unit_factory=factory)
+    async with Context() as ctx:
+        registry.bind(ctx)
+        try:
+            cluster = await registry.ensure_cluster(
+                "cluster", project_id="project", project_root_locator=str(tmp_path / "project")
+            )
+            unit = cluster._unit
+            actor = await spawn(unit)
+            existing = actor._context_manager.ability_content.mcp_service
+            original = unit._startup_materializer.bind_run
+
+            async def fail_after_bind(agent, materialization):
+                await original(agent, materialization)
+                raise RuntimeError("注入注册失败")
+
+            monkeypatch.setattr(unit._startup_materializer, "bind_run", fail_after_bind)
+            result = await unit.handle_command(
+                "spawn_agent",
+                {
+                    "config": {"name": "failed", "agent_id": "b" * 32},
+                    "manifest_ref": "content.reader",
+                },
+                None,
+            )
+            assert not result["success"]
+            assert unit._mcp_deployment._agents == {existing}
+            assert not existing._closed
+            await unit.stop()
+            assert existing._closed and not unit._mcp_deployment._agents
+        finally:
+            await registry.stop()

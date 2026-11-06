@@ -6,14 +6,14 @@
 
 两个职责，仅此而已：
 
-**一、记住「哪个 agent 能调哪些服务器上的哪些工具」。** 这是可见性与权限的唯一
-权威。技能的 MCP 声明在被加载时登记进来，卸载时移除。
+**一、记住「哪个 agent 能调哪些服务器上的哪些工具」。** 这是连接接纳的派生集合；
+生产授权权威在 AbilityAccessStore。受信接线核验加载与成员关系后登记，失效时移除。
 
 **二、把一次调用路由到正确的会话。** 解析服务器、校验白名单、取凭据、建会话、
 执行。
 
 这里**不存放工具信息**（名字、说明、参数 schema）。那些属于技能模块的本地配置，
-运行时只持有「授权集合」这一份最小事实。因此运行时不提供任何「列出工具」的查询
+运行时只持有受信接线提供的声明。因此运行时不提供任何「列出工具」的查询
 接口——一旦这里也能回答「有哪些工具」，就出现了第二份真源。
 
 一条必须遵守的顺序：**先校验权限，再取凭据，最后才建连**。反过来会把「这个工具
@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from ghrah.mcp.client import Connector
@@ -48,9 +49,13 @@ class McpRuntime:
         *,
         credentials: CredentialResolver | None = None,
         connector: Connector | None = None,
+        credentials_for_spec: Callable[[McpServerSpec], str | None] | None = None,
+        headers_for_spec: Callable[[McpServerSpec], dict[str, str] | None] | None = None,
     ) -> None:
         self._credentials: CredentialResolver = credentials or no_credentials
         self._connector = connector
+        self._credentials_for_spec = credentials_for_spec
+        self._headers_for_spec = headers_for_spec
         self._activated: dict[tuple[str, str], McpServerSpec] = {}
         self._sessions: dict[tuple[str, str], McpSession] = {}
         self._lock = asyncio.Lock()
@@ -66,7 +71,7 @@ class McpRuntime:
             raise McpConfigError("runtime is closed")
         key = (agent_scope, spec.server)
         existing = self._activated.get(key)
-        if existing is not None and existing.skill_full_name != spec.skill_full_name:
+        if existing is not None and existing != spec:
             # 同一 agent 下两台不同技能声明了同名服务器：无法从调用参数里区分，
             # 必须让它在加载期就失败，而不是留到调用期猜一个。
             raise McpConfigError(
@@ -83,11 +88,35 @@ class McpRuntime:
             for key, spec in self._activated.items()
             if key[0] == agent_scope and spec.skill_full_name == skill_full_name
         ]
+        # 先关闭整个集合的新调用接纳，再执行任何可挂起的连接清理。
+        sessions = []
         for key in removed:
             self._activated.pop(key, None)
             session = self._sessions.pop(key, None)
             if session is not None:
-                await session.close()
+                sessions.append(session)
+        for session in sessions:
+            await session.close()
+
+    async def close_scope(self, *, agent_scope: str) -> None:
+        """只关闭一个 Agent/run 的接纳与连接，不影响共享运行时的其他主体。"""
+        sessions = []
+        for key in tuple(self._activated):
+            if key[0] == agent_scope:
+                self._activated.pop(key)
+                session = self._sessions.pop(key, None)
+                if session is not None:
+                    sessions.append(session)
+        for session in sessions:
+            await session.close()
+
+    async def deactivate_server(self, *, agent_scope: str, server: str) -> None:
+        """关闭本 scope 的一个声明，保留同一 Skill 的其他服务器。"""
+        key = (agent_scope, server)
+        self._activated.pop(key, None)
+        session = self._sessions.pop(key, None)
+        if session is not None:
+            await session.close()
 
     def activated_servers(self, *, agent_scope: str) -> tuple[str, ...]:
         """该 agent 已激活的服务器名（按字典序，便于稳定输出）。"""
@@ -123,12 +152,33 @@ class McpRuntime:
         if session is not None:
             return session
         async with self._lock:
+            if self._closed or self._activated.get(key) != spec:
+                raise McpNotActivatedError("MCP activation ended before connection admission")
             session = self._sessions.get(key)
             if session is None:
-                # 凭据按**地址**关联：agentconf 里 base_url 等于该地址的 provider 记录。
-                credential = self._credentials(spec.url)
+                # 生产凭据按固定声明读取；显式注入的旧端口仅供受信调用者使用。
+                credential = (
+                    self._credentials_for_spec(spec)
+                    if self._credentials_for_spec is not None
+                    else self._credentials(spec.url)
+                )
+                headers = (
+                    self._headers_for_spec(spec) if self._headers_for_spec is not None else None
+                )
+                actual = (
+                    replace(spec, headers=headers, inline_headers=False)
+                    if headers is not None
+                    else spec
+                )
+                sensitive = []
+                for value in actual.headers.values():
+                    sensitive.append(value)
+                    for prefix in ("Bearer ", "Api-Key ", "Basic "):
+                        if value.startswith(prefix):
+                            sensitive.append(value[len(prefix) :])
                 session = McpSession(
-                    spec,
+                    actual,
+                    secrets=tuple(sensitive),
                     credential=credential,
                     connector=self._connector,
                 )

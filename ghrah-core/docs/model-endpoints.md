@@ -3,12 +3,12 @@ title: 模型端点与配置迁移
 description: 说明 ghrah 如何消费 agentconf 模型端点、保存请求参数，以及离线转换旧 Agent 配置。
 tags: [配置, 迁移, LLM]
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-11-06
 ---
 
 # 模型端点与配置迁移
 
-> 面向配置维护者和适配器调用者。端点决定连接到哪里，请求参数决定某个 Agent 怎样调用它。当前消费代码依赖 agentconf `>=0.3.0,<0.4`。运行 `uv sync --all-packages --group dev` 同步实际环境；不能用旧 0.1.0 客户端打开新版配置库。
+> 面向配置维护者和适配器调用者。端点决定连接到哪里，请求参数决定某个 Agent 怎样调用它。当前消费代码依赖 agentconf `>=0.4.0,<0.5`。运行 `uv sync --all-packages --group dev` 同步实际环境；不能用旧 0.1.0 客户端打开新版配置库。
 
 ## 配置由谁保存
 

@@ -26,14 +26,16 @@
 成 ``is_error=True`` 的结果，因此调用路径的返回值才是主要错误通道，异常只表示
 连接与协议层出问题。这一点如果搞反，错误会被当成空结果静默吞掉。
 
-已知限制：连接重建没有对并发调用做整体串行化——重建期间到达的另一个调用可能拿到
-已失效的句柄，并因此也触发一次重建。最坏结果是多重连一次，不会产生错误结果。
+同一会话的工具调用串行执行，避免并发重建复用失效句柄；关闭先停止接纳，再等待
+建连锁并回收连接。关闭不承诺撤销已经发往服务器的在途效果。
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import AsyncExitStack, suppress
+from dataclasses import replace
 from typing import Any
 
 from ghrah.mcp.client import (
@@ -65,15 +67,18 @@ class McpSession:
         *,
         credential: str | None = None,
         connector: Connector | None = None,
+        secrets: tuple[str, ...] = (),
     ) -> None:
         self._spec = spec
         self._credential = credential
+        self._secrets = secrets
         self._connector: Connector = connector or open_client
         self._stack: AsyncExitStack | None = None
         self._client: Any = None
         self._lock = asyncio.Lock()
         self._generation = 0
         self._closed = False
+        self._call_lock = asyncio.Lock()
 
     @property
     def spec(self) -> McpServerSpec:
@@ -96,17 +101,24 @@ class McpSession:
         """在持锁状态下建立连接。"""
         stack = AsyncExitStack()
         try:
-            client = await stack.enter_async_context(
-                self._connector(
-                    self._spec,
-                    credential=self._credential,
-                    read_timeout_s=self._spec.execution_timeout_ms / 1000,
+            # 缺凭据也必须在可注入 connector 之前拒绝。
+            resolve_headers(self._spec, self._credential)
+            async with asyncio.timeout(self._spec.connect_timeout_ms / 1000):
+                client = await stack.enter_async_context(
+                    self._connector(
+                        self._spec,
+                        credential=self._credential,
+                        read_timeout_s=self._spec.execution_timeout_ms / 1000,
+                    )
                 )
-            )
         except BaseException:
             with suppress(BaseException):
                 await stack.aclose()
             raise
+        if self._closed:
+            with suppress(BaseException):
+                await stack.aclose()
+            raise McpConnectionError("MCP session closed while connecting")
         self._stack = stack
         self._client = client
         self._generation += 1
@@ -130,6 +142,8 @@ class McpSession:
         if self._client is not None:
             return self._client
         async with self._lock:
+            if self._closed:
+                raise McpConnectionError("MCP session is closed")
             if self._client is None:
                 return await self._connect_locked()
             return self._client
@@ -146,13 +160,20 @@ class McpSession:
         失败一律以异常形式抛出（:class:`McpError` 的子类），成功的调用**也可能**
         带有 ``is_error=True``——那是服务器声明的工具级失败，调用方必须检查。
         """
+        async with self._call_lock:
+            return await self._call_tool(tool, arguments, read_timeout_s=read_timeout_s)
+
+    async def _call_tool(
+        self, tool: McpToolSpec, arguments: dict[str, Any] | None, *, read_timeout_s: float | None
+    ) -> ToolOutcome:
         timeout = self._spec.execution_timeout_ms / 1000
         attempts = 0
 
         while True:
             client = await self._ensure_client()
+            secrets = (*self._secrets, *((self._credential,) if self._credential else ()))
             try:
-                return await asyncio.wait_for(
+                outcome = await asyncio.wait_for(
                     call_tool_once(
                         client,
                         tool.name,
@@ -161,6 +182,30 @@ class McpSession:
                     ),
                     timeout=timeout,
                 )
+                if secrets:
+
+                    def redact(value: str) -> str:
+                        for secret in secrets:
+                            if secret:
+                                value = value.replace(secret, "***")
+                        return value
+
+                    def redact_value(value: Any) -> Any:
+                        if isinstance(value, str):
+                            return redact(value)
+                        if isinstance(value, Mapping):
+                            return {redact(str(k)): redact_value(v) for k, v in value.items()}
+                        if isinstance(value, list | tuple):
+                            return [redact_value(item) for item in value]
+                        return value
+
+                    outcome = replace(
+                        outcome,
+                        text=redact(outcome.text),
+                        diagnostics=tuple(redact(item) for item in outcome.diagnostics),
+                        structured=redact_value(outcome.structured),
+                    )
+                return outcome
             except asyncio.CancelledError:
                 # 先断开再放行取消：清理可能等待在途请求，而此刻正在被取消。
                 await self._reset()
@@ -175,7 +220,9 @@ class McpSession:
                 ) from None
             except Exception as exc:  # noqa: BLE001 - 统一翻译为本模块异常
                 error: McpError = translate_exception(exc)
-                error = await self._probe_http_failure(error)
+                # 注入连接器的回归不得因诊断路径访问外网。
+                if self._connector is open_client:
+                    error = await self._probe_http_failure(error)
                 if (
                     isinstance(error, McpRequestError)
                     and error.kind is FailureKind.SESSION_TERMINATED
@@ -191,8 +238,18 @@ class McpSession:
                         kind=FailureKind.SESSION_TERMINATED,
                         code=error.code,
                         uncertain=not tool.read_only,
-                    ) from exc
-                raise error from exc
+                    ) from None
+                if isinstance(error, McpRequestError):
+                    await self._reset()
+                    raise McpRequestError(
+                        "MCP tool request failed",
+                        kind=error.kind,
+                        code=error.code,
+                        uncertain=error.uncertain
+                        or (not tool.read_only and error.kind is FailureKind.TRANSIENT),
+                        http_status=error.http_status,
+                    ) from None
+                raise McpConnectionError("MCP tool transport failed") from None
 
     async def _probe_http_failure(self, error: McpError) -> McpError:
         """请求失败后再探一次 HTTP 状态码。
@@ -208,13 +265,16 @@ class McpSession:
             error,
             spec=self._spec,
             headers=headers,
-            secrets=(self._credential,) if self._credential else (),
+            secrets=(*self._secrets, *((self._credential,) if self._credential else ())),
         )
 
     async def close(self) -> None:
         """关闭连接。重复调用是安全的。"""
         self._closed = True
-        await self._reset()
+        async with self._lock:
+            await self._reset()
+        self._credential = None
+        self._secrets = ()
 
     async def __aenter__(self) -> McpSession:
         return self
