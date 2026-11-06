@@ -70,6 +70,13 @@ from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilitySourceMode,
 )
+from ghrah.ability.surface.config import (
+    DEFAULT_DEFINITION_TOKEN_RATIO,
+    DEFAULT_HARD_CAP,
+    DEFAULT_LOADED_LIMIT,
+    DEFAULT_MAX_STATIC,
+    DEFAULT_SEARCH_LIMIT,
+)
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.core.ability_protocol import AbilityProtocol
@@ -178,6 +185,12 @@ class CoreUnitConfig:
             非隐式兜底；None = 未配置，spawn(None) raise）。
         max_cluster_members: 集群成员上限（spawn 时超限 raise；
             透传 SupervisorActor.max_cluster_members，<=0 表示不限制）。
+        surface_definition_token_ratio: 定义 token 占模型上下文窗口比例的
+            默认上限，表面装配的阈值之一（本层只承载配置）。
+        surface_max_static: 静态工具数默认上限。
+        surface_hard_cap: auto 模式下切渐进的总成员数默认上限。
+        surface_search_limit: 单次搜索结果默认上限（硬上限 20，不可配置）。
+        surface_loaded_limit: 已加载集默认上限。
     """
 
     cluster_id: str = "default"
@@ -212,6 +225,13 @@ class CoreUnitConfig:
     ability_source: str = "legacy"
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
+    # 工具表面阈值：本层只承载配置，表面装配读取；默认值单源在
+    # ghrah.ability.surface.config。显式 static 的绝对上限固定 64，不开放配置。
+    surface_definition_token_ratio: float = DEFAULT_DEFINITION_TOKEN_RATIO
+    surface_max_static: int = DEFAULT_MAX_STATIC
+    surface_hard_cap: int = DEFAULT_HARD_CAP
+    surface_search_limit: int = DEFAULT_SEARCH_LIMIT
+    surface_loaded_limit: int = DEFAULT_LOADED_LIMIT
 
 
 # ----------------------------------------------------------------

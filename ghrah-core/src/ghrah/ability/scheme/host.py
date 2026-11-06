@@ -258,35 +258,41 @@ class AbilitySchemeHost:
 
     def project_view(self, view: AbilityTreeView) -> AbilityTreeView:
         """同源关系加上本 host 此刻的观测，领域读取保持 unknown。"""
-        abilities = [
-            node.model_copy(
-                update={
-                    "availability": "ready"
-                    if self._available(node.instance_id, node.instance_revision)
-                    else "unavailable",
-                    "operations": [
-                        operation.model_copy(
-                            update={
-                                "availability": "ready"
-                                if self._available(node.instance_id, node.instance_revision)
-                                and any(
-                                    action.name == operation.key
-                                    for action in self._exports[node.instance_id].spec.actions
-                                )
-                                else "unavailable"
-                            }
-                        )
-                        for operation in node.operations
-                    ],
-                    "skill": node.skill.model_copy(update={"availability": "ready"})
-                    if node.skill
-                    and node.instance_id in self._contents
-                    and self._contents[node.instance_id].revision == node.instance_revision
-                    else node.skill,
-                }
+        abilities = []
+        for node in view.abilities:
+            ready = (
+                node.instance_id in self._contents
+                and self._contents[node.instance_id].revision == node.instance_revision
             )
-            for node in view.abilities
-        ]
+            skills = [
+                item.model_copy(update={"availability": "ready"}) if ready else item
+                for item in node.skills
+            ]
+            abilities.append(
+                node.model_copy(
+                    update={
+                        "availability": "ready"
+                        if self._available(node.instance_id, node.instance_revision)
+                        else "unavailable",
+                        "operations": [
+                            operation.model_copy(
+                                update={
+                                    "availability": "ready"
+                                    if self._available(node.instance_id, node.instance_revision)
+                                    and any(
+                                        action.name == operation.key
+                                        for action in self._exports[node.instance_id].spec.actions
+                                    )
+                                    else "unavailable"
+                                }
+                            )
+                            for operation in node.operations
+                        ],
+                        "skills": skills,
+                        "skill": skills[0] if skills else node.skill,
+                    }
+                )
+            )
         return view.model_copy(
             update={
                 "abilities": abilities,

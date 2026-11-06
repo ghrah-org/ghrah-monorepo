@@ -1,7 +1,11 @@
 import { createPinia } from "pinia";
 import * as Vue from "vue";
 import { createApp } from "vue";
+import "./styles/layers.css";
 import "virtual:uno.css";
+import "./styles/reset.css";
+import "./styles/tokens.css";
+import "./styles/base.css";
 import "./style.css";
 import App from "./app.vue";
 import { initFontScale } from "./composables/useFontScale";

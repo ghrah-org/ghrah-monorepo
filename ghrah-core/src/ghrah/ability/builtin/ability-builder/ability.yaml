@@ -1,12 +1,9 @@
-# ability.yaml —— 头段值手写；members 按 v1 规则生成（生成器落地前手工维护，见 SKILL.md §8）
-# 暂存说明：P1 前以 `_` 前缀避开旧版内置扫描（旧加载器只认 0.1-draft / 0.2）；
-# P1 改名为 `ability-builder` 并由 v1 解析器加载。
 format: ghrah.ability-definition
 schema_version: '1'
 identity:
   namespace: ghrah
   name: ability-builder
-  version: '0.1.1'
+  version: 0.1.1
 title: Ability Builder
 description: 提供 Ability 包开发指南的 Skill 包。
 members:
@@ -15,7 +12,10 @@ members:
     ability-package-development-guide:
       title: Ability 包开发指南
       description: 定义一个 Ability 包的标准结构、手写 ability.yaml 字段，以及 Operation 与 Skill 的声明方式。
-      tags: [ability, guide, package]
+      tags:
+      - ability
+      - guide
+      - package
       body:
         path: skills/ability-package-development-guide/SKILL.md
         media_type: text/markdown

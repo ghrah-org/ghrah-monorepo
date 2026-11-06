@@ -297,7 +297,11 @@ class AbilityAccessStore:
         expected_members = set()
         for key, skill in definition.skills.items():
             expected_members.add(f"skill/{key}")
-            for role, resources in (("assets", skill.assets), ("references", skill.references)):
+            for role, resources in (
+                ("assets", skill.assets),
+                ("references", skill.references),
+                ("scripts", getattr(skill, "scripts", {})),
+            ):
                 if not isinstance(resources, dict):
                     if resources:
                         raise AccessError("invalid_change")
@@ -439,12 +443,18 @@ class AbilityAccessStore:
             members = sorted(operations) if change.whole_container else sorted(set(change.members))
             manifest = json.loads(version["manifest"])
             content = []
-            scope = change.skill
+            scopes = list(change.skills)
+            if change.skill is not None:
+                scopes.append(change.skill)
             if change.whole_container and definition["skills"]:
                 from ghrah.protocol.ability_tree import SkillReadScope
 
-                scope = SkillReadScope(key=next(iter(definition["skills"])))
-            if scope is not None:
+                scopes = [SkillReadScope(key=key) for key in definition["skills"]]
+            seen: set[str] = set()
+            for scope in scopes:
+                if scope.key in seen:
+                    raise AccessError("invalid_change")
+                seen.add(scope.key)
                 skill = definition["skills"].get(scope.key)
                 if skill is None:
                     raise AccessError("invalid_change")
@@ -631,6 +641,9 @@ class AbilityAccessStore:
             version = await self._row("ability_versions", "digest=?", instance["digest"])
             definition = json.loads(version["definition"])
             members = json.loads(grant["members"])
+            skills = self._skill_nodes(
+                definition, json.loads(version["manifest"]), json.loads(grant["content"])
+            )
             abilities.append(
                 AbilityNode(
                     alias=grant["alias"],
@@ -641,9 +654,8 @@ class AbilityAccessStore:
                     version_digest=instance["digest"],
                     revision=grant["revision"],
                     allowed_roots=json.loads(grant["roots"]),
-                    skill=self._skill_node(
-                        definition, json.loads(version["manifest"]), json.loads(grant["content"])
-                    ),
+                    skills=skills,
+                    skill=skills[0] if skills else None,
                     operations=[
                         OperationNode(
                             key=key,
@@ -684,29 +696,46 @@ class AbilityAccessStore:
         )
 
     @staticmethod
-    def _skill_node(
+    def _skill_nodes(
         definition: dict[str, Any], manifest: dict[str, Any], content: list[str]
-    ) -> SkillNode | None:
+    ) -> list[SkillNode]:
+        """按内容清单投影全部获授技能（一个包可以有多个技能）。
+
+        Args:
+            definition: 版本的归一化定义。
+            manifest: 版本的内容清单。
+            content: 本次授予覆盖的成员地址。
+
+        Returns:
+            按定义面键序排列的技能节点；没有任何获授内容时为空。
+        """
         if not content:
-            return None
-        key, skill = next(iter(definition["skills"].items()))
-        prefix = f"skill/{key}"
+            return []
+        nodes: list[SkillNode] = []
+        for key, skill in definition["skills"].items():
+            prefix = f"skill/{key}"
+            related = [path for path in content if path == prefix or path.startswith(f"{prefix}/")]
+            if not related:
+                continue
 
-        def children(role: str) -> list[ContentResourceNode]:
-            return [
-                ContentResourceNode(key=path.rsplit("/", 1)[-1], member=path, **manifest[path])
-                for path in content
-                if path.startswith(f"{prefix}/{role}/")
-            ]
+            def children(role: str, prefix: str = prefix) -> list[ContentResourceNode]:
+                return [
+                    ContentResourceNode(key=path.rsplit("/", 1)[-1], member=path, **manifest[path])
+                    for path in related
+                    if path.startswith(f"{prefix}/{role}/")
+                ]
 
-        return SkillNode(
-            key=key,
-            title=skill["title"],
-            description=skill["description"],
-            body_allowed=prefix in content,
-            assets=children("assets"),
-            references=children("references"),
-        )
+            nodes.append(
+                SkillNode(
+                    key=key,
+                    title=skill["title"],
+                    description=skill["description"],
+                    body_allowed=prefix in content,
+                    assets=children("assets"),
+                    references=children("references"),
+                )
+            )
+        return nodes
 
     async def view(self, actor: AccessIdentity, agent: str) -> AbilityTreeView:
         """事务内读取同源投影，不扫描来源、不更新状态。"""

@@ -1,0 +1,76 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: fixtures
+  name: reporting
+  version: 0.1.0
+title: Reporting
+description: 等价 fixture：一个 Operation 与一个 Skill，附样式参考与模板素材。
+members:
+  operations:
+    render:
+      title: Render Report
+      description: 按模板渲染一份报告。
+      entry: operations/render.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          template:
+            description: 模板名（assets 键）
+            type: string
+          rows:
+            description: 报告行
+            items:
+              type: string
+            minItems: 1
+            type: array
+        required:
+        - template
+        - rows
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          rendered:
+            description: 渲染后的报告文本
+            type: string
+        required:
+        - rendered
+        type: object
+      tags:
+      - render
+      - reporting
+      effects: []
+      permissions: {}
+      resources:
+        paths:
+        - template
+      execution:
+        mode: request
+        timeout_ms: 120000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills:
+    reporting-guide:
+      title: Reporting Guide
+      description: 写报告的步骤与模板说明。
+      tags:
+      - reporting
+      body:
+        path: skills/reporting-guide/SKILL.md
+        media_type: text/markdown
+      assets:
+        template:
+          path: skills/reporting-guide/assets/template.txt
+          media_type: text/plain
+          size: 68
+          digest: sha256:e3bcc91525086974b796a4ea8844ca285d4131a5009375ada632716c0d1152fc
+      references:
+        style-guide:
+          path: skills/reporting-guide/references/style-guide.md
+          media_type: text/markdown
+          size: 118
+          digest: sha256:5e78d4438ebf21c7950a84ecf0e023719afa58103d58302b16fafcc1b16a17a6
+      scripts: {}

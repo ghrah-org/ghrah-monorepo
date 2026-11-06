@@ -17,7 +17,7 @@ function normalizeScale(value: string | number | null | undefined): number {
   return Number((Math.round(clamped / FONT_SCALE_STEP) * FONT_SCALE_STEP).toFixed(2));
 }
 
-// --font-scale feeds the html root font-size (see style.css), so it scales the whole UI.
+// --font-scale feeds the html root font-size (see styles/base.css), so it scales the whole UI.
 function applyScale(value: number) {
   document.documentElement.style.setProperty("--font-scale", String(value));
 }

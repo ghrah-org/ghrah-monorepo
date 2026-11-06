@@ -14,6 +14,7 @@ from ghrah.manifest.types import (
     SUPPORTED_AGENT_VERSIONS,
     HookDef,
     PermissionFlags,
+    SurfaceConfig,
 )
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "PersistenceOverrides",
     "ContextOverrides",
     "AgentHooks",
+    "SurfaceConfig",
 ]
 
 
@@ -123,6 +125,7 @@ class AgentManifest(BaseModel):
     abilities: list[AbilityRef] = Field(min_length=1)
     context: ContextOverrides | None = None
     hooks: AgentHooks = Field(default_factory=AgentHooks)
+    surface: SurfaceConfig | None = Field(default=None, description="工具表面 per-Agent 覆盖")
 
     @model_validator(mode="before")
     @classmethod

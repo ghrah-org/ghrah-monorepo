@@ -11,9 +11,13 @@
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
     "test": "vitest run",
-    "lint": "oxlint src/ && eslint src/ && prettier --check src/ && pnpm lint:i18n && pnpm lint:ui-tokens",
+    "lint": "oxlint src/ && eslint src/ && pnpm lint:css && prettier --check src/ && pnpm lint:i18n && pnpm lint:ui-tokens",
+    "lint:css": "stylelint \"src/**/*.{css,vue}\"",
     "lint:i18n": "node scripts/check-i18n.mjs",
-    "lint:ui-tokens": "node scripts/check-ui-tokens.mjs"
+    "lint:ui-tokens": "node scripts/check-ui-tokens.mjs",
+    "test:visual": "playwright test e2e/visual.spec.ts",
+    "test:visual:update": "playwright test e2e/visual.spec.ts --update-snapshots",
+    "test:guards": "playwright test e2e/guards.spec.ts"
   },
   "dependencies": {
     "@ghrah/observer-core": "workspace:*",
@@ -30,8 +34,8 @@
   },
   "devDependencies": {
     "@ghrah/mock-server": "workspace:*",
+    "@playwright/test": "^1.64.1",
     "@types/markdown-it": "^14.1.2",
-    "@unocss/reset": "^66.0.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.10.6",

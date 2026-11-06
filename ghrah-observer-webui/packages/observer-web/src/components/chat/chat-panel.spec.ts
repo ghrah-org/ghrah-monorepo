@@ -99,6 +99,42 @@ describe("ChatPanel", () => {
     expect(wrapper.find("h3").text()).toContain("arch");
   });
 
+  it("会话头一行展示成员数、消息数与连接状态", async () => {
+    const { rooms } = setup();
+    rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend"])], "active");
+    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".room-header-title").text()).toBe("arch");
+    const meta = wrapper.find(".room-header-meta").text();
+    expect(meta).toContain("1 members");
+    expect(meta).toContain("1 messages");
+    expect(meta).toContain("Connected");
+  });
+
+  it("详情抽屉展示诊断与成员，Esc 关闭", async () => {
+    const { rooms } = setup();
+    rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend"])], "active");
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "question", {
+        deliveries: [
+          { delivery_id: "d1", recipient_id: "frontend", state: "failed", error: "boom" },
+        ],
+      }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    const open = wrapper.findAll("button").find((button) => button.text() === "Details");
+    await open!.trigger("click");
+    const dialog = wrapper.find('[role="dialog"]');
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.text()).toContain("boom");
+    expect(dialog.text()).toContain("Name-frontend");
+    await dialog.trigger("keydown", { key: "Escape" });
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+  });
+
   it("renders entries of the target room only", async () => {
     const { rooms } = setup();
     rooms.setRoomLog("r1", [
@@ -218,7 +254,8 @@ describe("ChatPanel", () => {
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const chips = wrapper.findAll('button[type="button"]');
+    // 会话头也有 type="button" 的“详情”按钮，chip 只在输入表单内查找
+    const chips = wrapper.find("form").findAll('button[type="button"]');
     await chips[0].trigger("click"); // @frontend
     await wrapper.find("textarea").setValue("please review");
     await wrapper.find("form").trigger("submit");
@@ -325,6 +362,11 @@ it("shows authoritative delivery failure", async () => {
       }),
     ]);
     const w = mountPanel();
+    // 投递状态不再出现在消息流里，而是收进详情抽屉的“诊断”分组
+    expect(w.text()).not.toContain("model_configuration_invalid");
+    const open = w.findAll("button").find((button) => button.text() === "Details");
+    expect(open).toBeTruthy();
+    await open!.trigger("click");
     expect(w.text()).toContain("model_configuration_invalid");
     expect(w.text()).toContain("Failed");
     w.unmount();

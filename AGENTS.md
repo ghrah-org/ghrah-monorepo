@@ -60,10 +60,15 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 
 ### TypeScript（ghrah-observer-webui）
 
-- lint：`pnpm lint` = **oxlint（先跑高性能通用规则）→ eslint（Vue/TS 专属；经 `eslint-plugin-oxlint` 按 `.oxlintrc.json` 关闭重复规则）→ prettier --check → i18n/ui-token 门禁**。fix：`pnpm lint:fix`；format：`pnpm format`。
-- 工具链职责：oxlint 管通用 JS/TS 规则；ESLint 管 Vue SFC/template 与 typescript-eslint 规则；prettier 管格式。规则配置在 `ghrah-observer-webui/`（`eslint.config.js` / `.oxlintrc.json` / `.prettierrc.json`），依赖装在 monorepo 根。
+- lint：`pnpm lint` = **oxlint（先跑高性能通用规则）→ eslint（Vue/TS 专属；经 `eslint-plugin-oxlint` 按 `.oxlintrc.json` 关闭重复规则）→ stylelint（CSS 正确性）→ `check-style-governance`（样式 ratchet 基线）→ prettier --check → i18n/ui-token 门禁**。fix：`pnpm lint:fix`；format：`pnpm format`。
+- 工具链职责：oxlint 管通用 JS/TS 规则；ESLint 管 Vue SFC/template 与 typescript-eslint 规则；stylelint 只管 CSS 的“对不对”（排版交给 prettier）；prettier 管格式。规则配置在 `ghrah-observer-webui/`（`eslint.config.js` / `.oxlintrc.json` / `stylelint.config.mjs` / `.prettierrc.json`），依赖装在 monorepo 根。
 - i18n：用户可见文案 **en 源 + zh-CN 双侧同步**（`check-i18n` 防中文残留）；新增组件文案先加 en 再补 zh。
-- 样式：字号/间距/颜色走 token（`check-ui-tokens` 禁魔法数字）；不写内联裸色值。
+- 样式分层：`src/styles/layers.css` 声明 `@layer reset, tokens, base, components, utilities`；`reset/tokens/base` 已拆分，`style.css` 整体位于 `components` 层。新增样式先判断归属：**值** → `tokens.css`；**元素默认** → `base.css`；**组件私有** → `<style scoped>`；其余才进 `style.css`。
+- 样式默认用 UnoCSS 原子类；颜色只用语义 token，禁止调色板类（`bg-gray-800`、`text-blue-500`）。
+- 禁止裸 hex/rgba、px 字号、任意值工具类（`w-[...]`）、`!important`、组件级 `:root.dark` 与模板 `dark:`；存量按基线只降不升，不得新增。
+- 级联顺序由 `@layer` 决定，不要靠 import 顺序或堆特异性取胜；需要覆盖组件样式时用工具类，而不是加 `!important`。
+- 样式门禁：`pnpm lint` 内含 `check-style-governance`（ratchet，基线 `style-baseline.json`）；CSS 体积用 `pnpm lint:css-budget` 在构建后校验（基线 `style-budget.json`，gzip 为主）。清理存量后跑对应 `--update` 下调基线。
+- 布局/样式改动须自查 1600 / 1024 两种宽度 × 100% / 110% 字号；涉及侧边栏的还要覆盖“展开 / 收起 / 两侧都收起”。
 - 构建：`packages/protocol` 与 `packages/observer-core` 改动后须 `pnpm build`（exports 指向 `dist/`，type-check 解析 dist；**dist 陈旧会让 type-check 与测试结果分裂**）。
 
 ### 通用
@@ -87,8 +92,13 @@ cd ../ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah
 pnpm vitest run        # 注意：根级无 test script，用 vitest run
 pnpm type-check        # 根级递归；vue-tsc 在 observer-web 包级
 pnpm lint
+
+# 观察端浏览器测试（首次需 pnpm --filter @ghrah/observer-web exec playwright install chromium）
+pnpm --filter @ghrah/observer-web test:guards   # 断言型护栏：盒模型/层顺序/横向溢出/侧边栏，CI 会跑
+pnpm --filter @ghrah/observer-web test:visual   # 像素基线：4 界面 × 2 宽度 × 2 字号 + 侧边栏三态
 ```
 
+- 视觉基线绑定生成机器的字体渲染：`test:visual` 只在本机或固定镜像内跑，跨发行版会整片误报；更新基线用 `test:visual:update` 并逐张确认差异。**像素基线不入库**（`e2e/visual.spec.ts-snapshots/` 已 gitignore），新克隆先跑一次 `test:visual:update` 生成，CI 只跑 `test:guards` 断言。
 - 删除型重构的验证顺序：**先 `rm` 工作树文件 → 再 pytest → 最后 `git add`**（仅 `git add` 前文件仍在磁盘，会被测试收集，造成"已删仍绿"假象）。
 - 收编跨包漂移的修复，须跑双侧测试（协议改动 → Python + TS 两侧）。
 

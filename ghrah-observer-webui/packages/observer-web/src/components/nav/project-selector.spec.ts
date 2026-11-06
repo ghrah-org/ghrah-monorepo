@@ -57,8 +57,9 @@ describe("ProjectSelector", () => {
     const wrapper = mount(ProjectSelector);
     await wrapper.vm.$nextTick();
     const items = wrapper.findAll("li");
-    expect(items[0].classes().join(" ")).toContain("bg-blue-100");
-    expect(items[1].classes().join(" ")).not.toContain("bg-blue-100");
+    // 选中态由 .project-item.active 的 ::before/::after 指示条表达，不再铺背景色
+    expect(items[0].classes()).toContain("active");
+    expect(items[1].classes()).not.toContain("active");
   });
 
   it("creates a project from inline form and selects it", async () => {

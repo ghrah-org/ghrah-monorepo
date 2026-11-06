@@ -272,7 +272,7 @@ mcp:
 
 ## 8. 构建、安装与版本
 
-> 状态（2026-11-04）：`build` / `install` / `verify` 命令自 P1/P2 起提供；M0 阶段只有生成器原型（`python -m ghrah.ability.tools.build`），当前示例包的 `members` 暂按本文规则手工维护，生成器落地后改为自动生成。
+> 状态（2026-11-04）：`build` / `install` / `verify` 命令尚未提供；当前只有生成器原型（`python -m ghrah.ability.tools.build`），示例包的 `members` 仍按本文规则手工维护；生成器已能处理 v1 源包，并可通过 `--builtin` 重建内置 `ghrah.ability-builder`。
 
 ```bash
 ghrah ability build <目录>

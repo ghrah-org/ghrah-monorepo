@@ -33,6 +33,24 @@ jobs:
           done
           uv run --isolated --no-project "${scheme_wheel_args[@]}" python -I -c "import importlib.util; import ghrah.scheme; assert importlib.util.find_spec('ghrah.abilities') is None"
 
+  windows-portability:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      # 路径、编码、换行与大小写语义的聚焦回归。
+      - run: uv run pytest ghrah-core/tests/ability/package ghrah-core/tests/ability/surface -q
+      - name: 内置包索引检查
+        run: uv run python -m ghrah.ability.tools.build ghrah-core/src/ghrah/ability/builtin/ability-builder --builtin --check
+      - name: fixture 索引检查
+        run: |
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/reporting --check
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/multi-skill --check
+          uv run python -m ghrah.ability.tools.build ghrah-core/tests/ability/package/fixtures/builder --check
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -48,3 +66,12 @@ jobs:
       - run: pnpm -r test
       - run: pnpm type-check
       - run: pnpm lint
+      # 只跑断言型护栏（盒模型/层顺序/溢出/侧边栏），不跑像素基线：
+      # 视觉基线绑定生成机器的字体渲染，跨镜像比较会整片误报。
+      - name: Playwright 布局护栏
+        run: |
+          pnpm --filter @ghrah/observer-web exec playwright install --with-deps chromium
+          pnpm --filter @ghrah/observer-web test:guards
+      # 体积预算需要真实构建产物：先构建观察端，再比对 style-budget.json。
+      - name: 构建观察端并校验 CSS 体积
+        run: pnpm --filter @ghrah/observer-web build && pnpm lint:css-budget

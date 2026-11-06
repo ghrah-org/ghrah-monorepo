@@ -1,6 +1,6 @@
 # 能力包开发指南
 
-> **已被取代（2026-11-04）**：作者面规范改由内置 Ability 包 `ghrah.ability-builder`（`ghrah.ability-builder@0.1.1`，源在 `ghrah-core/src/ghrah/ability/builtin/_ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md` 承载；本文保留作历史参考，不再更新。文中“`skills/SKILL.md` 单 skill”等写法属于旧版，已被 v1 两段式取代。
+> **已被取代（2026-11-04）**：作者面规范改由内置 Ability 包 `ghrah.ability-builder`（`ghrah.ability-builder@0.1.1`，源在 `ghrah-core/src/ghrah/ability/builtin/ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md` 承载；本文保留作历史参考，不再更新。文中“`skills/SKILL.md` 单 skill”等写法属于旧版，已被 v1 两段式取代。
 
 | 项 | 内容 |
 | --- | --- |
@@ -9,7 +9,7 @@
 | 校准基线 | `ghrah-monorepo` @ `f8ff157`（2026-10-28），`ghrah-core` 0.2.0a0 |
 | 读者 | 要新增一个工具（能力）、要改现有能力行为、要给能力加权限或审批的开发者 |
 | 取代 | `package技术文档.md`、`package增量开发指引.md`（归档至 `docs/archive/`） |
-| 被取代 | `ghrah.ability-builder` 包（`ghrah.ability-builder@0.1.1`，内置包 `builtin/_ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md`；M0 规范 §8-3（dev-docs，本地） |
+| 被取代 | `ghrah.ability-builder` 包（`ghrah.ability-builder@0.1.1`，内置包 `builtin/ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md`；作者面规范以该包正文为准 |
 | 相关文档 | `ghrah-01-ability-design-and-implementation.md`（为什么这样设计、契约全貌）、`ghrah-04-skill-system.md`（技能成员）、`ghrah-06-code-map.md` §8（新文件放哪） |
 
 ## 修订记录

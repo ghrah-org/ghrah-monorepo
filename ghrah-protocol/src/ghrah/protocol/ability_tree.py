@@ -59,7 +59,11 @@ class SkillReadScope(TreeModel):
 
 
 class AbilityNode(TreeModel):
-    """获授关联；revision 固定此次授予，实例版本另行表示。"""
+    """获授关联；revision 固定此次授予，实例版本另行表示。
+
+    一个 Ability 包可以有多个 Skill：``skills`` 是完整清单；``skill`` 是向后兼容的
+    "第一个技能"快捷字段，两者由同一份投影填充。
+    """
 
     alias: TreeKey
     instance_id: TreeId
@@ -69,6 +73,7 @@ class AbilityNode(TreeModel):
     revision: int = Field(ge=0)
     allowed_roots: list[str]
     operations: list[OperationNode]
+    skills: list[SkillNode] = Field(default_factory=list)
     skill: SkillNode | None = None
     availability: Literal["ready", "unavailable", "unknown"] = "unknown"
 
@@ -77,6 +82,8 @@ class AbilityNode(TreeModel):
         """同一实例下的成员键不能含糊地指向多个描述。"""
         if len({item.key for item in self.operations}) != len(self.operations):
             raise ValueError("Operation key 重复")
+        if len({item.key for item in self.skills}) != len(self.skills):
+            raise ValueError("Skill key 重复")
         return self
 
 
@@ -135,15 +142,27 @@ class EmptyTreeRequest(TreeModel):
 
 
 class GrantAbilityRequest(TreeModel):
-    """对当前关系修订提交一次明确获授变更。"""
+    """对当前关系修订提交一次明确获授变更。
+
+    ``skill`` 与 ``skills`` 是同一件事的单/多写法：只给 ``skill`` 时等价于只授予
+    一个技能；``skills`` 用来一次授予同一包里的多个技能。
+    """
 
     alias: TreeKey
     instance_id: TreeId
     members: list[TreeKey] = Field(default_factory=list)
     allowed_roots: list[str] = Field(default_factory=list)
     skill: SkillReadScope | None = None
+    skills: list[SkillReadScope] = Field(default_factory=list)
     whole_container: bool = False
     expected_revision: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def unique_scopes(self) -> GrantAbilityRequest:
+        """同一技能不能在一次变更里出现两份读范围。"""
+        if len({item.key for item in self.skills}) != len(self.skills):
+            raise ValueError("Skill 读范围重复")
+        return self
 
 
 class RevokeAbilityRequest(TreeModel):

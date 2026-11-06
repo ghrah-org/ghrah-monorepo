@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 层顺序先于任何 CSS 请求；与 src/styles/layers.css 保持一致 -->
+    <style>
+      @layer reset, tokens, base, components, utilities;
+    </style>
     <title>Ghrah Observer</title>
   </head>
   <body class="m-0 p-0">
