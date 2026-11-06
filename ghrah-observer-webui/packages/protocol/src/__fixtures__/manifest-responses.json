@@ -90,7 +90,8 @@
         "post_tool_execute": [],
         "on_error": [],
         "on_max_iterations": []
-      }
+      },
+      "surface": null
     },
     "source": "# Preserve this author comment and original whitespace.\n{\n  \"manifest\": \"agent\",\n  \"version\": \"2\",\n  \"metadata\": {\n    \"namespace\": \"audit\",\n    \"name\": \"helper\",\n    \"title\": \"Helper\",\n    \"description\": \"Display description\",\n    \"tags\": [\n      \"helper\"\n    ],\n    \"icon\": \"\",\n    \"deprecated\": false\n  },\n  \"model\": {\n    \"endpoint_name\": \"test-model\",\n    \"temperature\": 0.2,\n    \"max_tokens\": 256,\n    \"top_p\": null,\n    \"top_k\": null,\n    \"extra_params\": {\n      \"seed\": 42\n    }\n  },\n  \"system_prompt\": \"Keep the entire prompt.\\n第二行提示词。\",\n  \"max_iterations\": 10,\n  \"communication_timeout\": 300,\n  \"description\": \"Runtime description\",\n  \"abilities\": [\n    {\n      \"ref\": \"audit.fs.read_file\",\n      \"type\": null,\n      \"permissions\": null\n    },\n    {\n      \"ref\": null,\n      \"type\": \"end_task\",\n      \"permissions\": null\n    }\n  ],\n  \"context\": null,\n  \"hooks\": {\n    \"before_action\": [],\n    \"after_action\": [],\n    \"pre_llm_call\": [],\n    \"post_llm_call\": [],\n    \"pre_tool_execute\": [],\n    \"post_tool_execute\": [],\n    \"on_error\": [],\n    \"on_max_iterations\": []\n  }\n}\n",
     "source_hash": "sha256:b0e5c87c2cf99f58c2d5889d511fb54485a30777a9f3f7a29d630bfdb7808b3a"
