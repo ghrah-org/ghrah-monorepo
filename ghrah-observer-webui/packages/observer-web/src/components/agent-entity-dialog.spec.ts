@@ -102,6 +102,17 @@ beforeEach(() => {
       { id: "n1", iteration: 1, messages_delta: [{ content: "saved work" }], action_results: [] },
     ],
   });
+  api.createSession.mockResolvedValue({ session: { session_id: "s2" } });
+  api.activateSession.mockImplementation(async () => {
+    api.listSessions.mockResolvedValue({
+      active_session_id: "s2",
+      sessions: [
+        { session_id: "s1", name: "Saved session", active_branch_id: "b1", lifecycle: "active" },
+        { session_id: "s2", name: "Review", active_branch_id: "b2", lifecycle: "active" },
+      ],
+      branches: [{ branch_id: "b2", session_id: "s2", name: "main", lifecycle: "active" }],
+    });
+  });
   api.listInbox.mockResolvedValue({ items: [], next_before_seq: null });
 });
 it("reads saved sessions and history while offline without starting the actor", async () => {
@@ -116,6 +127,47 @@ it("reads saved sessions and history while offline without starting the actor", 
   expect(w.text()).toContain("saved work");
   expect(api.start).not.toHaveBeenCalled();
   expect(button(w, "Create session").attributes("disabled")).toBeDefined();
+  w.unmount();
+});
+it("creates a session with its own prompt and clears the form after success", async () => {
+  api.snapshot.mockResolvedValue(snapshot(true));
+  const w = render();
+  await flushPromises();
+  await button(w, "Sessions & history").trigger("click");
+  await flushPromises();
+  await w.get(".entity-session-form input").setValue("Review");
+  await w
+    .get(".entity-session-form textarea")
+    .setValue("Review frontend code.\nKeep answers short.");
+  await w.get(".entity-session-form").trigger("submit");
+  await flushPromises();
+  expect(api.createSession).toHaveBeenCalledWith(
+    "Review",
+    "Review frontend code.\nKeep answers short.",
+  );
+  expect(w.get<HTMLTextAreaElement>(".entity-session-form textarea").element.value).toBe("");
+  expect(api.activateSession).toHaveBeenCalledWith("s2");
+  expect(w.findAll("select")[0].element.value).toBe("s2");
+  expect(button(w, "Activate selected session").attributes("disabled")).toBeDefined();
+  w.unmount();
+});
+it("omits a blank prompt and retains input on a failed creation", async () => {
+  api.snapshot.mockResolvedValue(snapshot(true));
+  const w = render();
+  await flushPromises();
+  await button(w, "Sessions & history").trigger("click");
+  await flushPromises();
+  await w.get(".entity-session-form textarea").setValue("   ");
+  await w.get(".entity-session-form").trigger("submit");
+  await flushPromises();
+  expect(api.createSession).toHaveBeenCalledWith(undefined, undefined);
+  api.createSession.mockRejectedValue(new Error("Create failed"));
+  await w.get(".entity-session-form textarea").setValue("Keep this draft");
+  await w.get(".entity-session-form").trigger("submit");
+  await flushPromises();
+  expect(w.get<HTMLTextAreaElement>(".entity-session-form textarea").element.value).toBe(
+    "Keep this draft",
+  );
   w.unmount();
 });
 it("saves persistent selected types with the observed revision", async () => {

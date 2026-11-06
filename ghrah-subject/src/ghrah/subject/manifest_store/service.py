@@ -74,11 +74,11 @@ def handle_manifest_command(
                             "namespace": m.metadata.namespace,
                             "name": m.metadata.name,
                             "title": m.metadata.title,
-                            "description": m.description,
+                            "description": m.metadata.description,
                             "tags": m.metadata.tags,
-                            "permissions": m.permissions.model_dump(mode="python"),
+                            "permissions": m.metadata.permissions.model_dump(mode="python"),
                             "implementation_type": m.implementation.type,
-                            "has_hitl": m.permissions.require_hitl,
+                            "has_hitl": m.metadata.permissions.require_hitl,
                         }
                     )
                 except Exception:

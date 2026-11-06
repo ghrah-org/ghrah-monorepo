@@ -1,5 +1,4 @@
 import {
-  type AbilityManifestInfo,
   type AgentManifestInfo,
   type AgentTarget,
   type ChainTarget,
@@ -7,7 +6,6 @@ import {
   connectStores,
   extractAbilityList,
   extractAgentList,
-  extractManifestEntry,
   extractValidationResult,
   type ListProjectsOptions,
   ObserverClient,
@@ -359,19 +357,13 @@ export function useObserver() {
 
   async function getAbility(fullName: string) {
     const result = await withClient((c) => c.getAbility(fullName));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAbility(entry as AbilityManifestInfo);
-    }
+    // 详情是嵌套 Manifest，不可直接写入列表摘要 store。
     return result;
   }
 
   async function putAbility(fullName: string, content: string, overwrite?: boolean) {
     const result = await withClient((c) => c.putAbility(fullName, content, overwrite));
-    if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAbility(entry as AbilityManifestInfo);
-    }
+    // 保存返回嵌套 Manifest；列表由调用方重新请求摘要，不能直接写入列表 store。
     return result;
   }
 
@@ -383,13 +375,45 @@ export function useObserver() {
 
   // ── Manifest: Agent ──
 
+  function agentSummary(fullName: string, data: unknown): AgentManifestInfo {
+    const { manifest } = data as {
+      manifest: {
+        metadata: Pick<AgentManifestInfo, "namespace" | "name" | "title" | "description" | "tags">;
+        model: { endpoint_name: string };
+        system_prompt: string;
+        abilities: { ref: string | null; type: string | null }[];
+        max_iterations: number;
+      };
+    };
+    return {
+      full_name: fullName,
+      ...manifest.metadata,
+      endpoint_name: manifest.model.endpoint_name,
+      system_prompt: manifest.system_prompt,
+      ability_refs: manifest.abilities.map((ability) => ability.ref || ability.type || ""),
+      max_iterations: manifest.max_iterations,
+    };
+  }
+
   async function listManifestAgents(namespace?: string | null) {
     manifests.agentsLoading = true;
     try {
       const result = await withClient((c) => c.listManifestAgents(namespace));
       if (result?.success) {
         const agents = extractAgentList(result.data);
-        if (agents) manifests.setAgents(agents);
+        if (agents) {
+          // 兼容列表只返回 full_name 的条目，从已有详情接口重建摘要。
+          const summaries = await Promise.all(
+            agents.map(async (agent) => {
+              if (agent.namespace) return agent;
+              const detail = await withClient((c) => c.getAgent(agent.full_name));
+              if (!detail?.success)
+                throw new Error(detail?.error || i18n.global.t("config.agent.loadFailed"));
+              return agentSummary(agent.full_name, detail.data);
+            }),
+          );
+          manifests.setAgents(summaries);
+        }
       }
       return result;
     } finally {
@@ -400,8 +424,7 @@ export function useObserver() {
   async function getAgent(fullName: string) {
     const result = await withClient((c) => c.getAgent(fullName));
     if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAgent(entry as AgentManifestInfo);
+      manifests.upsertAgent(agentSummary(fullName, result.data));
     }
     return result;
   }
@@ -409,8 +432,7 @@ export function useObserver() {
   async function putAgent(fullName: string, content: string, overwrite?: boolean) {
     const result = await withClient((c) => c.putAgent(fullName, content, overwrite));
     if (result?.success) {
-      const entry = extractManifestEntry(result.data);
-      if (entry) manifests.upsertAgent(entry as AgentManifestInfo);
+      manifests.upsertAgent(agentSummary(fullName, result.data));
     }
     return result;
   }
@@ -430,10 +452,16 @@ export function useObserver() {
   async function validateManifest(content: string, manifestType: string) {
     manifests.setValidating(true);
     manifests.setValidationResult(null);
-    const result = await withClient((c) => c.validateManifest(content, manifestType));
-    manifests.setValidating(false);
+    const result = await (async () => {
+      try {
+        return await withClient((c) => c.validateManifest(content, manifestType));
+      } finally {
+        manifests.setValidating(false);
+      }
+    })();
     if (result?.success) {
-      const vr = extractValidationResult(result.data);
+      const data = result.data as { valid: boolean; errors: string[] };
+      const vr = extractValidationResult({ is_valid: data.valid, errors: data.errors });
       if (vr) {
         manifests.setValidationResult(vr);
       }
