@@ -5,20 +5,20 @@
 
 边界（见 M0 规范冻结 §3.8 / §3.10）：
 
-- 只处理 **v1 源包目录**。归档是传输形式，P2 不解包（``unsupported_source``）；
-  MCP 快照由 P5 的 MCP 客户端生成（``mcp_requires_p5``）。
+- 处理 v1 源包目录和显式 MCP 声明；MCP 快照由受信客户端发现生成。
+  归档须先解包（``unsupported_source``）。
 - 安装槽是 ``<root>/<namespace>/<name>/<version>/``，安装记录是版本目录旁的
   ``<version>.lock.yaml``；``<root>`` 由调用方显式传入，领域层不拼默认路径。
 - 安装只**校验**已生成的 ``members`` 与内容摘要，**不 import 包代码、不重建索引**。
 - 安装顺序：完整复制到同盘临时目录 → 复算摘要自检 → 写 lock 临时文件并
   ``os.replace`` → 原子 rename 版本目录。失败清理临时物，不留下"无 lock 的版本目录"。
 - ``list`` / ``show`` / ``verify`` 读安装存储，不调用 ``scan_abilities``；
-  ``refresh`` 在 P2 明确失败，不假装成功。
+  ``refresh`` 只刷新 MCP 快照。
 - 审计、授权与运行时选择不在本层。
 
 错误码（:class:`InstallerError.code`，供 CLI 透传）：
 
-``unsupported_source`` / ``mcp_requires_p5`` / ``reserved_namespace`` /
+``unsupported_source`` / ``mcp_config_invalid`` / ``reserved_namespace`` /
 ``reserved_member_name`` / ``lock_in_source`` / ``legacy_layout`` /
 ``invalid_definition`` / ``invalid_content`` / ``index_mismatch`` /
 ``portable_tree_violation`` / ``symlink_rejected`` / ``root_invalid`` /
@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -298,8 +299,7 @@ class AbilityInstaller:
         """把 v1 源包目录安装进 ``<root>/<namespace>/<name>/<version>/``。
 
         Args:
-            source: 源包根目录（含 ``ability.yaml``）。只支持目录；归档与 MCP
-                快照在 P2 明确拒绝。
+            source: 源包或 MCP 声明目录（含 ``ability.yaml``）；归档须先解包。
 
         Returns:
             安装结果；目标版本已存在且摘要相同时 ``already_installed=True``。
@@ -311,14 +311,8 @@ class AbilityInstaller:
         self._check_source(source_path)
         raw = self._read_definition_text(source_path)
         if self._declares_mcp_origin(raw):
-            raise InstallerError(
-                "mcp_requires_p5", "MCP 快照由 P5 的 MCP 客户端生成；P2 install 只接受 source 包"
-            )
+            return asyncio.run(self.install_mcp(source_path))
         definition = self._parse_definition_text(raw, source_path)
-        if definition.origin == "mcp":  # 防御性：上面的 peek 已经拦过一次
-            raise InstallerError(
-                "mcp_requires_p5", "MCP 快照由 P5 的 MCP 客户端生成；P2 install 只接受 source 包"
-            )
         namespace = definition.identity.namespace
         if namespace in _RESERVED_NAMESPACES:
             raise InstallerError(
@@ -591,6 +585,7 @@ class AbilityInstaller:
         slot: Path,
         version_root: Path,
         lock_path: Path,
+        mcp: McpLock | None = None,
     ) -> InstallResult:
         """同盘临时目录完整拷贝 → 摘要自检 → 写 lock → 原子 rename。"""
         lock_written = False
@@ -623,8 +618,11 @@ class AbilityInstaller:
                 package_digest=package_digest,
                 digest_algorithm=DIGEST_ALGORITHM,
                 installed_at=utc_now_rfc3339(),
-                source=InstallSource(kind="directory", ref=str(source)),
+                source=InstallSource(kind="directory", ref=str(source))
+                if mcp is None
+                else InstallSource(kind="mcp"),
                 files=dict(source_files),
+                mcp=mcp,
             )
             try:
                 write_lock(lock_path, lock)
@@ -971,23 +969,32 @@ class AbilityInstaller:
         full_name: str | None = None,
         version: str | None = None,
     ) -> InstallResult:
-        """P2 明确失败：源包不支持 refresh，MCP 快照要等 P5。
-
-        参数形状保持宽松（``target`` / ``full_name`` / ``version`` 都接受），
-        以便 CLI 透传；只要能识别出已安装的 MCP 快照就报 ``unsupported_until_p5``，
-        其余一律 ``unsupported_refresh``。**不假装成功**。
-        """
+        """刷新 MCP 最新候选；源包拒绝刷新，变化不会自动切换实例版本。"""
         candidate = full_name if full_name is not None else target
-        if isinstance(candidate, str):
-            for item in self._store.versions_of(candidate):
-                if item.mcp is not None or (item.source is not None and item.source.kind == "mcp"):
-                    raise InstallerError(
-                        "unsupported_until_p5",
-                        "MCP 快照刷新依赖 P5 的 MCP 客户端；P2 不假装成功",
-                    )
-        raise InstallerError(
-            "unsupported_refresh", "P2 不支持从源包 refresh；请对目标版本重新 install"
-        )
+        if version is not None:
+            raise InstallerError("invalid_arguments", "MCP refresh 不接受版本")
+        if isinstance(candidate, str) and candidate.startswith("mcp."):
+            return asyncio.run(self.refresh_mcp(candidate))
+        raise InstallerError("unsupported_refresh", "源包不支持 refresh；请重新 install")
+
+    async def install_mcp(
+        self, source_path: Path, *, source: Any = None, connector: Any = None
+    ) -> InstallResult:
+        """从显式声明观测 MCP 并安装；异步宿主使用本入口。"""
+        from ghrah.ability.package.sources.mcp import install_mcp
+
+        self._check_source(source_path)
+        return await install_mcp(self, source_path, source=source, connector=connector)
+
+    async def refresh_mcp(
+        self, full_name: str, *, source: Any = None, connector: Any = None
+    ) -> InstallResult:
+        """刷新已安装 MCP 包；不会自动替换任何实例的选择。"""
+        from ghrah.ability.package.sources.mcp import refresh_mcp
+
+        if parse_full_name(full_name) is None or not full_name.startswith("mcp."):
+            raise InstallerError("invalid_full_name", "需要 mcp.<name> 身份")
+        return await refresh_mcp(self, full_name, source=source, connector=connector)
 
 
 _LOCK_PROBLEM_CODES: frozenset[str] = frozenset(

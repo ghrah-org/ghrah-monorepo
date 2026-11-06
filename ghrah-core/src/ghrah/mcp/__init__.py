@@ -16,6 +16,7 @@ from ghrah.mcp.agentconf_source import AgentconfMcpSource, load_spec
 from ghrah.mcp.client import (
     call_tool_once,
     list_tool_names,
+    list_tools,
     open_client,
     read_only_hint,
     resolve_headers,
@@ -109,6 +110,7 @@ __all__ = [
     "format_unknown_tool_message",
     "is_session_terminated",
     "list_tool_names",
+    "list_tools",
     "load_spec",
     "no_credentials",
     "open_client",

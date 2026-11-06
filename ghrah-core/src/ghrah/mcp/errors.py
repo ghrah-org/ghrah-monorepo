@@ -94,6 +94,10 @@ class McpConfigError(McpError):
     """配置或规格非法。在建连之前就该被拦下。"""
 
 
+class McpUnsupportedTransportError(McpConfigError):
+    """当前宿主没有接入声明的传输类型。"""
+
+
 class McpNotActivatedError(McpError):
     """调用的服务器/工具不在调用方的已激活集合或白名单内。
 

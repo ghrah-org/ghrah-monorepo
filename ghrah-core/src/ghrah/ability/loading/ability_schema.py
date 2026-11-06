@@ -159,6 +159,7 @@ _V1_OPERATION_KEYS = frozenset(
         "title",
         "description",
         "entry",
+        "mcp",
         "input_schema",
         "output_schema",
         "effects",
@@ -262,22 +263,35 @@ def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
             raise ManifestValidationError(
                 f"{source}: members.operations.{key} 未知字段 {sorted(unknown)}（契约拒绝未知字段）"
             )
-        missing = {"title", "description", "entry"} - set(raw)
+        is_mcp = data.get("origin") == "mcp"
+        missing = {"title", "description", "mcp" if is_mcp else "entry"} - set(raw)
         if missing:
             raise ManifestValidationError(
                 f"{source}: members.operations.{key} 缺少必填字段 {sorted(missing)}"
             )
-        entry = raw["entry"]
+        entry = raw.get("entry")
         expected_entry = f"operations/{key}.py"
-        if entry != expected_entry:
+        if is_mcp and "entry" in raw:
+            raise ManifestValidationError(f"{source}: MCP 成员不得声明 entry")
+        if not is_mcp and "mcp" in raw:
+            raise ManifestValidationError(f"{source}: source 成员不得声明 mcp")
+        if not is_mcp and entry != expected_entry:
             raise ManifestValidationError(
                 f"{source}: members.operations.{key}.entry 必须是 "
                 f"{expected_entry!r}，当前是 {entry!r}"
             )
         input_schema = raw.get("input_schema") or dict(EMPTY_SCHEMA)
         output_schema = raw.get("output_schema") or dict(EMPTY_SCHEMA)
-        _require_object_schema(f"{source}: members.operations.{key}.input_schema", input_schema)
-        _require_object_schema(f"{source}: members.operations.{key}.output_schema", output_schema)
+        if not is_mcp:
+            _require_object_schema(f"{source}: members.operations.{key}.input_schema", input_schema)
+            _require_object_schema(
+                f"{source}: members.operations.{key}.output_schema", output_schema
+            )
+        else:
+            input_schema = raw.get("input_schema", {})
+            output_schema = raw.get("output_schema", {})
+            if not isinstance(input_schema, dict) or not isinstance(output_schema, dict):
+                raise ManifestValidationError(f"{source}: MCP schema 必须是对象")
         operations[key] = {
             "title": raw["title"],
             "description": raw["description"],
@@ -286,7 +300,8 @@ def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
             "effects": raw.get("effects") or [],
             "resources": raw.get("resources") or {},
             "execution": raw.get("execution") or dict(DEFAULT_EXECUTION),
-            "entry": {"path": entry, "media_type": "text/x-python"},
+            "entry": None if is_mcp else {"path": entry, "media_type": "text/x-python"},
+            "mcp": raw.get("mcp"),
             "expose": raw.get("expose", True),
             "tags": raw.get("tags") or [],
             "permissions": raw.get("permissions") or {},
@@ -416,6 +431,14 @@ class ExecutionSpec(BaseModel):
     retry: Literal["never"]
 
 
+class McpMember(BaseModel):
+    """固定服务器引用与远端原始工具名；不接受连接参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+    server: str = Field(min_length=1)
+    tool: str = Field(min_length=1)
+
+
 class OperationDefinition(BaseModel):
     """一个可执行成员：参数、结果、副作用与执行约束。"""
 
@@ -428,6 +451,7 @@ class OperationDefinition(BaseModel):
     effects: list[str] = Field(default_factory=list)
     resources: dict[str, Any] = Field(default_factory=dict)
     execution: ExecutionSpec
+    mcp: McpMember | None = Field(default=None, exclude_if=lambda value: value is None)
     entry: ContentResource | None = None
     """成员实现文件（v1 ``entry`` 的归一形状）：``operations/<键>.py``。
 
@@ -561,11 +585,18 @@ class AbilityDefinition(BaseModel):
             server = (self.mcp or {}).get("server")
             if not isinstance(server, str) or not server:
                 raise ValueError("origin: mcp 时必须声明 mcp.server")
-            if self.operations or self.skills:
-                raise ValueError(
-                    "origin: mcp 时成员由 tools/list 生成，不得声明 operations / skills"
-                )
-        elif self.mcp is not None:
+            if set(self.mcp or {}) != {"server"}:
+                raise ValueError("MCP 包只允许服务器引用")
+            if not self.identity.name or not self.operations or self.skills:
+                raise ValueError("MCP 包必须具名且仅含非空工具快照")
+            for operation in self.operations.values():
+                if (
+                    operation.entry is not None
+                    or operation.mcp is None
+                    or operation.mcp.server != server
+                ):
+                    raise ValueError("MCP 成员必须绑定包服务器，且不得声明 entry")
+        elif self.mcp is not None or any(o.mcp is not None for o in self.operations.values()):
             raise ValueError("origin: source 时不得声明 mcp")
         return self
 

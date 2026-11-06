@@ -279,7 +279,14 @@ def test_install_rejects_reserved_namespaces(tmp_path: Path) -> None:
         _assert_error("reserved_namespace", lambda: installer.install(source))
 
 
-def test_install_rejects_mcp_origin(tmp_path: Path) -> None:
+def test_install_mcp_reports_missing_configuration(tmp_path: Path, monkeypatch) -> None:
+    from ghrah.mcp.agentconf_source import AgentconfMcpSource
+    from ghrah.mcp.errors import McpConfigError
+
+    def missing(*args, **kwargs):
+        raise McpConfigError("missing server")
+
+    monkeypatch.setattr(AgentconfMcpSource, "connection_spec", missing)
     installer = _installer(tmp_path)
     source = tmp_path / "mcp-src"
     _write(
@@ -293,7 +300,7 @@ def test_install_rejects_mcp_origin(tmp_path: Path) -> None:
         "mcp: {server: github-mcp}\n"
         "members: {}\n",
     )
-    _assert_error("mcp_requires_p5", lambda: installer.install(source))
+    _assert_error("mcp_config_invalid", lambda: installer.install(source))
 
 
 def test_install_rejects_reserved_member_names(tmp_path: Path) -> None:
@@ -705,7 +712,7 @@ def test_refresh_source_is_unsupported(tmp_path: Path) -> None:
     _assert_error("unsupported_refresh", lambda: installer.refresh(full_name="fixtures.reporting"))
 
 
-def test_refresh_mcp_reports_unsupported_until_p5(tmp_path: Path) -> None:
+def test_refresh_mcp_rejects_corrupt_snapshot(tmp_path: Path) -> None:
     installer = _installer(tmp_path)
     version_root = installer.root / "mcp" / "github" / "0.0.1"
     _write(version_root / "ability.yaml", "format: ghrah.ability-definition\n")
@@ -719,7 +726,7 @@ def test_refresh_mcp_reports_unsupported_until_p5(tmp_path: Path) -> None:
         mcp=McpLock(fetched_at="2026-11-03T12:34:56Z", stale=False, last_error=None),
     )
     write_lock(installer.root / "mcp" / "github" / lock_filename("0.0.1"), lock)
-    _assert_error("unsupported_until_p5", lambda: installer.refresh(full_name="mcp.github"))
+    _assert_error("corrupt_install", lambda: installer.refresh(full_name="mcp.github"))
 
 
 def test_install_result_to_list_to_verify_roundtrip(tmp_path: Path) -> None:

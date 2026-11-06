@@ -59,6 +59,7 @@ __all__ = [
     "Connector",
     "call_tool_once",
     "list_tool_names",
+    "list_tools",
     "open_client",
     "read_only_hint",
     "resolve_headers",
@@ -223,21 +224,46 @@ def read_only_hint(tool: types.Tool) -> bool:
     return bool(annotations.read_only_hint)
 
 
-async def list_tool_names(client: mcp.Client) -> tuple[str, ...]:
-    """列出服务器上的全部工具名，跟随分页游标直到取尽。
+async def list_tools(
+    client: Any, *, max_pages: int = 100, max_bytes: int = 4_194_304
+) -> list[dict[str, Any]]:
+    """取尽分页工具契约；拒绝重复游标、超限与重复工具，不返回 SDK 对象。"""
+    import json
 
-    仅用于诊断与校验（例如确认配置里声明的工具是否仍然存在）；平时不调用——工具
-    清单来自本地配置，不需要联网获取。``max_pages`` 由调用方以超时或取消约束。
-    """
-    names: list[str] = []
+    result: list[dict[str, Any]] = []
+    cursors: set[str] = set()
+    names: set[str] = set()
     cursor: str | None = None
-    while True:
+    total = 0
+    for _ in range(max_pages):
         page = await client.list_tools(cursor=cursor)
-        names.extend(tool.name for tool in page.tools)
+        for tool in page.tools:
+            if tool.name in names:
+                raise McpProtocolError("duplicate tool name")
+            names.add(tool.name)
+            item = {
+                "name": tool.name,
+                "title": getattr(tool, "title", None),
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "output_schema": getattr(tool, "output_schema", None),
+            }
+            total += len(json.dumps(item, ensure_ascii=False).encode())
+            if total > max_bytes:
+                raise McpProtocolError("tool listing exceeds size limit")
+            result.append(item)
         cursor = page.next_cursor
         if not cursor:
-            break
-    return tuple(names)
+            return result
+        if cursor in cursors:
+            raise McpProtocolError("repeated tools cursor")
+        cursors.add(cursor)
+    raise McpProtocolError("tool listing exceeds page limit")
+
+
+async def list_tool_names(client: Any) -> tuple[str, ...]:
+    """取尽工具名；与完整契约发现共用分页和大小约束。"""
+    return tuple(tool["name"] for tool in await list_tools(client))
 
 
 async def call_tool_once(

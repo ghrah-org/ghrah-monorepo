@@ -13,7 +13,11 @@ from urllib.parse import urlsplit
 from agentconf import AgentsConfig, AgentsConfigError, StreamableHTTPConnection
 
 from ghrah.mcp.credentials import _secret_str
-from ghrah.mcp.errors import McpConfigError, McpCredentialMissingError
+from ghrah.mcp.errors import (
+    McpConfigError,
+    McpCredentialMissingError,
+    McpUnsupportedTransportError,
+)
 from ghrah.mcp.identity import MAX_SERVER_NAME_LEN
 from ghrah.mcp.spec import (
     AUTH_PLACEHOLDER,
@@ -126,7 +130,9 @@ class AgentconfMcpSource:
         record = self._resolve(name)
         connection = record.connection
         if not isinstance(connection, StreamableHTTPConnection):
-            raise McpConfigError("只支持 streamable-http，stdio／自定义 transport 尚未接入")
+            raise McpUnsupportedTransportError(
+                "只支持 streamable-http，stdio／自定义 transport 尚未接入"
+            )
         auth = record.auth
         if auth is None:
             raise McpConfigError("MCP 配置缺少 schema 6 认证描述")

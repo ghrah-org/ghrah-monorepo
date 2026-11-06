@@ -1117,6 +1117,7 @@ class AbilityAccessStore:
                             availability=(
                                 "unavailable"
                                 if not available
+                                or definition.get("origin") == "mcp"
                                 or not axes.get(f"operations/{key}", {}).get("available", True)
                                 else "unknown"
                             ),

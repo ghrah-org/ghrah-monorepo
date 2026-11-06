@@ -559,7 +559,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
-    """``refresh <full-name> --root R``：P2 尚无 MCP，安装器返回不支持的错误。"""
+    """``refresh <full-name> --root R``：刷新 MCP 包的最新候选快照。"""
     root = _resolve_root(args.root)
     full_name, version = _parse_target(args.target)
     if version is not None:
@@ -646,7 +646,7 @@ def _build_parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("show", "查看某个 Ability 包的详情（省略版本时列出该身份的全部版本）"),
         ("verify", "校验某个 Ability 包及安装记录（省略版本时校验该身份的全部版本）"),
-        ("refresh", "刷新某个 Ability 包（P5 MCP 快照；P2 明确返回不支持）"),
+        ("refresh", "刷新 MCP 包的工具快照"),
     ):
         sub = verbs.add_parser(name, help=help_text)
         sub.add_argument(
