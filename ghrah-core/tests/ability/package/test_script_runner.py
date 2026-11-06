@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -247,7 +248,11 @@ def _assert_audit(result, *, ok: bool, kind: str | None = None) -> None:
 
 
 async def test_local_script_success_returns_data_and_hides_stderr(tmp_path, caplog) -> None:
-    """成功信封回灌给调用方；stderr 只进日志。"""
+    """成功信封回灌给调用方；stderr 只进日志。
+
+    POSIX 让子进程自组进程组（``start_new_session``）以便整组终止；Windows
+    用 ``CREATE_NO_WINDOW`` 抑制控制台窗口，且没有 ``start_new_session``。
+    """
     version = _install_python(tmp_path, SUCCESS)
     db = await _store(tmp_path, ("pkg", version))
     await _grant(db, alias="tools", instance="pkg", available=True, expected_revision=0)
@@ -271,7 +276,11 @@ async def test_local_script_success_returns_data_and_hides_stderr(tmp_path, capl
     assert args[0] == sys.executable
     assert args[1].endswith("export.py")
     assert kwargs["cwd"] == str(tmp_path / "workspace")
-    assert kwargs["start_new_session"] is True
+    if os.name == "nt":
+        assert kwargs["creationflags"] == process.CREATE_NO_WINDOW
+        assert "start_new_session" not in kwargs
+    else:
+        assert kwargs["start_new_session"] is True
     assert "diagnostic" in caplog.text
 
 
@@ -292,7 +301,11 @@ async def test_script_failure_envelope_is_returned(tmp_path) -> None:
 
 
 async def test_timeout_kills_the_process_during_grace(tmp_path) -> None:
-    """超时先发 SIGTERM；宽限内退出时效果不是未知。"""
+    """超时先发 SIGTERM；宽限内退出时效果不是未知。
+
+    Windows 没有 POSIX 宽限：终止走 ``taskkill /F /T`` 树杀，无法确认子进程
+    是否已产生效果，因此 ``effect_unknown`` 为真。
+    """
     version = _install_python(tmp_path, SLEEP)
     db = await _store(tmp_path, ("pkg", version))
     await _grant(db, alias="tools", instance="pkg", available=True, expected_revision=0)
@@ -308,7 +321,8 @@ async def test_timeout_kills_the_process_during_grace(tmp_path) -> None:
     finally:
         await db.close()
     _assert_audit(result, ok=False, kind="timeout")
-    assert result.data["effect_unknown"] is False
+    expected_unknown = os.name == "nt"  # Windows 树杀无法确认效果。
+    assert result.data["effect_unknown"] is expected_unknown
     assert len(calls) == 1
     assert calls[0][0][0] == sys.executable
 
@@ -387,7 +401,11 @@ async def test_non_python_script_is_rejected_before_spawn(tmp_path) -> None:
 
 
 async def test_cancel_uses_the_same_termination_path(tmp_path) -> None:
-    """取消终止进程树。宽限内退出时不把效果标成未知。"""
+    """取消终止进程树。POSIX 宽限内退出时不把效果标成未知。
+
+    取消与超时共用 :func:`process._terminate`：Windows 上同样走
+    ``taskkill /F /T``，``effect_unknown`` 为真。
+    """
     version = _install_python(tmp_path, SLEEP)
     db = await _store(tmp_path, ("pkg", version))
     await _grant(db, alias="tools", instance="pkg", available=True, expected_revision=0)
@@ -412,7 +430,8 @@ async def test_cancel_uses_the_same_termination_path(tmp_path) -> None:
         await trip_task
         await db.close()
     _assert_audit(result, ok=False, kind="cancelled")
-    assert result.data["effect_unknown"] is False
+    expected_unknown = os.name == "nt"  # Windows 树杀无法确认效果。
+    assert result.data["effect_unknown"] is expected_unknown
     assert len(calls) == 1
 
 
@@ -475,6 +494,11 @@ def test_bom_stdout_is_internal() -> None:
     assert "utf-8-sig" in (outcome.error or "")
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX 专有路径：直接测 _terminate_posix 并注入 os.killpg；"
+    "Windows 树杀由 test_nt_timeout_and_cancel_use_taskkill 覆盖",
+)
 async def test_sigkill_after_grace_marks_effect_unknown(monkeypatch) -> None:
     """宽限后仍活着的进程被 SIGKILL，effect_unknown 为真。"""
     signals: list[int] = []
