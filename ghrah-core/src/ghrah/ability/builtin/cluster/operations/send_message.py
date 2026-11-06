@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -54,6 +54,38 @@ class SendMessageInput(BaseModel):
 
 
 Input = SendMessageInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class SendMessageAwaitReplyOutput(BaseModel):
+    """点对点发送在持久检查点之后等待回复的句柄。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(description="Prepared message id")
+    mode: str = Field(description="Wait mode")
+    target: str = Field(description="Agent the reply is expected from")
+    timeout: float = Field(description="Wait timeout in seconds")
+
+
+class SendMessageOutput(BaseModel):
+    """SendMessage 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(description="Prepared persistent message id")
+    recipients: list[str] = Field(description="Resolved recipient ids")
+    status: str = Field(description="Preparation status")
+    mode: str = Field(description="persistent, or async when fire_and_forget is set")
+    recipient_names: dict[str, str] = Field(
+        description="Stable recipient id to runtime display name"
+    )
+    target: str = Field(description="Requested target name or stable id")
+    await_reply: SendMessageAwaitReplyOutput | None = Field(
+        default=None, description="Durable wait handle when fire_and_forget is false"
+    )
+
+
+Output = SendMessageOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class SendMessageAbility(Ability):

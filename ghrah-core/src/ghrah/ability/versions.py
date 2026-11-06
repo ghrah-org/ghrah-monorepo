@@ -16,6 +16,7 @@ from ghrah.ability.content import CaptureLimits, canonical, capture_content, dig
 from ghrah.ability.file_members import FILE_OPERATIONS
 from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.loading.ability_schema import AbilityDefinition, parse_definition
+from ghrah.ability.package.digest import collect_files, tree_digest
 from ghrah.ability.permissions import fs_permissions
 from ghrah.ability.provider_contracts import (
     CLUSTER_CONTRACT,
@@ -125,27 +126,47 @@ def implementation_identity(definition: AbilityDefinition, *, root: Path) -> str
 
 @dataclass(frozen=True)
 class AbilityVersion:
-    """密封的定义文本与当前已加载后端版本，不持可变来源对象。"""
+    """一次捕获的定义、实现标识与内容清单。
+
+    ``digest`` 是关系库里的身份。包捕获的身份是 ``package_digest``（版本目录
+    整树摘要）；文件切片没有包树，身份仍是定义与实现的密封。从关系库读回时
+    只有 ``digest`` 列，``package_digest`` 留空：整树摘要不能从定义文本重算。
+    """
 
     digest: str
     definition_json: str
     implementation_digest: str
     manifest_json: str = "{}"
     blobs: tuple[tuple[str, bytes], ...] = ()
+    package_digest: str = ""
 
     @property
     def content_digest(self) -> str:
         """完整内容清单的摘要，与定义和后端代次分开。"""
         return digest_bytes(self.manifest_json.encode())
 
-    def expected_digest(self) -> str:
-        """无内容的旧版本保持原摘要；新内容格式显式加入清单。"""
+    def sealed_digest(self) -> str:
+        """定义、实现与内容清单的密封。
+
+        文件切片用它当身份。包版本不再用它当身份：同一份定义文本可以对应
+        不同的目录字节。无内容清单时不把空对象 ``{}`` 算进密封，与文件切片
+        的历史摘要保持一致。
+        """
         suffix = self.manifest_json if self.manifest_json != "{}" else ""
         return digest_bytes((self.definition_json + self.implementation_digest + suffix).encode())
 
+    def expected_digest(self) -> str:
+        """提交时必须与 ``digest`` 相等的身份。
+
+        整树版本返回 ``package_digest``。没有整树摘要的文件切片返回密封。
+        """
+        if self.package_digest:
+            return self.package_digest
+        return self.sealed_digest()
+
     @property
     def definition_digest(self) -> str:
-        """定义摘要不混入实现代码的摘要。"""
+        """定义摘要不混入实现代码的摘要，也不再承担版本身份。"""
         return "sha256:" + hashlib.sha256(self.definition_json.encode()).hexdigest()
 
     def definition(self) -> AbilityDefinition:
@@ -176,10 +197,35 @@ def capture_file_version(raw: str | None = None) -> AbilityVersion:
 def capture_ability_version(
     raw: str, *, root: Path, limits: CaptureLimits = CaptureLimits()
 ) -> AbilityVersion:
-    """显式捕获完整容器；实现标识与内容清单都从包来源重新计算。"""
+    """显式捕获完整容器。身份是包根目录的整树摘要。
+
+    ``root`` 是内置包目录或安装槽里的版本目录。摘要覆盖该目录下的普通文件，
+    排除缓存目录；版本目录旁的安装记录不在这棵树里。定义文本、实现标识和
+    内容清单仍一并捕获，但它们不再决定 ``digest``。
+
+    Args:
+        raw: 包定义原文。调用方从 ``root/ability.yaml`` 读出后传入。
+        root: 要计算整树摘要的包根。
+        limits: 内容捕获的大小限制。
+
+    Returns:
+        ``digest`` 与 ``package_digest`` 相同的版本。
+
+    Raises:
+        ValueError: 定义或内容清单不合法。
+        OSError: 包根不可读。
+        PathRuleError: 包根含符号链接、非普通文件或不可移植的文本。
+    """
     definition = parse_definition(raw, source=str(root))
     definition, manifest, blobs = capture_content(definition, root, limits)
     encoded = canonical(definition.model_dump(mode="json"))
     implementation = implementation_identity(definition, root=root)
-    version = AbilityVersion("", encoded, implementation, manifest, blobs)
-    return AbilityVersion(version.expected_digest(), encoded, implementation, manifest, blobs)
+    package_digest = tree_digest(collect_files(root))
+    return AbilityVersion(
+        package_digest,
+        encoded,
+        implementation,
+        manifest,
+        blobs,
+        package_digest,
+    )

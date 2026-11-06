@@ -169,7 +169,7 @@ def test_capture_includes_every_skill_and_attachment(tmp_path: Path) -> None:
     )
     members = set(json.loads(version.manifest_json))
 
-    # v1 的 Operation 源码不是内容成员（P4 的 package_digest 才覆盖整树）
+    # Operation 源码不是内容成员。版本身份另行覆盖整棵目录，不写进这份清单。
     assert {"skill/alpha", "skill/beta"} <= members
     assert "operations/ping/script" not in members
     assert "skill/beta/references/guide" in members

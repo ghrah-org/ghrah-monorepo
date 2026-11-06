@@ -34,9 +34,22 @@ members:
         - tool
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          content:
+            description: Tool result rendered for the model
+            type: string
+          server:
+            description: MCP server that handled the call
+            type: string
+          tool:
+            description: Tool name on that server
+            type: string
+        required:
+        - content
+        - server
+        - tool
+        type: object
       tags:
       - mcp
       - tool

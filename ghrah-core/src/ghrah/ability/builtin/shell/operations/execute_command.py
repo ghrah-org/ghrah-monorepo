@@ -91,6 +91,22 @@ class ExecuteCommandInput(BaseModel):
 Input = ExecuteCommandInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class ExecuteCommandOutput(BaseModel):
+    """ExecuteCommand 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    exit_code: int = Field(description="Process exit code")
+    stdout: str = Field(description="Standard output, folded when it exceeds the line limit")
+    stderr: str = Field(description="Standard error")
+    timed_out: bool = Field(description="Whether the command exceeded its timeout")
+    command: str = Field(description="Command that was executed")
+    working_dir: str = Field(description="Working directory; empty when the caller omitted one")
+
+
+Output = ExecuteCommandOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 @dataclass
 class CommandResult:
     exit_code: int

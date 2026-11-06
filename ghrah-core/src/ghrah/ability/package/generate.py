@@ -369,7 +369,7 @@ def _validate_permissions(key: str, permissions: dict[str, Any]) -> None:
                 )
 
 
-def _operation_member(key: str, script: Path, warnings: list[str]) -> dict[str, Any]:
+def _operation_member(key: str, script: Path) -> dict[str, Any]:
     """从实现模块声明生成一个 operation 成员。"""
     try:
         decl = read_declaration(script)
@@ -379,22 +379,11 @@ def _operation_member(key: str, script: Path, warnings: list[str]) -> dict[str, 
     input_schema = _strip_schema_metadata(
         _validate_schema(key, decl.input_schema or {}, what="Input.model_json_schema()")
     )
-    # 每次新建字面量：同一个字典对象被多个成员复用时，safe_dump 会写
-    # ``&id001`` / ``*id001`` 锚点，违反“生成物展开”的冻结规则。
-    output_schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
-    if decl.output_schema is not None:
-        output_schema = _strip_schema_metadata(
-            _validate_schema(key, decl.output_schema, what="Output.model_json_schema()")
-        )
-    else:
-        warnings.append(
-            f"operations/{key}.py: 缺 Output 模型，output_schema 占位空对象 schema"
-            "（P4 严格模式将失败）"
-        )
+    if decl.output_schema is None:
+        raise BuildError(f"operations/{key}.py: 缺 Output 模型")
+    output_schema = _strip_schema_metadata(
+        _validate_schema(key, decl.output_schema, what="Output.model_json_schema()")
+    )
     resources = dict(decl.resources)
     paths = resources.get("paths", [])
     if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
@@ -446,7 +435,7 @@ def _render(root: Path, *, builtin: bool) -> tuple[str, dict[str, Any], list[str
             raise BuildError(f"operations/ 成员键非法（^a-z[a-z0-9_]{{0,63}}$）: {key!r}")
         if key in _RESERVED_TOOL_NAMES:
             raise BuildError(f"operations/{key}.py: 保留名（生成期拒绝一次，表面投影再拒绝一次）")
-        operations[key] = _operation_member(key, op_files[key], warnings)
+        operations[key] = _operation_member(key, op_files[key])
     skills: dict[str, Any] = {}
     for name in sorted(skill_files):
         skills[name] = _skill_member(name, skill_files[name])

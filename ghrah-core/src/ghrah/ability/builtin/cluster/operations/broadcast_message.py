@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -53,6 +53,43 @@ class BroadcastMessageInput(BaseModel):
 
 
 Input = BroadcastMessageInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class BroadcastAwaitReplyOutput(BaseModel):
+    """广播在持久检查点之后等待回复的句柄。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(description="Prepared message id")
+    mode: str = Field(description="Wait mode")
+    timeout: float = Field(description="Wait timeout in seconds; -1 waits without a limit")
+    targets: list[str] = Field(description="Agents the broadcast was addressed to")
+
+
+class BroadcastMessageOutput(BaseModel):
+    """BroadcastMessage 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipients: list[str] = Field(
+        description="Resolved recipient ids; empty when nobody else is up"
+    )
+    agent_count: int = Field(description="Number of recipients")
+    responses: list[str] | None = Field(
+        default=None, description="Collected replies; present and empty when there is no recipient"
+    )
+    message_id: str | None = Field(default=None, description="Prepared message id")
+    status: str | None = Field(default=None, description="Preparation status")
+    mode: str | None = Field(default=None, description="Delivery mode")
+    recipient_names: dict[str, str] | None = Field(
+        default=None, description="Stable recipient id to runtime display name"
+    )
+    await_reply: BroadcastAwaitReplyOutput | None = Field(
+        default=None, description="Durable wait handle when at least one recipient exists"
+    )
+
+
+Output = BroadcastMessageOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class BroadcastMessageAbility(Ability):

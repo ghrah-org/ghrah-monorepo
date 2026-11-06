@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import MANIFEST_STORE
@@ -64,6 +64,55 @@ class QueryManifestsInput(BaseModel):
 
 
 Input = QueryManifestsInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class ManifestAbilityOutput(BaseModel):
+    """单条 manifest 里的一项能力引用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ability: str = Field(description="Ability ref or type")
+    require_hitl: bool | None = Field(
+        default=None, description="Whether the ability requires human approval"
+    )
+    allowed_paths: list[str] | None = Field(
+        default=None, description="Filesystem roots granted to the ability"
+    )
+
+
+class ManifestSummaryOutput(BaseModel):
+    """清单列表中的一行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(description="Manifest full name")
+    description: str = Field(description="Manifest description; empty when the file is unreadable")
+    unavailable: bool | None = Field(
+        default=None, description="True when this manifest could not be loaded"
+    )
+
+
+class QueryManifestsOutput(BaseModel):
+    """QueryManifests 的两种成功结果：省略 manifest_ref 时是列表，给出时是单条定义。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    manifests: list[ManifestSummaryOutput] | None = Field(
+        default=None, description="All manifests, when manifest_ref was omitted"
+    )
+    count: int | None = Field(default=None, description="Number of manifests listed")
+    full_name: str | None = Field(default=None, description="Inspected manifest name")
+    description: str | None = Field(default=None, description="Inspected manifest description")
+    system_prompt: str | None = Field(default=None, description="Inspected manifest system prompt")
+    abilities: list[ManifestAbilityOutput] | None = Field(
+        default=None, description="Abilities frozen on the inspected manifest"
+    )
+    truncated: bool | None = Field(
+        default=None, description="Whether the ability list was cut at the display limit"
+    )
+
+
+Output = QueryManifestsOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class QueryManifestsAbility(Ability):

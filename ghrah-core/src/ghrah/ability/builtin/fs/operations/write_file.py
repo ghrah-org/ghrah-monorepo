@@ -79,6 +79,18 @@ class WriteFileInput(BaseModel):
 Input = WriteFileInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class WriteFileOutput(BaseModel):
+    """WriteFile 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(description="Path of the file that was written")
+    bytes_written: int = Field(description="Number of bytes written")
+
+
+Output = WriteFileOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class WriteFileAbility(Ability):
     """文件写入能力 — 创建或覆盖文件。
 

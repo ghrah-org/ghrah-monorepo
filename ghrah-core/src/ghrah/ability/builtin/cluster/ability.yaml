@@ -23,9 +23,85 @@ members:
         - content
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          BroadcastAwaitReplyOutput:
+            additionalProperties: false
+            description: 广播在持久检查点之后等待回复的句柄。
+            properties:
+              message_id:
+                description: Prepared message id
+                type: string
+              mode:
+                description: Wait mode
+                type: string
+              timeout:
+                description: Wait timeout in seconds; -1 waits without a limit
+                type: number
+              targets:
+                description: Agents the broadcast was addressed to
+                items:
+                  type: string
+                type: array
+            required:
+            - message_id
+            - mode
+            - timeout
+            - targets
+            type: object
         additionalProperties: false
+        properties:
+          recipients:
+            description: Resolved recipient ids; empty when nobody else is up
+            items:
+              type: string
+            type: array
+          agent_count:
+            description: Number of recipients
+            type: integer
+          responses:
+            anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+            default: null
+            description: Collected replies; present and empty when there is no recipient
+          message_id:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Prepared message id
+          status:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Preparation status
+          mode:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Delivery mode
+          recipient_names:
+            anyOf:
+            - additionalProperties:
+                type: string
+              type: object
+            - type: 'null'
+            default: null
+            description: Stable recipient id to runtime display name
+          await_reply:
+            anyOf:
+            - $ref: '#/$defs/BroadcastAwaitReplyOutput'
+            - type: 'null'
+            default: null
+            description: Durable wait handle when at least one recipient exists
+        required:
+        - recipients
+        - agent_count
+        type: object
       tags:
       - cluster
       - communication
@@ -55,9 +131,60 @@ members:
             description: Optional substring to filter agent names
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          AgentRecordOutput:
+            additionalProperties: false
+            description: 集群里一个已注册 Agent 的公开记录。
+            properties:
+              agent_id:
+                description: Stable agent id
+                type: string
+              incarnation_id:
+                description: Incarnation id of the running process
+                type: string
+              name:
+                description: Runtime display name
+                type: string
+              config:
+                anyOf:
+                - additionalProperties: true
+                  type: object
+                - type: 'null'
+                description: Serializable agent configuration
+              description:
+                description: Agent description
+                type: string
+              tags:
+                description: Agent tags
+                items:
+                  type: string
+                type: array
+              created_at:
+                description: Registration time as a Unix timestamp
+                type: number
+            required:
+            - agent_id
+            - incarnation_id
+            - name
+            - config
+            - description
+            - tags
+            - created_at
+            type: object
         additionalProperties: false
+        properties:
+          agents:
+            description: Registered agents matching the filter
+            items:
+              $ref: '#/$defs/AgentRecordOutput'
+            type: array
+          count:
+            description: Number of agents returned
+            type: integer
+        required:
+        - agents
+        - count
+        type: object
       tags:
       - cluster
       - discovery
@@ -86,9 +213,100 @@ members:
             description: Optional full name of a single agent manifest to inspect (e.g. 'ghrah.designer'). Omit to list all available manifests.
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          ManifestAbilityOutput:
+            additionalProperties: false
+            description: 单条 manifest 里的一项能力引用。
+            properties:
+              ability:
+                description: Ability ref or type
+                type: string
+              require_hitl:
+                anyOf:
+                - type: boolean
+                - type: 'null'
+                default: null
+                description: Whether the ability requires human approval
+              allowed_paths:
+                anyOf:
+                - items:
+                    type: string
+                  type: array
+                - type: 'null'
+                default: null
+                description: Filesystem roots granted to the ability
+            required:
+            - ability
+            type: object
+          ManifestSummaryOutput:
+            additionalProperties: false
+            description: 清单列表中的一行。
+            properties:
+              full_name:
+                description: Manifest full name
+                type: string
+              description:
+                description: Manifest description; empty when the file is unreadable
+                type: string
+              unavailable:
+                anyOf:
+                - type: boolean
+                - type: 'null'
+                default: null
+                description: True when this manifest could not be loaded
+            required:
+            - full_name
+            - description
+            type: object
         additionalProperties: false
+        properties:
+          manifests:
+            anyOf:
+            - items:
+                $ref: '#/$defs/ManifestSummaryOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: All manifests, when manifest_ref was omitted
+          count:
+            anyOf:
+            - type: integer
+            - type: 'null'
+            default: null
+            description: Number of manifests listed
+          full_name:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Inspected manifest name
+          description:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Inspected manifest description
+          system_prompt:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Inspected manifest system prompt
+          abilities:
+            anyOf:
+            - items:
+                $ref: '#/$defs/ManifestAbilityOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Abilities frozen on the inspected manifest
+          truncated:
+            anyOf:
+            - type: boolean
+            - type: 'null'
+            default: null
+            description: Whether the ability list was cut at the display limit
+        type: object
       tags:
       - cluster
       - discovery
@@ -132,9 +350,46 @@ members:
         - message
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          message_id:
+            description: Prepared persistent message id
+            type: string
+          recipients:
+            description: Resolved room members and extra targets
+            items:
+              type: string
+            type: array
+          status:
+            description: Preparation status
+            type: string
+          mode:
+            description: Delivery mode
+            type: string
+          recipient_names:
+            additionalProperties:
+              type: string
+            description: Stable recipient id to runtime display name
+            type: object
+          delivered_to:
+            description: Recipients after the sender is excluded
+            items:
+              type: string
+            type: array
+          rooms:
+            description: Room ids the message was addressed to
+            items:
+              type: string
+            type: array
+        required:
+        - message_id
+        - recipients
+        - status
+        - mode
+        - recipient_names
+        - delivered_to
+        - rooms
+        type: object
       tags: []
       effects:
       - cluster:message
@@ -171,9 +426,67 @@ members:
         - content
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          SendMessageAwaitReplyOutput:
+            additionalProperties: false
+            description: 点对点发送在持久检查点之后等待回复的句柄。
+            properties:
+              message_id:
+                description: Prepared message id
+                type: string
+              mode:
+                description: Wait mode
+                type: string
+              target:
+                description: Agent the reply is expected from
+                type: string
+              timeout:
+                description: Wait timeout in seconds
+                type: number
+            required:
+            - message_id
+            - mode
+            - target
+            - timeout
+            type: object
         additionalProperties: false
+        properties:
+          message_id:
+            description: Prepared persistent message id
+            type: string
+          recipients:
+            description: Resolved recipient ids
+            items:
+              type: string
+            type: array
+          status:
+            description: Preparation status
+            type: string
+          mode:
+            description: persistent, or async when fire_and_forget is set
+            type: string
+          recipient_names:
+            additionalProperties:
+              type: string
+            description: Stable recipient id to runtime display name
+            type: object
+          target:
+            description: Requested target name or stable id
+            type: string
+          await_reply:
+            anyOf:
+            - $ref: '#/$defs/SendMessageAwaitReplyOutput'
+            - type: 'null'
+            default: null
+            description: Durable wait handle when fire_and_forget is false
+        required:
+        - message_id
+        - recipients
+        - status
+        - mode
+        - recipient_names
+        - target
+        type: object
       tags:
       - cluster
       - communication
@@ -215,9 +528,22 @@ members:
         - manifest_ref
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          agent_name:
+            description: Runtime name of the spawned agent
+            type: string
+          status:
+            description: Spawn status
+            type: string
+          manifest_ref:
+            description: Manifest the agent was created from
+            type: string
+        required:
+        - agent_name
+        - status
+        - manifest_ref
+        type: object
       tags:
       - cluster
       - lifecycle
@@ -248,9 +574,18 @@ members:
         - agent_name
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          agent_name:
+            description: Name of the terminated agent
+            type: string
+          status:
+            description: Termination status
+            type: string
+        required:
+        - agent_name
+        - status
+        type: object
       tags:
       - cluster
       - lifecycle

@@ -22,9 +22,18 @@ members:
         - file_path
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          file_path:
+            description: Path of the file that was deleted
+            type: string
+          deleted:
+            description: Whether the file was deleted
+            type: boolean
+        required:
+        - file_path
+        - deleted
+        type: object
       tags:
       - delete
       - filesystem
@@ -68,9 +77,18 @@ members:
         - new_str
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          file_path:
+            description: Path of the file that was edited
+            type: string
+          replacements:
+            description: Number of replacements applied
+            type: integer
+        required:
+        - file_path
+        - replacements
+        type: object
       tags:
       - edit
       - filesystem
@@ -218,9 +236,18 @@ members:
         - destination_path
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          source_path:
+            description: Path the file was moved from
+            type: string
+          destination_path:
+            description: Path the file was moved to
+            type: string
+        required:
+        - source_path
+        - destination_path
+        type: object
       tags:
       - filesystem
       - move
@@ -344,9 +371,57 @@ members:
         - path
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          SearchMatchOutput:
+            additionalProperties: false
+            description: 一行匹配。
+            properties:
+              file:
+                description: File path of the match
+                type: string
+              line:
+                description: 1-based line number
+                type: integer
+              text:
+                description: Matching line without the trailing newline
+                type: string
+            required:
+            - file
+            - line
+            - text
+            type: object
         additionalProperties: false
+        properties:
+          matches:
+            description: Matching lines in this window
+            items:
+              $ref: '#/$defs/SearchMatchOutput'
+            type: array
+          total:
+            description: Total number of matches found
+            type: integer
+          truncated:
+            description: Whether matches beyond the window were omitted
+            type: boolean
+          pattern:
+            description: Search pattern
+            type: string
+          path:
+            description: File or directory that was searched
+            type: string
+          exit_code:
+            anyOf:
+            - type: integer
+            - type: 'null'
+            default: null
+            description: Process exit code when search ran through the command runner
+        required:
+        - matches
+        - total
+        - truncated
+        - pattern
+        - path
+        type: object
       tags:
       - filesystem
       - read
@@ -388,9 +463,18 @@ members:
         - content
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          file_path:
+            description: Path of the file that was written
+            type: string
+          bytes_written:
+            description: Number of bytes written
+            type: integer
+        required:
+        - file_path
+        - bytes_written
+        type: object
       tags:
       - filesystem
       - write

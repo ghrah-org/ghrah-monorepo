@@ -86,6 +86,18 @@ class MoveFileInput(BaseModel):
 Input = MoveFileInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class MoveFileOutput(BaseModel):
+    """MoveFile 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(description="Path the file was moved from")
+    destination_path: str = Field(description="Path the file was moved to")
+
+
+Output = MoveFileOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class MoveFileAbility(Ability):
     """文件移动/重命名能力。
 

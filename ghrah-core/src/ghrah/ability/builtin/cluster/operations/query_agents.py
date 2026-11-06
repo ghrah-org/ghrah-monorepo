@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -52,6 +52,32 @@ class QueryAgentsInput(BaseModel):
 
 
 Input = QueryAgentsInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class AgentRecordOutput(BaseModel):
+    """集群里一个已注册 Agent 的公开记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(description="Stable agent id")
+    incarnation_id: str = Field(description="Incarnation id of the running process")
+    name: str = Field(description="Runtime display name")
+    config: dict[str, Any] | None = Field(description="Serializable agent configuration")
+    description: str = Field(description="Agent description")
+    tags: list[str] = Field(description="Agent tags")
+    created_at: float = Field(description="Registration time as a Unix timestamp")
+
+
+class QueryAgentsOutput(BaseModel):
+    """QueryAgents 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agents: list[AgentRecordOutput] = Field(description="Registered agents matching the filter")
+    count: int = Field(description="Number of agents returned")
+
+
+Output = QueryAgentsOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class QueryAgentsAbility(Ability):

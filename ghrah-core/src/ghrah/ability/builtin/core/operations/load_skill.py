@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.access import AccessError
 from ghrah.ability.execution.base import Ability
@@ -52,6 +52,27 @@ class LoadSkillInput(BaseModel):
 
 
 Input = LoadSkillInput
+
+
+class LoadSkillOutput(BaseModel):
+    """LoadSkill 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(description="alias/skill that was loaded")
+    instance_id: str = Field(description="Instance that owns the committed text")
+    version_digest: str = Field(description="Committed version digest")
+    member: str = Field(description="Member address of the document or attachment")
+    path: str = Field(description="Package-relative path")
+    media_type: str = Field(description="Media type")
+    digest: str = Field(description="Content digest")
+    total_bytes: int = Field(description="Total size in bytes")
+    alias: str = Field(description="Package alias")
+    uri: str = Field(description="ability: alias/member URI")
+    content: str = Field(description="UTF-8 text")
+
+
+Output = LoadSkillOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class LoadSkillAbility(Ability):

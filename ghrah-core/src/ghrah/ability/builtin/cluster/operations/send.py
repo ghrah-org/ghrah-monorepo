@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -72,6 +72,25 @@ class SendInput(BaseModel):
 
 
 Input = SendInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class SendOutput(BaseModel):
+    """Send 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(description="Prepared persistent message id")
+    recipients: list[str] = Field(description="Resolved room members and extra targets")
+    status: str = Field(description="Preparation status")
+    mode: str = Field(description="Delivery mode")
+    recipient_names: dict[str, str] = Field(
+        description="Stable recipient id to runtime display name"
+    )
+    delivered_to: list[str] = Field(description="Recipients after the sender is excluded")
+    rooms: list[str] = Field(description="Room ids the message was addressed to")
+
+
+Output = SendOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class SendAbility(Ability):

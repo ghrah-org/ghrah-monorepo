@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.access import AccessError
 from ghrah.ability.execution.base import Ability
@@ -46,6 +46,89 @@ class ListAbilitiesInput(BaseModel):
 
 
 Input = ListAbilitiesInput
+
+
+class GrantedAttachmentOutput(BaseModel):
+    """获授 Skill 的一个附件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(description="Attachment key")
+    member: str = Field(description="Granted member address")
+    path: str = Field(description="Package-relative path")
+    media_type: str = Field(description="Media type")
+    size: int = Field(description="Size in bytes")
+    digest: str = Field(description="Content digest")
+    available: bool = Field(description="Whether the attachment may be executed")
+
+
+class ListedAbilityOutput(BaseModel):
+    """目录模式下的一条 Operation。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(description="alias/operations/key")
+    kind: str = Field(description="Entry kind")
+    description: str = Field(description="Operation description")
+    availability: str = Field(description="ready, unavailable, or unknown")
+
+
+class ListedSkillOutput(BaseModel):
+    """目录模式下的一条 Skill。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(description="alias/skill")
+    kind: str = Field(description="Entry kind")
+    description: str = Field(description="Skill description")
+
+
+class ListAbilitiesOutput(BaseModel):
+    """列出获授条目，或在给出 full_name 时返回那一条的详情。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    abilities: list[ListedAbilityOutput] | None = Field(
+        default=None, description="Granted operations, when full_name was omitted"
+    )
+    skills: list[ListedSkillOutput] | None = Field(
+        default=None, description="Granted skills, when full_name was omitted"
+    )
+    count: int | None = Field(default=None, description="Total granted entries before truncation")
+    truncated: bool | None = Field(default=None, description="Whether either list was cut at 100")
+    sources: dict[str, bool] | None = Field(
+        default=None, description="Where the catalog was read from"
+    )
+    full_name: str | None = Field(default=None, description="Exact entry, when full_name was given")
+    kind: str | None = Field(default=None, description="Entry kind of the exact match")
+    description: str | None = Field(default=None, description="Description of the exact match")
+    title: str | None = Field(default=None, description="Skill title of the exact match")
+    alias: str | None = Field(default=None, description="Package alias of the exact match")
+    member: str | None = Field(default=None, description="Member address of the exact match")
+    instance_id: str | None = Field(default=None, description="Skill instance id")
+    version_digest: str | None = Field(default=None, description="Committed version digest")
+    input_schema: dict[str, Any] | None = Field(
+        default=None, description="Operation input schema of the exact match"
+    )
+    output_schema: dict[str, Any] | None = Field(
+        default=None, description="Operation output schema of the exact match"
+    )
+    availability: str | None = Field(default=None, description="Availability of the exact match")
+    tool_names: list[str] | None = Field(
+        default=None, description="Bound tool names of the exact operation"
+    )
+    assets: list[GrantedAttachmentOutput] | None = Field(
+        default=None, description="Granted skill assets"
+    )
+    references: list[GrantedAttachmentOutput] | None = Field(
+        default=None, description="Granted skill references"
+    )
+    scripts: list[GrantedAttachmentOutput] | None = Field(
+        default=None, description="Granted skill scripts"
+    )
+
+
+Output = ListAbilitiesOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class ListAbilitiesAbility(Ability):

@@ -80,6 +80,18 @@ class EditFileInput(BaseModel):
 Input = EditFileInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class EditFileOutput(BaseModel):
+    """EditFile 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(description="Path of the file that was edited")
+    replacements: int = Field(description="Number of replacements applied")
+
+
+Output = EditFileOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class EditFileAbility(Ability):
     """文件编辑能力 — 精确字符串替换。
 

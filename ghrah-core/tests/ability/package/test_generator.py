@@ -40,6 +40,10 @@ class Input(BaseModel):
     x: str
 
 
+class Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 TITLE = "Plain"
 SUMMARY = "plain"
 TAGS: list[str] = []
@@ -250,18 +254,15 @@ def test_permissions_value_type_is_validated(tmp_path: Path) -> None:
         build(root)
 
 
-def test_missing_output_warns(tmp_path: Path) -> None:
-    """缺 ``Output`` 时生成空对象 schema 占位并返回告警。"""
+def test_missing_output_fails(tmp_path: Path) -> None:
+    """缺 ``Output`` 时生成失败，不写空对象占位。"""
     root = _minimal(tmp_path)
-    result = build(root)
-    assert result.warnings
-    assert "Output" in result.warnings[0]
-    member = yaml.safe_load(result.rendered)["members"]["operations"]["plain"]
-    assert member["output_schema"] == {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+    source = PLAIN_SOURCE.replace(
+        'class Output(BaseModel):\n    model_config = ConfigDict(extra="forbid")\n\n', ""
+    )
+    (root / "operations" / "plain.py").write_text(source, encoding="utf-8", newline="\n")
+    with pytest.raises(BuildError, match="Output"):
+        build(root)
 
 
 def test_generated_index_has_no_host_artifacts(tmp_path: Path) -> None:
@@ -401,6 +402,10 @@ class Input(BaseModel):
     item: Item = Field(description="the item")
 
 
+class Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 TITLE = "Nested"
 SUMMARY = "nested"
 TAGS: list[str] = []
@@ -424,7 +429,10 @@ def test_additional_properties_must_be_strict(tmp_path: Path) -> None:
     """模型没有 ``extra='forbid'`` 时拒绝，不伪造索引。"""
     root = _minimal(tmp_path)
     (root / "operations" / "plain.py").write_text(
-        PLAIN_SOURCE.replace('    model_config = ConfigDict(extra="forbid")\n\n', ""),
+        PLAIN_SOURCE.replace(
+            'class Input(BaseModel):\n    model_config = ConfigDict(extra="forbid")\n\n',
+            "class Input(BaseModel):\n",
+        ),
         encoding="utf-8",
         newline="\n",
     )
@@ -574,9 +582,13 @@ def test_cli_entrypoint_detects_drift(tmp_path: Path) -> None:
     assert "已过期的说明" in result.stderr
 
 
-def test_cli_prints_warnings(tmp_path: Path) -> None:
-    """CLI 把生成告警写到 stderr，而不是静默吞掉。"""
+def test_cli_rejects_missing_output(tmp_path: Path) -> None:
+    """CLI 把缺 ``Output`` 写成 stderr 错误，并以非零退出。"""
     root = _minimal(tmp_path)
+    source = PLAIN_SOURCE.replace(
+        'class Output(BaseModel):\n    model_config = ConfigDict(extra="forbid")\n\n', ""
+    )
+    (root / "operations" / "plain.py").write_text(source, encoding="utf-8", newline="\n")
     result = subprocess.run(
         [sys.executable, "-m", "ghrah.ability.tools.build", str(root)],
         capture_output=True,
@@ -584,8 +596,8 @@ def test_cli_prints_warnings(tmp_path: Path) -> None:
         encoding="utf-8",
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert "warning:" in result.stderr
+    assert result.returncode == 1
+    assert "error:" in result.stderr
     assert "Output" in result.stderr
 
 

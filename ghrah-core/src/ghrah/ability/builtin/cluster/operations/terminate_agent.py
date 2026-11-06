@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -54,6 +54,18 @@ class TerminateAgentInput(BaseModel):
 
 
 Input = TerminateAgentInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class TerminateAgentOutput(BaseModel):
+    """TerminateAgent 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str = Field(description="Name of the terminated agent")
+    status: str = Field(description="Termination status")
+
+
+Output = TerminateAgentOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 class TerminateAgentAbility(Ability):

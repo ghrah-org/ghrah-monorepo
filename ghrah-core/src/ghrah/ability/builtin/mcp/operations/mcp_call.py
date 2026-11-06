@@ -93,6 +93,19 @@ class McpCallInput(BaseModel):
 Input = McpCallInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class McpCallOutput(BaseModel):
+    """McpCall 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(description="Tool result rendered for the model")
+    server: str = Field(description="MCP server that handled the call")
+    tool: str = Field(description="Tool name on that server")
+
+
+Output = McpCallOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class McpCallAbility(Ability):
     """调用 MCP 服务器上的工具（不可缓存、不可重放写操作）。"""
 

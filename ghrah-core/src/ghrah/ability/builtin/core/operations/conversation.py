@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import LOOP
@@ -59,6 +59,17 @@ class Input(BaseModel):
     """conversation 入参契约：无参数（额外字段拒绝）。"""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class Output(BaseModel):
+    """conversation 成功结果：有模型回复时带 response，否则为空对象。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response: str | None = Field(
+        default=None,
+        description="Assistant reply when the loop produced one",
+    )
 
 
 class ConversationDoneHook(Hook):

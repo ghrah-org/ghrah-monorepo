@@ -72,6 +72,18 @@ class DeleteFileInput(BaseModel):
 Input = DeleteFileInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class DeleteFileOutput(BaseModel):
+    """DeleteFile 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(description="Path of the file that was deleted")
+    deleted: bool = Field(description="Whether the file was deleted")
+
+
+Output = DeleteFileOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class DeleteFileAbility(Ability):
     """文件删除能力 — 不可逆操作。
 

@@ -11,7 +11,7 @@
     "offset": 0,
     "path": "skills/guide/assets/mark.bin",
     "total_bytes": 4,
-    "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
+    "version_digest": "sha256:1276587c1625a0e9633f84d5f903beff27a2c09dc2ea2e2b9377dff7445cd675"
   },
   "bound": {
     "error": null,
@@ -1141,7 +1141,7 @@
             "title": "reporting-guide"
           }
         ],
-        "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
+        "version_digest": "sha256:1276587c1625a0e9633f84d5f903beff27a2c09dc2ea2e2b9377dff7445cd675"
       }
     ],
     "agent_id": "alice",
@@ -1525,7 +1525,7 @@
     "offset": 0,
     "path": "skills/guide/SKILL.md",
     "total_bytes": 248,
-    "version_digest": "sha256:7d8a9cea3e2e3eaa76d04ca9cd2a2c69af2e6e127c8bc8f1ff2554a1a19da2ae"
+    "version_digest": "sha256:1276587c1625a0e9633f84d5f903beff27a2c09dc2ea2e2b9377dff7445cd675"
   },
   "unavailable": {
     "abilities": [

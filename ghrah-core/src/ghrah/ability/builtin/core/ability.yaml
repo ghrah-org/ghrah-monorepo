@@ -17,9 +17,15 @@ members:
         properties: {}
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          response:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Assistant reply when the loop produced one
+        type: object
       tags:
       - conversation
       - core
@@ -48,9 +54,14 @@ members:
             description: Optional summary of the task result
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          response:
+            description: Final response collected for the task
+            type: string
+        required:
+        - response
+        type: object
       tags:
       - core
       - lifecycle
@@ -80,9 +91,214 @@ members:
             description: Optional exact entry name returned by this tool; omit to list granted entries.
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          GrantedAttachmentOutput:
+            additionalProperties: false
+            description: 获授 Skill 的一个附件。
+            properties:
+              key:
+                description: Attachment key
+                type: string
+              member:
+                description: Granted member address
+                type: string
+              path:
+                description: Package-relative path
+                type: string
+              media_type:
+                description: Media type
+                type: string
+              size:
+                description: Size in bytes
+                type: integer
+              digest:
+                description: Content digest
+                type: string
+              available:
+                description: Whether the attachment may be executed
+                type: boolean
+            required:
+            - key
+            - member
+            - path
+            - media_type
+            - size
+            - digest
+            - available
+            type: object
+          ListedAbilityOutput:
+            additionalProperties: false
+            description: 目录模式下的一条 Operation。
+            properties:
+              full_name:
+                description: alias/operations/key
+                type: string
+              kind:
+                description: Entry kind
+                type: string
+              description:
+                description: Operation description
+                type: string
+              availability:
+                description: ready, unavailable, or unknown
+                type: string
+            required:
+            - full_name
+            - kind
+            - description
+            - availability
+            type: object
+          ListedSkillOutput:
+            additionalProperties: false
+            description: 目录模式下的一条 Skill。
+            properties:
+              full_name:
+                description: alias/skill
+                type: string
+              kind:
+                description: Entry kind
+                type: string
+              description:
+                description: Skill description
+                type: string
+            required:
+            - full_name
+            - kind
+            - description
+            type: object
         additionalProperties: false
+        properties:
+          abilities:
+            anyOf:
+            - items:
+                $ref: '#/$defs/ListedAbilityOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Granted operations, when full_name was omitted
+          skills:
+            anyOf:
+            - items:
+                $ref: '#/$defs/ListedSkillOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Granted skills, when full_name was omitted
+          count:
+            anyOf:
+            - type: integer
+            - type: 'null'
+            default: null
+            description: Total granted entries before truncation
+          truncated:
+            anyOf:
+            - type: boolean
+            - type: 'null'
+            default: null
+            description: Whether either list was cut at 100
+          sources:
+            anyOf:
+            - additionalProperties:
+                type: boolean
+              type: object
+            - type: 'null'
+            default: null
+            description: Where the catalog was read from
+          full_name:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Exact entry, when full_name was given
+          kind:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Entry kind of the exact match
+          description:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Description of the exact match
+          alias:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Package alias of the exact match
+          member:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Member address of the exact match
+          instance_id:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Skill instance id
+          version_digest:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Committed version digest
+          input_schema:
+            anyOf:
+            - additionalProperties: true
+              type: object
+            - type: 'null'
+            default: null
+            description: Operation input schema of the exact match
+          output_schema:
+            anyOf:
+            - additionalProperties: true
+              type: object
+            - type: 'null'
+            default: null
+            description: Operation output schema of the exact match
+          availability:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Availability of the exact match
+          tool_names:
+            anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+            default: null
+            description: Bound tool names of the exact operation
+          assets:
+            anyOf:
+            - items:
+                $ref: '#/$defs/GrantedAttachmentOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Granted skill assets
+          references:
+            anyOf:
+            - items:
+                $ref: '#/$defs/GrantedAttachmentOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Granted skill references
+          scripts:
+            anyOf:
+            - items:
+                $ref: '#/$defs/GrantedAttachmentOutput'
+              type: array
+            - type: 'null'
+            default: null
+            description: Granted skill scripts
+        type: object
       tags:
       - core
       - discovery
@@ -117,9 +333,54 @@ members:
         - full_name
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          full_name:
+            description: alias/skill that was loaded
+            type: string
+          instance_id:
+            description: Instance that owns the committed text
+            type: string
+          version_digest:
+            description: Committed version digest
+            type: string
+          member:
+            description: Member address of the document or attachment
+            type: string
+          path:
+            description: Package-relative path
+            type: string
+          media_type:
+            description: Media type
+            type: string
+          digest:
+            description: Content digest
+            type: string
+          total_bytes:
+            description: Total size in bytes
+            type: integer
+          alias:
+            description: Package alias
+            type: string
+          uri:
+            description: 'ability: alias/member URI'
+            type: string
+          content:
+            description: UTF-8 text
+            type: string
+        required:
+        - full_name
+        - instance_id
+        - version_digest
+        - member
+        - path
+        - media_type
+        - digest
+        - total_bytes
+        - alias
+        - uri
+        - content
+        type: object
       tags:
       - core
       - skill
@@ -198,9 +459,119 @@ members:
             type: integer
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          RecallMessageOutput:
+            additionalProperties: false
+            description: messages 模式里的一条原文。
+            properties:
+              role:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Message role
+              source:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Message source
+              text:
+                description: Message text
+                type: string
+            required:
+            - text
+            type: object
+          RecallNodeOutput:
+            additionalProperties: false
+            description: list 模式的节点概要，或 messages 模式的一组分页原文。
+            properties:
+              node_id:
+                description: Action-chain node id
+                type: string
+              iteration:
+                description: Node iteration
+                type: integer
+              node_kind:
+                description: Node kind, such as action or compact
+                type: string
+              branch_id:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Branch the node was created on
+              timestamp:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: ISO timestamp, in list mode
+              ability_names:
+                anyOf:
+                - items:
+                    type: string
+                  type: array
+                - type: 'null'
+                default: null
+                description: Abilities recorded on the node, in list mode
+              message_count:
+                anyOf:
+                - type: integer
+                - type: 'null'
+                default: null
+                description: Messages on the node, in list mode
+              summarized_range:
+                anyOf:
+                - items:
+                    type: string
+                  type: array
+                - type: 'null'
+                default: null
+                description: Original node ids covered by a compact node
+              trigger_source:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: What triggered compaction, on a compact node
+              degraded:
+                anyOf:
+                - type: boolean
+                - type: 'null'
+                default: null
+                description: Whether compaction fell back to a folded view
+              messages:
+                anyOf:
+                - items:
+                    $ref: '#/$defs/RecallMessageOutput'
+                  type: array
+                - type: 'null'
+                default: null
+                description: Original messages, in messages mode
+            required:
+            - node_id
+            - iteration
+            - node_kind
+            type: object
         additionalProperties: false
+        properties:
+          nodes:
+            description: Selected nodes
+            items:
+              $ref: '#/$defs/RecallNodeOutput'
+            type: array
+          count:
+            description: Number of nodes returned
+            type: integer
+          truncated:
+            description: Whether the node window or token budget cut the result
+            type: boolean
+        required:
+        - nodes
+        - count
+        - truncated
+        type: object
       tags:
       - context
       - core
@@ -223,9 +594,177 @@ members:
         properties: {}
         type: object
       output_schema:
-        type: object
-        properties: {}
+        $defs:
+          EnvironmentOutput:
+            additionalProperties: false
+            description: spawn 装配期写入的部署快照。
+            properties:
+              deployment:
+                description: standalone or subject-mounted
+                type: string
+              project_id:
+                description: Project id; empty when the agent is unattached
+                type: string
+              cluster_id:
+                description: Cluster id
+                type: string
+              workspace_root:
+                anyOf:
+                - type: string
+                - type: 'null'
+                description: Workspace root, or null when unset
+              default_working_dir:
+                anyOf:
+                - type: string
+                - type: 'null'
+                description: Default working directory
+              allowed_roots:
+                description: Filesystem roots the agent may use
+                items:
+                  type: string
+                type: array
+              hitl_timeout:
+                description: Human-approval timeout in seconds
+                type: number
+              hitl_consecutive_timeout_limit:
+                description: Consecutive approval timeouts allowed
+                type: integer
+              hitl_degraded_timeout:
+                description: Timeout used after the approval limit
+                type: number
+            required:
+            - deployment
+            - project_id
+            - cluster_id
+            - workspace_root
+            - default_working_dir
+            - allowed_roots
+            - hitl_timeout
+            - hitl_consecutive_timeout_limit
+            - hitl_degraded_timeout
+            type: object
+          SessionAgentOutput:
+            additionalProperties: false
+            description: 当前 Agent 与活动会话。
+            properties:
+              name:
+                description: Agent name
+                type: string
+              session_id:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Active session id
+              active_branch_id:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Active branch id
+              session_error:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Why the active session could not be read
+              session:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Why session fields are absent when context is not wired
+            required:
+            - name
+            type: object
+          SessionClusterMemberOutput:
+            additionalProperties: false
+            description: 集群成员的公开记录。
+            properties:
+              agent_id:
+                description: Stable agent id
+                type: string
+              incarnation_id:
+                description: Incarnation id
+                type: string
+              name:
+                description: Runtime display name
+                type: string
+              config:
+                anyOf:
+                - additionalProperties: true
+                  type: object
+                - type: 'null'
+                description: Serializable agent configuration
+              description:
+                description: Agent description
+                type: string
+              tags:
+                description: Agent tags
+                items:
+                  type: string
+                type: array
+              created_at:
+                description: Registration time as a Unix timestamp
+                type: number
+            required:
+            - agent_id
+            - incarnation_id
+            - name
+            - config
+            - description
+            - tags
+            - created_at
+            type: object
+          SessionClusterOutput:
+            additionalProperties: false
+            description: 集群段：列出成员，或在列举失败时只带 error。
+            properties:
+              members:
+                anyOf:
+                - items:
+                    $ref: '#/$defs/SessionClusterMemberOutput'
+                  type: array
+                - type: 'null'
+                default: null
+                description: Registered cluster members
+              count:
+                anyOf:
+                - type: integer
+                - type: 'null'
+                default: null
+                description: Number of members
+              error:
+                anyOf:
+                - type: string
+                - type: 'null'
+                default: null
+                description: Why the member list could not be read
+            type: object
         additionalProperties: false
+        properties:
+          environment:
+            anyOf:
+            - $ref: '#/$defs/EnvironmentOutput'
+            - type: 'null'
+            description: Spawn-time deployment snapshot, or null when it was not injected
+          environment_source:
+            description: Where the environment snapshot came from
+            type: string
+          agent:
+            $ref: '#/$defs/SessionAgentOutput'
+            description: Current agent and session
+          cluster:
+            anyOf:
+            - $ref: '#/$defs/SessionClusterOutput'
+            - type: 'null'
+            description: Cluster members, an error object, or null when the supervisor is not wired
+        required:
+        - environment
+        - environment_source
+        - agent
+        - cluster
+        type: object
       tags:
       - core
       - introspection

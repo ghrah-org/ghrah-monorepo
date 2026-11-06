@@ -133,7 +133,7 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
     instance = await store.instance("acme-reports")
     assert instance["root"] == str(tmp_path)
     assert (
-        instance["digest"] != installer.store.resolve("acme.reports", "1.0.0").lock.package_digest
+        instance["digest"] == installer.store.resolve("acme.reports", "1.0.0").lock.package_digest
     )
     assert (
         tool.bind_tool()["function"]["parameters"]["properties"]["file_path"]["default"]

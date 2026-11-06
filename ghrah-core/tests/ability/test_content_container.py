@@ -377,9 +377,15 @@ def test_version_captures_index_metadata_and_unlinked_resources(tmp_path):
     # 正文只链接了 references/style.md；template/mark 不是正文链接，但索引声明了
     # 它们，因此都按索引进清单。
     assert {"skill/guide/assets/template", "skill/guide/assets/mark"} <= set(manifest)
-    # v1 不再扫描索引外的文件。
+    # v1 不再把索引外的文件放进内容清单，但目录里的普通文件仍算进版本身份。
     assert "skill/guide/assets/orphan" not in manifest
-    assert version.digest != replace(version, manifest_json="{}").expected_digest()
+    assert version.digest == version.package_digest
+    cleared = replace(version, manifest_json="{}")
+    assert cleared.expected_digest() == version.digest
+    orphan = source / "skills/guide/assets/orphan.txt"
+    orphan.unlink()
+    without_orphan = capture_ability_version((source / "ability.yaml").read_text(), root=source)
+    assert without_orphan.digest != version.digest
 
 
 async def test_describe_and_partial_content_revoke_keep_remaining_content(container):

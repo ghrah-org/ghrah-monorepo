@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
@@ -60,6 +60,79 @@ class Input(BaseModel):
     """session_info 入参契约：无参数（额外字段拒绝）。"""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class EnvironmentOutput(BaseModel):
+    """spawn 装配期写入的部署快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deployment: str = Field(description="standalone or subject-mounted")
+    project_id: str = Field(description="Project id; empty when the agent is unattached")
+    cluster_id: str = Field(description="Cluster id")
+    workspace_root: str | None = Field(description="Workspace root, or null when unset")
+    default_working_dir: str | None = Field(description="Default working directory")
+    allowed_roots: list[str] = Field(description="Filesystem roots the agent may use")
+    hitl_timeout: float = Field(description="Human-approval timeout in seconds")
+    hitl_consecutive_timeout_limit: int = Field(description="Consecutive approval timeouts allowed")
+    hitl_degraded_timeout: float = Field(description="Timeout used after the approval limit")
+
+
+class SessionAgentOutput(BaseModel):
+    """当前 Agent 与活动会话。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Agent name")
+    session_id: str | None = Field(default=None, description="Active session id")
+    active_branch_id: str | None = Field(default=None, description="Active branch id")
+    session_error: str | None = Field(
+        default=None, description="Why the active session could not be read"
+    )
+    session: str | None = Field(
+        default=None, description="Why session fields are absent when context is not wired"
+    )
+
+
+class SessionClusterMemberOutput(BaseModel):
+    """集群成员的公开记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(description="Stable agent id")
+    incarnation_id: str = Field(description="Incarnation id")
+    name: str = Field(description="Runtime display name")
+    config: dict[str, Any] | None = Field(description="Serializable agent configuration")
+    description: str = Field(description="Agent description")
+    tags: list[str] = Field(description="Agent tags")
+    created_at: float = Field(description="Registration time as a Unix timestamp")
+
+
+class SessionClusterOutput(BaseModel):
+    """集群段：列出成员，或在列举失败时只带 error。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: list[SessionClusterMemberOutput] | None = Field(
+        default=None, description="Registered cluster members"
+    )
+    count: int | None = Field(default=None, description="Number of members")
+    error: str | None = Field(default=None, description="Why the member list could not be read")
+
+
+class Output(BaseModel):
+    """session_info 成功结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    environment: EnvironmentOutput | None = Field(
+        description="Spawn-time deployment snapshot, or null when it was not injected"
+    )
+    environment_source: str = Field(description="Where the environment snapshot came from")
+    agent: SessionAgentOutput = Field(description="Current agent and session")
+    cluster: SessionClusterOutput | None = Field(
+        description="Cluster members, an error object, or null when the supervisor is not wired"
+    )
 
 
 class SessionInfoAbility(Ability):

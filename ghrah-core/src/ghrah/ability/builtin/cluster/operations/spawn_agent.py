@@ -18,7 +18,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ghrah.ability._cluster_common import cluster_supervisor_error
 from ghrah.ability.execution.base import Ability
@@ -76,6 +76,19 @@ class SpawnAgentInput(BaseModel):
 
 
 Input = SpawnAgentInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class SpawnAgentOutput(BaseModel):
+    """SpawnAgent 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str = Field(description="Runtime name of the spawned agent")
+    status: str = Field(description="Spawn status")
+    manifest_ref: str = Field(description="Manifest the agent was created from")
+
+
+Output = SpawnAgentOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 async def _assemble_child_abilities(

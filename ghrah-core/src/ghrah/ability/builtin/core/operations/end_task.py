@@ -75,6 +75,14 @@ class Input(BaseModel):
     )
 
 
+class Output(BaseModel):
+    """end_task 成功结果：最终回复。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response: str = Field(description="Final response collected for the task")
+
+
 class EndTaskDoneHook(Hook):
     """EndTaskAbility 执行完成后终止驱动循环。
 

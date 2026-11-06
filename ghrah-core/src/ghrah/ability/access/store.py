@@ -138,6 +138,37 @@ class MemberFence:
     version_digest: str = ""
 
 
+def _declared_content(definition: dict[str, Any], member: str) -> dict[str, Any] | None:
+    """从定义里取出一个内容成员声明的路径和摘要。
+
+    Args:
+        definition: 已提交的定义 JSON。
+        member: ``skill/<name>`` 或 ``skill/<name>/<role>/<key>``。
+
+    Returns:
+        ``path`` 与 ``digest``。正文没有摘要时 ``digest`` 为 ``None``。
+        成员不在定义里时返回 ``None``。
+    """
+    parts = member.split("/")
+    if len(parts) < 2 or parts[0] != "skill":
+        return None
+    skill = definition.get("skills", {}).get(parts[1])
+    if not isinstance(skill, dict):
+        return None
+    if len(parts) == 2:
+        body = skill.get("body")
+        if not isinstance(body, dict) or not isinstance(body.get("path"), str):
+            return None
+        return {"path": body["path"], "digest": None}
+    if len(parts) != 4 or parts[2] not in {"assets", "references", "scripts"}:
+        return None
+    resource = (skill.get(parts[2]) or {}).get(parts[3])
+    if not isinstance(resource, dict) or not isinstance(resource.get("path"), str):
+        return None
+    digest = resource.get("digest")
+    return {"path": resource["path"], "digest": digest if isinstance(digest, str) else None}
+
+
 _SCRIPT_GRANT_ADDRESS = re.compile(
     r"^skill/(?P<skill>[a-z0-9]+(?:-[a-z0-9]+)*)/scripts/(?P<key>[a-z0-9][a-z0-9._-]*)$"
 )
@@ -314,12 +345,6 @@ class AbilityAccessStore:
             (self.project_id, *params),
         ) as cursor:
             row = await cursor.fetchone()
-        if table == "ability_versions" and row is not None:
-            version = AbilityVersion(
-                row["digest"], row["definition"], row["implementation"], row["manifest"]
-            )
-            if version.expected_digest() != version.digest:
-                raise AccessError("unavailable")
         return row
 
     def _operator(self, actor: AccessIdentity) -> bool:
@@ -496,7 +521,13 @@ class AbilityAccessStore:
             )
 
     async def commit_version(self, actor: AccessIdentity, version: AbilityVersion) -> None:
-        """提交确定定义；相同版本幂等，不扫描来源或自动给 Agent 授权。"""
+        """提交确定定义；相同版本幂等，不扫描来源或自动给 Agent 授权。
+
+        身份在捕获时已经确定：整树版本的 ``digest`` 必须等于 ``package_digest``，
+        文件切片必须等于定义与实现的密封。读回时不再重算。整树摘要无法从
+        定义、实现和清单这三列复原，重算会把新提交的行全部判成不可用。
+        内容 blob 仍按各自摘要核对。
+        """
         self._require_operator(actor)
         if version.expected_digest() != version.digest:
             raise AccessError("invalid_change")
@@ -1535,6 +1566,15 @@ class AbilityAccessStore:
             instance = await self._row("ability_instances", "id=?", fence.instance_id)
             version = await self._row("ability_versions", "digest=?", instance["digest"])
             entry = json.loads(version["manifest"])[fence.member]
+            declared = _declared_content(json.loads(version["definition"]), fence.member)
+            if (
+                declared is None
+                or entry.get("path") != declared["path"]
+                or (declared["digest"] is not None and entry.get("digest") != declared["digest"])
+            ):
+                # 清单可以改指向另一份已入库的 blob，且那份 blob 自己的摘要仍然
+                # 成立。定义里声明的路径和摘要才是这一成员的内容，对不上就拒绝。
+                raise AccessError("unavailable")
             blob = await self._row("ability_content", "digest=?", entry["digest"])
             if (
                 blob is None

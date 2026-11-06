@@ -145,7 +145,7 @@ members:
 | 声明 | 要求 | 生成到 | 说明 |
 | --- | --- | --- | --- |
 | `Input`（`BaseModel` 子类或其别名） | 必需 | `input_schema` | 参数模型；缺失即构建失败 |
-| `Output`（`BaseModel` 子类或其别名） | 建议 | `output_schema` | 成功结果的 `data`；缺失时生成占位 schema |
+| `Output`（`BaseModel` 子类或其别名） | 必需 | `output_schema` | 成功结果的 `data`；缺失即构建失败 |
 | `TITLE: str` | 必需 | `title` | 给模型看的短标题 |
 | `SUMMARY: str` | 必需 | `description` | 一行说明 |
 | `TAGS: list[str]` | 必需，可为 `[]` | `tags` | 发现与过滤；生成器排序去重 |
@@ -200,7 +200,7 @@ async def execute(call: OperationCall, services: ExecutionServices) -> ActionRes
 
 模块顶层只放声明和可安全导入的定义；不要在 import 时执行 I/O、网络或长任务。生成器只读取声明，**不会执行** `execute`。外部 Operation 的作者入口固定为模块级 `async def execute(call, services) -> ActionResult`，两个参数名与顺序固定；运行时将它适配为执行对象。
 
-`call.arguments` 是参数的唯一来源；成员、项目、Agent 与 run 由受信装配者绑定。运行时校验输入，应用模型默认值，并把 `RESOURCES.paths` 中声明的相对路径按授权工作区解析为绝对路径，再交给函数。`Output` 描述成功结果的 `data`，函数仍返回完整 `ActionResult`。已有 `Output` 会被校验；缺失继续使用构建器的告警规则。
+`call.arguments` 是参数的唯一来源；成员、项目、Agent 与 run 由受信装配者绑定。运行时校验输入，应用模型默认值，并把 `RESOURCES.paths` 中声明的相对路径按授权工作区解析为绝对路径，再交给函数。`Output` 描述成功结果的 `data`，函数仍返回完整 `ActionResult`。加载外部包时，模块上的 `Output` 必须与已安装索引一致。
 
 工具名、完整 schema、版本、权限检查和人工审批由运行时装配；外部模块不提供另一份工具定义或自定义 Hook。`services` 由当前 Provider 宿主显式注入，使用方按服务键取依赖；某个服务可能缺席，必须明确处理。当前服务表中的 Core 对象引用不是长期作者契约，独立 AbilityProvider 服务接入后需要本地服务或显式代理。
 

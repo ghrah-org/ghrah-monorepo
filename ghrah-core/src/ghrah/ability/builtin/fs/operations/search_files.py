@@ -138,6 +138,35 @@ class SearchFilesInput(BaseModel):
 Input = SearchFilesInput  # v1 生成器入口别名（生成器只读 module.Input）
 
 
+class SearchMatchOutput(BaseModel):
+    """一行匹配。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file: str = Field(description="File path of the match")
+    line: int = Field(description="1-based line number")
+    text: str = Field(description="Matching line without the trailing newline")
+
+
+class SearchFilesOutput(BaseModel):
+    """SearchFiles 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    matches: list[SearchMatchOutput] = Field(description="Matching lines in this window")
+    total: int = Field(description="Total number of matches found")
+    truncated: bool = Field(description="Whether matches beyond the window were omitted")
+    pattern: str = Field(description="Search pattern")
+    path: str = Field(description="File or directory that was searched")
+    exit_code: int | None = Field(
+        default=None,
+        description="Process exit code when search ran through the command runner",
+    )
+
+
+Output = SearchFilesOutput  # v1 生成器入口别名（生成器只读 module.Output）
+
+
 class SearchFilesAbility(Ability):
     """内容搜索能力 — Subject 模式走 rg 命令，单体回退 Python 纯实现。
 

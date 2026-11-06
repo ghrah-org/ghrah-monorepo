@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import CONTEXT_MANAGER
@@ -120,6 +120,59 @@ class RecallContextInput(BaseModel):
 
 
 Input = RecallContextInput  # v1 生成器入口别名（生成器只读 module.Input）
+
+
+class RecallMessageOutput(BaseModel):
+    """messages 模式里的一条原文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: str | None = Field(default=None, description="Message role")
+    source: str | None = Field(default=None, description="Message source")
+    text: str = Field(description="Message text")
+
+
+class RecallNodeOutput(BaseModel):
+    """list 模式的节点概要，或 messages 模式的一组分页原文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(description="Action-chain node id")
+    iteration: int = Field(description="Node iteration")
+    node_kind: str = Field(description="Node kind, such as action or compact")
+    branch_id: str | None = Field(default=None, description="Branch the node was created on")
+    timestamp: str | None = Field(default=None, description="ISO timestamp, in list mode")
+    ability_names: list[str] | None = Field(
+        default=None, description="Abilities recorded on the node, in list mode"
+    )
+    message_count: int | None = Field(
+        default=None, description="Messages on the node, in list mode"
+    )
+    summarized_range: list[str] | None = Field(
+        default=None, description="Original node ids covered by a compact node"
+    )
+    trigger_source: str | None = Field(
+        default=None, description="What triggered compaction, on a compact node"
+    )
+    degraded: bool | None = Field(
+        default=None, description="Whether compaction fell back to a folded view"
+    )
+    messages: list[RecallMessageOutput] | None = Field(
+        default=None, description="Original messages, in messages mode"
+    )
+
+
+class RecallContextOutput(BaseModel):
+    """RecallContext 工具的成功结果契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[RecallNodeOutput] = Field(description="Selected nodes")
+    count: int = Field(description="Number of nodes returned")
+    truncated: bool = Field(description="Whether the node window or token budget cut the result")
+
+
+Output = RecallContextOutput  # v1 生成器入口别名（生成器只读 module.Output）
 
 
 def _node_kind(node: Any) -> str:

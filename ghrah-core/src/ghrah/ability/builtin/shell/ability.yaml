@@ -28,9 +28,34 @@ members:
         - command
         type: object
       output_schema:
-        type: object
-        properties: {}
         additionalProperties: false
+        properties:
+          exit_code:
+            description: Process exit code
+            type: integer
+          stdout:
+            description: Standard output, folded when it exceeds the line limit
+            type: string
+          stderr:
+            description: Standard error
+            type: string
+          timed_out:
+            description: Whether the command exceeded its timeout
+            type: boolean
+          command:
+            description: Command that was executed
+            type: string
+          working_dir:
+            description: Working directory; empty when the caller omitted one
+            type: string
+        required:
+        - exit_code
+        - stdout
+        - stderr
+        - timed_out
+        - command
+        - working_dir
+        type: object
       tags:
       - execution
       - shell

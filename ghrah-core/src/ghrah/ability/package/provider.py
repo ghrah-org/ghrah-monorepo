@@ -76,6 +76,12 @@ class InstalledAbilityProvider:
         captured = capture_ability_version(
             (item.root / "ability.yaml").read_text(encoding="utf-8"), root=item.root
         )
+        if (
+            item.lock is None
+            or captured.digest != item.lock.package_digest
+            or captured.package_digest != item.lock.package_digest
+        ):
+            raise ManifestValidationError(f"安装包摘要与安装记录不一致：{package}@{item.version}")
         definition = captured.definition()
         if (
             definition.identity.full_name != package
@@ -274,8 +280,6 @@ def _validate_entry(module: ModuleType, input_schema: dict, output_schema: dict)
         raise ManifestValidationError("外部 Operation 入口必须为 execute(call, services)")
     for name, schema in (("Input", input_schema), ("Output", output_schema)):
         model = getattr(module, name, None)
-        if name == "Output" and model is None:
-            continue
         if not isinstance(model, type) or not issubclass(model, BaseModel):
             raise ManifestValidationError(f"外部 Operation 的 {name} 必须是 BaseModel")
         if strip_schema_metadata(model.model_json_schema()) != schema:
