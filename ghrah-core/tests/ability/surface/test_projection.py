@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import pytest
 from ghrah.protocol.ability_tree import (
     AbilityNode,
     AbilityTreeView,
@@ -12,7 +13,8 @@ from ghrah.protocol.ability_tree import (
     OperationNode,
 )
 
-from ghrah.ability.surface import MemberRef, SurfaceEntry, project_grants
+from ghrah.ability.access.errors import AccessError
+from ghrah.ability.surface import MemberRef, SurfaceEntry, project_grants, project_surface
 
 
 def _operation(key: str, availability: str = "ready") -> OperationNode:
@@ -111,3 +113,75 @@ def test_projection_is_sorted_by_tool_name_and_empty_when_nothing_selected() -> 
         "read_file",
     ]
     assert project_grants(_view([_operation("read_file")], [])) == []
+
+
+class _Store:
+    """最小关系库端口：固定一份投影并记录实际使用的受信身份。"""
+
+    project_id = "project"
+
+    def __init__(self, view: AbilityTreeView) -> None:
+        self._view = view
+        self.actor = None
+        self.view_calls = 0
+
+    def current_run(self, agent: str) -> str:
+        assert agent == self._view.agent_id
+        return self._view.run_id
+
+    async def view(self, actor, agent: str) -> AbilityTreeView:
+        self.actor = actor
+        self.view_calls += 1
+        assert agent == self._view.agent_id
+        return self._view
+
+
+async def test_surface_excludes_unavailable_and_unmaterialized_members() -> None:
+    """未获授、未选、已撤销、降级及后端未就绪的成员都不进入工具面。"""
+    view = _view(
+        [
+            _operation("zeta"),
+            _operation("alpha"),
+            _operation("unselected"),
+            _operation("degraded", "unavailable"),
+            _operation("backend_down"),
+        ],
+        [
+            _bound("zeta", "zeta"),
+            _bound("alpha", "alpha"),
+            _bound("degraded", "degraded"),
+            _bound("backend_down", "backend_down"),
+            _bound("revoked", "revoked"),
+        ],
+    )
+    store = _Store(view)
+
+    entries = await project_surface(
+        "alice",
+        "alice-run",
+        store=store,
+        backend_available=lambda entry: entry.tool_name != "backend_down",
+    )
+
+    # not_granted 从未进入关系投影；revoked 只剩陈旧选择；其余按条件排除。
+    assert [entry.tool_name for entry in entries] == ["alpha", "zeta"]
+    assert all(entry.available for entry in entries)
+    assert store.actor.project_id == "project"
+    assert store.actor.subject_id == "alice"
+    assert store.actor.run_id == "alice-run"
+
+
+async def test_surface_rejects_stale_run_before_reading_view() -> None:
+    """旧 run 不能借用当前 Agent 的关系投影，也不会发起投影读取。"""
+    store = _Store(_view([_operation("read_file")], [_bound("read_file", "read_file")]))
+
+    with pytest.raises(AccessError) as denied:
+        await project_surface(
+            "alice",
+            "earlier-run",
+            store=store,
+            backend_available=lambda entry: True,
+        )
+
+    assert denied.value.code == "access_denied"
+    assert store.view_calls == 0

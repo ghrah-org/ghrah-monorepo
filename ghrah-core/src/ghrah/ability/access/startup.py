@@ -50,6 +50,8 @@ from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.permissions.hitl import HITLRequiredAbility, PermissionDeniedAbility
 from ghrah.ability.permissions.scope import resolve_effective_permission
 from ghrah.ability.surface.naming import assign_tool_names
+from ghrah.ability.surface.projection import project_surface
+from ghrah.ability.surface.types import SurfaceEntry
 from ghrah.ability.versions import AbilityVersion, capture_ability_version
 from ghrah.manifest.resolver import ResolvedAbility, ResolvedAgent
 from ghrah.types.results import ActionOutcome, ActionResult
@@ -85,15 +87,24 @@ class AuthorizedToolTable(list):
     def __init__(self, abilities: Iterable[Any] = (), *, ability_content: Any = None) -> None:
         super().__init__(abilities)
         self.ability_content = ability_content
+        self._bound_run = ""
+
+    @property
+    def bound_run(self) -> str:
+        """本次装配绑定的受信 run；空串表示尚未完成注册绑定。"""
+        return self._bound_run
 
     def bind_run(self, run: str) -> None:
         """把注册完成的受信代次固定到表内每个投影工具。"""
+        if not run or (self._bound_run and self._bound_run != run):
+            raise StartupGrantError("Cannot rebind a tool table from an earlier run")
         for ability in self:
             bind = getattr(ability, "bind_run", None)
             if callable(bind):
                 bind(run)
         if self.ability_content is not None:
             self.ability_content.bind_run(run)
+        self._bound_run = run
 
 
 @dataclass(frozen=True)
@@ -540,7 +551,8 @@ class StartupGrantMaterializer:
 
         工具表是关系库的派生投影，必须能从权威重建：调用方每轮取一次可见
         工具名，撤销在下一轮就从模型视野消失，无需重启 Agent。只保留本次
-        物化实际实例化过的工具——没有实例的成员即使后来被授予也不能凭空出现。
+        物化实际实例化过且仍可用的工具——没有实例的成员即使后来被授予也不能
+        凭空出现。投影固定使用本次装配绑定的 run，旧装配不能借用新 run。
 
         Args:
             agent: 稳定 Agent ID。
@@ -550,19 +562,34 @@ class StartupGrantMaterializer:
             无参异步投影器，返回当前可见的工具名元组；无法确认时返回空元组。
         """
         store = self._store
-        spawned = {binding.tool_name for binding in materialization.tools}
+        ready = {
+            (ability.name, reference.instance_id, reference.alias, reference.member)
+            for ability in materialization.abilities
+            if (reference := getattr(ability, "member_reference", None)) is not None
+        }
+
+        def backend_available(entry: SurfaceEntry) -> bool:
+            return (
+                entry.tool_name,
+                entry.member.instance_id,
+                entry.package,
+                entry.member.member,
+            ) in ready
 
         async def project() -> tuple[str, ...]:
+            run = materialization.abilities.bound_run
+            if not run:
+                return ()
             try:
-                run = store.current_run(agent)
+                entries = await project_surface(
+                    agent,
+                    run,
+                    store=store,
+                    backend_available=backend_available,
+                )
             except AccessError:
                 return ()
-            actor = AccessIdentity(store.project_id, agent, run)
-            try:
-                view = await store.view(actor, agent)
-            except AccessError:
-                return ()
-            return tuple(sorted(tool.name for tool in view.bound_tools if tool.name in spawned))
+            return tuple(entry.tool_name for entry in entries)
 
         return project
 

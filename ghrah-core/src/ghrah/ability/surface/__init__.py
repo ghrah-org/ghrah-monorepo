@@ -30,7 +30,7 @@ from ghrah.ability.surface.naming import (
     ToolNameError,
     assign_tool_names,
 )
-from ghrah.ability.surface.projection import project_grants
+from ghrah.ability.surface.projection import project_grants, project_surface
 from ghrah.ability.surface.types import MemberRef, SurfaceEntry
 
 __all__ = [
@@ -53,4 +53,5 @@ __all__ = [
     "ToolNameError",
     "assign_tool_names",
     "project_grants",
+    "project_surface",
 ]

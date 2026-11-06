@@ -12,6 +12,8 @@ import pytest
 from _helpers import make_call, make_services
 from ghrah.protocol.ability_tree import (
     BindToolRequest,
+    GrantAbilityRequest,
+    MemberAxes,
     RevokeAbilityRequest,
     UnbindToolRequest,
 )
@@ -223,11 +225,13 @@ async def test_merge_policy_revokes_a_requested_member(store, tmp_path):
     policy = GrantPolicy(
         rules=(GrantRule(package="ghrah.fs", operation="list_directory", effect="revoke"),)
     )
-    result = await _materializer(store, assembly, tmp_path, policy).materialize(
-        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
-    )
+    materializer = _materializer(store, assembly, tmp_path, policy)
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    result = await materializer.materialize(agent=agent, resolved=resolved)
     assert [binding.member for binding in result.tools] == ["read_file"]
     assert [item.name for item in result.abilities] == ["conversation", "read_file"]
+    projector = materializer.tool_table_projector(agent, result)
+    assert await projector() == ("read_file",)
 
 
 async def test_materialize_is_idempotent(store, tmp_path):
@@ -440,7 +444,8 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
     assembly, resolved = _resolved(AGENT_YAML)
     target = tmp_path / "note.txt"
     target.write_text("w1 content", encoding="utf-8")
-    result = await _materializer(store, assembly, tmp_path).materialize(
+    materializer = _materializer(store, assembly, tmp_path)
+    result = await materializer.materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
     read_file = next(item for item in result.abilities if item.name == "read_file")
@@ -461,6 +466,8 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
             expected_revision=revision,
         ),
     )
+    projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
+    assert await projector() == ("list_directory",)
     outcome = await read_file.execute(
         make_call(arguments={"file_path": str(target), "dir_path": str(tmp_path)}),
         make_services(),
@@ -568,6 +575,8 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
         target = tmp_path / "note.txt"
         target.write_text("run content", encoding="utf-8")
         read_file = next(item for item in result.abilities if item.name == "read_file")
+        projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
+        assert await projector() == ("list_directory", "read_file")
 
         first = await read_file.execute(
             make_call(arguments={"file_path": str(target)}), make_services()
@@ -576,6 +585,7 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
 
         current["run"] = "alice-run-2"
 
+        assert await projector() == ()
         stale = await read_file.execute(
             make_call(arguments={"file_path": str(target)}), make_services()
         )
@@ -594,7 +604,7 @@ async def test_tool_table_projector_tracks_revoke(store, tmp_path):
     )
     projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
 
-    assert set(await projector()) == {"list_directory", "read_file"}
+    assert await projector() == ("list_directory", "read_file")
 
     revision = await store.agent_revision(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     await store.write_revoke(
@@ -606,6 +616,92 @@ async def test_tool_table_projector_tracks_revoke(store, tmp_path):
     )
 
     assert set(await projector()) == {"list_directory"}
+
+
+async def test_tool_table_projector_excludes_unselected_and_unavailable(store, tmp_path):
+    """取消选择与显式降级都在下一轮移除，即使执行对象曾经物化。"""
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assembly, resolved = _resolved(AGENT_YAML)
+    materializer = _materializer(store, assembly, tmp_path)
+    result = await materializer.materialize(agent=agent, resolved=resolved)
+    projector = materializer.tool_table_projector(agent, result)
+
+    revision = await store.agent_revision(DEPLOY, agent)
+    revision = await store.write_unbind_tool(
+        DEPLOY,
+        agent,
+        UnbindToolRequest(tool_name="list_directory", expected_revision=revision),
+    )
+    assert await projector() == ("read_file",)
+
+    revision = await store.write_grant(
+        DEPLOY,
+        agent,
+        GrantAbilityRequest(
+            alias="fs",
+            instance_id="ghrah-fs",
+            members=["list_directory", "read_file"],
+            allowed_roots=[str(tmp_path)],
+            axes=[MemberAxes(member="operations/read_file", available=False)],
+            expected_revision=revision,
+        ),
+    )
+    # 授权改写会清除旧选择；重新选择同一组执行对象以隔离可用性条件。
+    for member in ("list_directory", "read_file"):
+        revision = await store.write_bind_tool(
+            DEPLOY,
+            agent,
+            BindToolRequest(
+                alias="fs",
+                member=member,
+                tool_name=member,
+                expected_revision=revision,
+            ),
+        )
+
+    assert await projector() == ("list_directory",)
+
+
+async def test_restored_member_without_execution_object_stays_out_of_projection(store, tmp_path):
+    """初始不可用成员恢复授权后，仍须重新物化才能进入工具面。"""
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    policy = GrantPolicy(
+        rules=(GrantRule(package="ghrah.fs", operation="read_file", available=False),)
+    )
+    assembly, resolved = _resolved(AGENT_YAML)
+    materializer = _materializer(store, assembly, tmp_path, policy)
+    result = await materializer.materialize(agent=agent, resolved=resolved)
+    projector = materializer.tool_table_projector(agent, result)
+
+    assert {binding.member for binding in result.tools} == {"list_directory", "read_file"}
+    assert "read_file" not in {ability.name for ability in result.abilities}
+    assert await projector() == ("list_directory",)
+
+    revision = await store.agent_revision(DEPLOY, agent)
+    revision = await store.write_grant(
+        DEPLOY,
+        agent,
+        GrantAbilityRequest(
+            alias="fs",
+            instance_id="ghrah-fs",
+            members=["list_directory", "read_file"],
+            allowed_roots=[str(tmp_path)],
+            expected_revision=revision,
+        ),
+    )
+    for member in ("list_directory", "read_file"):
+        revision = await store.write_bind_tool(
+            DEPLOY,
+            agent,
+            BindToolRequest(
+                alias="fs",
+                member=member,
+                tool_name=member,
+                expected_revision=revision,
+            ),
+        )
+
+    assert await projector() == ("list_directory",)
 
 
 @pytest.mark.parametrize("auto_approve", [(), ("write_file",)])
