@@ -10,7 +10,7 @@
 核心职责：
 - 迭代生命周期：begin_iteration → commit_iteration / rollback_iteration
 - 消息+状态协调：commit 时自动计算 delta、定期存储 snapshot、管理 state 事务
-- 上下文构建：build_execution_context 供 Ability/Hook 使用
+- 执行期服务：以 CONTEXT_MANAGER 服务注入能力执行，不再构造上下文对象
 - 子 Agent 继承：fork_for_sub_agent 创建独立但继承的上下文
 - Session 管理：create_session / activate_session / list_sessions
 - Branch 管理：create_branch / activate_branch / list_branches
@@ -46,9 +46,7 @@ from ghrah.core.window_protocol import MessageFactory
 from ghrah.skills.catalog import digest_catalog, render_catalog_message
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
-    from ghrah.core.message import AgentMessage
-    from ghrah.types.config_types import AgentConfig
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +116,7 @@ class ContextManager:
         compact_method: str = "ghrah.builtin",
         estimator: TokenEstimator | None = None,
         skill_provider: Any | None = None,
+        ability_content: Any | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._state_manager = StateManager(initial_state)
@@ -129,6 +128,12 @@ class ContextManager:
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
         # 技能目录摘要：provider 装配期显式注入；digest 仅用于文案口径与变化日志
+        if skill_provider is not None and ability_content is not None:
+            raise ValueError("Skill 来源必须显式选择一个")
+        validate_agent = getattr(ability_content, "validate_agent", None)
+        if validate_agent is not None:
+            validate_agent(agent_name)
+        self._ability_content = ability_content
         self._skill_provider = skill_provider
         self._skill_catalog_digest: str | None = None
         self._pending_messages: list[Any] = []
@@ -1042,36 +1047,6 @@ class ContextManager:
             )
         return branch
 
-    # ----------------------------------------------------------------
-    # 上下文构建
-    # ----------------------------------------------------------------
-
-    def build_execution_context(
-        self,
-        message: AgentMessage | None = None,
-        config: AgentConfig | None = None,
-        system_prompt: str | None = None,
-        context_filter: Callable | None = None,
-    ) -> AbilityExecutionContext:
-        """构建 AbilityExecutionContext。
-
-        Args:
-            message: 输入消息（可选，保留向后兼容）
-            config: Agent 配置（可选）
-            system_prompt: 覆盖默认 system_prompt（可选）
-            context_filter: 上下文过滤函数（可选）
-
-        Returns:
-            初始化后的 AbilityExecutionContext
-        """
-        from ghrah.abilities.context import AbilityExecutionContext
-
-        return AbilityExecutionContext(
-            current_ability_name="",
-            agent_state=self._state_manager.current,
-            context_manager=self,
-        )
-
     async def get_llm_messages(
         self,
         max_tokens: int | None = None,
@@ -1112,7 +1087,20 @@ class ContextManager:
                 self._pending_compaction.extend(records)
 
         # 技能目录摘要：窗口管理之后追加——不被压缩裁掉，且始终位于队列末尾
-        catalog = self._skill_catalog_message()
+        if self._ability_content is not None:
+            validate_context = getattr(self._ability_content, "validate_context", None)
+            if validate_context is not None:
+                validate_context(self._agent_name)
+            text = await self._ability_content.catalog_text()
+            catalog = (
+                self._message_factory.create_message(
+                    role="user", text=text, source="ability:catalog"
+                )
+                if text and self._message_factory is not None
+                else None
+            )
+        else:
+            catalog = self._skill_catalog_message()
         if catalog is not None:
             messages = [*messages, catalog]
 
@@ -1164,6 +1152,11 @@ class ContextManager:
     def skill_provider(self) -> Any | None:
         """SkillAbilityProvider（装配期显式接线；None = 未接线）。"""
         return self._skill_provider
+
+    @property
+    def ability_content(self) -> Any | None:
+        """显式接线的当前 Agent 内容端口；不回退旧 Skill 来源。"""
+        return self._ability_content
 
     def get_cumulative_token_usage(self) -> dict[str, int]:
         """从链历史中累计计算总 token 用量。

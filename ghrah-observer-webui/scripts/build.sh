@@ -12,6 +12,9 @@ echo "=== Building @ghrah/plugin-registry ==="
 echo "=== Building @ghrah/observer-core ==="
 (cd "$ROOT_DIR/packages/observer-core" && pnpm build)
 
+echo "=== Building @ghrah/mock-server ==="
+(cd "$ROOT_DIR/packages/mock-server" && pnpm build)
+
 echo "=== Building @ghrah/observer-web (SPA) ==="
 (cd "$ROOT_DIR/packages/observer-web" && pnpm build)
 

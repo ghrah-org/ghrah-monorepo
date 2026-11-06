@@ -34,6 +34,8 @@ def create_rebased_context(
     state_filter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     snapshot_interval: int | None = None,
     window_manager: WindowManager | None = None,
+    *,
+    ability_content: Any | None = None,
 ) -> ContextManager:
     """从源 Agent 的 chain 节点创建 rebased ContextManager。
 
@@ -52,6 +54,8 @@ def create_rebased_context(
         window_manager: 新 Agent 的窗口管理器（可选，默认 None 不配置）。
             必须传入独立实例——直接共享源 CM 的实例会使摘要策略状态
             与压缩排水记录跨 Agent 互串
+        ability_content: 新 Agent 显式装配的内容服务；不继承源 Agent 的授权端口。
+            复用时服务必须核验目标稳定主体与当前运行代次。
 
     Returns:
         新 Agent 的 ContextManager，与源 CM 共享同一 persistence backend，
@@ -60,6 +64,9 @@ def create_rebased_context(
     Raises:
         ValueError: 源 chain 为空或指定节点不存在
     """
+    if ability_content is not None:
+        ability_content.validate_context(agent_name)
+
     # 1. 确定源节点
     if source_node_id is None:
         source_node = source_cm.active_head
@@ -109,7 +116,8 @@ def create_rebased_context(
         compact_threshold=source_cm.compact_threshold,
         compact_keep_recent=source_cm.compact_keep_recent,
         compact_method=source_cm.compact_method,
-        skill_provider=source_cm.skill_provider,
+        skill_provider=source_cm.skill_provider if ability_content is None else None,
+        ability_content=ability_content,
     )
 
     return child_cm

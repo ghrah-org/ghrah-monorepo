@@ -1,12 +1,15 @@
 # 能力包开发指南
 
+> **已被取代（2026-11-04）**：作者面规范改由内置 Ability 包 `ghrah.ability-builder`（`ghrah.ability-builder@0.1.1`，源在 `ghrah-core/src/ghrah/ability/builtin/ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md` 承载；本文保留作历史参考，不再更新。文中“`skills/SKILL.md` 单 skill”等写法属于旧版，已被 v1 两段式取代。
+
 | 项 | 内容 |
 | --- | --- |
 | 文档编号 | GHRAH-GUIDE-002 |
-| 文档状态 | 现行（authoritative） |
+| 文档状态 | 已取代（superseded，2026-11-04） |
 | 校准基线 | `ghrah-monorepo` @ `f8ff157`（2026-10-28），`ghrah-core` 0.2.0a0 |
 | 读者 | 要新增一个工具（能力）、要改现有能力行为、要给能力加权限或审批的开发者 |
 | 取代 | `package技术文档.md`、`package增量开发指引.md`（归档至 `docs/archive/`） |
+| 被取代 | `ghrah.ability-builder` 包（`ghrah.ability-builder@0.1.1`，内置包 `builtin/ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md`；作者面规范以该包正文为准 |
 | 相关文档 | `ghrah-01-ability-design-and-implementation.md`（为什么这样设计、契约全貌）、`ghrah-04-skill-system.md`（技能成员）、`ghrah-06-code-map.md` §8（新文件放哪） |
 
 ## 修订记录
@@ -91,12 +94,13 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from ghrah.scheme.execution.base import Ability
+from ghrah.ability.execution.base import Ability
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.scheme.execution.context import AbilityExecutionContext
-    from ghrah.scheme.execution.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.hooks import Hook
+    from ghrah.ability.execution.invocation import OperationCall
 
 PERMISSIONS: dict[str, Any] = {}
 HOOKS: dict[str, Any] = {}
@@ -116,9 +120,8 @@ class HelloEchoAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        args = context.tool_args or context.accumulated_data.get("tool_args", {})
-        text = str(args.get("text", ""))
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        text = str(call.arguments.get("text", ""))
         if not text:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
@@ -238,7 +241,7 @@ class ReadFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult: ...
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult: ...
 
 
 # 5) 私有辅助函数（下划线开头，不会被当成实现类）
@@ -258,11 +261,16 @@ def _number_lines(lines, *, start_no: int) -> str: ...
 
 ### 5.2 `execute` 的写法
 
+执行签名固定为 `execute(self, call: OperationCall, services: ExecutionServices)`：
+
+- `call` 只带成员引用（`call.member.member`）、参数（`call.arguments`）、`tool_call_id` 与受信身份（`call.identity`）；参数只有一个来源，不接受 `context.tool_args` 之类的回退；
+- `services` 带执行期依赖，按服务键取：`CONTEXT_MANAGER`、`SUPERVISOR`、`LOOP`（循环数据，如 `llm_response`）、`MANIFEST_STORE`、`SKILL_PROVIDER`、`MCP_RUNTIME`、`ABILITY_CONTENT`、`MESSAGE_FACTORY`。新增依赖加服务键，不给调用对象加属性；
+- 本机没有接线或允许为空的服务用 `services.get(...)` 并显式降级；必需服务用 `services.require(...)` 让缺失直接报错。
+
 ```python
-async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-    # a) 取参数：优先 context.tool_args，兼容 accumulated_data["tool_args"]
-    args = context.tool_args or context.accumulated_data.get("tool_args", {})
-    file_path = args.get("file_path", "")
+async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+    # a) 取参数：唯一来源是 call.arguments，没有旧门面回退
+    file_path = str(call.arguments.get("file_path", ""))
 
     # b) 自己做参数校验（执行器不做 schema 校验）
     if not file_path:

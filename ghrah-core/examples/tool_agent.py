@@ -32,7 +32,8 @@ from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
 from ghrah.abilities.builtin.conversation import ConversationAbility
 from ghrah.abilities.builtin.end_task import EndTaskAbility
 from ghrah.abilities.builtin.read_file import ReadFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication import SupervisorActor
 from ghrah.types.config_types import AgentConfig
@@ -88,7 +89,7 @@ async def demo_custom_ability() -> None:
         def name(self) -> str:
             return "code_review"
 
-        async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+        async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
             return ActionResult(
                 outcome=ActionOutcome.SUCCESS,
                 data={"response": "Code review completed"},

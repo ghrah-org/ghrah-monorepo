@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { type AbilityTreeClient } from "@ghrah/observer-core";
-import { BindToolRequestSchema, type AbilityTreeView } from "@ghrah/protocol";
+import {
+  BindToolRequestSchema,
+  type AbilityTreeView,
+  type ContentReadResult,
+} from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -12,6 +16,9 @@ const toolName = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
+const content = ref<ContentReadResult | null>(null);
+const contentTarget = ref<{ alias: string; member: string; version: string } | null>(null);
+const reading = ref(false);
 let epoch = 0;
 const choices = computed(() =>
   (view.value?.abilities ?? []).flatMap((ability) =>
@@ -19,7 +26,9 @@ const choices = computed(() =>
       value: `${ability.alias}/${operation.key}`,
       alias: ability.alias,
       member: operation.key,
-      available: ability.availability === "ready",
+      available:
+        operation.availability === "ready" ||
+        (operation.availability === "unknown" && ability.availability === "ready"),
     })),
   ),
 );
@@ -39,6 +48,9 @@ async function refresh() {
   const current = ++epoch;
   const target = props.agentId;
   view.value = null;
+  content.value = null;
+  contentTarget.value = null;
+  reading.value = false;
   selected.value = "";
   loading.value = true;
   saving.value = false;
@@ -82,6 +94,37 @@ async function change(tool?: string) {
     if (current === epoch) saving.value = false;
   }
 }
+async function readContent(alias: string, member: string, version: string, offset = 0) {
+  const current = epoch;
+  reading.value = true;
+  error.value = "";
+  content.value = null;
+  contentTarget.value = { alias, member, version };
+  try {
+    const result = await props.client.readContent(props.agentId, alias, member, version, offset);
+    if (current === epoch) content.value = result;
+  } catch {
+    if (current === epoch) error.value = t("schemeAbilities.contentFailed");
+  } finally {
+    if (current === epoch) reading.value = false;
+  }
+}
+
+function downloadChunk() {
+  if (!content.value) return;
+  const item = content.value;
+  const bytes =
+    item.encoding === "base64"
+      ? Uint8Array.from(atob(item.content), (char) => char.charCodeAt(0))
+      : new TextEncoder().encode(item.content);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${item.member.replaceAll("/", "-")}.${item.offset}.bin`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 watch([() => props.agentId, () => props.client], () => void refresh(), { immediate: true });
 </script>
 
@@ -121,9 +164,76 @@ watch([() => props.agentId, () => props.client], () => void refresh(), { immedia
           {{ t("schemeAbilities.bind") }}
         </button>
       </form>
+      <h4>{{ t("schemeAbilities.content") }}</h4>
+      <ul>
+        <li v-for="ability in view.abilities" :key="ability.alias">
+          <code>{{ ability.alias }}</code>
+          <p>{{ t("schemeAbilities.version", { version: ability.version_digest }) }}</p>
+          <template v-if="ability.skill">
+            <p>{{ ability.skill.title }} — {{ ability.skill.description }}</p>
+            <button
+              v-if="ability.skill.body_allowed"
+              type="button"
+              class="btn-secondary"
+              :disabled="reading"
+              @click="
+                readContent(ability.alias, `skill/${ability.skill.key}`, ability.version_digest)
+              "
+            >
+              {{ t("schemeAbilities.readBody") }}
+            </button>
+            <ul v-for="role in ['assets', 'references'] as const" :key="role">
+              <li v-for="entry in ability.skill[role]" :key="entry.member">
+                <code>{{ role }}/{{ entry.key }}</code>
+                <span>{{ entry.media_type }} · {{ entry.size }}</span>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  :disabled="reading"
+                  @click="readContent(ability.alias, entry.member, ability.version_digest)"
+                >
+                  {{ t("schemeAbilities.readContent") }}
+                </button>
+              </li>
+            </ul>
+          </template>
+        </li>
+      </ul>
+      <div v-if="content">
+        <p>
+          {{
+            t("schemeAbilities.range", {
+              offset: content.offset,
+              count: content.byte_count,
+              total: content.total_bytes,
+            })
+          }}
+        </p>
+        <pre v-if="content.encoding === 'utf-8'">{{ content.content }}</pre>
+        <p v-else>{{ t("schemeAbilities.binary") }}</p>
+        <button type="button" class="btn-secondary" @click="downloadChunk">
+          {{ t("schemeAbilities.downloadChunk") }}
+        </button>
+        <button
+          v-if="content.next_offset !== null && contentTarget"
+          type="button"
+          class="btn-secondary"
+          :disabled="reading"
+          @click="
+            readContent(
+              contentTarget.alias,
+              contentTarget.member,
+              contentTarget.version,
+              content.next_offset,
+            )
+          "
+        >
+          {{ t("schemeAbilities.nextChunk") }}
+        </button>
+      </div>
       <h4>{{ t("schemeAbilities.bound") }}</h4>
       <p v-if="!view.bound_tools.length">{{ t("schemeAbilities.noTools") }}</p>
-      <ul>
+      <ul class="bound-tools">
         <li v-for="tool in view.bound_tools" :key="tool.name">
           <code>{{ tool.name }}</code>
           <span>{{ tool.alias }}/{{ tool.member }}</span>

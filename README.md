@@ -2,16 +2,14 @@
 
 参伍以变，错综其数
 
-多智能体运行时（multi-agent runtime）：认知（Core）、效果（Subject）、观察（Observer）三层分离的 agent 基础设施。
+九夏/ghrah 是一个多智能体运行时（Multi-Agent System）
 
-## 这是什么
+为持久化、可观察、受权限治理的多 agent 协作提供运行时：
 
-ghrah 为持久化、可观察、受权限治理的多 agent 协作提供运行时：
-
-- **Core**（`ghrah-core`）— agent 认知半区：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
-- **Subject**（`ghrah-subject`）— agent 效果半区（effect host）：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
-- **Protocol**（`ghrah-protocol`）— 跨进程协议真相源：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
-- **Observer WebUI**（`ghrah-observer-webui`）— CQRS 读模型：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
+- **Core**（`ghrah-core`）— agent 运行时：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
+- **Subject**（`ghrah-subject`）— agent 服务：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
+- **Protocol**（`ghrah-protocol`）— 跨进程协议：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
+- **Observer WebUI**（`ghrah-observer-webui`）— 前端与CQRS读取区：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
 
 ```
 Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUnit)
@@ -20,25 +18,33 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 
 ## 现状
 
-- 版本 `0.2.0a0`（快速成型期，接口可能破坏性变更）；Core Unit 化与单进程化已完成，Room/Project/Task 域已落地，恢复（reconcile）体系在建。
-- Python ≥ 3.11 + [uv](https://docs.astral.sh/uv/)；Node.js ≥ 22 + pnpm ≥ 9（pnpm 11 需要 Node ≥ 22 的 `node:sqlite`）。
-- 许可 Apache-2.0（REUSE 标注补全进行中）。
+- 版本 `0.2.0a0`（快速成型期，接口可能破坏性变更）
+- Python ≥ 3.15.1 + [uv](https://docs.astral.sh/uv/)；Node.js ≥ 26 + pnpm ≥ 11
+- 许可 Apache-2.0
 
 模型连接通过 agentconf 0.3 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
 
 ## 快速开始
 
-```sh
-# 0) 依赖（仓库根执行）
-uv sync --all-packages            # Python 全量（单一 uv.lock 在根）
-pnpm install                      # TS 全量（单一 pnpm-lock.yaml 在根）
+推荐借助九夏的工具链完成安装与部署，需要先安装uv:
 
-# 1) 一键启动全栈（根目录）
-python3 scripts/start_all.py      # Subject :4112 + WebUI dev server :5173
-# 常用变体：
-#   --no-webui            仅后端
-#   --no-webui --open     后端 + 自动开浏览器
-#   --webui-port 5273     换端口
+1. 安装工具链并安装九夏
+```sh
+git clone https://github.com/ghrah-org/ghrah-toolchain
+cd ghrah-toolchain
+uv tool install . --editable
+ghrah install https://github.com/ghrah-org/ghrah-monorepo
+```
+
+2. 启动九夏
+
+```sh
+ghrah start
+```
+
+3. 查看状态
+```sh
+ghrah status
 ```
 
 启动后访问 `http://localhost:5173`（WebUI）。Ctrl+C 一键退出（进程组整组终止，退出时清理注入的 env 文件）。
@@ -58,18 +64,19 @@ cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo
 | 目录 | 语言 | 说明 | 发布 |
 | --- | --- | --- | --- |
 | `ghrah-core/` | Python | agent 认知核心（loop/上下文/能力/装配） | PyPI `ghrah-core` |
+| `ghrah-kernel/` | Python | 应用微内核与监督者（14 个基础入口、受信启动、静态身份/Scope 与真实命名服务）；真实 Agent/Ability 尚未接入 | 未发布（未纳入发布白名单） |
 | `ghrah-plugin/` | Python | 插件基础设施（plugin spec 契约/发现/注册/协商/离线验证） | 未发布（`publish.yml` 白名单未纳入） |
 | `ghrah-protocol/` | Python | 协议类型与消息定义 | PyPI `ghrah-protocol` |
 | `ghrah-subject/` | Python | 效果宿主（工作区/权限/HITL/Project/Room/恢复） | PyPI `ghrah-subject` |
 | `ghrah-taskstore/` | Python | 任务归因内核（**可选组件**、首个接入插件系统的插件；tasks/claims/evidence 三表权威 + checker 扩展点宿主） | 未发布（`publish.yml` 白名单未纳入） |
 | `ghrah-scheme/` | Python | 内部 Scheme 控制平面原型：类型化动作、路由引用、接纳与有界生命周期；现有 Core／Subject 尚未迁移 | 未发布（自用，未纳入发布白名单） |
 | `ghrah-observer-webui/` | TypeScript | 观察端（`@ghrah/protocol`、`@ghrah/observer-core` 发 npm；`observer-web` 前端、`mock-server` 私有；`vscode-extension` 发 Marketplace） | npm / Marketplace |
-| `scripts/` | Python | 全栈启动入口（`start_all.py`） | — |
+| `scripts/` | Python | 发布、导出与迁移辅助脚本 | — |
 
 ## 测试与质量
 
 ```sh
-uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme  # Python 六包
+uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel  # Python 七包
 uv run ruff check . && uv run ruff format --check .     # Python lint/format
 pnpm -r test && pnpm type-check                          # TS 测试 + 类型检查（webui 内）
 pnpm lint                                                # TS biome + i18n/ui-token 门禁（webui 内）

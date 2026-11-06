@@ -186,7 +186,7 @@ graph LR
 要点：
 - **观察端端口** `4112`（`ObserverServerConfig.port`，注释明确"区别于 Core 的 4111"，`ghrah-subject/ghrah/subject/server/config.py:23`）。
 - `GHRAH_SUBJECT_CORE_URL` 默认 `ws://localhost:4111/ws` 是**遗留配置项**（`CoreTransportConfig`），当前单进程形态下 CoreUnit 由 Ouroboros Context 直接在进程内挂载，不经过该 WS。
-- 前端 dev server 端口 `5173`，后端地址经 `packages/observer-web/.env.local` 的 `VITE_GHRAH_SUBJECT_WS_URL` 注入（`scripts/start_all.py:213-218`）。
+- 前端 dev server 端口 `5173`，后端地址经 `packages/observer-web/.env.local` 的 `VITE_GHRAH_SUBJECT_WS_URL` 注入（`ghrah dev run` / `ghrah start`）。
 
 ### 2.3 仓库结构与包依赖
 
@@ -241,10 +241,10 @@ graph TB
 
 | 面 | 技术 |
 |---|---|
-| Python | ≥ 3.11；`uv` 管理（单一 `uv.lock` 在根）；pydantic v2；aiosqlite；ruff（`E,F,I,N,W,UP`，行宽 100）；pytest（`asyncio_mode = "auto"`） |
+| Python | ≥ 3.15；`uv` 管理（单一 `uv.lock` 在根）；pydantic v2；aiosqlite；ruff（`E,F,I,N,W,UP`，行宽 100）；pytest（`asyncio_mode = "auto"`） |
 | Unit 内核 | [Ouroboros](https://pypi.org/project/cordis-ouroboros/)（`Context` / `plugin` / `Fiber` / `FiberState`） |
 | Web 服务 | FastAPI + uvicorn（WebSocket + `/health` + `/`） |
-| TS | Node ≥ 22.12（pnpm 11 依赖 `node:sqlite`）、pnpm workspace、Vue 3 + Vite、Pinia、zod、vitest、tsup |
+| TS | Node ≥ 26（pnpm 11 依赖 `node:sqlite`）、pnpm workspace、Vue 3 + Vite、Pinia、zod、vitest、tsup |
 | Lint（TS） | oxlint → eslint → prettier → i18n/ui-token 门禁 |
 | 许可 | Apache-2.0（REUSE 标注补全进行中） |
 
@@ -537,7 +537,7 @@ Unit 契约（`ghrah-subject/ghrah/subject/unit/base.py`）：
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SA as scripts/start_all.py
+    participant SA as ghrah dev run
     participant Proc as ghrah-subject-server 进程
     participant App as app.serve()
     participant Asm as assemble_subject()
@@ -547,7 +547,7 @@ sequenceDiagram
     participant Uvicorn as uvicorn
     participant Vite as vite dev server
 
-    SA->>SA: 检查 uv / pnpm / node>=22、端口占用
+    SA->>SA: 检查 uv / pnpm、端口占用
     SA->>Proc: spawn(uv run ghrah-subject-server, env GHRAH_SUBJECT_SERVER_PORT)
     Proc->>App: asyncio.run(serve())
     App->>Proc: SubjectConfig.from_env() + configure_logging
@@ -1632,40 +1632,15 @@ classDiagram
 
 ### 6.2 能力定义面与物化面
 
-能力**不再有代码注册表**。2026-10-28 的重构（`1938ffa`）删除了 `ghrah/abilities/` 与 `ghrah/manifest/` 两棵目录树，改为**先有定义、后有类**：一份 `ability.yaml` 声明容器及其成员（`operations` / `skills` / `assets`），`ghrah.scheme_ability.loading` 负责扫盘、校验、投影，`create_ability()` 在物化期把 handler 映射到实现类。
+当前运行体系分为两条明确的链：既有生产 Agent 仍使用 `ghrah.abilities`／`ghrah.skills`，新容器链的定义、快照、关系和执行实质归 `ghrah.ability`。新链不通过旧生产注册表回退授权，也不把目录准备结果当作模型工具集合。
 
-```mermaid
-flowchart LR
-    Dir["（root）/（容器）/ability.yaml<br/>format: ghrah.ability-definition"] --> Scan["scan_ability_definitions()<br/>目录面：全池扫盘、收集 issue、不抛错"]
-    Scan --> Def["AbilityDefinition<br/>identity / operations / skills / assets"]
-    Def --> View["AbilityManifest 视图<br/>load_all_builtin_manifests()"]
-    Def --> Ops["operation_containers()<br/>builtin_handlers()"]
-    Ops --> Create["create_ability(handler, **params)<br/>ability_class() → 实现类"]
-```
+新容器具有 `0..N` 个 Operation 与 `0..1` 个 Skill；assets 和 references 都属于该 Skill。来源先显式捕获成完整内容快照，受信操作员提交并选择实例版本，再授权 Agent。工具投影只从当前获授 Operation 中选出。目录查询、View 和内容读取不扫描来源。
 
-`ghrah-core/src/ghrah/scheme_ability/loading/ability_catalog.py` 是把定义面装配成运行时视图的唯一门面：
+21 个内置 Operation 算法保存在 `ghrah-core/src/ghrah/ability/builtin/`。文件 `read_file`／`list_directory` 已有真实资源树后端，其余算法保留，不据此宣称全部完成运行接入。脚本入口可声明为 Operation 并固定源内容，通用脚本后端与 MCP 尚待独立接入。
 
-| API | 语义 | 行号 |
-|---|---|---|
-| `load_definition(container)` | 取单容器定义；未知容器抛 `ManifestValidationError` | `:130` |
-| `operation_containers()` | `{handler: 容器名}`，**含** registry-only | `:452` |
-| `builtin_handlers()` | 升序 handler 列表，**含** registry-only | `:469` |
-| `has_handler(handler)` / `ability_class(handler)` | 存在性 / 取实现类 | `:481` / `:495` |
-| `create_ability(handler, **params)` | **原 `AbilityRegistry.create` 的唯一替代入口** | `:518` |
-| `builtin_full_names()` | 声明路径成员全名，**不含** registry-only | `:424` |
-| `load_builtin_manifest(full_name)` | 单个 `AbilityManifest` 视图 | `:539` |
+定义格式在 `ability/loading/ability_schema.py`，内容捕获在 `ability/content.py`，不可变版本在 `ability/versions.py`，授权写者在 `ability/access/store.py`。新链的 Context 端口在 `ability/consumer.py`。来源扫描及旧 lock 工具保留为受信准备工具，不是运行时权限作者。
 
-**三个口径不可混用**（同一份内置树，实测于 `f8ff157`）：
-
-| 口径 | 数量 | API |
-|---|---|---|
-| handler 全集 | 22（含 `send`） | `builtin_handlers()` |
-| 运行时视图 | 21（不含 `send`，见 `REGISTRY_ONLY_OPERATIONS`） | `load_all_builtin_manifests()` |
-| 模型工具面 | 20（再去掉 `conversation`，其 `expose: false`） | `load_tool_list()` |
-
-> **关键区分**：按名称解析 `tool_call` 的既不是注册表也不是 catalog，而是 **Agent 的实例表**（`execute_tool_calls(abilities=self._abilities)`）。`create_ability()` 只在**物化期**用；catalog 是**进程本地、无缓存、每次重新扫盘**（热插拔）。
->
-> 字段级契约、扫描规则与投影细节见 [ghrah-01-ability-design-and-implementation.md](ghrah-01-ability-design-and-implementation.md) §5–§7；改 `ability.yaml` 的逐字段说明见 [ghrah-02-ability-package-guide.md](ghrah-02-ability-package-guide.md)。
+详见 [Ability 容器 API 与 Scheme 接入](../ghrah-scheme/docs/2026-10-29-ability-api.md)及[完整内容消费示例](../ghrah-core/examples/ability_content/README.md)。下节的执行器说明仍描述既有生产链；新领域包中没有另一份复制执行器。
 
 ### 6.3 AbilityExecutor
 
@@ -2035,14 +2010,14 @@ flowchart TD
 
 | 实现 | 位置 | 能力 |
 |---|---|---|
-| `BuiltinManifestStore` | `ghrah-core/src/ghrah/scheme_ability/loading/manifest_io.py:116` | **只读**、从 5 份内置容器定义**投影**出 21 个 ability 视图（`REGISTRY_ONLY_OPERATIONS` 里的 `send` 不在其中）；**不缓存**，每次访问重新扫盘（热插拔）。`load_ability` 未命中抛 `ManifestNotFoundError`；**`load_agent` 恒抛**；`list_agents` 恒 `[]` |
+| `BuiltinAbilitySource` | `ghrah-core/src/ghrah/ability/source.py` | 受信准备时从四份内置定义固定 20 个兼容视图；21 个实现含需明确装配的 `send`。查询不重扫；Agent 声明仅委托显式注入的主线存储 |
 | `ManifestStore`（Subject 侧） | `ghrah-subject/src/ghrah/subject/manifest_store/store.py:54` | **文件存储 CRUD**：`{root}/abilities/{namespace}/{name}.yaml`、`{root}/agents/{namespace}/{name}.yaml`；`full_name` 分解为 `(namespace, name)`（无点则 `default`）；namespace/name 有正则校验；原子写 |
 
 `ManifestStoreProtocol`（4 方法 duck-typed）：`load_ability` / `load_agent` / `list_abilities` / `list_agents`。命令面 DTO 有 7 个（`responses.py`），对应 `MANIFEST_*` 命令。
 
 #### 内置定义面（5 个容器 / 22 个 handler）
 
-2026-10-28 之后内置树不再有 20 份 per-ability YAML，改为 5 份容器定义（`ghrah-core/src/ghrah/scheme_ability/ability/<容器>/ability.yaml`）。容器内用 `operations` 声明成员，**成员键就是 handler**：
+2026-10-28 之后内置树不再有 20 份 per-ability YAML，改为 5 份容器定义（`ghrah-core/src/ghrah/ability/builtin/<容器>/ability.yaml`）。容器内用 `operations` 声明成员，**成员键就是 handler**：
 
 | 容器 | 成员数 | 成员（handler） |
 |---|---|---|
@@ -2073,9 +2048,9 @@ flowchart LR
 - **三个指纹不是一件事**：`digest_skill_catalog()` 管"清单文案要不要标 changed"；入口哨兵 `sha256-entry-v1`（`ability.yaml` + `skills/SKILL.md` 两个文件）管"这个技能变没变"，供发现面每轮调用；整树 `content_digest` / `snapshot_digest` 管"整个容器还是不是同一份快照"，只在登记与显式校验时算（昂贵）。前两者可从整树 manifest 复算，不是第二套权威。
 - **lock**：`ability.lock.yaml`（schema 2）；`ensure_locks()` 只补缺失、**不覆盖**，`relock_skill()` 是唯一覆盖路径（`.tmp` + `os.replace`）。条目 > 1024 或总字节 > 64 MiB 时降级，两枚摘要写 `null`，绝不拿"部分树的摘要"冒充全树。
 
-**模块**（`ghrah-core/src/ghrah/scheme_ability/loading/`）：`ability_scan.py`（扫盘 + 技能摊出 + lock 登记）、`skill_fingerprint.py`（整树 manifest 与两枚投影）、`skill_lock.py`（lock 读写）、`skill_models.py`、`skill_context.py`（目录渲染与正文读取）、`skill_provider.py`（目录池持有者）、`skill_mcp.py`（技能声明的 MCP 服务解析）。
+**模块**（`ghrah-core/src/ghrah/ability/loading/`）：`ability_scan.py`（扫盘 + 技能摊出 + lock 登记）、`skill_fingerprint.py`（整树 manifest 与两枚投影）、`skill_lock.py`（lock 读写）、`skill_models.py`、`skill_context.py`（目录渲染与正文读取）、`skill_provider.py`（目录池持有者）、`skill_mcp.py`（技能声明的 MCP 服务解析）。
 
-> ⚠ **两套实现并存**：`ghrah-core/src/ghrah/skills/`（旧的目录式技能包，写 schema=1 的单文件 lock）仍然存在，`ghrah-subject/src/ghrah/subject/units/skill.py:21` 仍在用它做装配期初始化；而 Core 的注入与 `load_skill` 走 `scheme/loading`（schema=2）。结果：`SkillUnit` 写出的 lock 会被判 `schema=1 与当前 2 不符`，漂移永久不可裁决。这是迁移未收尾，不是设计意图——完整成因与排查见 [ghrah-04-skill-system.md](ghrah-04-skill-system.md) §3、§12。
+> **生产与内容端口分别接线**：生产 `ghrah.skills` 与 Subject SkillUnit 仍使用既有目录／lock 初始化。`ghrah.ability.loading` 的旧扫描与 lock 工具只负责受信准备；新容器运行时以已提交内容清单和字节仓为权威，不用来源 lock 授权或读取。Context 必须明确注入 `ability_content` 或旧 SkillProvider，不混用两个来源，也不因新授权失败而回退。
 
 ### 6.9 能力子系统的深入文档
 
@@ -3416,7 +3391,7 @@ monorepo 根 package.json  →  pnpm --dir ghrah-observer-webui <script>（纯�
 webui 根：
   dev            → ./scripts/dev.sh
       --mock        → mock-server(:4113) + observer-web(:5173)，后台 + trap 清理
-      （默认）      → exec python3 <monorepo>/scripts/start_all.py
+      （默认）      → exec ghrah dev run（ghrah-toolchain 本地 dev 会话）
   dev:extension  → 构建 4 包 → 起 Core(:4111) → 轮询 /health 30s → 起 Subject → webui dev → extension watch
   build          → ./scripts/build.sh
       protocol → plugin-registry → observer-core → observer-web → vscode-extension → vsce package
@@ -3631,11 +3606,9 @@ flowchart TD
 uv sync --all-packages      # Python 全量（单一 uv.lock 在根）
 pnpm install                # TS 全量（单一 pnpm-lock.yaml 在根）
 
-# 一键全栈
-python3 scripts/start_all.py            # Subject :4112 + WebUI dev :5173
-python3 scripts/start_all.py --no-webui  # 仅后端
-python3 scripts/start_all.py --no-webui --open
-python3 scripts/start_all.py --webui-port 5273
+# 一键全栈（ghrah-toolchain）
+ghrah dev run               # 工作树增量构建 + 本地前台起服；Ctrl+C 退出
+ghrah start                 # 已安装实例后台启动
 
 # 仅前端 demo（无需后端，协议级 mock）
 cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo
@@ -3698,6 +3671,7 @@ uv run ghrah-subject-server
 | `GHRAH_SUBJECT_TASKSTORE_ENABLED` | `true` | 任务归因内核 Unit 挂载开关 |
 | `GHRAH_SUBJECT_TASKSTORE_DB` | `~/.ghrah/taskstore.sqlite3` | 内核三表库路径 |
 | `GHRAH_SUBJECT_SKILL_ROOT` | `~/.ghrah/skill-ability` | Skill 存储根（装配期自举 + 补 lock） |
+| `GHRAH_SUBJECT_ABILITY_SOURCE` | `legacy` | 能力来源装配模式（`legacy` \| `builtin`）；一个选择同时决定声明目录、工具实例与 Skill 读取服务，`builtin` 不读旧 Skill 根 |
 | `GHRAH_SUBJECT_ROOM_FILTER_ENABLED` | `true` | Room Filter Unit 挂载开关 |
 | `GHRAH_SUBJECT_ROOM_FILTER_ABILITIES` | `conversation,end_task` | 落 RoomLog 的能力白名单 |
 

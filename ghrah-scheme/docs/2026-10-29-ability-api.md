@@ -1,164 +1,132 @@
 ---
 title: Ability 容器 API 与 Scheme 接入
-description: 区分现有容器定义、扫描和执行接口，以及目标模型中的实例、获授关系和工具绑定
-tags: [Scheme, Ability, Operation, API]
+description: 单 Skill 容器的显式内容提交、获授范围、版本恢复、受控读取与 Context 消费
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 status: active
 ---
 
 # Ability 容器 API 与 Scheme 接入
 
-> 本文面向能力作者与接入开发者。先说明容器和成员，再给出当前可用接口，最后说明如何接到公共运行时。
+> 面向能力作者与受信宿主开发者。Ability 的定义、内容和执行实质归 Core 的 `ghrah.ability`；独立 `ghrah.scheme` 提供访问与生命周期机制。
 
-校准基线：`acf06fe` 与 2026-10-29 工作区。`ghrah.ability` 门面及 BuiltinAbilitySource 来自当日未提交的接入改动；核心定义和执行实质仍由 `ghrah.scheme_ability` 提供。当日已新增文件切片的获授树 API，装配与调用见[文件 Ability 资源切片：权威关系、Scheme 接入与面板](2026-10-29-ability-resource-slice.md)；它尚未接管生产 Agent。
+当前支持混合容器、纯 Operation 容器和单 Skill 内容包。完整生产 Agent、HITL 和生产接线仍须分别验收。下文描述当前已实现的隔离装配接口，不将来源扫描当作运行时授权。
 
-## 1. 容器 API 与控制原语属于不同层
+## 一、定义与资源树
 
-Ability 是包含 Operation、Skill 和 Asset 的容器。Operation 定义可执行行为，Skill 提供说明内容，Asset 表达资源内容。当前资产字段较宽泛。
-
-| 接口层 | 当前归属 | 负责什么 |
-| --- | --- | --- |
-| 定义与来源 | Core 的 `ghrah.ability` 门面及 `ghrah.scheme_ability.loading` | 定义模型、扫描、目录和明确的内置来源 |
-| Operation 执行 | Core 的 `ghrah.scheme_ability.execution` | 执行上下文、执行器、Hook 及既有外部效果 |
-| 公共访问机制 | 独立包 `ghrah.scheme` | 契约、局部绑定、引用、调用和生命周期 |
-| 获授树／bound_tools | 文件切片由 ghrah.ability.access／scheme 实现，尚未接管生产 | Agent 的有效成员关系和已生效工具选择 |
-
-`ghrah.scheme` 不导出 AbilityDefinition，也不依赖 Core 才能运行。能力作者无需为每个工具新建 scheme；多个实例和异构成员仍可以由同一个 ability kind 组织。
-
-## 2. 当前容器定义
-
-能力包以 `ability.yaml` 定义身份、成员和 provider 槽需求。定义模型是 [ability_schema.py](../../ghrah-core/src/ghrah/scheme_ability/loading/ability_schema.py) 的 AbilityDefinition；文本解析使用该模块 `parse_definition(raw, source=...)`，它还执行版本、槽引用、成员键和 Skill 数量等跨字段校验。
-
-| 顶层字段 | 作用 |
-| --- | --- |
-| format、schema_version | 当前格式分别为 `ghrah.ability-definition`、`0.1-draft` |
-| identity | namespace、可选 name、version；与显示名、Agent alias 分开 |
-| title、description | 容器的人类／模型说明 |
-| provider_requirements | 提供者槽到契约要求的映射 |
-| operations | 成员键到 OperationDefinition 的映射 |
-| skills | Skill 声明；当前解析器至多接受一个成员 |
-| assets | 当前为自由结构，尚无完整字段级服务契约 |
-
-OperationDefinition 声明 input_schema、output_schema、errors、implementation、effects、resources、execution 和 expose 等内容。implementation.operation 必须等于成员键，provider_slot 必须已声明。expose 决定当前定义工具投影是否包含该成员，不等于 Agent 已获授调用权。
-
-ExecutionSpec 当前只接受 request 模式、正数 timeout_ms、cooperative／unsupported 取消、drain／request_cancel 撤销策略和 never 重试。字段能够被解析，不等于所有执行后端已经完整强制这些策略；适配者需要核对真实后端支持。
-
-下面是一份可通过当前文本解析器校验的纯 Operation 容器。它说明定义格式，不会仅因解析成功就注册 provider 或授予权限。
-
-<!-- validate: ability-definition -->
-```yaml
-format: ghrah.ability-definition
-schema_version: 0.1-draft
-identity:
-  namespace: demo
-  name: text
-  version: 0.1.0
-title: 文本处理
-description: 对文本执行无外部副作用的规范化。
-provider_requirements:
-  text_backend:
-    contract: demo.text
-    required_capabilities: [request]
-operations:
-  normalize:
-    title: 规范化文本
-    description: 去掉两端空白并转换为小写。
-    input_schema:
-      type: object
-      properties:
-        text: {type: string}
-      required: [text]
-      additionalProperties: false
-    output_schema:
-      type: object
-      properties:
-        text: {type: string}
-      required: [text]
-      additionalProperties: false
-    implementation: {provider_slot: text_backend, operation: normalize}
-    effects: []
-    execution:
-      mode: request
-      timeout_ms: 30000
-      cancellation: cooperative
-      on_revoke: drain
-      retry: never
-skills: {}
-assets: {}
-```
-
-静态 YAML 与 SchemeSpec 不应各自演化成不同的参数契约。当前文件切片已将两个所选成员的确定 schema 通过 JsonSchemaCodec 接入 SchemeSpec；尚无覆盖任意 AbilityDefinition 的通用转换器。接入时应明确唯一作者，再生成或核对重叠 schema。公共描述格式由 ghrah-protocol 持有，不能仅手工修改 UI 一侧。
-
-## 3. 当前公开来源与扫描 API
-
-当日工作区的 [ghrah.ability](../../ghrah-core/src/ghrah/ability/__init__.py) 是薄门面，直接导出原实现对象。Operation 是既有单动作执行基类 Ability 的公开名称；它不是新的容器实例类型，也不是 Scheme 的 ActionSpec。
-
-| 接口 | 返回或效果 | 边界 |
-| --- | --- | --- |
-| `scan_abilities(pool=None)` | `tuple[AbilityContainer, ...]` | 按定义聚合 operations／skills／assets 和问题；不授予权限 |
-| `scan_catalog(pool=None)` | CatalogReport | 来源和实现相关的目录报告，不是当前 Agent 的有效工具集合 |
-| `default_pool()` | 默认目录池 | 内置包资源及用户能力目录；不自行创建目录 |
-| `SkillAbilityProvider(pool)` | 固定目录池的门面 | 构造不扫描、不写盘、不监视目录 |
-| `provider.scan()` | AbilityScanResult | entries、skills、issues、lock_issues；与 scan_abilities 的聚合容器返回不同 |
-| `provider.get_skill(name)`、`read_skill(name)` | 技能成员或正文对象 | 精确全名优先，宽松别名必须唯一；读取不授予访问权 |
-| `initialize(...)`、`relock(...)`、`verify(...)` | 显式初始化、登记或校验 | 写入和较昂贵整树校验不混入普通扫描 |
-
-目录池 rank 较小者优先；同名容器冲突收集为问题。当前扫描重新读取定义，不保证目录已经是固定运行版本。执行接入需要另行固定所选择的定义、内容和配置，不能一边调用一边把可变目录当作已授权的固定对象。
-
-以下只读示例核对内置容器及明确来源，不执行文件操作：
-
-<!-- runnable: ability-catalog -->
-```python
-from ghrah.ability import BuiltinAbilitySource, scan_abilities
-
-containers = scan_abilities()
-filesystem = next(item for item in containers if item.name == "fs")
-assert any(item.key == "read_file" for item in filesystem.operations)
-
-source = BuiltinAbilitySource()
-manifest = source.load_ability("ghrah.fs.read_file")
-assert manifest.full_name == "ghrah.fs.read_file"
-print(manifest.full_name)
-```
-
-BuiltinAbilitySource 还提供 `load_builtin(type)`、`list_abilities(namespace=None)`、`resolver()` 和 `create_operation(full_name, **params)`。它显式选择新增内置来源，返回兼容投影或为受信装配者创建后端；不在来源缺失时回退旧注册表，不注册运行端点，不提交授权。Agent 声明存储通过 agent_store 显式注入。
-
-## 4. 接入 Scheme 的最小边界
-
-把现有 Operation 接到 Scheme，需要一个 Provider 适配器：从 ProviderCall 取得可信主体、目标、已验证参数和调用关联；映射到领域调用；将结果转换为契约规定的 SchemeModel。若后端使用既有执行器和 Hook，就继续使用它们承载领域效果，避免复制第二套业务。
+Ability 包有 `0..N` 个 Operation、`0..1` 个 Skill。Skill 具有明确键、一个正文，以及各自具名的 assets 和 references。两类附件共享内容底座，保留角色与父节点。
 
 ```text
-确定 Ability 定义及实例选择
-  → 成员契约与资源路径
-  → SchemeSpec／ActionSpec 与 Provider 适配
-  → 受信 publish 与局部 bind
-  → Authority 读取当前获授关系并核定／接纳
-  → Session acquire／submit
-  → 既有 Operation／领域逻辑
+/scheme/ability/<instance>/operations/<key>
+/scheme/ability/<instance>/skill/<key>
+/scheme/ability/<instance>/skill/<key>/assets/<key>
+/scheme/ability/<instance>/skill/<key>/references/<key>
 ```
 
-每个 provider 槽可由进程内逻辑、脚本或远端适配满足，但当前运行时只实现进程内分派；外部传输和进程生命周期适配仍需具体实现。一个容器可含异构成员，不能因为同处容器就假定它们都有相同参数、输出或可用性。
+全局实例路径需要受信操作员身份并在 `acquire` 时指定 `global_instance=True`。Agent 默认使用自己的 alias；其明确路径为 `/scheme/agent/<id>/ability/<alias>/...`，同源 View 入口也可使用 `/scheme/view/<id>/ability/<alias>/...`。Skill 节点自身提供正文，不增加同级正文文件节点。
 
-当前 [真实文件 Ability 接入测试](../tests/test_core_file_ability.py) 演示 Provider 映射到 Core 执行器并验证文件效果。它使用旧单动作后端，不证明新容器驱动已经完成产品获授树、Subject 装配或模型工具切换。
+新定义使用 `schema_version: '0.2'`，在 `skills` 的受限单项映射内声明正文与附件。例如：
 
-`catalog／describe` 是运行时的受控发现方法；Skill 读取、Asset 读取、获授关联变更、工具选择等则需要各领域动作契约。不能据这些概念存在就写出尚不存在的 `session.read_skill()` 或 `session.bind_tool()`。
+```yaml
+skills:
+  guide:
+    body: {path: SKILL.md, media_type: text/markdown}
+    assets:
+      template: {path: assets/template.txt, media_type: text/plain}
+    references:
+      style: {path: references/style.md, media_type: text/markdown}
+```
 
-## 5. 容器接入完成的判断
+名称与说明从 SKILL.md frontmatter 的 `name`／`description` 单向派生；原文完整保留。Skill 键与源名称、Python 模块名分别处理。第二个 Skill、未知字段、重复 YAML 键、同类重复资源键、非法路径和未登记本地链接均拒绝。不同类别允许同名资源。
 
-一个容器的接入应能解释：定义和实例是谁；成员如何找到提供者；Agent 获授哪些成员和范围；工具绑定如何引用它们；调用撤销或 provider 重启后如何失效；UI 与 Agent 如何读取结果。
+`0.1-draft` 定义仍可显式导入旧正文位置。非空的旧顶层 assets 和旧 references 字符串列表要求作者明确转换；系统不猜父 Skill，不制造空正文。旧的来源扫描与 lock 工具保留为受信准备工具，不能作为当前 Agent 的内容消费入口。
 
-这些事实在目标树中有明确位置，在实现中有明确写者。只完成目录扫描或执行对象实例化，不等于完成该闭环。具体当前边界统一查阅实现状态，避免将目标模型写成已有运行事实。
+## 二、显式提交与恢复
+
+完整流程把准备、提交、选择和授权分开。查询不会推进其中任一步。
+
+1. 调用 `capture_ability_version(raw, root=...)` 在指定包根捕获声明清单。`CaptureLimits` 配置单文件、包总量和条目数上限。逐级目录描述符与 `NOFOLLOW` 拒绝符号链接，也防止校验后替换路径跳出包根。
+2. 调用 `store.commit_version(operator, version)` 在同一事务保存定义、清单及按摘要寻址的字节。定义摘要、内容摘要、后端摘要和整体版本摘要分别保留。失败不发布半个版本。
+3. 调用 `select_instance` 显式选择版本。纯内容实例可以省略文件根；文件 Operation 必须有真实效果范围。
+4. 显式授予 Agent 范围，再由 `AbilitySchemeHost.install` 安装当前代次的导出。
+
+标准源包不必另外编写重复元数据：`import_skill_package(root, key=..., identity=..., assets=..., references=...)` 接受完整显式附件清单，直接捕获标准 SKILL.md 包。不依据 Markdown 链接推断所有文件；只是被提及的模板同样可以登记。
+
+运行内容保存在项目数据库的内容表中，以摘要去重；读取不访问源目录。修改源码不生效，提交新版本也不会自动切换实例。切换实例后，该实例的旧获授关系和工具选择失效，必须重新授权。其他实例不受影响。
+
+宿主重启后通过 `host.restore(operator)` 从已提交数据重建，不扫描来源、不重演 Operation。字节损坏、缺失或清单摘要不符明确拒绝；不回退读源码。后端摘要不匹配的 Operation 不可用，独立内容仍可读。旧文件实例需要匹配的后端，或由操作员重新捕获、选择并授权；不改写历史摘要来复活旧引用。
+
+## 三、获授范围与撤销
+
+`GrantAbilityRequest.members` 明确只表示 Operation 键；Skill 内容用 `skill=SkillReadScope(...)` 独立表达。
+
+```python
+from ghrah.protocol.ability_tree import GrantAbilityRequest, SkillReadScope
+
+change = GrantAbilityRequest(
+    alias="reports",
+    instance_id="reporting",
+    members=[],
+    skill=SkillReadScope(key="guide", body=True, assets=["template"], references=[]),
+    expected_revision=0,
+)
+```
+
+`assets`／`references` 为 `None` 时展开该类别当前版本的全部成员，空列表表示不授予；`body` 控制正文。`whole_container=True` 同时展开当前可暴露 Operation 与单 Skill 内容，任何成员无效则整组失败。它不选择模型工具，也不覆盖未来版本新增资源。
+
+`allowed_roots` 约束文件 Operation 的真实文件访问；不成为 Skill 资源的文件系统权限。纯内容包无需填它。`bound_tools` 只接受已获授且允许暴露的 Operation，Skill 或附件不会自动成为工具。
+
+`RevokeAbilityRequest(alias=..., expected_revision=...)` 撤销整个关联。给出 `members` 可局部撤销规范身份，例如 `operations/read_file`、`skill/guide` 或 `skill/guide/assets/template`。Skill 整体撤销覆盖正文和附件。保留的 Operation 工具选择继续存在，引用重新获取；无关实例和其他 Agent 不受影响。局部变更保守更新该 alias 的获授代次，因此旧引用需要重新获取。
+
+关系库从 schema 2 事务升级到 schema 3；旧短名只转换为 Operation，内容范围为空，保留原修订和历史。升级前应保存数据库的 SQLite 一致备份；回退必须匹配旧代码和旧数据，不单独回滚程序。当前运行 run 直接读取宿主注入的生命周期来源，关系库不维护第二份 run。
+
+## 四、读取、描述和模型消费
+
+Skill、assets 和 references 支持 `read` 与 `describe`。它们复用 Scheme 五个原语；每次最后接纳重新核对请求者 run、实例代次、版本、父 Skill、角色、资源键和获授代次。
+
+```python
+body = await client.call(
+    "/scheme/agent/alice/ability/reports/skill/guide",
+    "read",
+    {"offset": 0, "limit": 65536},
+)
+```
+
+`read` 返回确定实例／版本／成员、原相对路径、媒体类型、摘要、总字节数、offset、byte_count、next_offset、encoding 和 content。文本提供 UTF-8，二进制提供 base64；UTF-8 字符跨块边界时也可返回 base64，确保字节无损。单块上限为 65536 字节，宿主可在 `AbilityAccessStore.open(..., read_limit=...)` 中降低限额。每一块都重新核权，撤销阻止后续读取；已经交付的字节不能收回。
+
+`describe` 返回相同确定身份与内容元数据，不包含正文。读取与描述均不新增数据库写记录，因此另一连接持有写锁时仍可读取已提交状态。
+
+`GrantedContentProvider` 持有某 Agent 的受信 Scheme 会话。它向 `ContextManager(..., ability_content=provider)` 提供获准目录，`load_into_context` 按需把完整有界文本加入实际 Context；二进制不自动注入模型。`read_relative` 只把相对链接解析到该 Skill 已登记且获授的资源。旧 `skill_provider` 与新端口必须明确择一，不因新授权失败而回退旧目录。
+
+完整可运行示例见[完整 Ability 内容消费示例](../../ghrah-core/examples/ability_content/README.md)。它使用真实数据库、Provider、Context 和文本／二进制附件。
+
+## 五、协议与独立面板
+
+树投影升级为 `ghrah.ability-tree.v2`；v1 载荷显式拒绝。Python 作者模型单向生成 TS Zod 校验器，生成命令如下：
+
+```sh
+uv run --frozen --no-sync python scripts/export_ability_contracts.py --check
+uv run --frozen --no-sync python scripts/export_ability_tree_fixture.py --check
+```
+
+独立面板展示容器版本、Operation 与单 Skill，附件显示在 Skill 子树；工具选择只列 Operation。文本安全地按普通文本预览，二进制显示范围并允许下载本次字节范围，后续块另行核权。客户端核对返回的成员和版本，不维护额外授权目录。生产网络传输和完整 Agent 接线仍由宿主明确提供。
+
+## 六、支持边界与源码位置
+
+| 能力 | 当前状态 |
+| --- | --- |
+| 文件 read_file／list_directory | 明确槽契约、真实后端与文件范围检查 |
+| 单 Skill 正文、assets／references | 固定快照、治理、描述、有界读取及真实 Context／面板消费 |
+| 其他 19 个内置 Operation | 算法和 YAML 迁入 `ability/builtin`；不据此宣称全部已由资源树运行接入 |
+| 显式脚本入口 | `OperationDefinition.script` 保存绑定源内容；无通用执行后端时不可调用 |
+| MCP、通用脚本执行、后台协调 | 尚未接入，须另行验收 |
+| 生产 Agent、HITL、消息循环、停止／重启 | 仍使用既有生产链，本次隔离接入不替代最终切换验收 |
+
+定义和导入在 `ghrah.ability.loading`、`content.py`、`versions.py`；关系写者在 `access/store.py`；Scheme 适配在 `scheme/host.py`；实际 Context 端口在 `consumer.py`。旧预判驱动目录已删除，保留的领域实现不再通过旧路径转导出。
 
 ## 相关文档
 
-- [文件 Ability 资源切片：权威关系、Scheme 接入与面板](2026-10-29-ability-resource-slice.md) — 当日工作区新增的可执行文件资源闭环与独立面板。
-
-- [ghrah-scheme](../README.md) — 阅读入口。
-- [Scheme 系统模型：全局树与局部入口](2026-10-29-system-model.md) — 定义、实例和局部入口。
-- [资源、权限与节点必要性](2026-10-29-resources-and-authority.md) — 获授集合与工具选择。
-- [运行时 API：契约、原语与生命周期](2026-10-29-runtime-api.md) — 完整的可执行接入示例。
-- [二次开发：逻辑、Scheme 接入与 UI 并行推进](2026-10-29-development-guide.md) — 容器、适配和 UI 的开发分工。
-- [第一代文档的实现状态与代码地图](2026-10-29-implementation-status.md) — 工作区 API 与提交基线的区别。
-- [能力包开发指南](../../docs/ghrah-02-ability-package-guide.md) — 既有包实现模板；其中历史模块路径以本文代码链接核对。
-- [技能系统](../../docs/ghrah-04-skill-system.md) — Skill 内容与登记机制的现有说明。
+- [完整 Ability 内容消费示例](../../ghrah-core/examples/ability_content/README.md) — 可执行隔离装配。
+- [文件 Ability 资源切片：权威关系、Scheme 接入与面板](2026-10-29-ability-resource-slice.md) — 首个 Operation 切片；最新内容契约以本文为准。
+- [第一代文档的实现状态与代码地图](2026-10-29-implementation-status.md) — 验证结果及支持边界。
+- [运行时 API：契约、原语与生命周期](2026-10-29-runtime-api.md) — 独立 Scheme 机制。

@@ -21,7 +21,7 @@ status: active
 | [Scheme 系统模型：全局树与局部入口](docs/2026-10-29-system-model.md) | 管理员、Agent 和一般用户怎样找到资源，定义、实例和链接如何区分 |
 | [资源、权限与节点必要性](docs/2026-10-29-resources-and-authority.md) | Agent 子树如何表达权限和工具绑定，View 如何同源投影，节点为何保留 |
 | [运行时 API：契约、原语与生命周期](docs/2026-10-29-runtime-api.md) | 当前 Python API、可执行示例、发现、接纳、取消、去重及关闭 |
-| [Ability 容器 API 与 Scheme 接入](docs/2026-10-29-ability-api.md) | 容器定义、Operation／Skill／Asset、现有来源 API 和 Provider 适配 |
+| [Ability 容器 API 与 Scheme 接入](docs/2026-10-29-ability-api.md) | 单 Skill 及附件快照、授权与撤销、Scheme／Context／面板消费 |
 | [二次开发：逻辑、Scheme 接入与 UI 并行推进](docs/2026-10-29-development-guide.md) | 如何按共同契约分别开发逻辑、接入和消费界面 |
 | [文件 Ability 资源切片：权威关系、Scheme 接入与面板](docs/2026-10-29-ability-resource-slice.md) | 已实现切片的完整装配示例、公开路径、持久关系与 UI 注入 |
 | [第一代文档的实现状态与代码地图](docs/2026-10-29-implementation-status.md) | 已实现、当日工作区新增与尚未实现的目标分别在哪里 |

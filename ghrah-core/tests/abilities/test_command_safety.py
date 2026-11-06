@@ -9,19 +9,22 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.builtin.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
     CommandSafetyChecker,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 # ── CommandSafetyChecker.parse_command 测试 ──
@@ -248,66 +251,66 @@ class TestCommandApprovalHook:
     @pytest.mark.asyncio
     async def test_should_trigger_for_execute_command(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(current_ability_name="execute_command")
-        assert await hook.should_trigger(context) is True
+        call, services = _make_context(member="execute_command")
+        assert await hook.should_trigger(call, services) is True
 
     @pytest.mark.asyncio
     async def test_should_not_trigger_for_other_ability(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(current_ability_name="write_file")
-        assert await hook.should_trigger(context) is False
+        call, services = _make_context(member="write_file")
+        assert await hook.should_trigger(call, services) is False
 
     @pytest.mark.asyncio
     async def test_safe_command_passes(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "ls -la"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
         assert result.requires_hitl is False
 
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "rm -rf /"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False
 
     @pytest.mark.asyncio
     async def test_unknown_command_requires_hitl(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "curl https://example.com"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
 
     @pytest.mark.asyncio
     async def test_git_status_passes(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "git status"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
 
     @pytest.mark.asyncio
     async def test_git_clean_blocked(self) -> None:
         hook = CommandApprovalHook(CommandSafetyChecker())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "git clean -fdx"},
         )
-        result = await hook.execute(context, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is False
 
@@ -344,3 +347,112 @@ class TestExtendSafeLists:
         checker = CommandSafetyChecker(require_approval=True)
         checker.extend_safe_lists(extra_commands={"pnpm"})
         assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+
+class TestDeclaredCommandScope:
+    """声明命令范围：allowed_commands 自动批准、denied_commands 硬拒绝。"""
+
+    def test_allowed_commands_auto_approve_two_segment(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, allowed_commands=("git status",))
+        assert checker.check_command("git status -s").category == CommandSafetyCategory.SAFE
+        assert (
+            checker.check_command("git commit -m x").category == CommandSafetyCategory.REQUIRE_HITL
+        )
+
+    def test_dangerous_command_vetoes_allowed_scope(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, allowed_commands=("rm",))
+        assert checker.check_command("rm -rf /").category == CommandSafetyCategory.DANGEROUS
+
+    def test_denied_commands_hard_deny_even_within_allowed(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=True,
+            allowed_commands=("git",),
+            denied_commands=("git push",),
+        )
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+        assert checker.check_command("git push origin main").category == (
+            CommandSafetyCategory.DANGEROUS
+        )
+
+    def test_out_of_scope_denies_when_approval_disabled(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=False,
+            allowed_commands=("git status",),
+            deny_out_of_scope=True,
+        )
+        assert checker.check_command("npm install").category == CommandSafetyCategory.DANGEROUS
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+    def test_out_of_scope_allows_when_no_scope_declared(self) -> None:
+        checker = CommandSafetyChecker(require_approval=False, deny_out_of_scope=True)
+        assert checker.check_command("npm install").category == CommandSafetyCategory.SAFE
+
+    def test_empty_declared_scope_denies_non_safe_commands(self) -> None:
+        checker = CommandSafetyChecker(
+            require_approval=False, allowed_commands=(), deny_out_of_scope=True
+        )
+        assert checker.check_command("npm install").category == CommandSafetyCategory.DANGEROUS
+        # 内置安全列表仍是部署级基线
+        assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
+
+    async def test_hook_maps_denied_scope_to_stop(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True, denied_commands=("git push",))
+        hook = CommandApprovalHook(checker)
+        call, services = _make_context(
+            member="execute_command",
+            tool_args={"command": "git push origin main"},
+        )
+        result = await hook.execute(call, services, None)
+        assert result.should_continue is False
+        assert result.requires_hitl is False
+
+
+@pytest.mark.parametrize(
+    ("allowed", "command"),
+    [
+        ("git", "git clean -fd"),
+        ("docker", "docker rmi image"),
+        ("kubectl", "kubectl delete pod test"),
+        ("npm", "npm publish"),
+    ],
+)
+def test_declared_allow_cannot_override_dangerous_subcommand(allowed, command):
+    checker = CommandSafetyChecker(require_approval=False, allowed_commands=(allowed,))
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C sub clean -fd",
+        "git -Csub clean -fd",
+        "git --git-dir=sub clean -fd",
+        "docker -H host rmi image",
+        "kubectl -n default delete pod x",
+        "kubectl --namespace=default delete pod x",
+        "npm --prefix sub publish",
+        "git reset --hard",
+        "git push --force",
+        "git push --force-with-lease",
+        "docker rm -f image",
+        "docker system prune",
+        "git --unknown value clean -fd",
+        "echo ok; git clean -fd",
+        "echo $(git clean -fd)",
+    ],
+)
+def test_leading_options_and_shell_composition_cannot_bypass_dangerous_checks(command):
+    checker = CommandSafetyChecker(
+        allowed_commands=("git", "docker", "kubectl", "npm", "echo"),
+        denied_commands=("git clean",),
+        require_approval=False,
+    )
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize("command", ["git -C sub status", "git --no-pager status"])
+def test_command_and_scope_share_leading_option_parsing(command):
+    checker = CommandSafetyChecker(allowed_commands=("git status",), require_approval=True)
+    assert checker.check_command(command).category is CommandSafetyCategory.SAFE
+    checker = CommandSafetyChecker(allowed_commands=("git",), denied_commands=("git status",))
+    assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS

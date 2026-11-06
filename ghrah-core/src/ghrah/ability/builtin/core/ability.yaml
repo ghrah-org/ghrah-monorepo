@@ -1,0 +1,242 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: ghrah
+  name: core
+  version: 0.1.0
+title: Core
+description: Session-level abilities owned by the runtime itself — conversation, task completion, discovery, skill loading, history recall, and introspection.
+members:
+  operations:
+    conversation:
+      title: Conversation
+      description: Direct conversation with the LLM without tool usage
+      entry: operations/conversation.py
+      input_schema:
+        additionalProperties: false
+        properties: {}
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - conversation
+      - core
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: false
+    end_task:
+      title: End Task
+      description: End the current task and generate a final response
+      entry: operations/end_task.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          summary:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Optional summary of the task result
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - core
+      - lifecycle
+      effects:
+      - session:end
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    list_abilities:
+      title: List Abilities
+      description: List this Agent's granted Operations and Skills from the current authorization view. Pass an exact full_name for one entry. Skill names match load_skill's alias/skill input; Skill details include only granted attachment paths.
+      entry: operations/list_abilities.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          full_name:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Optional exact entry name returned by this tool; omit to list granted entries.
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - core
+      - discovery
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    load_skill:
+      title: Load Skill
+      description: Load the complete text of a granted Skill by its exact alias/skill catalog name. Pass path to read a granted text attachment relative to that Skill. Content comes from the committed version; returned paths are package-relative.
+      entry: operations/load_skill.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          full_name:
+            description: Exact alias/skill name from the available-skills catalog or list_abilities.
+            minLength: 1
+            type: string
+          path:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Optional registered attachment path relative to the Skill document, for example references/style.md. Omit to load the complete Skill document.
+        required:
+        - full_name
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - core
+      - skill
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    recall_context:
+      title: Recall Context
+      description: Recall original messages from the current-branch action-chain history, including nodes summarized away by compaction.
+      entry: operations/recall_context.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          mode:
+            default: list
+            description: 'list: summarize nodes on the current branch; messages: fetch original messages of the selected nodes'
+            enum:
+            - list
+            - messages
+            type: string
+          node_id:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Target a single node on the current branch (exclusive with node_id_range)
+          node_id_range:
+            anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+            default: null
+            description: Inclusive [from_id, to_id] range of node ids on the current branch
+          keyword:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Case-insensitive substring filter over message text
+          role:
+            anyOf:
+            - enum:
+              - system
+              - user
+              - ai
+              - tool
+              type: string
+            - type: 'null'
+            default: null
+            description: Filter messages by role
+          since_iteration:
+            anyOf:
+            - minimum: 0
+              type: integer
+            - type: 'null'
+            default: null
+            description: Only nodes with iteration >= this value
+          limit:
+            default: 20
+            description: Max number of nodes returned (most recent first)
+            maximum: 500
+            minimum: 1
+            type: integer
+          max_output_tokens:
+            default: 2000
+            description: Output budget; recall stops and sets truncated=True when exceeded
+            minimum: 100
+            type: integer
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - context
+      - core
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    session_info:
+      title: Session Info
+      description: Read-only introspection of the runtime environment (deployment mode, allowed roots, HITL parameters), current session, and cluster members.
+      entry: operations/session_info.py
+      input_schema:
+        additionalProperties: false
+        properties: {}
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - core
+      - introspection
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills: {}

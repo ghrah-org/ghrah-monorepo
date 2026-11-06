@@ -93,7 +93,7 @@ async function submitCreate() {
         :class="[
           'project-item cursor-pointer text-sm transition-colors',
           projects.activeProjectId === project.project_id
-            ? 'active bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100 font-medium'
+            ? 'active text-blue-900 dark:text-blue-100 font-medium'
             : 'hover:bg-gray-100 dark:hover:bg-gray-800',
         ]"
         @click="switchProject(project.project_id)"

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.command_safety import (
@@ -20,13 +21,15 @@ from ghrah.abilities.builtin.command_safety import (
 from ghrah.abilities.builtin.execute_command import CommandResult
 from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.abilities.builtin.search_files import SearchFilesAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 def _make_tree(tmp_path: Path) -> Path:
@@ -115,20 +118,20 @@ class TestSchema:
 class TestValidation:
     async def test_missing_pattern_rejected(self) -> None:
         ability = SearchFilesAbility()
-        result = await ability.execute(_make_context(tool_args={"path": "/tmp"}))
+        result = await ability.execute(*_make_context(tool_args={"path": "/tmp"}))
         assert result.outcome == ActionOutcome.FAILURE
         assert "pattern is required" in result.data["error"]
 
     async def test_missing_path_rejected(self) -> None:
         ability = SearchFilesAbility()
-        result = await ability.execute(_make_context(tool_args={"pattern": "x"}))
+        result = await ability.execute(*_make_context(tool_args={"pattern": "x"}))
         assert result.outcome == ActionOutcome.FAILURE
         assert "path is required" in result.data["error"]
 
     async def test_nonexistent_path_rejected(self, tmp_path: Path) -> None:
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "x", "path": str(tmp_path / "nope")})
+            *_make_context(tool_args={"pattern": "x", "path": str(tmp_path / "nope")})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "does not exist" in result.data["error"]
@@ -143,7 +146,7 @@ class TestValidation:
             )
         )
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root)})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "Permission denied" in result.data["error"]
@@ -158,7 +161,7 @@ class TestPythonFallback:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root)})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         files = {m["file"] for m in result.data["matches"]}
@@ -173,7 +176,7 @@ class TestPythonFallback:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         files = {m["file"] for m in result.data["matches"]}
@@ -185,7 +188,7 @@ class TestPythonFallback:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(
+            *_make_context(
                 tool_args={"pattern": "alpha_case", "path": str(root), "ignore_case": True}
             )
         )
@@ -201,7 +204,7 @@ class TestPythonFallback:
         big.write_text("\n".join(f"alpha line {i}" for i in range(10)), encoding="utf-8")
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root), "max_results": 3})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root), "max_results": 3})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert len(result.data["matches"]) == 3
@@ -215,7 +218,7 @@ class TestPythonFallback:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "(unclosed", "path": str(root)})
+            *_make_context(tool_args={"pattern": "(unclosed", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "Invalid regex" in result.data["error"]
@@ -227,7 +230,7 @@ class TestPythonFallback:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "def alpha", "path": str(root), "include": "*.py"})
+            *_make_context(tool_args={"pattern": "def alpha", "path": str(root), "include": "*.py"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         match = result.data["matches"][0]
@@ -244,7 +247,7 @@ class TestRunnerMode:
         runner = MockCommandRunner(stdout="")
         ability = SearchFilesAbility(command_runner=runner)
         await ability.execute(
-            _make_context(
+            *_make_context(
                 tool_args={
                     "pattern": "alpha",
                     "path": str(root),
@@ -279,7 +282,7 @@ class TestRunnerMode:
         runner = MockCommandRunner(stdout=rg_out)
         ability = SearchFilesAbility(command_runner=runner)
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root)})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["total"] == 2
@@ -293,7 +296,7 @@ class TestRunnerMode:
         runner = MockCommandRunner(stdout=lines)
         ability = SearchFilesAbility(command_runner=runner)
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "match", "path": str(root), "max_results": 2})
+            *_make_context(tool_args={"pattern": "match", "path": str(root), "max_results": 2})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert len(result.data["matches"]) == 2
@@ -309,7 +312,7 @@ class TestRunnerMode:
 
         ability = SearchFilesAbility(command_runner=BoomRunner())
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root)})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "Search failed" in result.data["error"]
@@ -319,7 +322,7 @@ class TestRunnerMode:
         runner = MockCommandRunner(stdout="", exit_code=1)
         ability = SearchFilesAbility(command_runner=runner)
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "nomatch", "path": str(root)})
+            *_make_context(tool_args={"pattern": "nomatch", "path": str(root)})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["total"] == 0
@@ -341,13 +344,13 @@ class TestLocalRg:
         root = _make_tree(tmp_path)
         rg_ability = SearchFilesAbility()
         rg_result = await rg_ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
         )
 
         monkeypatch.setattr("ghrah.abilities.builtin.search_files.shutil.which", lambda _: None)
         py_ability = SearchFilesAbility()
         py_result = await py_ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root), "include": "*.py"})
         )
 
         assert rg_result.outcome == ActionOutcome.SUCCESS
@@ -361,7 +364,7 @@ class TestLocalRg:
         root = _make_tree(tmp_path)
         ability = SearchFilesAbility()
         result = await ability.execute(
-            _make_context(tool_args={"pattern": "alpha", "path": str(root)})
+            *_make_context(tool_args={"pattern": "alpha", "path": str(root)})
         )
         files = " ".join(str(m["file"]) for m in result.data["matches"])
         assert ".git" not in files

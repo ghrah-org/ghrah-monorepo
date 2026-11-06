@@ -1,0 +1,29 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: fixtures
+  name: builder
+  version: 0.1.0
+title: Builder
+description: 自举 fixture：零 Operation + 一个 Skill，覆盖空 operations 分支与脚本登记。
+members:
+  operations: {}
+  skills:
+    ability-package-development-guide:
+      title: Ability 包开发指南
+      description: 定义一个 Ability 包的标准结构、手写 ability.yaml 字段，以及 Operation 与 Skill 的声明方式。
+      tags:
+      - ability
+      - guide
+      - package
+      body:
+        path: skills/ability-package-development-guide/SKILL.md
+        media_type: text/markdown
+      assets: {}
+      references: {}
+      scripts:
+        export:
+          path: skills/ability-package-development-guide/scripts/export.py
+          media_type: text/x-python
+          size: 556
+          digest: sha256:7871f2f397d6d48620db7a3cc092a1f30e2f120a493a4081028655de9516c9d7

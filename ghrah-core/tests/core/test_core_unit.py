@@ -18,8 +18,9 @@ import pytest
 from ghrah.protocol.types import CommandType, EventType
 
 from ghrah.abilities.base import Ability
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.events import ContextUsageUpdatedEvent, HITLRequestEvent
 from ghrah.core.unit import (
     CoreUnit,
@@ -77,7 +78,7 @@ class MockAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         self.execute_count += 1
         return ActionResult(
             outcome=ActionOutcome.SUCCESS,
@@ -99,11 +100,14 @@ class HITLBlockingHook(Hook):
     def __init__(self, target_ability: str = "mock_ability") -> None:
         self._target_ability = target_ability
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._target_ability
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._target_ability
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult.hitl(message="Human approval required")
 
@@ -354,7 +358,7 @@ class TestHITL:
             if store.list_pending():
                 break
             await asyncio.sleep(0.01)
-        assert store.list_pending() == [("agent-1", "mock_ability", "call-1")]
+        assert store.list_pending() == [("agent-1", "mock_ability", "req-hitl")]
 
         # HITL 请求事件已上抛
         name, payload = next(
@@ -362,7 +366,7 @@ class TestHITL:
         )
         assert payload["agent_name"] == "agent-1"
         assert payload["ability_name"] == "mock_ability"
-        assert payload["context"]["tool_call_id"] == "call-1"
+        assert payload["context"]["tool_call_id"] == "req-hitl"
 
         # 审批通过 → resolve 进程内 future
         resp = await unit.handle_command(
@@ -370,7 +374,7 @@ class TestHITL:
             {
                 "agent_name": "agent-1",
                 "ability_name": "mock_ability",
-                "tool_call_id": "call-1",
+                "tool_call_id": "req-hitl",
                 "approved": True,
             },
             None,
@@ -456,7 +460,7 @@ class TestHITL:
             if store.list_pending():
                 break
             await asyncio.sleep(0.01)
-        assert store.list_pending() == [("agent-1", "mock_ability", "call-s")]
+        assert store.list_pending() == [("agent-1", "mock_ability", "req-stop")]
 
         await unit.stop()
         assert store.list_pending() == []
@@ -625,7 +629,7 @@ class TestHITL:
                 "promise_id": "will-fallback",
                 "agent_name": "agent-1",
                 "ability_name": "mock_ability",
-                "tool_call_id": "call-r",
+                "tool_call_id": "req-rej",
                 "approved": False,
                 "reason": "不安全的目录",
             },

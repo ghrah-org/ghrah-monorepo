@@ -12,8 +12,8 @@ ghrah 观察端 WebUI 与 VS Code 扩展（Vue 3 + Vite + pnpm workspace）。
 
 ## 环境要求
 
-- Node.js `^20.19.0 || >=22.12.0`
-- pnpm `>=9.0.0`
+- Node.js `>=26.0.0`
+- pnpm `>=11.0.0`
 
 ## 构建与测试（在 monorepo 根目录执行）
 
@@ -40,7 +40,7 @@ pnpm -r build
 ## 本目录下的 scripts
 
 ```sh
-pnpm dev            # ./scripts/dev.sh — 起 observer-web vite dev server
+pnpm dev            # ./scripts/dev.sh — 全栈 dev（ghrah dev run）；--mock 仅起前端 demo
 pnpm build          # ./scripts/build.sh
 pnpm lint           # i18n / ui-tokens 检查 + biome
 ```

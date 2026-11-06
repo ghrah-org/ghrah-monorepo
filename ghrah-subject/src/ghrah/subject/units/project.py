@@ -97,6 +97,7 @@ class ProjectUnit(SubjectUnit):
             cluster_transport,
             manifest_store,
             on_event=self._emit_event,
+            ability_source=self._config.ability_source,
             bootstrap_workspace_locator=self._config.project.bootstrap_workspace_locator,
             default_root_locator_template=self._config.project.default_root_locator_template,
         )

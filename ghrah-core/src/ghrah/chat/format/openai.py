@@ -286,7 +286,7 @@ class OpenAIFormat(ChatFormat):
                     args_str = getattr(func, "arguments", "{}")
                     try:
                         arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except (json.JSONDecodeError, TypeError):
+                    except json.JSONDecodeError, TypeError:
                         arguments = {}
                     name = getattr(func, "name", "")
                 else:

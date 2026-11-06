@@ -24,7 +24,7 @@ from ghrah.context.persistence.memory import InMemoryBackend
 from ghrah.core.config import AgentConfig, ContextConfig
 from ghrah.core.message import AgentMessage, MessageType
 
-AGENT_NAME = "test-agent"
+AGENT_DISPLAY_NAME = "test-agent"
 AGENT_ID = "agent-fullchain-1"
 SYSTEM_PROMPT = "You are a test agent."
 USER_INPUT = "预设输入"
@@ -35,7 +35,7 @@ async def test_conversation_fullchain_memory_persist_and_restore() -> None:
     """初始化创建 → 收消息 → 预设回复 → 落库 → restore 重建。"""
     # 1. 构造配置与脚本化 LLM
     config = AgentConfig(
-        name=AGENT_NAME,
+        name=AGENT_DISPLAY_NAME,
         agent_id=AGENT_ID,
         system_prompt=SYSTEM_PROMPT,
         context=ContextConfig(persistence_type="memory", auto_persist=True),
@@ -61,7 +61,7 @@ async def test_conversation_fullchain_memory_persist_and_restore() -> None:
     # 3. 收到预设消息 → 推理 → 预设回复
     message = AgentMessage(
         sender="user",
-        recipient=AGENT_NAME,
+        recipient=AGENT_DISPLAY_NAME,
         content=USER_INPUT,
         type=MessageType.CHAT,
     )

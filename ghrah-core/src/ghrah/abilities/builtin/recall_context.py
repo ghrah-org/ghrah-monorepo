@@ -16,7 +16,7 @@ messages_delta / root 的 messages_snapshot 中——本能力按查询边界
 查询边界 = 压缩边界：兄弟分支与跨 session 不纳入，界外 node_id 返回
 明确边界错误（区分"存在但界外"与"不存在"）。
 
-context_manager 经 AbilityExecutionContext.services 显式接线——
+context_manager 经 ExecutionServices 显式接线——
 未接线 → FAILURE 指路（零隐式）。
 """
 
@@ -27,11 +27,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ghrah.abilities.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 # 忽略 root（initial_messages 装配产物）之外节点数的 list 上限保护
 _MAX_LIST_NODES = 500
@@ -184,8 +186,8 @@ class RecallContextAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        tool_args = call.arguments
         try:
             args = RecallContextInput.model_validate(
                 {k: v for k, v in tool_args.items() if k in RecallContextInput.model_fields}
@@ -195,7 +197,7 @@ class RecallContextAbility(Ability):
                 outcome=ActionOutcome.FAILURE, data={"error": f"invalid recall_context args: {e}"}
             )
 
-        cm = context.context_manager
+        cm = services.get(CONTEXT_MANAGER)
         if cm is None or not hasattr(cm, "get_history"):
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

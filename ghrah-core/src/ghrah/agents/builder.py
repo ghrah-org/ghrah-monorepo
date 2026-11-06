@@ -171,6 +171,7 @@ def _build_context_manager(
     llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
     supervisor: Any = None,
     estimator: TokenEstimator | None = None,
+    ability_content: Any = None,
 ) -> ContextManager:
     """从 AgentConfig 构建 ContextManager（含 WindowManager + Persistence）。
 
@@ -277,6 +278,7 @@ def _build_context_manager(
         # skill-ability：provider 由 supervisor 装配期注入（None = 不接线，
         # 上下文不注入技能目录摘要）
         skill_provider=getattr(supervisor, "skill_provider", None),
+        ability_content=ability_content,
         **compact_kwargs,
     )
 
@@ -304,6 +306,7 @@ class AgentBuilder:
         event_publisher: EventPublisher | None = None,
         llm_factory: Callable[[AgentConfig], LLMProtocol] | None = None,
         persistence_factory: Callable[[AgentConfig], Any] | None = None,
+        tool_table_projector: Callable[[], Any] | None = None,
     ) -> ActorAgent:
         """从 AgentConfig 构建 ActorAgent（默认注入策略）。
 
@@ -317,13 +320,20 @@ class AgentBuilder:
             persistence_factory: 可选的 per-agent 持久化后端工厂
                 （``(AgentConfig) -> PersistenceBackend | None``；None 走默认
                 ``create_persistence``）。新 spawn 生效，存量 agent 不受影响。
+            tool_table_projector: 可选的工具表投影器（builtin 模式由启动装配
+                边界提供）；None = 旧模式静态工具表。
 
         Returns:
             配置好的 ActorAgent 实例
         """
         resolved_llm_factory = llm_factory or _default_llm_factory
+        ability_content = getattr(abilities, "ability_content", None)
         context_manager = _build_context_manager(
-            config, persistence_factory, llm_factory=resolved_llm_factory, supervisor=supervisor
+            config,
+            persistence_factory,
+            llm_factory=resolved_llm_factory,
+            supervisor=supervisor,
+            ability_content=ability_content,
         )
 
         def _cm_factory() -> ContextManager:
@@ -332,6 +342,7 @@ class AgentBuilder:
                 persistence_factory,
                 llm_factory=resolved_llm_factory,
                 supervisor=supervisor,
+                ability_content=ability_content,
             )
 
         if ability_executor is None:
@@ -351,6 +362,7 @@ class AgentBuilder:
             supervisor=supervisor,
             event_publisher=event_publisher,
             llm_factory=resolved_llm_factory,
+            tool_table_projector=tool_table_projector,
         )
 
         if abilities is not None:

@@ -20,10 +20,10 @@ from ghrah.scheme import (
 )
 
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
+from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.scheme import AbilitySchemeHost
 from ghrah.ability.versions import capture_file_version
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
-from ghrah.scheme_ability.loading.ability_roots import builtin_root
 
 ADMIN = AccessIdentity("project", "admin", "control", True)
 ALICE = AccessIdentity("project", "alice", "alice-run")
@@ -660,7 +660,7 @@ async def test_hidden_operation_cannot_be_granted_published_or_selected(slice_en
 
     store, host, base = slice_env
     raw = yaml.safe_load(builtin_root().locator.joinpath("fs", "ability.yaml").read_text())
-    raw["operations"]["read_file"]["expose"] = False
+    raw["members"]["operations"]["read_file"]["expose"] = False
     version = capture_file_version(yaml.safe_dump(raw))
     await store.commit_version(ADMIN, version)
     await store.select_instance(
@@ -767,7 +767,7 @@ async def test_changes_are_a_bounded_revision_feed_with_actor_and_version(slice_
     assert await store.changes(ADMIN) == before
 
 
-async def test_legacy_schema_preserves_relationship_revision_but_removes_run_copy(tmp_path):
+async def test_legacy_schema_rejects_name_identity_without_mutating_data(tmp_path):
     import aiosqlite
 
     path = tmp_path / "legacy.db"
@@ -788,17 +788,16 @@ async def test_legacy_schema_preserves_relationship_revision_but_removes_run_cop
         """)
     finally:
         await db.close()
-    store = await AbilityAccessStore.open(
-        path, "project", operators=frozenset({"admin"}), runs={"alice": "owner-run"}.get
-    )
+    with pytest.raises(ValueError, match="稳定 Agent ID"):
+        await AbilityAccessStore.open(
+            path, "project", operators=frozenset({"admin"}), runs={"alice": "owner-run"}.get
+        )
+    db = await aiosqlite.connect(path)
     try:
-        view = await store.view(ADMIN, "alice")
-        assert view.run_id == "owner-run" and view.revision == 7
-        assert (await store.changes(ADMIN))[0]["actor"] is None
-        async with store._db.execute("SELECT arguments FROM ability_admissions") as cursor:
-            assert (await cursor.fetchone())[0] == "retained"
+        async with db.execute("SELECT run,revision FROM ability_agents") as cursor:
+            assert tuple(await cursor.fetchone()) == ("obsolete-run", 7)
     finally:
-        await store.close()
+        await db.close()
 
 
 async def test_member_fence_codec_and_public_errors_are_strict(slice_env):

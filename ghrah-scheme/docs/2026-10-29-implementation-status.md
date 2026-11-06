@@ -11,13 +11,13 @@ status: active
 
 > 本文用于回答“现在能调用什么、目标模型还缺什么、应该到哪里找代码”。第一代指这套技术文档，不表示软件已经完成第一代产品树。
 
-校准基线：`ghrah-monorepo` 提交 `acf06fe`，2026-10-29；包版本 `ghrah-scheme 0.1.0a0`。当日工作区包含未提交的 `ghrah.ability` 门面、来源接线及文件资源切片，下文明确区分。已有 Core／Subject 产品通路尚未整体切换到 Scheme 控制平面，包未纳入对外发布白名单。
+校准基线：`016dc1e` 与 2026-10-30 完整容器工作树；包版本 `ghrah-scheme 0.1.0a0`。当前领域实质归 `ghrah.ability`，固定单 Skill 内容、附件治理和隔离 Context／面板消费已经接入。已有 Core／Subject 产品通路尚未整体切换到 Scheme 控制平面，包未纳入对外发布白名单。
 
 ## 1. 已实现、工作区新增与目标模型
 
 本表是支持范围索引。当前行为以实际代码与测试为准；目标模型说明设计方向，不构成已有方法或传输协议。
 
-| 能力 | 2026-10-29 状态 | 使用边界 |
+| 能力 | 当前状态 | 使用边界 |
 | --- | --- | --- |
 | SchemeSpec、ActionSpec、严格输入输出和公共描述格式 | 已实现 | 类型化进程内契约；公开描述由 ghrah-protocol 提供 |
 | AgentScope 与局部 alias 解析 | 已实现 | project_id、agent_id、run_id 三维隔离；alias 不是全局实例 ID |
@@ -25,8 +25,9 @@ status: active
 | catalog／describe | 已实现 | 当前 scope 的受控发现；无通用递归目录、分页和订阅 |
 | ProviderLifecycle 与共享 owner 收尾 | 已实现 | 显式 prepare／aclose、健康代次、残余报告与失败重试 |
 | 真实 Core 文件 Ability 通过 Provider 执行 | 已有测试验证 | 测试适配旧单动作后端，不代表新容器产品链已整体迁移 |
-| Ability 容器定义、扫描、Skill 与单动作执行实质 | Core 已有实现 | 归 `ghrah.scheme_ability`，不是机制包的导出 |
-| `ghrah.ability` 薄门面及 BuiltinAbilitySource | 当日工作区新增，尚未在基线提交中 | 明确新增内置来源、兼容解析和后端实例化；不自动授权或注册端点 |
+| Ability 容器定义、扫描、Skill 与单动作执行实质 | Core 已有实现 | 归 `ghrah.ability`，不是机制包的导出 |
+| `ghrah.ability` 领域包及 BuiltinAbilitySource | 定义、算法和来源已迁入 | 来源显式准备后固定；不自动授权或注册端点 |
+| 单 Skill、assets／references | 内容快照、整体及局部治理、Scheme／Context／独立面板已接入 | 一包至多一个 Skill；脚本只完成声明与内容映射，完整生产接线另行验收 |
 | 人类管理范围内的全局树与跨树链接 | 目标模型，未完整实现 | 当前第三段仍按调用者 alias 解析，不能仅靠拼字符串获得全局语义 |
 | 人类／管理服务主体与可信 self 解析 | 工作区已有独立 ControlPrincipal | 文件切片可保留操作员身份管理；生产认证传输和通用 self 解析未接线 |
 | Agent 获授关联、bound_tools 及节点变更入口 | 文件切片已实现持久闭环 | 唯一领域写入口、修订比较、当前关系接纳和旧引用失效；生产 Agent 尚未迁移 |
@@ -37,7 +38,7 @@ status: active
 
 ## 2. 代码地图
 
-按职责找代码，不根据历史上同名的 `scheme` 模块猜归属。当前机制导入 `ghrah.scheme`，Core 容器实质在 `ghrah.scheme_ability`，当日门面为 `ghrah.ability`。
+按职责找代码，不根据历史上同名的 `scheme` 模块猜归属。当前机制导入 `ghrah.scheme`，Core 容器定义、内容、关系与执行实质在 `ghrah.ability`。
 
 | 职责 | 代码与主要符号 |
 | --- | --- |
@@ -52,9 +53,9 @@ status: active
 | 错误分类 | [errors.py](../src/ghrah/scheme/errors.py)：SchemeError、ErrorCode |
 | Python 公共描述格式 | [protocol/scheme.py](../../ghrah-protocol/src/ghrah/protocol/scheme.py)：ContractDescriptor、CatalogSnapshot 等 |
 | TS 描述格式 | [protocol/src/scheme.ts](../../ghrah-observer-webui/packages/protocol/src/scheme.ts)：与 Python 样本对齐 |
-| Ability 公开门面和来源 | [ability/__init__.py](../../ghrah-core/src/ghrah/ability/__init__.py)、[source.py](../../ghrah-core/src/ghrah/ability/source.py)：当日工作区接入 |
-| 容器格式、目录与 Skill | [ability_schema.py](../../ghrah-core/src/ghrah/scheme_ability/loading/ability_schema.py)、[ability_scan.py](../../ghrah-core/src/ghrah/scheme_ability/loading/ability_scan.py)、[skill_provider.py](../../ghrah-core/src/ghrah/scheme_ability/loading/skill_provider.py) |
-| 既有 Operation 执行接口 | [execution/base.py](../../ghrah-core/src/ghrah/scheme_ability/execution/base.py)：旧名 Ability，当日门面名称 Operation |
+| Ability 公开门面和来源 | [ability/__init__.py](../../ghrah-core/src/ghrah/ability/__init__.py)、[source.py](../../ghrah-core/src/ghrah/ability/source.py)：正式领域入口 |
+| 容器格式、目录与 Skill | [ability_schema.py](../../ghrah-core/src/ghrah/ability/loading/ability_schema.py)、[ability_scan.py](../../ghrah-core/src/ghrah/ability/loading/ability_scan.py)、[skill_provider.py](../../ghrah-core/src/ghrah/ability/loading/skill_provider.py) |
+| 既有 Operation 执行接口 | [execution/base.py](../../ghrah-core/src/ghrah/ability/execution/base.py)：旧名 Ability，当日门面名称 Operation |
 
 ## 3. 已有验证能证明什么
 
@@ -101,3 +102,9 @@ status: active
 - [Ability 容器 API 与 Scheme 接入](2026-10-29-ability-api.md) — Core 容器 API 与机制接入。
 - [二次开发：逻辑、Scheme 接入与 UI 并行推进](2026-10-29-development-guide.md) — 实现与联调方法。
 - [ghrah 文档索引](../../docs/ghrah-00-doc-index.md) — 平台和既有子系统文档入口；历史模块路径按本页代码链接核对。
+
+### 2026-10-30 完整容器补充
+
+当前内容 API、schema 3 关系迁移、v2 投影及支持矩阵见[Ability 容器 API 与 Scheme 接入](2026-10-29-ability-api.md)。测试入口为 `ghrah-core/tests/ability/test_content_container.py`，可执行装配见[完整 Ability 内容消费示例](../../ghrah-core/examples/ability_content/README.md)。
+
+领域定义、21 个 Operation 算法及必要执行／权限接口已迁入正式目录。重复 Agent 解析器、重复 Manifest 解析入口、无消费者的复制执行器与 Hook 装配、全局短名工具装配及惰性门面已经删除；旧目录不再随 wheel 分发。生产 `ghrah.abilities`／`ghrah.skills` 保留原有运行责任，不能把目录退役记成完整生产 Agent 切换。

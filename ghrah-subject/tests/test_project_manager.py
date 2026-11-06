@@ -1160,3 +1160,16 @@ class TestBootstrapMethods:
         mgr = _make_manager(store)
         result = await mgr.handle_command("project_mystery", {})
         assert not result["success"]
+
+
+async def test_builtin_restore_rejects_legacy_spec_without_stable_id(store):
+    from ghrah.subject.project.models import AgentSpec
+
+    manager = _make_manager(store)
+    manager._ability_source = "builtin"
+    handle = _FakeHandle()
+    mode, error = await manager._spawn_agent_spec(
+        handle, AgentSpec(name="old-name", cluster_id="cluster", agent_id=""), "project"
+    )
+    assert mode is None and "stable_agent_id_required" in error
+    assert not handle.spawned

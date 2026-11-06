@@ -8,7 +8,7 @@ import {
   useBranchesStore,
   useSessionsStore,
 } from "@ghrah/observer-core";
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
@@ -364,11 +364,36 @@ const selectedNode = computed(
   () => visibleNodes.value.find((item) => item.id === selectedNodeId.value) ?? null,
 );
 
-// 滚动恢复挂接画布内部视口（canvas 组件经 defineExpose 暴露；面板不重复包滚动层）
+// 滚动恢复挂接画布内部视口（canvas 组件经 defineExpose 暴露；面板不重复包滚动层）。
+// 链方向为 root → Head 自左向右：默认贴右端（最新节点），用户在历史区间浏览时不被新节点拽回。
 const canvasRef = ref<InstanceType<typeof ActionChainCanvas> | null>(null);
 const chainViewport = computed<HTMLElement | null>(() => canvasRef.value?.viewport ?? null);
-const { onScroll: onChainScroll } = useTabScrollRestore(chainViewport, {
-  contentKey: computed(() => graph.value.nodes.length),
+const STICK_RIGHT_PX = 8;
+const stickyRight = ref(true);
+
+function isNearRight(): boolean {
+  const el = chainViewport.value;
+  if (!el) return true;
+  return el.scrollWidth - el.scrollLeft - el.clientWidth <= STICK_RIGHT_PX;
+}
+
+const { onScroll: onChainScroll, applyScroll: applyChainScroll } = useTabScrollRestore(
+  chainViewport,
+  {
+    contentKey: computed(() => graph.value.nodes.length),
+    horizontalTarget: () => (stickyRight.value ? "end" : null),
+  },
+);
+
+function handleChainScroll(): void {
+  stickyRight.value = isNearRight();
+  onChainScroll();
+}
+
+// 切换 viewed Session/Branch 视为“打开另一条链”：回到右端看最新节点。
+watch(layoutScopeKey, () => {
+  stickyRight.value = true;
+  void nextTick(applyChainScroll);
 });
 
 const selectBranchValue = computed(() => {
@@ -455,13 +480,14 @@ const selectBranchValue = computed(() => {
       </div>
       <ActionChainCanvas
         ref="canvasRef"
+        :class="{ 'ac-canvas--detail-open': selectedNode }"
         :graph="graph"
         :selected-node-id="selectedNodeId"
         @select="selectedNodeId = $event"
-        @scroll="onChainScroll"
+        @scroll="handleChainScroll"
       />
       <!-- 详情区（D4 裁决 A：画布下方展开；selectedNodeId 无效时占位提示） -->
-      <div class="ac-detail-wrap">
+      <div class="ac-detail-wrap" :class="{ 'ac-detail-wrap--empty': !selectedNode }">
         <ActionChainDetail :node="selectedNode" />
         <div v-if="selectedNode" class="ac-detail-actions">
           <button

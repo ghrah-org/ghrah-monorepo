@@ -18,7 +18,7 @@
 - WindowableMessage: 窗口管理中消息的最小接口
 - MessageFactory: 消息和 block 的构造接口（用于策略需要构造新消息时）
 - SummaryLLMProtocol: LLM 摘要策略对 LLM 的最小依赖接口
-- ContextManagerProtocol: AbilityExecutionContext 对 ContextManager 的最小依赖接口
+- ContextManagerProtocol: 能力执行期对 ContextManager 的最小依赖接口
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ class SummaryLLMProtocol(Protocol):
 
 
 class ContextManagerProtocol(Protocol):
-    """AbilityExecutionContext 对 ContextManager 的最小依赖接口。
+    """能力执行期对 ContextManager 的最小依赖接口。
 
     解除 abilities → context 的循环依赖。
     """

@@ -170,7 +170,7 @@ class OpenAIResponsesFormat(OpenAIFormat):
                     args = json.loads(item["arguments"])
                     if not isinstance(args, dict):
                         raise ValueError
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     blocks.append(
                         ErrorBlock(
                             error_type="invalid_tool_arguments",

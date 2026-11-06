@@ -49,6 +49,7 @@ ABILITY_PATH_SPECS: dict[str, AbilityPathSpec] = {
         path_keys=("source_path", "destination_path"),
         alt_keys={"source_path": "file_path"},
     ),
+    "search_files": AbilityPathSpec(path_keys=("path",)),
     "execute_command": AbilityPathSpec(working_dir_keys=("working_dir",)),
 }
 

@@ -3,7 +3,7 @@ name = "ghrah-core"
 version = "0.2.0a0"
 description = " General Distributed Agent Cluster Framework"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.15.1"
 dependencies = [
     "openai>=3.6.0",
     "anthropic>=0.40",
@@ -25,8 +25,8 @@ scheme = ["ghrah-scheme>=0.1.0a0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "ruff>=0.3.0",
-    "mypy>=1.9",
+    "ruff>=0.17.3",
+    "mypy>=2.4.1",
     "types-PyYAML",
 ]
 
@@ -38,7 +38,7 @@ build-backend = "hatchling.build"
 packages = ["src/ghrah"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py315"
 line-length = 100
 
 [tool.ruff.lint]
@@ -49,7 +49,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.15"
 strict = true
 
 [tool.hatch.build.targets.sdist]

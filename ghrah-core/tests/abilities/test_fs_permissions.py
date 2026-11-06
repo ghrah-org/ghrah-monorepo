@@ -10,15 +10,18 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    """创建测试用 AbilityExecutionContext。"""
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 # ── FSPermissionChecker 测试 ──
@@ -103,11 +106,11 @@ class TestFSPermissionChecker:
             assert status is None
 
     def test_workspace_root_read_outside_workspace(self) -> None:
-        """路径不在工作路径下需要审批（require_approval=True）。"""
+        """工作区是沙盒硬边界：沙盒外即使 require_approval=True 也拒绝。"""
         checker = FSPermissionChecker(workspace_root="/home/user/project")
         allowed, status = checker.check_read_path("/etc/passwd")
-        assert allowed is True
-        assert status == "pending"
+        assert allowed is False
+        assert "outside workspace sandbox" in (status or "")
 
     def test_workspace_root_read_outside_workspace_no_approval(self) -> None:
         """路径不在工作路径下且不需要审批时拒绝读取。"""
@@ -394,43 +397,43 @@ class TestAccessApprovalHook:
         """写入类 Ability 触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
         for name in AccessApprovalHook.WRITE_ABILITIES:
-            ctx = _make_context(current_ability_name=name)
-            assert await hook.should_trigger(ctx) is True
+            call, services = _make_context(member=name)
+            assert await hook.should_trigger(call, services) is True
 
     async def test_should_trigger_read_ability(self) -> None:
         """读取类 Ability 触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
         for name in AccessApprovalHook.READ_ABILITIES:
-            ctx = _make_context(current_ability_name=name)
-            assert await hook.should_trigger(ctx) is True
+            call, services = _make_context(member=name)
+            assert await hook.should_trigger(call, services) is True
 
     async def test_should_not_trigger_other_ability(self) -> None:
         """其他 Ability 不触发检查。"""
         hook = AccessApprovalHook(FSPermissionChecker())
-        ctx = _make_context(current_ability_name="conversation")
-        assert await hook.should_trigger(ctx) is False
+        call, services = _make_context(member="conversation")
+        assert await hook.should_trigger(call, services) is False
 
     async def test_execute_auto_approved(self) -> None:
         """白名单内路径自动批准。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="write_file",
+            call, services = _make_context(
+                member="write_file",
                 tool_args={"file_path": str(Path(tmpdir) / "file.txt")},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is True
 
     async def test_execute_needs_approval(self) -> None:
         """白名单外路径需要人工批准。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
         assert "approval required" in (result.message or "").lower()
@@ -439,73 +442,91 @@ class TestAccessApprovalHook:
         """白名单外且不需要批准时拒绝。"""
         checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert "denied" in (result.message or "").lower()
 
     async def test_execute_no_file_path_continues(self) -> None:
         """没有 file_path 时放行（由 Ability 自身做参数验证）。"""
         hook = AccessApprovalHook(FSPermissionChecker())
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is True
 
-    async def test_execute_move_file_uses_destination_path(self) -> None:
-        """move_file 使用 destination_path 检查权限。"""
+    async def test_execute_move_file_checks_source_and_destination(self) -> None:
+        """move_file 同时核对源与目标：任一越界即拦截。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="move_file",
+            inside = str(Path(tmpdir) / "dest.txt")
+            call, services = _make_context(
+                member="move_file",
                 tool_args={
-                    "source_path": "/tmp/source.txt",
-                    "destination_path": str(Path(tmpdir) / "dest.txt"),
+                    "source_path": str(Path(tmpdir) / "source.txt"),
+                    "destination_path": inside,
                 },
             )
-            result = await hook.execute(ctx, None)
+            assert (await hook.execute(call, services, None)).should_continue is True
+
+            escaped_call, escaped_services = _make_context(
+                member="move_file",
+                tool_args={
+                    "source_path": "/tmp/source.txt",
+                    "destination_path": inside,
+                },
+            )
+            result = await hook.execute(escaped_call, escaped_services, None)
+            assert result.should_continue is False
+            assert result.requires_hitl is True
+            assert "/tmp/source.txt" in (result.message or "")
+
+    async def test_execute_ignores_loop_data_fallback(self) -> None:
+        """参数只来自 call.arguments：LOOP 里的 tool_args 不得当作本次参数。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outside = "/etc/config.txt"
+            checker = FSPermissionChecker(allowed_paths=[tmpdir], require_approval=False)
+            hook = AccessApprovalHook(checker)
+            call, services = _make_context(member="write_file")
+            services.require(LOOP).update({"tool_args": {"file_path": outside}})
+            result = await hook.execute(call, services, None)
+            # 没有 arguments → 没有目标路径 → 放行（不读 LOOP 里的旧 tool_args）
             assert result.should_continue is True
 
-    async def test_execute_uses_accumulated_data_fallback(self) -> None:
-        """tool_args 为空时从 accumulated_data 获取。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checker = FSPermissionChecker(allowed_paths=[tmpdir])
-            hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="write_file",
-                tool_args=None,
-                accumulated_data={"tool_args": {"file_path": str(Path(tmpdir) / "file.txt")}},
+            call, services = _make_context(
+                member="write_file",
+                tool_args={"file_path": outside},
             )
-            result = await hook.execute(ctx, None)
-            assert result.should_continue is True
+            denied = await hook.execute(call, services, None)
+            assert denied.should_continue is False
 
     async def test_execute_read_ability_uses_dir_path(self) -> None:
         """list_directory 使用 dir_path 检查权限。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="list_directory",
+            call, services = _make_context(
+                member="list_directory",
                 tool_args={"dir_path": tmpdir},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is True
 
     async def test_execute_read_needs_approval(self) -> None:
         """读取操作也需要审批。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="read_file",
+        call, services = _make_context(
+            member="read_file",
             tool_args={"file_path": "/etc/passwd"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert result.requires_hitl is True
         assert "read" in (result.message or "").lower()
@@ -514,11 +535,11 @@ class TestAccessApprovalHook:
         """写入操作审批消息包含 write。"""
         checker = FSPermissionChecker(require_approval=True)
         hook = AccessApprovalHook(checker)
-        ctx = _make_context(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/etc/config.txt"},
         )
-        result = await hook.execute(ctx, None)
+        result = await hook.execute(call, services, None)
         assert result.should_continue is False
         assert "write" in (result.message or "").lower()
 
@@ -532,10 +553,73 @@ class TestAccessApprovalHook:
                 denied_paths=[str(secret)],
             )
             hook = AccessApprovalHook(checker)
-            ctx = _make_context(
-                current_ability_name="read_file",
+            call, services = _make_context(
+                member="read_file",
                 tool_args={"file_path": str(secret / "file.txt")},
             )
-            result = await hook.execute(ctx, None)
+            result = await hook.execute(call, services, None)
             assert result.should_continue is False
             assert "denied" in (result.message or "").lower()
+
+
+# ── 声明范围 × 沙盒语义（2026-11-05 裁决） ──
+
+
+class TestDeclaredScopeWithSandbox:
+    """allowed_paths 是自动批准范围；工作区是硬沙盒边界。"""
+
+    def test_allowed_scope_shadows_workspace_auto_approval(self) -> None:
+        """声明了更窄的范围后，工作区内但范围外的路径不再自动批准。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            checker = FSPermissionChecker(
+                allowed_paths=[str(src)], workspace_root=tmpdir, require_approval=True
+            )
+            inside, inside_status = checker.check_read_path(str(src / "a.txt"))
+            assert inside is True and inside_status is None
+            outside, outside_status = checker.check_read_path(str(Path(tmpdir) / "b.txt"))
+            assert outside is True and outside_status == "pending"
+
+    def test_out_of_scope_denies_without_approval(self) -> None:
+        """范围外且不允许审批时直接拒绝。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            checker = FSPermissionChecker(
+                allowed_paths=[str(src)], workspace_root=tmpdir, require_approval=False
+            )
+            allowed, status = checker.check_write_path(str(Path(tmpdir) / "b.txt"))
+            assert allowed is False
+            assert "not in allowed paths" in (status or "")
+
+    def test_declared_scope_outside_workspace_still_denied(self) -> None:
+        """声明路径落在沙盒外时，沙盒仍然优先拒绝（审批也不能放行）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                allowed_paths=["/tmp"],
+                workspace_root=tmpdir,
+                require_approval=True,
+            )
+            allowed, status = checker.check_read_path("/tmp/outside.txt")
+            assert allowed is False
+            assert "outside workspace sandbox" in (status or "")
+
+    def test_deny_all_paths_never_auto_approves(self) -> None:
+        """声明了范围但交集为空：沙盒内也不自动批准。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                workspace_root=tmpdir, require_approval=True, deny_all_paths=True
+            )
+            allowed, status = checker.check_read_path(str(Path(tmpdir) / "a.txt"))
+            assert allowed is True and status == "pending"
+            assert checker.deny_all_paths is True
+
+    def test_deny_all_paths_denies_without_approval(self) -> None:
+        """交集为空且不允许审批时拒绝。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checker = FSPermissionChecker(
+                workspace_root=tmpdir, require_approval=False, deny_all_paths=True
+            )
+            allowed, _ = checker.check_read_path(str(Path(tmpdir) / "a.txt"))
+            assert allowed is False

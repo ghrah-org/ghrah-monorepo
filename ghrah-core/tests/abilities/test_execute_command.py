@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.execute_command import (
@@ -19,13 +20,15 @@ from ghrah.abilities.builtin.execute_command import (
     ExecuteCommandAbility,
     ExecuteCommandInput,
 )
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    member = overrides.pop("member", "")
+    return make_call(member=member, arguments=tool_args), make_services(**overrides)
 
 
 # ── ExecuteCommandInput 测试 ──
@@ -68,11 +71,11 @@ class TestExecuteSubprocess:
     @pytest.mark.asyncio
     async def test_echo_hello(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "echo hello"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert "hello" in result.data["stdout"]
         assert result.data["exit_code"] == 0
@@ -80,11 +83,11 @@ class TestExecuteSubprocess:
     @pytest.mark.asyncio
     async def test_command_failure(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "false"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["exit_code"] != 0
 
@@ -94,11 +97,11 @@ class TestExecuteSubprocess:
         # POSIX shell 用 pwd；Windows 上 create_subprocess_shell 走 cmd.exe，
         # 无 pwd，用内建 cd（无参时打印当前目录）。
         command = "pwd" if os.name == "posix" else "cd"
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": command, "working_dir": str(tmp_path)},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         stdout_dir = Path(result.data["stdout"].strip().splitlines()[-1])
         assert os.path.normcase(str(stdout_dir)) == os.path.normcase(str(tmp_path))
@@ -106,43 +109,43 @@ class TestExecuteSubprocess:
     @pytest.mark.asyncio
     async def test_empty_command_returns_failure(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": ""},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "command is required" in result.data["error"]
 
     @pytest.mark.asyncio
     async def test_missing_command_returns_failure(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
 
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked_inline(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "rm -rf /"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "Dangerous command" in result.data["error"]
 
     @pytest.mark.asyncio
     async def test_dangerous_command_sudo_blocked(self) -> None:
         ability = ExecuteCommandAbility()
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "sudo apt install foo"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
 
 
@@ -204,11 +207,11 @@ class TestExecuteViaRunner:
     async def test_delegates_to_runner(self) -> None:
         runner = MockCommandRunner()
         ability = ExecuteCommandAbility(command_runner=runner)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "ls -la"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["stdout"] == "mock output"
         assert len(runner.calls) == 1
@@ -218,11 +221,11 @@ class TestExecuteViaRunner:
     async def test_runner_with_working_dir(self) -> None:
         runner = MockCommandRunner()
         ability = ExecuteCommandAbility(command_runner=runner)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "ls", "working_dir": "/tmp"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert runner.calls[0]["cwd"] == "/tmp"
 
@@ -234,11 +237,11 @@ class TestExecuteViaRunner:
             }
         )
         ability = ExecuteCommandAbility(command_runner=runner)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "false"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["exit_code"] == 1
 
@@ -250,11 +253,11 @@ class TestExecuteViaRunner:
             }
         )
         ability = ExecuteCommandAbility(command_runner=runner)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "sleep 10"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["timed_out"] is True
 
@@ -265,11 +268,11 @@ class TestExecuteViaRunner:
                 raise RuntimeError("runner crashed")
 
         ability = ExecuteCommandAbility(command_runner=FailingRunner())
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "ls"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "runner crashed" in result.data["error"]
 
@@ -277,11 +280,11 @@ class TestExecuteViaRunner:
     async def test_invalid_command_syntax_handled(self) -> None:
         runner = MockCommandRunner()
         ability = ExecuteCommandAbility(command_runner=runner)
-        context = _make_context(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "echo 'unterminated string"},
         )
-        result = await ability.execute(context)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "Failed to parse command" in result.data["error"]
 

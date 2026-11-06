@@ -10,7 +10,7 @@
 - 删除是破坏性操作，需要写入权限
 
 执行逻辑：
-1. 从 context.tool_args 获取参数
+1. 从 call.arguments 获取参数
 2. 权限验证（写入权限，因为删除是破坏性操作）
 3. 验证文件存在
 4. 删除文件
@@ -30,8 +30,9 @@ from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -93,18 +94,19 @@ class DeleteFileAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行文件删除。
 
         Args:
-            context: 执行上下文
+            call: 一次调用的值对象
+            services: 执行期服务表
 
         Returns:
             ActionResult：
             - SUCCESS: data 包含 "file_path" 和 "deleted"
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         file_path = tool_args.get("file_path", "")
 
         if not file_path:

@@ -22,6 +22,7 @@ from ouroboros_testutil import wait_active
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.core_cluster.registry import (
     CoreClusterRegistry,
+    default_core_unit_factory,
 )
 from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
@@ -947,3 +948,65 @@ class TestRealCoreUnitMultiCluster:
         finally:
             await registry.stop()
             await ctx.__aexit__(None, None, None)
+
+
+class TestDefaultFactoryGrantStoreWiring:
+    """builtin 模式由生产工厂打开启动授权关系库并按项目注入。"""
+
+    async def test_prepare_injects_open_grant_store(self, tmp_path: Path) -> None:
+        from ghrah.ability.access import GrantPolicy, GrantRule
+
+        policy = GrantPolicy(rules=(GrantRule(package="ghrah.fs"),))
+        config = SubjectConfig(ability_source="builtin", ability_grant_policy=policy)
+        locator = (tmp_path / "project-root").as_uri()
+        root = tmp_path / "project-root"
+        root.mkdir()
+        (root / "db").mkdir()
+
+        factory = default_core_unit_factory(config)
+        unit = factory("cluster-1", "project-1", locator)
+        try:
+            await factory.prepare(unit, "cluster-1", "project-1", locator)
+            assert unit._config.ability_store is not None
+            assert unit._config.ability_grant_policy is policy
+        finally:
+            await factory.release("cluster-1")
+
+    async def test_legacy_mode_does_not_open_grant_store(self, tmp_path: Path) -> None:
+        locator = (tmp_path / "project-root").as_uri()
+        root = tmp_path / "project-root"
+        root.mkdir()
+        (root / "db").mkdir()
+
+        factory = default_core_unit_factory(SubjectConfig())
+        unit = factory("cluster-1", "project-1", locator)
+        try:
+            await factory.prepare(unit, "cluster-1", "project-1", locator)
+            assert unit._config.ability_store is None
+        finally:
+            await factory.release("cluster-1")
+
+
+async def test_production_grant_store_asks_lifecycle_by_uuid_not_display_name(tmp_path):
+    from types import SimpleNamespace
+
+    from ghrah.ability.access import GrantPolicy
+
+    root = tmp_path / "project"
+    (root / "db").mkdir(parents=True)
+    config = SubjectConfig(ability_source="builtin", ability_grant_policy=GrantPolicy())
+    factory = default_core_unit_factory(config)
+    unit = factory("cluster", "project", root.as_uri())
+    called = []
+
+    def current(agent_id):
+        called.append(agent_id)
+        return "trusted-incarnation" if agent_id == "a" * 32 else None
+
+    try:
+        await factory.prepare(unit, "cluster", "project", root.as_uri())
+        unit._supervisor = SimpleNamespace(incarnation_for_agent=current)
+        assert unit._config.ability_store.current_run("a" * 32) == "trusted-incarnation"
+        assert called == ["a" * 32]
+    finally:
+        await factory.release("cluster")

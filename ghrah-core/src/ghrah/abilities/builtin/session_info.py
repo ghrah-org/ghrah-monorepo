@@ -22,11 +22,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ghrah.abilities.base import Ability
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 __all__ = ["SessionInfoAbility"]
 
@@ -94,11 +96,12 @@ class SessionInfoAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """组装静态快照 + 动态运行信息。
 
         Args:
-            context: 执行上下文
+            call: 一次调用的值对象
+            services: 执行期服务表
 
         Returns:
             ActionResult：SUCCESS 时 data 含 environment/agent/cluster 三段
@@ -114,9 +117,9 @@ class SessionInfoAbility(Ability):
             ),
         }
 
-        # ---- agent/session 段（context_manager 接线时叠加） ----
-        agent: dict[str, Any] = {"name": context.agent_name}
-        cm = context.context_manager
+        # ---- agent/session 段（CONTEXT_MANAGER 服务接线时叠加） ----
+        agent: dict[str, Any] = {"name": call.identity.agent_name}
+        cm = services.get(CONTEXT_MANAGER)
         if cm is not None and hasattr(cm, "get_active_session"):
             try:
                 session = cm.get_active_session()
@@ -129,8 +132,8 @@ class SessionInfoAbility(Ability):
             agent["session"] = "context_manager not wired (session info unavailable)"
         data["agent"] = agent
 
-        # ---- cluster 段（supervisor 接线时叠加） ----
-        supervisor = context.supervisor
+        # ---- cluster 段（SUPERVISOR 服务接线时叠加） ----
+        supervisor = services.get(SUPERVISOR)
         if supervisor is not None and hasattr(supervisor, "list_agents"):
             try:
                 agents = await supervisor.list_agents()

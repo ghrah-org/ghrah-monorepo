@@ -5,13 +5,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from ghrah.ability.execution.base import Ability
+from ghrah.ability.loading import ability_catalog
 from ghrah.manifest.ability import AbilityManifest
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import ManifestStoreProtocol
 from ghrah.manifest.resolver import ManifestResolver
-from ghrah.scheme_ability.execution.base import Ability
-from ghrah.scheme_ability.loading import ability_catalog
 
 
 class BuiltinAbilitySource:
@@ -23,10 +23,15 @@ class BuiltinAbilitySource:
 
     def __init__(self, *, agent_store: ManifestStoreProtocol | None = None) -> None:
         self._agent_store = agent_store
+        # 显式准备时固定来源；后续查询不因来源目录变化而偷偷改接。
+        self._manifests = dict(ability_catalog.load_all_builtin_manifests())
+        self._classes = {
+            key: ability_catalog.ability_class(key) for key in ability_catalog.builtin_handlers()
+        }
 
     def load_builtin(self, ability_type: str) -> AbilityManifest:
         """从新增驱动读取内置类型，缺失时不回退旧注册表。"""
-        manifests = ability_catalog.load_all_builtin_manifests()
+        manifests = self._manifests
         matches = [
             manifest
             for manifest in manifests.values()
@@ -35,7 +40,7 @@ class BuiltinAbilitySource:
         if len(matches) > 1:
             raise ManifestValidationError(f"Ambiguous builtin ability type: {ability_type!r}")
         if not matches:
-            if ability_catalog.has_handler(ability_type):
+            if ability_type in self._classes:
                 raise ManifestNotFoundError(
                     f"Builtin ability requires explicit assembly: {ability_type!r}"
                 )
@@ -44,14 +49,14 @@ class BuiltinAbilitySource:
 
     def load_ability(self, full_name: str) -> AbilityManifest:
         """按完整成员名读取内置能力，返回隔离的兼容投影。"""
-        manifest = ability_catalog.load_all_builtin_manifests().get(full_name)
+        manifest = self._manifests.get(full_name)
         if manifest is None:
             raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
         return AbilityManifest.model_validate(manifest.model_dump())
 
     def list_abilities(self, namespace: str | None = None) -> list[str]:
         """列出新增驱动的内置成员，忽略未选用的旧注册表。"""
-        names = sorted(ability_catalog.load_all_builtin_manifests())
+        names = sorted(self._manifests)
         if namespace is not None:
             names = [name for name in names if name.startswith(f"{namespace}.")]
         return names
@@ -80,4 +85,4 @@ class BuiltinAbilitySource:
             raise ManifestValidationError(f"Unsupported operation backend: {full_name}")
         if self.load_builtin(handler).full_name != full_name:
             raise ManifestValidationError(f"Operation identity changed: {full_name}")
-        return ability_catalog.create_ability(handler, **params)
+        return self._classes[handler](**params)

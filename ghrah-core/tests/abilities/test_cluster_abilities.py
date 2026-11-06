@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
@@ -19,8 +20,8 @@ from ghrah.abilities.builtin.query_agents import QueryAgentsAbility
 from ghrah.abilities.builtin.send_message import SendMessageAbility
 from ghrah.abilities.builtin.spawn_agent import SpawnAgentAbility
 from ghrah.abilities.builtin.terminate_agent import TerminateAgentAbility
-from ghrah.abilities.context import AbilityExecutionContext
-from ghrah.abilities.invocation import AbilityInvocation
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.config import AgentConfig
 
 
@@ -29,16 +30,16 @@ def _make_context(
     agent_name: str = "test-agent",
     tool_args: dict[str, Any] | None = None,
     **overrides: Any,
-) -> AbilityExecutionContext:
-    defaults: dict[str, Any] = {
-        "supervisor": supervisor,
-        "agent_name": agent_name,
-        "tool_args": tool_args or {},
-        "context_manager": MagicMock(),
-        "invocation": AbilityInvocation(tool_call_id="call-1"),
-    }
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(
+            arguments=tool_args or {},
+            agent_name=agent_name,
+            tool_call_id="call-1",
+        ),
+        make_services(supervisor=supervisor, context_manager=MagicMock(), **overrides),
+    )
 
 
 def _make_supervisor(
@@ -87,9 +88,9 @@ class TestQueryAgentsAbility:
         assert ability.get_hooks() == []
 
     async def test_execute_no_supervisor(self) -> None:
-        ctx = _make_context(supervisor=None)
+        call, services = _make_context(supervisor=None)
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
@@ -99,9 +100,9 @@ class TestQueryAgentsAbility:
             {"name": "coder", "description": "Code writer"},
         ]
         supervisor = _make_supervisor(list_agents_return=agents)
-        ctx = _make_context(supervisor=supervisor)
+        call, services = _make_context(supervisor=supervisor)
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["count"] == 2
         assert result.data["agents"] == agents
@@ -113,9 +114,9 @@ class TestQueryAgentsAbility:
             {"name": "code-reviewer", "description": "Code reviewer"},
         ]
         supervisor = _make_supervisor(list_agents_return=agents)
-        ctx = _make_context(supervisor=supervisor, tool_args={"filter": "code"})
+        call, services = _make_context(supervisor=supervisor, tool_args={"filter": "code"})
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["count"] == 2
         names = [a["name"] for a in result.data["agents"]]
@@ -126,9 +127,9 @@ class TestQueryAgentsAbility:
     async def test_execute_list_agents_exception(self) -> None:
         supervisor = _make_supervisor()
         supervisor.list_agents = AsyncMock(side_effect=RuntimeError("registry error"))
-        ctx = _make_context(supervisor=supervisor)
+        call, services = _make_context(supervisor=supervisor)
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "registry error" in result.data["error"]
 
@@ -155,21 +156,23 @@ class TestSendMessageAbility:
         assert "content" in required
 
     async def test_execute_no_supervisor(self) -> None:
-        ctx = _make_context(supervisor=None, tool_args={"target": "agent-b", "content": "hello"})
+        call, services = _make_context(
+            supervisor=None, tool_args={"target": "agent-b", "content": "hello"}
+        )
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
     async def test_execute_prepares_persistent_message(self) -> None:
         supervisor = _make_supervisor(send_return="done!")
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             agent_name="agent-a",
             tool_args={"target": "agent-b", "content": "hello"},
         )
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["message_id"] == "message-1"
         assert result.data["target"] == "agent-b"
@@ -179,29 +182,29 @@ class TestSendMessageAbility:
 
     async def test_execute_missing_target(self) -> None:
         supervisor = _make_supervisor()
-        ctx = _make_context(supervisor=supervisor, tool_args={"content": "hello"})
+        call, services = _make_context(supervisor=supervisor, tool_args={"content": "hello"})
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "target is required" in result.data["error"]
 
     async def test_execute_missing_content(self) -> None:
         supervisor = _make_supervisor()
-        ctx = _make_context(supervisor=supervisor, tool_args={"target": "agent-b"})
+        call, services = _make_context(supervisor=supervisor, tool_args={"target": "agent-b"})
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "content is required" in result.data["error"]
 
     async def test_execute_prepare_failure(self) -> None:
         supervisor = _make_supervisor()
         supervisor.prepare_message = AsyncMock(side_effect=RuntimeError("write failed"))
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"target": "agent-b", "content": "hello"},
         )
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "write failed" in result.data["error"]
 
@@ -224,9 +227,9 @@ class TestBroadcastMessageAbility:
         assert "content" in params
 
     async def test_execute_no_supervisor(self) -> None:
-        ctx = _make_context(supervisor=None, tool_args={"content": "hello all"})
+        call, services = _make_context(supervisor=None, tool_args={"content": "hello all"})
         ability = BroadcastMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
@@ -235,13 +238,13 @@ class TestBroadcastMessageAbility:
             list_agents_return=[{"name": "agent-a"}, {"name": "b"}, {"name": "c"}]
         )
         supervisor.prepare_message.return_value["recipients"] = ["b", "c"]
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             agent_name="agent-a",
             tool_args={"content": "hello all"},
         )
         ability = BroadcastMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["status"] == "prepared"
         assert result.data["recipients"] == ["b", "c"]
@@ -251,21 +254,21 @@ class TestBroadcastMessageAbility:
 
     async def test_execute_missing_content(self) -> None:
         supervisor = _make_supervisor()
-        ctx = _make_context(supervisor=supervisor, tool_args={})
+        call, services = _make_context(supervisor=supervisor, tool_args={})
         ability = BroadcastMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "content is required" in result.data["error"]
 
     async def test_execute_broadcast_exception(self) -> None:
         supervisor = _make_supervisor(list_agents_return=[{"name": "b"}])
         supervisor.prepare_message = AsyncMock(side_effect=RuntimeError("network error"))
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"content": "hello all"},
         )
         ability = BroadcastMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "network error" in result.data["error"]
 
@@ -372,32 +375,32 @@ class TestSpawnAgentAbility:
         assert "manifest_ref" in required
 
     async def test_execute_no_supervisor(self) -> None:
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=None,
             tool_args={"manifest_ref": "ghrah.designer"},
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
     async def test_execute_missing_manifest_ref(self) -> None:
         supervisor = _make_supervisor()
-        ctx = _make_context(supervisor=supervisor, tool_args={})
+        call, services = _make_context(supervisor=supervisor, tool_args={})
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "manifest_ref is required" in result.data["error"]
 
     async def test_execute_store_not_wired(self) -> None:
         """manifest_store 未接线 → 显式 FAILURE 指路（零隐式）。"""
         supervisor = _make_supervisor()
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.designer"},
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "manifest_store is not wired" in result.data["error"]
         supervisor.spawn_agent.assert_not_awaited()
@@ -406,13 +409,13 @@ class TestSpawnAgentAbility:
         supervisor = _make_supervisor(spawn_agent_return="designer")
         store = _make_store()
         _patch_resolver(monkeypatch, store)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.designer"},
             manifest_store=store,
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["agent_name"] == "designer"
         assert result.data["manifest_ref"] == "ghrah.designer"
@@ -429,7 +432,7 @@ class TestSpawnAgentAbility:
         supervisor = _make_supervisor(spawn_agent_return="designer-x")
         store = _make_store()
         _patch_resolver(monkeypatch, store)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={
                 "manifest_ref": "ghrah.designer",
@@ -440,7 +443,7 @@ class TestSpawnAgentAbility:
             manifest_store=store,
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         call_args = supervisor.spawn_agent.call_args
         config = call_args[0][0]
@@ -452,13 +455,13 @@ class TestSpawnAgentAbility:
         supervisor = _make_supervisor()
         store = _make_store()
         _patch_resolver(monkeypatch, store)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.nonexistent"},
             manifest_store=store,
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "ghrah.nonexistent" in result.data["error"]
         supervisor.spawn_agent.assert_not_awaited()
@@ -468,13 +471,13 @@ class TestSpawnAgentAbility:
         supervisor.spawn_agent = AsyncMock(side_effect=RuntimeError("name conflict"))
         store = _make_store()
         _patch_resolver(monkeypatch, store)
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.designer"},
             manifest_store=store,
         )
         ability = SpawnAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "name conflict" in result.data["error"]
 
@@ -543,24 +546,24 @@ class TestTerminateAgentAbility:
         assert "agent_name" in required
 
     async def test_execute_no_supervisor(self) -> None:
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=None,
             tool_args={"agent_name": "worker-1"},
         )
         ability = TerminateAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor" in result.data["error"]
 
     async def test_execute_success(self) -> None:
         supervisor = MagicMock()
         supervisor.terminate_agent = AsyncMock()
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"agent_name": "worker-1"},
         )
         ability = TerminateAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["agent_name"] == "worker-1"
         assert result.data["status"] == "terminated"
@@ -569,21 +572,21 @@ class TestTerminateAgentAbility:
     async def test_execute_missing_agent_name(self) -> None:
         supervisor = MagicMock()
         supervisor.terminate_agent = AsyncMock()
-        ctx = _make_context(supervisor=supervisor, tool_args={})
+        call, services = _make_context(supervisor=supervisor, tool_args={})
         ability = TerminateAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "agent_name is required" in result.data["error"]
 
     async def test_execute_terminate_exception(self) -> None:
         supervisor = MagicMock()
         supervisor.terminate_agent = AsyncMock(side_effect=RuntimeError("not found"))
-        ctx = _make_context(
+        call, services = _make_context(
             supervisor=supervisor,
             tool_args={"agent_name": "ghost"},
         )
         ability = TerminateAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"]
 
@@ -596,12 +599,11 @@ class TestPersistentSendModes:
     async def test_modes_prepare_persistent_message(self, value: bool) -> None:
         supervisor = _make_supervisor()
         supervisor._resolve_timeout.return_value = 300
-        result = await SendMessageAbility().execute(
-            _make_context(
-                supervisor=supervisor,
-                tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": value},
-            )
+        call, services = _make_context(
+            supervisor=supervisor,
+            tool_args={"target": "agent-b", "content": "hello", "fire_and_forget": value},
         )
+        result = await SendMessageAbility().execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert ("await_reply" in result.data) is (not value)
         supervisor.send.assert_not_awaited()
@@ -631,27 +633,27 @@ class _EmptyClusterSupervisor:
 class TestClusterSupervisorGate:
     async def test_none_supervisor_standalone_error(self) -> None:
         """档一：supervisor=None → standalone 正常态文案。"""
-        ctx = _make_context(supervisor=None)
+        call, services = _make_context(supervisor=None)
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "No supervisor configured" in result.data["error"]
         assert "standalone" in result.data["error"]
 
     async def test_supervisor_missing_get_cluster_context(self) -> None:
         """档二：supervisor 已注入但缺 get_cluster_context → 装配缺陷文案。"""
-        ctx = _make_context(supervisor=_BareSupervisor())
+        call, services = _make_context(supervisor=_BareSupervisor())
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "assembly defect" in result.data["error"]
         assert "get_cluster_context" in result.data["error"]
 
     async def test_supervisor_empty_cluster_id(self) -> None:
         """档二：cluster_id 为空 → 装配缺陷文案。"""
-        ctx = _make_context(supervisor=_EmptyClusterSupervisor())
+        call, services = _make_context(supervisor=_EmptyClusterSupervisor())
         ability = TerminateAgentAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "assembly defect" in result.data["error"]
 
@@ -662,9 +664,9 @@ class TestClusterSupervisorGate:
             def get_cluster_context(self) -> dict[str, Any]:
                 raise RuntimeError("boom")
 
-        ctx = _make_context(supervisor=_Broken())
+        call, services = _make_context(supervisor=_Broken())
         ability = SendMessageAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert "assembly defect" in result.data["error"]
 
@@ -673,8 +675,8 @@ class TestClusterSupervisorGate:
         from ghrah.communication.supervisor import SupervisorActor
 
         supervisor = SupervisorActor(cluster_id="c1")
-        ctx = _make_context(supervisor=supervisor)
+        call, services = _make_context(supervisor=supervisor)
         ability = QueryAgentsAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["count"] == 0

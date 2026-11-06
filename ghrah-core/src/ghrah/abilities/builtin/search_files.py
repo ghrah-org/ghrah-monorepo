@@ -15,7 +15,7 @@
 任意预处理器的入口）。
 
 执行逻辑：
-1. 从 context.tool_args 获取 LLM 解析的参数
+1. 从 call.arguments 获取 LLM 解析的参数
 2. 权限验证（FSPermissionChecker.check_read_path）
 3. 执行搜索（rg 或 Python 回退）
 4. 返回 ActionResult(data={"matches": [...], "total": N, "truncated": bool})
@@ -37,8 +37,9 @@ from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ class SearchFilesAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """执行内容搜索。
 
         Returns:
@@ -174,7 +175,7 @@ class SearchFilesAbility(Ability):
               "total" 与 "truncated" 标志
             - FAILURE: data 包含 "error"
         """
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         pattern = tool_args.get("pattern", "")
         path = tool_args.get("path", "")
         include = tool_args.get("include")
@@ -381,7 +382,7 @@ def _python_search(
                                     "text": line.rstrip("\n"),
                                 }
                             )
-        except (OSError, PermissionError):
+        except OSError, PermissionError:
             continue
 
     return ActionResult(

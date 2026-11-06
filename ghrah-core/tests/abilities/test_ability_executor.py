@@ -13,19 +13,74 @@
 """
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
-from ghrah.abilities.hook_context import HookContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import (
+    LOOP,
+    MANIFEST_STORE,
+    SUPERVISOR,
+    ExecutionServices,
+)
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.event_publisher import EventPublisher, NullEventPublisher
 from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent
 from ghrah.core.hitl import HITLPromiseRegistry
+
+
+def _make_context(
+    *,
+    member: str = "",
+    tool_args: dict[str, Any] | None = None,
+    accumulated_data: dict[str, Any] | None = None,
+    tool_call_id: str = "",
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(
+            member=member,
+            arguments=tool_args or {},
+            tool_call_id=tool_call_id,
+        ),
+        make_services(loop=accumulated_data),
+    )
+
+
+def _invocation_factory(executor: LocalAbilityExecutor, context_manager: Any) -> Any:
+    """模拟装配者：把成员、参数、受信身份与服务表组装成 (call, services)。"""
+
+    def factory(
+        ability: Any,
+        arguments: dict[str, Any],
+        accumulated_data: dict[str, Any],
+        *,
+        tool_call_id: str = "",
+    ) -> tuple[OperationCall, ExecutionServices]:
+        supervisor = executor._supervisor
+        return (
+            make_call(
+                member=getattr(ability, "member", "") or ability.name,
+                arguments=arguments,
+                tool_call_id=tool_call_id,
+                agent_name=executor._agent_name,
+            ),
+            make_services(
+                loop=accumulated_data,
+                context_manager=context_manager,
+                supervisor=supervisor,
+                manifest_store=getattr(supervisor, "manifest_store", None),
+            ),
+        )
+
+    return factory
+
 
 # ─── 测试用 Ability 和 Hook ───
 
@@ -43,7 +98,7 @@ class MockAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return self._action_result
 
     def get_hooks(self) -> list[Hook]:
@@ -67,7 +122,7 @@ class FailingAbility(Ability):
     def name(self) -> str:
         return "failing_ability"
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return ActionResult(outcome=ActionOutcome.FAILURE, data={"error": "intentional failure"})
 
     def get_hooks(self) -> list[Hook]:
@@ -83,11 +138,14 @@ class BlockingHook(Hook):
         self._target_ability = target_ability
         self._message = message
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._target_ability
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._target_ability
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult(should_continue=False, message=self._message)
 
@@ -103,11 +161,14 @@ class HITLBlockingHook(Hook):
         self._target_ability = target_ability
         self._message = message
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._target_ability
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._target_ability
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult.hitl(message=self._message)
 
@@ -120,11 +181,14 @@ class ModifyingHook(Hook):
     def __init__(self, target_ability: str = "mock_ability"):
         self._target_ability = target_ability
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
-        return context.current_ability_name == self._target_ability
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
+        return call.member.member == self._target_ability
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult(
             should_continue=True,
@@ -137,11 +201,14 @@ class PostExecuteHook(Hook):
 
     hook_point = HookPoint.POST_EXECUTE
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return True
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return HookResult(should_continue=True, message="post_execute hook ran")
 
@@ -190,13 +257,12 @@ class TestLocalAbilityExecutor:
         ability = MockAbility()
         executor = LocalAbilityExecutor(agent_name="test-agent")
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
         )
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data == {"result": "ok"}
 
@@ -207,17 +273,16 @@ class TestLocalAbilityExecutor:
         hook = ModifyingHook()
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.SUCCESS
         # Hook 修改的上下文应该被合并
-        assert context.accumulated_data.get("hook_modified") is True
+        assert services.require(LOOP).raw.get("hook_modified") is True
 
     @pytest.mark.asyncio
     async def test_execute_ability_with_blocking_hook(self):
@@ -226,16 +291,15 @@ class TestLocalAbilityExecutor:
         hook = BlockingHook(message="Permission denied")
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
         # BlockingHook 返回 should_continue=False 且 requires_hitl=False
         # 应直接返回 FAILURE，不进入 HITL 等待流程
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data.get("error") == "Permission denied"
         assert "hitl_rejected" not in result.data  # 非 HITL 拦截不应包含 hitl_rejected
@@ -251,10 +315,10 @@ class TestLocalAbilityExecutor:
             hitl_timeout=5.0,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={"call_id": "call_hitl_reject"},
-            agent_state={},
+            tool_call_id="call_hitl_reject",
             accumulated_data={},
         )
 
@@ -269,7 +333,7 @@ class TestLocalAbilityExecutor:
 
         asyncio.create_task(reject())
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         # HITL 拒绝后应返回 FAILURE 且包含 hitl_rejected 标记与归因字段
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data.get("hitl_rejected") is True
@@ -279,7 +343,7 @@ class TestLocalAbilityExecutor:
     @pytest.mark.asyncio
     async def test_execute_ability_hitl_rejected_reason_passthrough(self):
         """审批人拒绝理由（HITLResult.result）须透传进错误信息，不被丢弃。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )
@@ -289,10 +353,10 @@ class TestLocalAbilityExecutor:
             hitl_timeout=5.0,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm type-check", "call_id": "call_reason"},
-            agent_state={},
+            tool_call_id="call_reason",
             accumulated_data={},
         )
 
@@ -308,7 +372,7 @@ class TestLocalAbilityExecutor:
 
         asyncio.create_task(reject_with_reason())
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data.get("hitl_rejected") is True
         # 拒绝理由到达 LLM 上下文（bug A 修复点）
@@ -317,7 +381,7 @@ class TestLocalAbilityExecutor:
     @pytest.mark.asyncio
     async def test_execute_ability_hitl_timeout_attribution(self):
         """超时错误须携带命令摘要与归因 id（并行双超时可归因到具体调用）。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )
@@ -327,14 +391,14 @@ class TestLocalAbilityExecutor:
             hitl_timeout=0.05,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm build", "call_id": "call_t1"},
-            agent_state={},
+            tool_call_id="call_t1",
             accumulated_data={},
         )
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data.get("hitl_timeout") is True
         assert result.data.get("promise_id")
@@ -349,14 +413,13 @@ class TestLocalAbilityExecutor:
         hook = PostExecuteHook()
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.SUCCESS
 
     @pytest.mark.asyncio
@@ -365,13 +428,12 @@ class TestLocalAbilityExecutor:
         ability = FailingAbility()
         executor = LocalAbilityExecutor(agent_name="test-agent")
 
-        context = AbilityExecutionContext(
-            current_ability_name="failing_ability",
+        call, services = _make_context(
+            member="failing_ability",
             tool_args={},
-            agent_state={},
         )
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data == {"error": "intentional failure"}
 
@@ -394,6 +456,7 @@ class TestLocalAbilityExecutor:
             abilities={"mock_ability": ability},
             accumulated_data={},
             context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
             last_action_result=None,
         )
 
@@ -404,11 +467,11 @@ class TestLocalAbilityExecutor:
 
     @pytest.mark.asyncio
     async def test_execute_tool_calls_injects_supervisor(self):
-        """断线回归：tool-call 路径须注入 supervisor/manifest_store。
+        """断线回归：tool-call 路径须原样交给 ability 装配者的服务表。
 
-        此前 _execute_single_with_context 只注入 agent_name/context_manager，
-        LLM 工具调用集群类 ability（query_agents 等）拿到 supervisor=None，
-        误报 standalone。
+        回归现场：旧实现各入口各自拼上下文，LLM 工具调用集群类 ability
+        （query_agents 等）拿到 supervisor=None，误报 standalone。新契约下
+        服务表由 invocation_factory 统一组装，执行器不得丢弃或重拼。
         """
 
         class SupervisorProbeAbility(Ability):
@@ -416,12 +479,14 @@ class TestLocalAbilityExecutor:
             def name(self) -> str:
                 return "supervisor_probe"
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 return ActionResult(
                     outcome=ActionOutcome.SUCCESS,
                     data={
-                        "has_supervisor": context.supervisor is not None,
-                        "has_manifest_store": context.manifest_store is not None,
+                        "has_supervisor": services.get(SUPERVISOR) is not None,
+                        "has_manifest_store": services.get(MANIFEST_STORE) is not None,
                     },
                 )
 
@@ -443,6 +508,7 @@ class TestLocalAbilityExecutor:
             abilities={"supervisor_probe": SupervisorProbeAbility()},
             accumulated_data={},
             context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
             last_action_result=None,
         )
 
@@ -467,6 +533,7 @@ class TestLocalAbilityExecutor:
             abilities={},
             accumulated_data={},
             context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
             last_action_result=None,
         )
 
@@ -495,6 +562,7 @@ class TestLocalAbilityExecutor:
             abilities={"ability_a": ability1, "ability_b": ability2},
             accumulated_data={},
             context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
         )
 
         assert len(results) == 2
@@ -521,7 +589,9 @@ class TestLocalAbilityExecutor:
             def name(self) -> str:
                 return "cancelled_await"
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 fut = asyncio.get_running_loop().create_future()
 
                 async def cancel_after_suspend() -> None:
@@ -554,6 +624,7 @@ class TestLocalAbilityExecutor:
                 },
                 accumulated_data={},
                 context_manager=mock_cm,
+                invocation_factory=_invocation_factory(executor, mock_cm),
             )
 
     @pytest.mark.asyncio
@@ -565,7 +636,9 @@ class TestLocalAbilityExecutor:
             def name(self) -> str:
                 return "raising_ability"
 
-            async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+            async def execute(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> ActionResult:
                 raise RuntimeError("boom in ability")
 
             def get_hooks(self) -> list[Hook]:
@@ -581,6 +654,7 @@ class TestLocalAbilityExecutor:
             abilities={"raising_ability": RaisingAbility()},
             accumulated_data={},
             context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
         )
 
         assert len(results) == 1
@@ -594,15 +668,12 @@ class TestLocalAbilityExecutor:
         """测试没有 Hook 时的 HookRunner。"""
         executor = LocalAbilityExecutor(agent_name="test-agent")
 
-        context = AbilityExecutionContext(
-            current_ability_name="test",
+        call, services = _make_context(
+            member="test",
             tool_args={},
-            agent_state={},
         )
 
-        result = await executor._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context)
-        )
+        result = await executor._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
         assert result is None
 
     @pytest.mark.asyncio
@@ -611,16 +682,13 @@ class TestLocalAbilityExecutor:
         hook = ModifyingHook()
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
-        result = await executor._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context)
-        )
+        result = await executor._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
         assert result is not None
         assert result.modified_context == {"hook_modified": True}
 
@@ -630,16 +698,13 @@ class TestLocalAbilityExecutor:
         hook = ModifyingHook()  # PRE_EXECUTE
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
-        result = await executor._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.POST_EXECUTE, context)
-        )
+        result = await executor._hook_runner.run(HookPoint.POST_EXECUTE, call, services)
         assert result is None  # PRE_EXECUTE hook 不应在 POST_EXECUTE 触发
 
     @pytest.mark.asyncio
@@ -649,18 +714,15 @@ class TestLocalAbilityExecutor:
         hook2 = PostExecuteHook()
         executor = LocalAbilityExecutor(agent_name="test-agent", hooks=[hook1, hook2])
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={},
-            agent_state={},
             accumulated_data={},
         )
 
         # 两个 PRE_EXECUTE Hook 应该合并结果
         # 但 PostExecuteHook 的 hook_point 是 POST_EXECUTE，不会触发
-        result = await executor._hook_runner.run(
-            HookContext.from_ability_context(HookPoint.PRE_EXECUTE, context)
-        )
+        result = await executor._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
         assert result is not None
         assert result.modified_context == {"hook_modified": True}
 
@@ -669,10 +731,10 @@ class TestLocalAbilityExecutor:
         """测试 HITL 审批通过流程。"""
         executor = LocalAbilityExecutor(agent_name="test-agent")
 
-        context = AbilityExecutionContext(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/tmp/test.txt", "call_id": "call_789"},
-            agent_state={},
+            tool_call_id="call_789",
             accumulated_data={},
         )
 
@@ -691,7 +753,7 @@ class TestLocalAbilityExecutor:
 
         asyncio.create_task(approve_after_delay())
 
-        result = await executor.handle_hitl_hook_result(hook_result, context)
+        result = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert result.outcome == "approved"  # 审批通过
         assert result.promise_id  # 归因字段随回执下发
         assert result.tool_call_id == "call_789"
@@ -704,10 +766,10 @@ class TestLocalAbilityExecutor:
         """测试 HITL 审批拒绝流程。"""
         executor = LocalAbilityExecutor(agent_name="test-agent")
 
-        context = AbilityExecutionContext(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/tmp/test.txt", "call_id": "call_101"},
-            agent_state={},
+            tool_call_id="call_101",
             accumulated_data={},
         )
 
@@ -726,7 +788,7 @@ class TestLocalAbilityExecutor:
 
         asyncio.create_task(reject_after_delay())
 
-        result = await executor.handle_hitl_hook_result(hook_result, context)
+        result = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert result.outcome == "rejected"  # 审批拒绝
         assert result.promise_id
         assert result.tool_call_id == "call_101"
@@ -736,10 +798,9 @@ class TestLocalAbilityExecutor:
         """测试 HITL 审批超时。"""
         executor = LocalAbilityExecutor(agent_name="test-agent", hitl_timeout=0.1)
 
-        context = AbilityExecutionContext(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/tmp/test.txt"},
-            agent_state={},
             accumulated_data={},
         )
 
@@ -748,7 +809,7 @@ class TestLocalAbilityExecutor:
         )
 
         # 不 resolve Future，等待超时
-        result = await executor.handle_hitl_hook_result(hook_result, context)
+        result = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert result.outcome == "timeout"  # 超时与拒绝语义分离
         assert result.promise_id  # 超时也带归因字段（并行超时可归因）
         assert result.tool_call_id  # 无 call_id 时兜底生成
@@ -775,10 +836,9 @@ class TestLocalAbilityExecutor:
             hitl_timeout=0.1,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/tmp/test.txt"},
-            agent_state={},
             accumulated_data={},
         )
 
@@ -787,7 +847,7 @@ class TestLocalAbilityExecutor:
         )
 
         # 触发 HITL 流程（会超时）
-        await executor.handle_hitl_hook_result(hook_result, context)
+        await executor.handle_hitl_hook_result(hook_result, call, services)
 
         # 验证两类事件均被发布：请求 + 超时终结
         assert mock_publisher.publish.await_count == 2
@@ -815,16 +875,16 @@ class TestLocalAbilityExecutor:
             hitl_promise_registry=registry,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="write_file",
+        call, services = _make_context(
+            member="write_file",
             tool_args={"file_path": "/tmp/test.txt", "call_id": "call_p1"},
-            agent_state={},
+            tool_call_id="call_p1",
             accumulated_data={},
         )
         hook_result = HookResult.hitl(message="Human approval required")
 
         # 超时路径：promise 登记后按三元组惰性清除
-        outcome = await executor.handle_hitl_hook_result(hook_result, context)
+        outcome = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert outcome.outcome == "timeout"
         request_event = mock_publisher.publish.await_args_list[0][0][0]
         assert registry.resolve(request_event.promise_id) is None
@@ -839,7 +899,7 @@ class TestLocalAbilityExecutor:
             )
 
         asyncio.create_task(approve_after_delay())
-        outcome = await executor.handle_hitl_hook_result(hook_result, context)
+        outcome = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert outcome.outcome == "approved"
         request_event2 = mock_publisher.publish.await_args_list[-2][0][0]
         assert isinstance(request_event2, HITLRequestEvent)
@@ -857,10 +917,10 @@ class TestLocalAbilityExecutor:
             hitl_timeout=5.0,
         )
 
-        context = AbilityExecutionContext(
-            current_ability_name="mock_ability",
+        call, services = _make_context(
+            member="mock_ability",
             tool_args={"call_id": "call_hitl_1"},
-            agent_state={},
+            tool_call_id="call_hitl_1",
             accumulated_data={},
         )
 
@@ -875,7 +935,7 @@ class TestLocalAbilityExecutor:
 
         asyncio.create_task(approve())
 
-        result = await executor.execute_ability(ability, context)
+        result = await executor.execute_ability(ability, call, services)
         # HITL 审批通过后，Ability 应该正常执行
         assert result.outcome == ActionOutcome.SUCCESS
 
@@ -906,16 +966,15 @@ class TestHitlConsecutiveTimeoutCircuit:
         executor = LocalAbilityExecutor(
             agent_name="test-agent", hitl_timeout=0.1, hitl_consecutive_timeout_limit=0
         )
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm build"},
-            agent_state={},
             accumulated_data={},
         )
         hook_result = HookResult.hitl(message="requires approval")
 
-        first = await executor.handle_hitl_hook_result(hook_result, context)
-        second = await executor.handle_hitl_hook_result(hook_result, context)
+        first = await executor.handle_hitl_hook_result(hook_result, call, services)
+        second = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert first.outcome == "timeout" and first.degraded is False
         assert second.outcome == "timeout" and second.degraded is False
 
@@ -928,20 +987,19 @@ class TestHitlConsecutiveTimeoutCircuit:
             hitl_consecutive_timeout_limit=2,
             hitl_degraded_timeout=0.02,
         )
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm build"},
-            agent_state={},
             accumulated_data={},
         )
         hook_result = HookResult.hitl(message="requires approval")
 
-        first = await executor.handle_hitl_hook_result(hook_result, context)
-        second = await executor.handle_hitl_hook_result(hook_result, context)
+        first = await executor.handle_hitl_hook_result(hook_result, call, services)
+        second = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert first.degraded is False and second.degraded is False
 
         # 第三次起降级（等待更短）
-        third = await executor.handle_hitl_hook_result(hook_result, context)
+        third = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert third.outcome == "timeout"
         assert third.degraded is True
         assert third.degraded_timeout == 0.02
@@ -955,16 +1013,16 @@ class TestHitlConsecutiveTimeoutCircuit:
             hitl_consecutive_timeout_limit=1,
             hitl_degraded_timeout=0.02,
         )
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm build", "call_id": "call_c1"},
-            agent_state={},
+            tool_call_id="call_c1",
             accumulated_data={},
         )
         hook_result = HookResult.hitl(message="requires approval")
 
         # 第一次超时 → 计数 1（已达阈值 1）
-        first = await executor.handle_hitl_hook_result(hook_result, context)
+        first = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert first.degraded is False
 
         # 第二次本应降级（等待缩短为 0.02s），approve 立即 resolve 复位计数
@@ -977,17 +1035,17 @@ class TestHitlConsecutiveTimeoutCircuit:
             )
 
         asyncio.create_task(approve_after_delay())
-        second = await executor.handle_hitl_hook_result(hook_result, context)
+        second = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert second.outcome == "approved"
 
         # 计数已复位：再超时也不立即降级
-        third = await executor.handle_hitl_hook_result(hook_result, context)
+        third = await executor.handle_hitl_hook_result(hook_result, call, services)
         assert third.degraded is False
 
     @pytest.mark.asyncio
     async def test_degraded_error_guides_end_task(self):
         """降级超时的错误信息声明通道疑似离线并引导 end_task。"""
-        ability = MockAbility()
+        ability = MockAbility("execute_command")
         hook = HITLBlockingHook(
             target_ability="execute_command", message="Command requires approval"
         )
@@ -998,15 +1056,14 @@ class TestHitlConsecutiveTimeoutCircuit:
             hitl_consecutive_timeout_limit=1,
             hitl_degraded_timeout=0.02,
         )
-        context = AbilityExecutionContext(
-            current_ability_name="execute_command",
+        call, services = _make_context(
+            member="execute_command",
             tool_args={"command": "pnpm build"},
-            agent_state={},
             accumulated_data={},
         )
 
-        await executor.execute_ability(ability, context)  # 第一次：未降级
-        result = await executor.execute_ability(ability, context)  # 第二次：降级
+        await executor.execute_ability(ability, call, services)  # 第一次：未降级
+        result = await executor.execute_ability(ability, call, services)  # 第二次：降级
 
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data.get("hitl_degraded") is True

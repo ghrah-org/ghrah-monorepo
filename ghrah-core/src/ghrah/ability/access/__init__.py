@@ -1,6 +1,74 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Ability 实例、获授关联与工具选择的领域入口。"""
+"""Ability 实例、获授关联、授权策略与工具选择的领域入口。"""
 
-from ghrah.ability.access.store import AbilityAccessStore, AccessError, AccessIdentity, MemberFence
+from ghrah.ability.access.boundary import AuthorizedToolTable, build_startup_materializer
+from ghrah.ability.access.facts import GrantFacts
+from ghrah.ability.access.migration import (
+    MIGRATION_SOURCE,
+    MigrationError,
+    MigrationGrant,
+    MigrationResult,
+    migrate_agent,
+    migrate_agents,
+)
+from ghrah.ability.access.policy import GrantEffect, GrantMode, GrantPolicy, GrantRule
+from ghrah.ability.access.reconcile import (
+    GrantInstance,
+    GrantReconcileError,
+    ReconciliationResult,
+    apply_grants,
+    desired_grants,
+)
+from ghrah.ability.access.startup import (
+    ProjectedAbility,
+    StartupGrantError,
+    StartupGrantMaterializer,
+    StartupMaterialization,
+    StartupToolBinding,
+)
+from ghrah.ability.access.store import (
+    AbilityAccessStore,
+    AccessError,
+    AccessIdentity,
+    GrantRecord,
+    MemberFence,
+)
+from ghrah.ability.permissions.scope import (
+    EffectivePermission,
+    command_in_scope,
+    resolve_effective_permission,
+)
 
-__all__ = ["AccessIdentity", "AbilityAccessStore", "AccessError", "MemberFence"]
+__all__ = [
+    "AccessIdentity",
+    "EffectivePermission",
+    "AbilityAccessStore",
+    "AccessError",
+    "AuthorizedToolTable",
+    "GrantEffect",
+    "GrantFacts",
+    "GrantInstance",
+    "GrantMode",
+    "GrantPolicy",
+    "GrantReconcileError",
+    "GrantRecord",
+    "GrantRule",
+    "MIGRATION_SOURCE",
+    "MemberFence",
+    "MigrationError",
+    "MigrationGrant",
+    "MigrationResult",
+    "ProjectedAbility",
+    "ReconciliationResult",
+    "StartupGrantError",
+    "StartupGrantMaterializer",
+    "StartupMaterialization",
+    "StartupToolBinding",
+    "apply_grants",
+    "build_startup_materializer",
+    "command_in_scope",
+    "desired_grants",
+    "migrate_agent",
+    "migrate_agents",
+    "resolve_effective_permission",
+]

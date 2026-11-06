@@ -85,7 +85,7 @@ class ObserverServer:
         try:
             raw_seq = websocket.query_params.get("last_seq_id", "0")
             last_seq_id = int(raw_seq)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             last_seq_id = 0
 
         if client_id:

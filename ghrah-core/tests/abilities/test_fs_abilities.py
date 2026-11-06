@@ -11,6 +11,8 @@ import os
 import tempfile
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.delete_file import DeleteFileAbility
 from ghrah.abilities.builtin.edit_file import EditFileAbility
@@ -18,14 +20,15 @@ from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
 from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
 from ghrah.abilities.builtin.move_file import MoveFileAbility
 from ghrah.abilities.builtin.write_file import WriteFileAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 
-def _make_context(**overrides: Any) -> AbilityExecutionContext:
-    """创建测试用 AbilityExecutionContext。"""
-    defaults: dict[str, Any] = {}
-    defaults.update(overrides)
-    return AbilityExecutionContext(**defaults)
+def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    tool_args = overrides.pop("tool_args", None)
+    loop = overrides.pop("accumulated_data", None)
+    return make_call(arguments=tool_args), make_services(loop=loop)
 
 
 # ── WriteFileAbility 测试 ──
@@ -74,11 +77,11 @@ class TestWriteFileAbility:
         """成功写入新文件。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"file_path": file_path, "content": "Hello, World!"},
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["file_path"] == file_path
@@ -95,11 +98,11 @@ class TestWriteFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"file_path": temp_path, "content": "new content"},
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             with open(temp_path) as f:
@@ -111,11 +114,11 @@ class TestWriteFileAbility:
         """自动创建父目录。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "sub", "dir", "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"file_path": file_path, "content": "nested"},
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             with open(file_path) as f:
@@ -125,7 +128,7 @@ class TestWriteFileAbility:
         """不自动创建目录时，父目录不存在则失败。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "nonexistent", "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": file_path,
                     "content": "test",
@@ -133,16 +136,16 @@ class TestWriteFileAbility:
                 },
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "error" in result.data
 
     async def test_execute_write_no_file_path(self) -> None:
         """缺少 file_path 返回 FAILURE。"""
-        ctx = _make_context(tool_args={"content": "test"})
+        call, services = _make_context(tool_args={"content": "test"})
         ability = WriteFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "file_path is required" in result.data["error"]
@@ -152,11 +155,11 @@ class TestWriteFileAbility:
         with tempfile.TemporaryDirectory() as tmpdir:
             checker = FSPermissionChecker(allowed_paths=[tmpdir])
             file_path = os.path.join(tmpdir, "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"file_path": file_path, "content": "allowed"},
             )
             ability = WriteFileAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
 
@@ -164,11 +167,11 @@ class TestWriteFileAbility:
         """权限检查拒绝时返回 FAILURE。"""
         # require_approval=False 时，不在白名单的路径会被直接拒绝
         checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"file_path": "/etc/config.txt", "content": "denied"},
         )
         ability = WriteFileAbility(permission_checker=checker)
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "Permission denied" in result.data["error"]
@@ -177,7 +180,7 @@ class TestWriteFileAbility:
         """使用指定编码写入文件。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": file_path,
                     "content": "你好世界",
@@ -185,23 +188,25 @@ class TestWriteFileAbility:
                 },
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             with open(file_path, encoding="utf-8") as f:
                 assert f.read() == "你好世界"
 
-    async def test_execute_uses_accumulated_data_fallback(self) -> None:
-        """tool_args 为空时从 accumulated_data 获取参数。"""
+    async def test_execute_ignores_accumulated_data_fallback(self) -> None:
+        """参数只来自 call.arguments：LOOP 里的 tool_args 不再回退为参数。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "test.txt")
-            ctx = _make_context(
+            call, services = _make_context(
                 accumulated_data={"tool_args": {"file_path": file_path, "content": "fallback"}},
             )
             ability = WriteFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
-            assert result.outcome == ActionOutcome.SUCCESS
+            assert result.outcome == ActionOutcome.FAILURE
+            assert "file_path is required" in result.data["error"]
+            assert not os.path.exists(file_path)
 
 
 # ── EditFileAbility 测试 ──
@@ -246,7 +251,7 @@ class TestEditFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "World",
@@ -254,7 +259,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["replacements"] == 1
@@ -271,7 +276,7 @@ class TestEditFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "    pass",
@@ -279,7 +284,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
 
@@ -295,7 +300,7 @@ class TestEditFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "not_present",
@@ -303,7 +308,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "not found" in result.data["error"]
@@ -317,7 +322,7 @@ class TestEditFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "foo",
@@ -325,7 +330,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "3 times" in result.data["error"]
@@ -335,29 +340,29 @@ class TestEditFileAbility:
 
     async def test_execute_edit_no_file_path(self) -> None:
         """缺少 file_path 返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"old_str": "a", "new_str": "b"},
         )
         ability = EditFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "file_path is required" in result.data["error"]
 
     async def test_execute_edit_no_old_str(self) -> None:
         """缺少 old_str 返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"file_path": "/tmp/test.txt", "new_str": "b"},
         )
         ability = EditFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "old_str is required" in result.data["error"]
 
     async def test_execute_edit_file_not_found(self) -> None:
         """文件不存在返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={
                 "file_path": "/nonexistent/file.txt",
                 "old_str": "a",
@@ -365,7 +370,7 @@ class TestEditFileAbility:
             },
         )
         ability = EditFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"].lower()
@@ -379,7 +384,7 @@ class TestEditFileAbility:
         try:
             # require_approval=False 时，不在白名单的路径会被直接拒绝
             checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "Hello",
@@ -387,7 +392,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "Permission denied" in result.data["error"]
@@ -402,7 +407,7 @@ class TestEditFileAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "file_path": temp_path,
                     "old_str": "line2",
@@ -410,7 +415,7 @@ class TestEditFileAbility:
                 },
             )
             ability = EditFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             with open(temp_path) as f:
@@ -461,11 +466,11 @@ class TestMoveFileAbility:
             with open(src, "w") as f:
                 f.write("content")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["source_path"] == src
@@ -488,11 +493,11 @@ class TestMoveFileAbility:
             with open(src, "w") as f:
                 f.write("moved")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert not os.path.exists(src)
@@ -506,11 +511,11 @@ class TestMoveFileAbility:
             with open(src, "w") as f:
                 f.write("content")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert os.path.exists(dst)
@@ -523,7 +528,7 @@ class TestMoveFileAbility:
             with open(src, "w") as f:
                 f.write("content")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "source_path": src,
                     "destination_path": dst,
@@ -531,7 +536,7 @@ class TestMoveFileAbility:
                 },
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
 
@@ -545,7 +550,7 @@ class TestMoveFileAbility:
             with open(dst, "w") as f:
                 f.write("old content")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={
                     "source_path": src,
                     "destination_path": dst,
@@ -553,7 +558,7 @@ class TestMoveFileAbility:
                 },
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             with open(dst) as f:
@@ -569,47 +574,47 @@ class TestMoveFileAbility:
             with open(dst, "w") as f:
                 f.write("existing")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "already exists" in result.data["error"]
 
     async def test_execute_move_source_not_found(self) -> None:
         """源文件不存在返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={
                 "source_path": "/nonexistent/source.txt",
                 "destination_path": "/tmp/dest.txt",
             },
         )
         ability = MoveFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"].lower()
 
     async def test_execute_move_no_source_path(self) -> None:
         """缺少 source_path 返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"destination_path": "/tmp/dest.txt"},
         )
         ability = MoveFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "source_path is required" in result.data["error"]
 
     async def test_execute_move_no_destination_path(self) -> None:
         """缺少 destination_path 返回 FAILURE。"""
-        ctx = _make_context(
+        call, services = _make_context(
             tool_args={"source_path": "/tmp/source.txt"},
         )
         ability = MoveFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "destination_path is required" in result.data["error"]
@@ -623,11 +628,11 @@ class TestMoveFileAbility:
             with open(src, "w") as f:
                 f.write("content")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
 
@@ -638,11 +643,11 @@ class TestMoveFileAbility:
             src = "/etc/passwd"  # 不在白名单中
             dst = os.path.join(tmpdir, "dest.txt")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"source_path": src, "destination_path": dst},
             )
             ability = MoveFileAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
 
@@ -687,9 +692,9 @@ class TestDeleteFileAbility:
 
         assert os.path.exists(temp_path)
 
-        ctx = _make_context(tool_args={"file_path": temp_path})
+        call, services = _make_context(tool_args={"file_path": temp_path})
         ability = DeleteFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["file_path"] == temp_path
@@ -698,18 +703,18 @@ class TestDeleteFileAbility:
 
     async def test_execute_delete_file_not_found(self) -> None:
         """文件不存在返回 FAILURE。"""
-        ctx = _make_context(tool_args={"file_path": "/nonexistent/file.txt"})
+        call, services = _make_context(tool_args={"file_path": "/nonexistent/file.txt"})
         ability = DeleteFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"].lower()
 
     async def test_execute_delete_no_file_path(self) -> None:
         """缺少 file_path 返回 FAILURE。"""
-        ctx = _make_context(tool_args={})
+        call, services = _make_context(tool_args={})
         ability = DeleteFileAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "file_path is required" in result.data["error"]
@@ -722,9 +727,9 @@ class TestDeleteFileAbility:
             with open(file_path, "w") as f:
                 f.write("content")
 
-            ctx = _make_context(tool_args={"file_path": file_path})
+            call, services = _make_context(tool_args={"file_path": file_path})
             ability = DeleteFileAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert not os.path.exists(file_path)
@@ -733,27 +738,31 @@ class TestDeleteFileAbility:
         """权限检查拒绝时返回 FAILURE。"""
         # require_approval=False 时，不在白名单的路径会被直接拒绝
         checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
-        ctx = _make_context(tool_args={"file_path": "/etc/config.txt"})
+        call, services = _make_context(tool_args={"file_path": "/etc/config.txt"})
         ability = DeleteFileAbility(permission_checker=checker)
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "Permission denied" in result.data["error"]
 
-    async def test_execute_delete_uses_accumulated_data_fallback(self) -> None:
-        """tool_args 为空时从 accumulated_data 获取参数。"""
+    async def test_execute_delete_ignores_accumulated_data_fallback(self) -> None:
+        """参数只来自 call.arguments：LOOP 里的 tool_args 不再回退为参数。"""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("content")
             temp_path = f.name
 
-        ctx = _make_context(
-            accumulated_data={"tool_args": {"file_path": temp_path}},
-        )
-        ability = DeleteFileAbility()
-        result = await ability.execute(ctx)
+        try:
+            call, services = _make_context(
+                accumulated_data={"tool_args": {"file_path": temp_path}},
+            )
+            ability = DeleteFileAbility()
+            result = await ability.execute(call, services)
 
-        assert result.outcome == ActionOutcome.SUCCESS
-        assert not os.path.exists(temp_path)
+            assert result.outcome == ActionOutcome.FAILURE
+            assert "file_path is required" in result.data["error"]
+            assert os.path.exists(temp_path)
+        finally:
+            os.unlink(temp_path)
 
 
 # ── ListDirectoryAbility 测试 ──
@@ -802,9 +811,9 @@ class TestListDirectoryAbility:
             with open(os.path.join(tmpdir, "file2.txt"), "w") as f:
                 f.write("world")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir})
+            call, services = _make_context(tool_args={"dir_path": tmpdir})
             ability = ListDirectoryAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["dir_path"] == tmpdir
@@ -834,11 +843,11 @@ class TestListDirectoryAbility:
             with open(os.path.join(tmpdir, "sub", "nested", "deep.txt"), "w") as f:
                 f.write("deep")
 
-            ctx = _make_context(
+            call, services = _make_context(
                 tool_args={"dir_path": tmpdir, "recursive": True},
             )
             ability = ListDirectoryAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             entries = result.data["entries"]
@@ -853,18 +862,18 @@ class TestListDirectoryAbility:
     async def test_execute_list_empty_directory(self) -> None:
         """空目录返回空列表。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            ctx = _make_context(tool_args={"dir_path": tmpdir})
+            call, services = _make_context(tool_args={"dir_path": tmpdir})
             ability = ListDirectoryAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["entries"] == []
 
     async def test_execute_list_directory_not_found(self) -> None:
         """目录不存在返回 FAILURE。"""
-        ctx = _make_context(tool_args={"dir_path": "/nonexistent/dir"})
+        call, services = _make_context(tool_args={"dir_path": "/nonexistent/dir"})
         ability = ListDirectoryAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "not found" in result.data["error"].lower()
@@ -876,9 +885,9 @@ class TestListDirectoryAbility:
             temp_path = f.name
 
         try:
-            ctx = _make_context(tool_args={"dir_path": temp_path})
+            call, services = _make_context(tool_args={"dir_path": temp_path})
             ability = ListDirectoryAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.FAILURE
             assert "not a directory" in result.data["error"].lower()
@@ -887,9 +896,9 @@ class TestListDirectoryAbility:
 
     async def test_execute_list_no_dir_path(self) -> None:
         """缺少 dir_path 返回 FAILURE。"""
-        ctx = _make_context(tool_args={})
+        call, services = _make_context(tool_args={})
         ability = ListDirectoryAbility()
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "dir_path is required" in result.data["error"]
@@ -901,9 +910,9 @@ class TestListDirectoryAbility:
             with open(os.path.join(tmpdir, "file.txt"), "w") as f:
                 f.write("content")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir})
+            call, services = _make_context(tool_args={"dir_path": tmpdir})
             ability = ListDirectoryAbility(permission_checker=checker)
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert len(result.data["entries"]) == 1
@@ -911,23 +920,24 @@ class TestListDirectoryAbility:
     async def test_execute_list_with_permission_checker_denied(self) -> None:
         """权限检查拒绝时返回 FAILURE。"""
         checker = FSPermissionChecker(allowed_paths=["/tmp/data"], require_approval=False)
-        ctx = _make_context(tool_args={"dir_path": "/etc"})
+        call, services = _make_context(tool_args={"dir_path": "/etc"})
         ability = ListDirectoryAbility(permission_checker=checker)
-        result = await ability.execute(ctx)
+        result = await ability.execute(call, services)
 
         assert result.outcome == ActionOutcome.FAILURE
         assert "Permission denied" in result.data["error"]
 
-    async def test_execute_uses_accumulated_data_fallback(self) -> None:
-        """tool_args 为空时从 accumulated_data 获取参数。"""
+    async def test_execute_list_ignores_accumulated_data_fallback(self) -> None:
+        """参数只来自 call.arguments：LOOP 里的 tool_args 不再回退为参数。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            ctx = _make_context(
+            call, services = _make_context(
                 accumulated_data={"tool_args": {"dir_path": tmpdir}},
             )
             ability = ListDirectoryAbility()
-            result = await ability.execute(ctx)
+            result = await ability.execute(call, services)
 
-            assert result.outcome == ActionOutcome.SUCCESS
+            assert result.outcome == ActionOutcome.FAILURE
+            assert "dir_path is required" in result.data["error"]
 
     async def test_pagination_legacy_mode_without_offset_limit(self) -> None:
         """offset=0/limit=0（默认）→ 旧行为：全量返回，无分页元数据。"""
@@ -936,8 +946,8 @@ class TestListDirectoryAbility:
                 with open(os.path.join(tmpdir, f"f{i}.txt"), "w") as f:
                     f.write("x")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir})
-            result = await ListDirectoryAbility().execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir})
+            result = await ListDirectoryAbility().execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert len(result.data["entries"]) == 5
@@ -954,8 +964,8 @@ class TestListDirectoryAbility:
                 with open(os.path.join(tmpdir, f"f{i}.txt"), "w") as f:
                     f.write("x")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "limit": 2})
-            result = await ListDirectoryAbility().execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir, "limit": 2})
+            result = await ListDirectoryAbility().execute(call, services)
 
             assert result.outcome == ActionOutcome.SUCCESS
             assert [e["name"] for e in result.data["entries"]] == ["f0.txt", "f1.txt"]
@@ -973,15 +983,15 @@ class TestListDirectoryAbility:
                     f.write("x")
 
             ability = ListDirectoryAbility()
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "offset": 1, "limit": 2})
-            result = await ability.execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir, "offset": 1, "limit": 2})
+            result = await ability.execute(call, services)
             assert [e["name"] for e in result.data["entries"]] == ["f1.txt", "f2.txt"]
             assert result.data["truncated"] is True
             assert result.data["next_offset"] == 3
 
             # 末页：正好取完剩余条目
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "offset": 3, "limit": 2})
-            result = await ability.execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir, "offset": 3, "limit": 2})
+            result = await ability.execute(call, services)
             assert [e["name"] for e in result.data["entries"]] == ["f3.txt", "f4.txt"]
             assert result.data["truncated"] is True  # offset>0 即视为分页窗口
             assert result.data["next_offset"] is None
@@ -993,8 +1003,8 @@ class TestListDirectoryAbility:
                 with open(os.path.join(tmpdir, f"f{i}.txt"), "w") as f:
                     f.write("x")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "offset": 2})
-            result = await ListDirectoryAbility().execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir, "offset": 2})
+            result = await ListDirectoryAbility().execute(call, services)
             assert [e["name"] for e in result.data["entries"]] == ["f2.txt", "f3.txt"]
             assert result.data["truncated"] is True
             assert result.data["next_offset"] is None
@@ -1009,8 +1019,10 @@ class TestListDirectoryAbility:
             with open(os.path.join(tmpdir, "sub", "deep.txt"), "w") as f:
                 f.write("d")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "recursive": True, "limit": 2})
-            result = await ListDirectoryAbility().execute(ctx)
+            call, services = _make_context(
+                tool_args={"dir_path": tmpdir, "recursive": True, "limit": 2}
+            )
+            result = await ListDirectoryAbility().execute(call, services)
             assert len(result.data["entries"]) == 2
             assert result.data["total_entries"] == 5  # sub + 3 files + deep.txt
             assert result.data["truncated"] is True
@@ -1021,8 +1033,8 @@ class TestListDirectoryAbility:
             with open(os.path.join(tmpdir, "f.txt"), "w") as f:
                 f.write("x")
 
-            ctx = _make_context(tool_args={"dir_path": tmpdir, "offset": 10, "limit": 5})
-            result = await ListDirectoryAbility().execute(ctx)
+            call, services = _make_context(tool_args={"dir_path": tmpdir, "offset": 10, "limit": 5})
+            result = await ListDirectoryAbility().execute(call, services)
             assert result.outcome == ActionOutcome.SUCCESS
             assert result.data["entries"] == []
             assert result.data["total_entries"] == 1

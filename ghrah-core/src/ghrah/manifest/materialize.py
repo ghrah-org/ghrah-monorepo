@@ -23,6 +23,14 @@ HITL 接线（通用分支）：FS/command 分支之外的 ability，若 manifes
 PRE_EXECUTE HITL hook——否则该声明会被兜底分支裸实例化**静默忽略**
 （纸面门禁）。优先级链与 FS/command 分支一致：
 ``auto_approve > manifest require_hitl > 兜底默认``。
+
+**已废弃，且不参与权限治理。** 本模块只服务于 ``ability_source=legacy``
+装配模式，该模式仅保留旧部署兼容。这里不计算 ``EffectivePermission``，
+不执行只读约束与权限位检查（``fs_write``/``net_access``/``shell_access``），
+命令检查器也不消费 ``allowed_commands``/``denied_commands``；旧 OR 合并
+视图 ``PermissionFlags.merge`` 仍按原样使用。因此不能把本模块当作权限或
+安全依据，也不要在 legacy 路径上宣称权限保障；受治理的物化入口是
+``ghrah.ability.execution.ability_build``。
 """
 
 from __future__ import annotations
@@ -63,7 +71,11 @@ def instantiate_resolved_abilities(
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
 ) -> list[AbilityProtocol]:
-    """ResolvedAbility → Ability 实例列表（对齐独立库 runner 范式）。
+    """ResolvedAbility → Ability 实例列表（旧注册表物化，legacy 专用）。
+
+    已废弃，仅旧部署兼容：权限只按旧 ``PermissionFlags`` 合并视图喂检查器，
+    不做有效权限合并、只读与权限位检查，也不消费 ``denied_*`` 范围，不能
+    作为权限或安全依据；受治理路径见 ``ghrah.ability.execution.ability_build``。
 
     权限经 ``resolve_fs_permission_paths`` 解析 ``{{workspace}}`` 模板后
     直接喂 ``FSPermissionChecker``（不经 params dict 往返）。

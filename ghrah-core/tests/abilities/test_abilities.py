@@ -9,10 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 
 # ── 辅助：用于测试的具体 Ability 子类 ──
 
@@ -38,7 +40,7 @@ class StubAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         return self._execute_result
 
     def get_hooks(self) -> list[Hook]:
@@ -64,11 +66,14 @@ class StubHook(Hook):
         self._should_trigger = should_trigger
         self._result = result or HookResult.continue_()
 
-    async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return self._should_trigger
 
     async def execute(
-        self, context: AbilityExecutionContext, result: ActionResult | None
+        self,
+        call: OperationCall,
+        services: ExecutionServices,
+        result: ActionResult | None = None,
     ) -> HookResult:
         return self._result
 
@@ -145,8 +150,8 @@ class TestAbilityABC:
 
     async def test_stub_ability_execute(self) -> None:
         ability = StubAbility()
-        ctx = self._make_context()
-        result = await ability.execute(ctx)
+        call, services = self._make_invocation()
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.SUCCESS
 
     def test_default_bind_tool_returns_none(self) -> None:
@@ -195,13 +200,13 @@ class TestAbilityABC:
             next_action_hint="retry",
         )
         ability = StubAbility(execute_result=custom_result)
-        ctx = self._make_context()
-        result = await ability.execute(ctx)
+        call, services = self._make_invocation()
+        result = await ability.execute(call, services)
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["error"] == "timeout"
         assert result.next_action_hint == "retry"
 
     # ── 辅助 ──
 
-    def _make_context(self) -> AbilityExecutionContext:
-        return AbilityExecutionContext()
+    def _make_invocation(self) -> tuple[OperationCall, ExecutionServices]:
+        return make_call(), make_services()

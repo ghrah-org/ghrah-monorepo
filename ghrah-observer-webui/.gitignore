@@ -42,5 +42,10 @@ __screenshots__/
 test-results/
 playwright-report/
 
+# Playwright 像素基线：截图绑定本机字体渲染（Arch/Linux 无头 Chromium），
+# CI 只跑断言护栏 test:guards，跨机器无从比对，故不入库。
+# 首次本地运行 `pnpm --filter @ghrah/observer-web test:visual:update` 生成。
+packages/observer-web/e2e/visual.spec.ts-snapshots/
+
 # 宿主装配生成物（assemble-plugins.mjs 产出；同时被 prettier/oxlint 忽略）
 packages/observer-web/public/plugins/

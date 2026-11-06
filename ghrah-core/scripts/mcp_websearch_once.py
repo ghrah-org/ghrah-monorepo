@@ -141,7 +141,7 @@ def candidate_log_paths() -> list[Path]:
     paths.append(Path.cwd() / name)
     try:
         paths.append(Path.home() / name)
-    except (OSError, RuntimeError):
+    except OSError, RuntimeError:
         pass
 
     unique: list[Path] = []

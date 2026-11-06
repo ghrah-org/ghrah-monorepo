@@ -12,11 +12,13 @@ from pydantic import BaseModel, Field
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin._cluster_common import cluster_supervisor_error
+from ghrah.ability.execution.execution_services import SUPERVISOR
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.context import AbilityExecutionContext
     from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.invocation import OperationCall
 
 
 class TerminateAgentInput(BaseModel):
@@ -60,15 +62,15 @@ class TerminateAgentAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return []
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        error = cluster_supervisor_error(context.supervisor)
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        error = cluster_supervisor_error(services.get(SUPERVISOR))
         if error:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
                 data={"error": error},
             )
 
-        tool_args = context.tool_args or context.accumulated_data.get("tool_args", {})
+        tool_args = call.arguments
         agent_name = tool_args.get("agent_name", "")
 
         if not agent_name:
@@ -78,7 +80,7 @@ class TerminateAgentAbility(Ability):
             )
 
         try:
-            await context.supervisor.terminate_agent(agent_name)
+            await services.get(SUPERVISOR).terminate_agent(agent_name)
             return ActionResult(
                 outcome=ActionOutcome.SUCCESS,
                 data={"agent_name": agent_name, "status": "terminated"},

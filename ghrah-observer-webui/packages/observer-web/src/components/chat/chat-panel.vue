@@ -15,10 +15,15 @@ import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 import MessageInput from "./message-input.vue";
+import RoomDetailDrawer, { type DeliveryDiagnostic } from "./room-detail-drawer.vue";
 
 const props = defineProps<{
   projectId: string;
   roomId: string;
+}>();
+
+const emit = defineEmits<{
+  roomInvalidated: [target: { projectId: string; roomId: string }];
 }>();
 
 const chat = useChatStore();
@@ -50,14 +55,6 @@ const deliveryTimer = setInterval(() => {
     void refreshDeliveries();
 }, 3000);
 onScopeDispose(() => clearInterval(deliveryTimer));
-const deliveryStates = new Set([
-  "pending",
-  "processing",
-  "completed",
-  "failed",
-  "interrupted",
-  "blocked",
-]);
 const { render: renderMarkdown } = useMarkdown();
 const { t } = useI18n();
 const memberLabel = useRoomMemberLabel();
@@ -97,6 +94,39 @@ const roomEntries = computed<ChatEntry[]>(() => {
 });
 
 const canChat = computed(() => room.value !== null && connection.state === "connected");
+
+/** 详情抽屉：运维信息（投递状态、协议错误、Room 管理）按需展开。 */
+const detailOpen = ref(false);
+watch(
+  () => props.roomId,
+  () => {
+    detailOpen.value = false;
+  },
+);
+
+const deliveryDiagnostics = computed<DeliveryDiagnostic[]>(() =>
+  roomEntries.value.flatMap((entry) =>
+    (entry.deliveries ?? [])
+      .filter((delivery) => delivery.state !== "completed")
+      .map((delivery) => ({
+        id: delivery.delivery_id,
+        recipient: displayName(delivery.recipient_id),
+        state: delivery.state,
+        detail: delivery.blocked_reason || delivery.error || undefined,
+      })),
+  ),
+);
+
+/** 会话头一行元信息：成员数 · 消息数 · 连接状态。 */
+const roomMeta = computed(() => {
+  const current = room.value;
+  if (!current) return "";
+  return t("chat.meta", {
+    members: current.members.length,
+    messages: roomEntries.value.length,
+    state: t(`app.status.${connection.state}`),
+  });
+});
 
 async function handleSend(targets: string[], content: string) {
   const projectId = props.projectId;
@@ -225,25 +255,23 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
-    <div class="px-3 py-2">
+  <div class="relative flex flex-col h-full">
+    <header class="room-header">
+      <div class="room-header-main">
+        <h3 class="room-header-title">{{ room ? room.name : t("chat.name") }}</h3>
+        <p v-if="room" class="room-header-meta">{{ roomMeta }}</p>
+      </div>
       <button
+        v-if="room"
+        type="button"
         class="btn-secondary"
-        :disabled="refreshing || connection.state !== 'connected'"
-        @click="refreshDeliveries"
+        :aria-expanded="detailOpen"
+        aria-controls="room-detail-drawer"
+        @click="detailOpen = !detailOpen"
       >
-        {{ t("agentEntity.deliveryRefresh") }}
+        {{ t("chat.detail.open") }}
       </button>
-      <p class="text-xs">{{ t("agentEntity.deliveryHint") }}</p>
-      <p v-if="deliveryError" role="alert">{{ deliveryError }}</p>
-    </div>
-    <div
-      class="px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex items-center justify-between"
-    >
-      <h3 class="text-sm font-semibold truncate">
-        {{ room ? t("chat.title", { room: room.name }) : t("chat.name") }}
-      </h3>
-    </div>
+    </header>
 
     <div
       v-if="!room"
@@ -272,22 +300,6 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       >
         <div class="entry-header">{{ entryHeader(entry) }}</div>
 
-        <div
-          v-for="delivery in entry.deliveries ?? []"
-          :key="delivery.delivery_id"
-          class="text-xs"
-          role="status"
-        >
-          {{ displayName(delivery.recipient_id) }} ·
-          {{
-            t(
-              `agentEntity.deliveryStates.${deliveryStates.has(delivery.state) ? delivery.state : "unknown"}`,
-            )
-          }}
-          <p v-if="delivery.error || delivery.blocked_reason" role="alert">
-            {{ delivery.blocked_reason || delivery.error }}
-          </p>
-        </div>
         <div v-if="entry.error" class="block-error">
           <span class="text-sm text-red-600 dark:text-red-400">{{ entry.error }}</span>
         </div>
@@ -353,10 +365,53 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
     </div>
 
     <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
+
+    <RoomDetailDrawer
+      :open="detailOpen"
+      :room-id="roomId"
+      :diagnostics="deliveryDiagnostics"
+      :refreshing="refreshing"
+      :delivery-error="deliveryError"
+      @close="detailOpen = false"
+      @refresh="refreshDeliveries"
+      @room-invalidated="emit('roomInvalidated', $event)"
+    />
   </div>
 </template>
 
 <style scoped>
+.room-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--ui-panel-border);
+  min-height: 3rem;
+}
+
+.room-header-main {
+  min-width: 0;
+}
+
+.room-header-title {
+  margin: 0;
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.room-header-meta {
+  margin: 0.0625rem 0 0;
+  color: var(--ui-panel-muted);
+  font-size: var(--font-ui-note);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-entry {
   padding: 0.375rem 0.75rem;
   border-radius: 0.5rem;

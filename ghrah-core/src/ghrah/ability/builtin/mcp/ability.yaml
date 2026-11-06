@@ -1,0 +1,55 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: ghrah
+  name: mcp
+  version: 0.1.0
+title: MCP
+description: Invoke a tool on an MCP server declared by a loaded skill.
+members:
+  operations:
+    mcp_call:
+      title: MCP Call
+      description: Call a tool on an MCP server. The tools available to you are listed in the MCP catalog of the skill you loaded; 'server' and 'tool' are case-sensitive.
+      entry: operations/mcp_call.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          server:
+            description: MCP server name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
+            type: string
+          tool:
+            description: Tool name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
+            type: string
+          arguments:
+            additionalProperties: true
+            description: Tool arguments matching the tool's input schema. Call load_skill with server= and tool= to read the exact schema before guessing.
+            type: object
+          skill:
+            default: ''
+            description: Optional. The skill full name that declares this server. Only needed when several loaded skills could own the same server name.
+            type: string
+        required:
+        - server
+        - tool
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - mcp
+      - tool
+      effects:
+      - net:request
+      permissions:
+        net_access: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 300000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills: {}

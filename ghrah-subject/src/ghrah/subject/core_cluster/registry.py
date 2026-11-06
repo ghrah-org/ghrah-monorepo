@@ -354,6 +354,10 @@ def default_core_unit_factory(
      SkillAbilityProvider（skill 清单 + 上下文目录摘要）。建目录与补齐 lock
      仍由 SkillUnit 在装配期完成——Core 只读，不重复初始化。
 
+     ``config.ability_source`` 透传 CoreUnitConfig.ability_source：同一模式
+     决定声明目录、工具实例与 Skill 读取服务；builtin 模式下旧 Skill 根不被
+     读取（SkillUnit 同时跳过目录自举）。
+
     ``llm_factory`` 为可选的 per-cluster LLM 工厂注入（透传
     CoreUnitConfig.llm_factory；None = Core 内建默认 agentconf 解析）。
     部署方显式声明 LLM 出口的程序化接缝——SubjectConfig 暂不暴露用户级
@@ -371,6 +375,7 @@ def default_core_unit_factory(
 
     managers: dict[str, tuple[str, MessageManager, set[str]]] = {}
     memberships: dict[str, str] = {}
+    stores: dict[str, Any] = {}
     manager_lock = asyncio.Lock()
 
     async def prepare(unit: Any, cluster_id: str, project_id: str, locator: str) -> None:
@@ -378,8 +383,8 @@ def default_core_unit_factory(
             existing = managers.get(project_id)
             if existing and existing[0] != locator:
                 raise ValueError("Project message database owner conflict")
+            path = ProjectPaths.from_locator(locator).action_chain_db_path
             if existing is None:
-                path = ProjectPaths.from_locator(locator).action_chain_db_path
                 async with SqliteBackend(path) as backend:
                     await backend.load_checkpoint("bootstrap")
                 manager = MessageManager(
@@ -397,8 +402,37 @@ def default_core_unit_factory(
             existing[2].add(cluster_id)
             memberships[cluster_id] = project_id
             unit._config = replace(unit._config, message_manager=existing[1])
+            # builtin 模式：为本次 spawn 打开启动授权关系库（与 Context 共用
+            # 项目数据库文件）；运行期只读，写入只经启动核定。
+            if unit._config.ability_source == "builtin":
+                from ghrah.ability.access import AbilityAccessStore
+
+                def runs(agent: str) -> str | None:
+                    supervisor = getattr(unit, "supervisor", None)
+                    if supervisor is None:
+                        return None
+                    try:
+                        return supervisor.incarnation_for_agent(agent)
+                    except Exception:
+                        return None
+
+                store = await AbilityAccessStore.open(
+                    path,
+                    project_id,
+                    operators=frozenset({"deployment"}),
+                    runs=runs,
+                )
+                stores[cluster_id] = store
+                unit._config = replace(
+                    unit._config,
+                    ability_store=store,
+                    ability_grant_policy=config.ability_grant_policy,
+                )
 
     async def release(cluster_id: str) -> None:
+        store = stores.pop(cluster_id, None)
+        if store is not None:
+            await store.close()
         async with manager_lock:
             project_id = memberships.pop(cluster_id, None)
             if project_id is None:
@@ -438,6 +472,8 @@ def default_core_unit_factory(
             # Core 侧只按此根构造 provider 读 skill（建目录/lock 由 SkillUnit
             # 在装配期完成，Core 不重复初始化）。
             skill_root=config.skill.root,
+            # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
+            ability_source=config.ability_source,
             llm_factory=llm_factory,
             # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
             # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。

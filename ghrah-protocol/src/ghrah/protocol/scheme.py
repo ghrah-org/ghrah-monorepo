@@ -36,7 +36,7 @@ class ContractDescriptor(DescriptorModel):
     actions: list[ActionDescriptor]
 
     @model_validator(mode="after")
-    def unique_actions(self) -> "ContractDescriptor":
+    def unique_actions(self) -> ContractDescriptor:
         """同一契约不得重复声明动作。"""
         if len({item.name for item in self.actions}) != len(self.actions):
             raise ValueError("契约动作不能重复")

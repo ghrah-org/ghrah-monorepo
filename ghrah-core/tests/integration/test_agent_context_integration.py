@@ -8,7 +8,7 @@
 - ContextManager 自动创建和初始化
 - 迭代生命周期（begin/commit/rollback）
 - 消息委托到 ContextManager
-- AbilityExecutionContext 包含 context_manager 引用
+- OperationCall / ExecutionServices 携带 context_manager 引用
 - 向后兼容 API（_state, get_state, set_state）
 - 链式历史记录
 - 无 Ability 时抛出 AgentError
@@ -22,8 +22,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -57,7 +58,7 @@ class MockAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         self.execute_count += 1
         return self._action_result
 
@@ -78,7 +79,7 @@ class FailingAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         raise RuntimeError("Ability execution failed")
 
     def get_hooks(self) -> list[Hook]:
@@ -98,9 +99,10 @@ class StateMutatingAbility(Ability):
     def name(self) -> str:
         return self._name
 
-    async def execute(self, context: AbilityExecutionContext) -> ActionResult:
-        if context.context_manager is not None:
-            context.context_manager.apply_state_changes({"mutated": True})
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        context_manager = services.get(CONTEXT_MANAGER)
+        if context_manager is not None:
+            context_manager.apply_state_changes({"mutated": True})
         return ActionResult(
             outcome=ActionOutcome.SUCCESS,
             data={"response": "state mutated"},
@@ -189,40 +191,40 @@ class TestContextManagerCreation:
 
 
 # ----------------------------------------------------------------
-# 测试：AbilityExecutionContext 包含 context_manager 引用
+# 测试：OperationCall / ExecutionServices 携带 context_manager 引用
 # ----------------------------------------------------------------
 
 
-class TestAbilityExecutionContextIntegration:
-    """验证 AbilityExecutionContext 中的 context_manager 引用。"""
+class TestAbilityCallServicesIntegration:
+    """验证调用对象与服务表中的 context_manager 引用。"""
 
-    def test_build_context_includes_context_manager(self) -> None:
-        """_build_hook_context 返回的 AbilityExecutionContext 应包含 context_manager。"""
+    def test_build_hook_call_includes_context_manager(self) -> None:
+        """_build_hook_call 返回的服务表应可取得 context_manager。"""
         agent = _create_agent()
 
-        context = agent._build_hook_context({})
+        call, services = agent._build_hook_call({})
 
-        assert context.context_manager is agent._context_manager
+        assert services.get(CONTEXT_MANAGER) is agent._context_manager
 
-    def test_build_hook_context_agent_state_from_cm(self) -> None:
-        """agent_state 应来自 ContextManager。"""
+    def test_hook_services_expose_cm_agent_state(self) -> None:
+        """Hook 的状态数据应经 ContextManager 取得。"""
         agent = _create_agent()
         agent.set_state("test_key", "test_value")
 
-        context = agent._build_hook_context({})
+        call, services = agent._build_hook_call({})
 
-        assert context.agent_state == {"test_key": "test_value"}
+        assert services.require(CONTEXT_MANAGER).get_current_state() == {"test_key": "test_value"}
 
-    def test_build_ability_context_agent_state(self) -> None:
-        """_build_ability_context 的 agent_state 应来自 ContextManager。"""
+    def test_build_ability_call_member_and_arguments(self) -> None:
+        """_build_ability_call 的成员、参数与服务表来自统一形状。"""
         agent = _create_agent()
         agent.set_state("key", "value")
 
-        context = agent._build_ability_context("test_ability", {}, {})
+        call, services = agent._build_ability_call(MockAbility(name="test_ability"), {}, {})
 
-        assert context.agent_state == {"key": "value"}
-        assert context.current_ability_name == "test_ability"
-        assert context.tool_args == {}
+        assert services.require(CONTEXT_MANAGER).get_current_state() == {"key": "value"}
+        assert call.member.member == "test_ability"
+        assert call.arguments == {}
 
 
 # ----------------------------------------------------------------
@@ -290,11 +292,16 @@ class TestIterationLifecycle:
             hook_point = HookPoint.AFTER_ACTION
             count = 0
 
-            async def should_trigger(self, context: AbilityExecutionContext) -> bool:
+            async def should_trigger(
+                self, call: OperationCall, services: ExecutionServices
+            ) -> bool:
                 return True
 
             async def execute(
-                self, context: AbilityExecutionContext, result: ActionResult | None
+                self,
+                call: OperationCall,
+                services: ExecutionServices,
+                result: ActionResult | None = None,
             ) -> HookResult:
                 self.count += 1
                 if self.count >= 2:

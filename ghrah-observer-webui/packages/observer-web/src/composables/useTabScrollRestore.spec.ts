@@ -3,7 +3,11 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import { type ComponentPublicInstance, defineComponent, h, nextTick, ref } from "vue";
-import type { ScrollRestoreTarget, TabScrollRestoreOptions } from "./useTabScrollRestore";
+import type {
+  HorizontalRestoreTarget,
+  ScrollRestoreTarget,
+  TabScrollRestoreOptions,
+} from "./useTabScrollRestore";
 import { useTabScrollRestore } from "./useTabScrollRestore";
 
 // happy-dom 无真实布局（scrollHeight/clientHeight 恒 0），按元素属性模拟可滚动容器，
@@ -21,9 +25,28 @@ function mockScrollable(el: HTMLElement, scrollHeight: number, clientHeight: num
   });
 }
 
+/** 横向可滚动容器；width 用可变对象模拟内容增长。 */
+function mockHorizontalScroll(
+  el: HTMLElement,
+  width: { value: number },
+  clientWidth: number,
+): void {
+  let left = 0;
+  Object.defineProperty(el, "scrollWidth", { configurable: true, get: () => width.value });
+  Object.defineProperty(el, "clientWidth", { configurable: true, get: () => clientWidth });
+  Object.defineProperty(el, "scrollLeft", {
+    configurable: true,
+    get: () => left,
+    set: (v: number) => {
+      left = Math.max(0, Math.min(v, width.value - clientWidth));
+    },
+  });
+}
+
 interface PaneOptions {
   contentKey?: TabScrollRestoreOptions["contentKey"];
   target?: () => ScrollRestoreTarget;
+  horizontalTarget?: () => HorizontalRestoreTarget;
 }
 
 // 面板宿主：KeepAlive 内 v-if 切换停用/激活，捕获真实滚动元素供断言
@@ -35,6 +58,7 @@ function mountKeepAlivePane(options: PaneOptions = {}) {
       const restore = useTabScrollRestore(container, {
         contentKey: options.contentKey,
         target: options.target,
+        horizontalTarget: options.horizontalTarget,
       });
       return () =>
         h("div", {
@@ -145,6 +169,60 @@ describe("useTabScrollRestore", () => {
     await nextTick();
     await nextTick();
     expect(el.scrollTop).toBe(30); // 保持用户位置而非重放 500
+    host.wrapper.unmount();
+  });
+
+  it("horizontalTarget 返回 end 时激活即落右端", async () => {
+    const host = mountKeepAlivePane({ horizontalTarget: () => "end" });
+    await host.hide();
+    const el = host.el();
+    if (!el) throw new Error("scroll container missing");
+    const width = { value: 1000 };
+    mockHorizontalScroll(el, width, 200);
+    el.scrollLeft = 0;
+
+    await host.showPane();
+    expect(el.scrollLeft).toBe(800); // 1000 - 200
+    host.wrapper.unmount();
+  });
+
+  it("横向贴右后内容增长继续跟随", async () => {
+    const contentLength = ref(2);
+    const host = mountKeepAlivePane({
+      contentKey: () => contentLength.value,
+      horizontalTarget: () => "end",
+    });
+    const el = host.el();
+    if (!el) throw new Error("scroll container missing");
+    const width = { value: 1000 };
+    mockHorizontalScroll(el, width, 200);
+
+    el.scrollLeft = 800;
+    await host.hide();
+    el.scrollLeft = 0;
+    await host.showPane();
+    expect(el.scrollLeft).toBe(800);
+
+    width.value = 1400; // 新节点追加，内容变宽
+    contentLength.value = 3;
+    await nextTick();
+    await nextTick();
+    expect(el.scrollLeft).toBe(1200); // 贴右跟随
+    host.wrapper.unmount();
+  });
+
+  it("停用→激活后恢复用户横向位置", async () => {
+    const host = mountKeepAlivePane();
+    const el = host.el();
+    if (!el) throw new Error("scroll container missing");
+    mockHorizontalScroll(el, { value: 1000 }, 200);
+
+    el.scrollLeft = 300;
+    el.dispatchEvent(new Event("scroll"));
+    await host.hide();
+    el.scrollLeft = 0;
+    await host.showPane();
+    expect(el.scrollLeft).toBe(300);
     host.wrapper.unmount();
   });
 });

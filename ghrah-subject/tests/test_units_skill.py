@@ -126,3 +126,19 @@ async def test_init_logs_summary(tmp_path: Path, caplog: pytest.LogCaptureFixtur
 
     assert "skills=1" in caplog.text
     assert "locks_created=1" in caplog.text
+
+
+async def test_init_skipped_when_ability_source_is_builtin(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """builtin 模式不读旧 Skill 根：不建目录、不补 lock，并记录原因。"""
+    config = _config(tmp_path)
+    config.ability_source = "builtin"
+    root = Path(config.skill.root)
+
+    caplog.set_level(logging.WARNING, logger="ghrah.subject.units.skill")
+    async with Context() as ctx:
+        await SkillUnit(config).init(ctx)
+
+    assert not root.exists()
+    assert "ability_source=builtin" in caplog.text

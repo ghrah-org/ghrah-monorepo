@@ -1,0 +1,46 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: reporting
+  version: 0.1.0
+title: Reporting
+description: 示例内容包：一个带模板、参考与脚本附件的 Skill。
+members:
+  operations: {}
+  skills:
+    guide:
+      title: reporting-guide
+      description: 使用获准模板和写作指南整理报告。
+      tags:
+      - reporting
+      body:
+        path: skills/guide/SKILL.md
+        media_type: text/markdown
+      assets:
+        mark:
+          path: skills/guide/assets/mark.bin
+          media_type: application/octet-stream
+          size: 4
+          digest: sha256:a33bb2aed757bc839807d7a9deab0688c3cf06d36e53cb428f2e539c8dc76c5b
+        template:
+          path: skills/guide/assets/template.txt
+          media_type: text/plain
+          size: 24
+          digest: sha256:e77e9a0c9a973927ee193e0a0d99d96855b7dcd04f80c69db1e443aedb57030c
+      references:
+        mark:
+          path: skills/guide/references/mark.bin
+          media_type: application/octet-stream
+          size: 4
+          digest: sha256:94d3d8e007850dfb2666320c088c681913687f033fdd5d69d818bec99843655c
+        style:
+          path: skills/guide/references/style.md
+          media_type: text/markdown
+          size: 34
+          digest: sha256:47a9972ac7fbdef4dedfcdd450833d6d3eda56e09ac81db056d8eecedff0a673
+      scripts:
+        render:
+          path: skills/guide/scripts/render.py
+          media_type: text/x-python
+          size: 54
+          digest: sha256:612c06db1c12ed0143546cbb1c9106e3143a057137263c54900bd95452e6f59c

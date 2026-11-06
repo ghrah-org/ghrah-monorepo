@@ -1,0 +1,50 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: ghrah
+  name: shell
+  version: 0.1.0
+title: Shell
+description: Run shell commands through the delegated command runner, under the command safety classifier.
+members:
+  operations:
+    execute_command:
+      title: Execute Command
+      description: Execute a shell command and return its output. Dangerous commands are blocked. Other commands require human approval.
+      entry: operations/execute_command.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          command:
+            description: The shell command to execute
+            type: string
+          working_dir:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Working directory for the command
+        required:
+        - command
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - execution
+      - shell
+      effects:
+      - process:spawn
+      permissions:
+        shell_access: true
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 300000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills: {}

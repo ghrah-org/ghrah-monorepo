@@ -15,12 +15,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _helpers import make_call, make_services
 from pydantic import ValidationError
 
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.load_skill import LoadSkillAbility, LoadSkillInput
-from ghrah.abilities.context import AbilityExecutionContext
 from ghrah.abilities.registry import AbilityRegistry
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.manifest.builtins import _BUILTIN_YAML_NAMES, load_all_builtin_manifests
 from ghrah.manifest.resolver import ResolvedAbility
 from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider, SkillParseError
@@ -47,11 +49,11 @@ def _write_skill(root: Path, dir_name: str, text: str = SKILL_TEXT) -> Path:
 def _make_context(
     provider: Any = None,
     tool_args: dict[str, Any] | None = None,
-) -> AbilityExecutionContext:
-    return AbilityExecutionContext(
-        current_ability_name="load_skill",
-        tool_args=tool_args or {},
-        skill_provider=provider,
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(member="load_skill", arguments=tool_args or {}),
+        make_services(skill_provider=provider),
     )
 
 
@@ -98,7 +100,7 @@ class TestLoadSkillAbilityExecute:
         skill_dir = _write_skill(tmp_path, "db-query")
 
         result = await LoadSkillAbility().execute(
-            _make_context(
+            *_make_context(
                 provider=SkillAbilityProvider.from_root(tmp_path),
                 tool_args={"full_name": "db-query"},
             )
@@ -112,7 +114,7 @@ class TestLoadSkillAbilityExecute:
         assert result.data["note"] == "skill-ability document — instructions to apply"
 
     async def test_missing_full_name(self) -> None:
-        result = await LoadSkillAbility().execute(_make_context(tool_args={}))
+        result = await LoadSkillAbility().execute(*_make_context(tool_args={}))
 
         assert result.outcome == ActionOutcome.FAILURE
         assert result.data["error"] == "full_name is required"
@@ -120,7 +122,7 @@ class TestLoadSkillAbilityExecute:
     async def test_blank_full_name_rejected(self, tmp_path: Path) -> None:
         _write_skill(tmp_path, "db-query")
         result = await LoadSkillAbility().execute(
-            _make_context(
+            *_make_context(
                 provider=SkillAbilityProvider.from_root(tmp_path),
                 tool_args={"full_name": "   "},
             )
@@ -133,7 +135,7 @@ class TestLoadSkillAbilityExecute:
         _write_skill(tmp_path, "db-query")
 
         result = await LoadSkillAbility().execute(
-            _make_context(
+            *_make_context(
                 provider=SkillAbilityProvider.from_root(tmp_path),
                 tool_args={"full_name": "no-such-skill"},
             )
@@ -146,7 +148,7 @@ class TestLoadSkillAbilityExecute:
     async def test_unwired_provider_reports_absence(self) -> None:
         """未接线 ≠ 技能不存在：文案必须说清是装配期没注入。"""
         result = await LoadSkillAbility().execute(
-            _make_context(tool_args={"full_name": "db-query"})
+            *_make_context(tool_args={"full_name": "db-query"})
         )
 
         assert result.outcome == ActionOutcome.FAILURE
@@ -155,7 +157,7 @@ class TestLoadSkillAbilityExecute:
 
     async def test_unreadable_document(self) -> None:
         result = await LoadSkillAbility().execute(
-            _make_context(
+            *_make_context(
                 provider=_ParseFailingProvider(),
                 tool_args={"full_name": "db-query"},
             )
@@ -166,7 +168,7 @@ class TestLoadSkillAbilityExecute:
 
     async def test_unexpected_provider_error_is_fail_soft(self) -> None:
         result = await LoadSkillAbility().execute(
-            _make_context(
+            *_make_context(
                 provider=_BrokenProvider(),
                 tool_args={"full_name": "db-query"},
             )

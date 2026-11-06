@@ -90,18 +90,61 @@ _KEYWORDS = {
     "maxLength",
     "minItems",
     "maxItems",
+    "$defs",
+    "$ref",
 }
 _TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
 
 
-def _check_schema(schema: dict[str, Any], depth: int = 0) -> None:
+def _resolve_ref(ref: Any, scopes: tuple[dict[str, Any], ...]) -> dict[str, Any]:
+    """解析本地 ``#/$defs/<name>`` 引用；只支持与生成索引一致的局部引用。
+
+    Args:
+        ref: ``$ref`` 原值。
+        scopes: 由根到当前节点的 ``$defs`` 作用域栈（就近优先）。
+
+    Returns:
+        被引用的 schema。
+
+    Raises:
+        ValueError: 不是本地 ``$defs`` 引用，或引用未声明。
+    """
+    prefix = "#/$defs/"
+    if not isinstance(ref, str) or not ref.startswith(prefix):
+        raise ValueError("只支持本地 $defs 引用")
+    name = ref[len(prefix) :]
+    for scope in reversed(scopes):
+        if name in scope:
+            return cast(dict[str, Any], scope[name])
+    raise ValueError("$ref 指向未声明的 $defs")
+
+
+def _check_schema(
+    schema: dict[str, Any],
+    depth: int = 0,
+    scopes: tuple[dict[str, Any], ...] = (),
+) -> None:
     if depth > 24 or not isinstance(schema, dict) or set(schema) - _KEYWORDS:
         raise ValueError("不支持的 schema 关键字或深度")
+    if "$defs" in schema:
+        definitions = schema["$defs"]
+        if not isinstance(definitions, dict) or any(
+            not isinstance(name, str) for name in definitions
+        ):
+            raise ValueError("$defs 必须是命名 schema 映射")
+        scopes = (*scopes, definitions)
+        for definition in definitions.values():
+            _check_schema(definition, depth + 1, scopes)
+    if "$ref" in schema:
+        if set(schema) - {"$ref", "$defs", "title", "description"}:
+            raise ValueError("$ref 不能与其他 schema 关键字并用")
+        _resolve_ref(schema["$ref"], scopes)
+        return
     if "anyOf" in schema:
-        if set(schema) - {"anyOf", "title", "description"} or not schema["anyOf"]:
+        if set(schema) - {"anyOf", "title", "description", "default"} or not schema["anyOf"]:
             raise ValueError("anyOf 必须独立声明非空分支")
         for branch in schema["anyOf"]:
-            _check_schema(branch, depth + 1)
+            _check_schema(branch, depth + 1, scopes)
         return
     types = schema.get("type")
     required = schema.get("required", [])
@@ -139,9 +182,9 @@ def _check_schema(schema: dict[str, Any], depth: int = 0) -> None:
         ):
             raise ValueError("无效的对象字段")
         for child in properties.values():
-            _check_schema(child, depth + 1)
+            _check_schema(child, depth + 1, scopes)
     if types == "array":
-        _check_schema(schema.get("items", {}), depth + 1)
+        _check_schema(schema.get("items", {}), depth + 1, scopes)
     # 不能接受一个已知关键字，却在不适用的类型上静默忽略它。
     constraints = {
         "properties": {"object"},
@@ -165,11 +208,18 @@ def _literal_equal(left: Any, right: Any) -> bool:
     return bool((type(left) is type(right) or numeric) and left == right)
 
 
-def _validate(schema: dict[str, Any], value: JsonValue) -> None:
+def _validate(
+    schema: dict[str, Any], value: JsonValue, scopes: tuple[dict[str, Any], ...] = ()
+) -> None:
+    if "$defs" in schema:
+        scopes = (*scopes, schema["$defs"])
+    if "$ref" in schema:
+        _validate(_resolve_ref(schema["$ref"], scopes), value, scopes)
+        return
     if "anyOf" in schema:
         for branch in schema["anyOf"]:
             try:
-                _validate(branch, value)
+                _validate(branch, value, scopes)
                 return
             except ValueError:
                 pass
@@ -197,10 +247,10 @@ def _validate(schema: dict[str, Any], value: JsonValue) -> None:
         if set(value) - props.keys() or not set(schema.get("required", [])) <= value.keys():
             raise ValueError("未知或缺失的字段")
         for key, child in value.items():
-            _validate(props[key], child)
+            _validate(props[key], child, scopes)
     if isinstance(value, list):
         for child in value:
-            _validate(schema["items"], child)
+            _validate(schema["items"], child, scopes)
     for lower, upper, size in (
         ("minLength", "maxLength", len(value) if isinstance(value, str) else None),
         ("minItems", "maxItems", len(value) if isinstance(value, list) else None),

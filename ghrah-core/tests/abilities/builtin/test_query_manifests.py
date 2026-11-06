@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from _helpers import make_call, make_services
+
 from ghrah.abilities.base import ActionOutcome
 from ghrah.abilities.builtin.query_manifests import QueryManifestsAbility
-from ghrah.abilities.context import AbilityExecutionContext
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
 from ghrah.manifest.agent import AbilityRef, AgentManifest, AgentMetadata, ModelConfig
 from ghrah.manifest.types import PermissionFlags
 
@@ -52,11 +55,11 @@ class _FakeStore:
 def _make_context(
     store: Any = None,
     tool_args: dict[str, Any] | None = None,
-) -> AbilityExecutionContext:
-    return AbilityExecutionContext(
-        current_ability_name="query_manifests",
-        tool_args=tool_args or {},
-        manifest_store=store,
+) -> tuple[OperationCall, ExecutionServices]:
+    """创建测试用 (OperationCall, ExecutionServices)。"""
+    return (
+        make_call(member="query_manifests", arguments=tool_args or {}),
+        make_services(manifest_store=store),
     )
 
 
@@ -73,7 +76,7 @@ class TestQueryManifestsAbility:
 
     async def test_store_not_wired_failure(self) -> None:
         """未接线 → 显式 FAILURE 指路（零隐式）。"""
-        result = await QueryManifestsAbility().execute(_make_context(store=None))
+        result = await QueryManifestsAbility().execute(*_make_context(store=None))
         assert result.outcome == ActionOutcome.FAILURE
         assert "manifest_store is not wired" in result.data["error"]
 
@@ -84,7 +87,7 @@ class TestQueryManifestsAbility:
                 "ghrah.coder": _agent_manifest("coder"),
             }
         )
-        result = await QueryManifestsAbility().execute(_make_context(store=store))
+        result = await QueryManifestsAbility().execute(*_make_context(store=store))
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["count"] == 2
         names = {m["full_name"] for m in result.data["manifests"]}
@@ -109,7 +112,7 @@ class TestQueryManifestsAbility:
             }
         )
         result = await QueryManifestsAbility().execute(
-            _make_context(store=store, tool_args={"manifest_ref": "ghrah.designer"})
+            *_make_context(store=store, tool_args={"manifest_ref": "ghrah.designer"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["full_name"] == "ghrah.designer"
@@ -122,7 +125,7 @@ class TestQueryManifestsAbility:
     async def test_read_unknown_manifest_failure(self) -> None:
         store = _FakeStore({"ghrah.designer": _agent_manifest("designer")})
         result = await QueryManifestsAbility().execute(
-            _make_context(store=store, tool_args={"manifest_ref": "ghrah.ghost"})
+            *_make_context(store=store, tool_args={"manifest_ref": "ghrah.ghost"})
         )
         assert result.outcome == ActionOutcome.FAILURE
         assert "ghrah.ghost" in result.data["error"]
@@ -142,7 +145,7 @@ class TestQueryManifestsAbility:
                 "ghrah.broken": _agent_manifest("broken"),
             }
         )
-        result = await QueryManifestsAbility().execute(_make_context(store=store))
+        result = await QueryManifestsAbility().execute(*_make_context(store=store))
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["count"] == 2
         broken = [m for m in result.data["manifests"] if m["full_name"] == "ghrah.broken"]

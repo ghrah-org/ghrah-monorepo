@@ -1,0 +1,410 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: ghrah
+  name: fs
+  version: 0.1.0
+title: Filesystem
+description: Read, search, and mutate files and directories inside the delegated workspace.
+members:
+  operations:
+    delete_file:
+      title: Delete File
+      description: Delete a file at the specified path. This operation is irreversible.
+      entry: operations/delete_file.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          file_path:
+            description: Path to the file to delete
+            type: string
+        required:
+        - file_path
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - delete
+      - filesystem
+      - write
+      effects:
+      - filesystem:write
+      permissions:
+        fs_write: true
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    edit_file:
+      title: Edit File
+      description: Edit a file by replacing a unique string. The old_str must appear exactly once in the file.
+      entry: operations/edit_file.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          file_path:
+            description: Path to the file to edit
+            type: string
+          old_str:
+            description: The exact string to find and replace (must be unique in the file)
+            type: string
+          new_str:
+            description: The replacement string
+            type: string
+          encoding:
+            default: utf-8
+            description: Text encoding for the file
+            type: string
+        required:
+        - file_path
+        - old_str
+        - new_str
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - edit
+      - filesystem
+      - write
+      effects:
+      - filesystem:write
+      permissions:
+        fs_write: true
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    list_directory:
+      title: List Directory
+      description: List files and directories at the specified path. Returns entry names, types, and sizes. Use recursive=true to list all nested contents.
+      entry: operations/list_directory.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          dir_path:
+            description: Path to the directory to list
+            type: string
+          recursive:
+            default: false
+            description: Recursively list nested directories
+            type: boolean
+          offset:
+            default: 0
+            description: 0-based entry index to start from (pagination; 0 with limit 0 = legacy full listing)
+            minimum: 0
+            type: integer
+          limit:
+            default: 0
+            description: Max number of entries to return (0 = no limit; pagination active when offset or limit is set)
+            minimum: 0
+            type: integer
+        required:
+        - dir_path
+        type: object
+      output_schema:
+        $defs:
+          DirectoryEntryOutput:
+            additionalProperties: false
+            description: 目录条目结果契约；非递归列表可能不带 ``path`` / ``size``。
+            properties:
+              name:
+                description: Entry name
+                type: string
+              type:
+                description: Entry type
+                enum:
+                - file
+                - directory
+                type: string
+              path:
+                default: ''
+                description: Path relative to the listed directory
+                type: string
+              size:
+                default: -1
+                description: Entry size for files (-1 when unknown)
+                type: integer
+            required:
+            - name
+            - type
+            type: object
+        additionalProperties: false
+        properties:
+          dir_path:
+            description: Directory path
+            type: string
+          total_entries:
+            description: Total number of entries
+            type: integer
+          entries:
+            description: Entries in this window
+            items:
+              $ref: '#/$defs/DirectoryEntryOutput'
+            type: array
+          offset:
+            default: 0
+            description: Pagination offset (when paginated)
+            type: integer
+          limit:
+            default: 0
+            description: Pagination limit (when paginated)
+            type: integer
+          truncated:
+            default: false
+            description: Whether more entries remain
+            type: boolean
+          next_offset:
+            anyOf:
+            - type: integer
+            - type: 'null'
+            default: null
+            description: Next offset, or null when done
+        required:
+        - dir_path
+        - total_entries
+        - entries
+        type: object
+      tags:
+      - filesystem
+      - read
+      effects: []
+      permissions:
+        fs_read_only: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    move_file:
+      title: Move File
+      description: Move or rename a file. Supports cross-directory moves. The source and destination paths are both subject to permission checks.
+      entry: operations/move_file.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          source_path:
+            description: Path to the source file
+            type: string
+          destination_path:
+            description: Path to the destination
+            type: string
+          create_dirs:
+            default: true
+            description: Create parent directories of the destination if they do not exist
+            type: boolean
+          overwrite:
+            default: false
+            description: Overwrite the destination file if it already exists
+            type: boolean
+        required:
+        - source_path
+        - destination_path
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - filesystem
+      - move
+      - write
+      effects:
+      - filesystem:write
+      permissions:
+        fs_write: true
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    read_file:
+      title: Read File
+      description: Read the content of a file at the specified path
+      entry: operations/read_file.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          file_path:
+            description: Path to the file to read
+            type: string
+          encoding:
+            default: utf-8
+            description: Text encoding for the file
+            type: string
+          offset:
+            default: 0
+            description: 0-based line number to start from
+            minimum: 0
+            type: integer
+          limit:
+            default: 0
+            description: Max lines to return; 0 = whole file (legacy behavior)
+            minimum: 0
+            type: integer
+        required:
+        - file_path
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          content:
+            description: File content (line-numbered when paginated)
+            type: string
+          file_path:
+            description: Path of the file that was read
+            type: string
+          total_lines:
+            description: Total number of lines in the file
+            type: integer
+          offset:
+            default: 0
+            description: Pagination offset (when paginated)
+            type: integer
+          limit:
+            default: 0
+            description: Pagination limit (when paginated)
+            type: integer
+        required:
+        - content
+        - file_path
+        - total_lines
+        type: object
+      tags:
+      - filesystem
+      - read
+      effects: []
+      permissions:
+        fs_read_only: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    search_files:
+      title: Search Files
+      description: Search file contents for a regex pattern using ripgrep, with results including file paths and line numbers.
+      entry: operations/search_files.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          pattern:
+            description: Regular expression to search for
+            type: string
+          path:
+            description: Directory or file to search in
+            type: string
+          include:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: Optional glob filter for file names (e.g. '*.py')
+          context_lines:
+            default: 0
+            description: Lines of context around each match
+            maximum: 5
+            minimum: 0
+            type: integer
+          max_results:
+            default: 50
+            description: Maximum number of matching lines to return
+            maximum: 200
+            minimum: 1
+            type: integer
+          ignore_case:
+            default: false
+            description: Case-insensitive search
+            type: boolean
+        required:
+        - pattern
+        - path
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - filesystem
+      - read
+      - search
+      effects: []
+      permissions:
+        fs_read_only: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    write_file:
+      title: Write File
+      description: Write content to a file. Creates the file and parent directories if they do not exist. Overwrites existing content.
+      entry: operations/write_file.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          file_path:
+            description: Path to the file to write
+            type: string
+          content:
+            description: Content to write to the file
+            type: string
+          create_dirs:
+            default: true
+            description: Create parent directories if they do not exist
+            type: boolean
+          encoding:
+            default: utf-8
+            description: Text encoding for the file
+            type: string
+        required:
+        - file_path
+        - content
+        type: object
+      output_schema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      tags:
+      - filesystem
+      - write
+      effects:
+      - filesystem:write
+      permissions:
+        fs_write: true
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills: {}

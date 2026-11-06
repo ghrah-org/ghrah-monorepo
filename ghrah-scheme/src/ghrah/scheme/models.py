@@ -7,12 +7,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TypeAlias
 
 from ghrah.scheme.errors import ErrorCode
 
-JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-JsonObject: TypeAlias = dict[str, JsonValue]
+type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
+type JsonObject = dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -81,8 +80,8 @@ class ControlPrincipal:
         return ControlScope(self.project_id, self.subject_id, self.session_id)
 
 
-Requester: TypeAlias = Principal | ControlPrincipal
-BindingScope: TypeAlias = AgentScope | ControlScope
+type Requester = Principal | ControlPrincipal
+type BindingScope = AgentScope | ControlScope
 
 
 @dataclass(frozen=True)

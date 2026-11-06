@@ -3,7 +3,7 @@ name = "ghrah-scheme"
 version = "0.1.0a0"
 description = "ghrah 自用的类型化 Scheme 与控制平面原语"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.15.1"
 dependencies = ["pydantic>=2.0", "ghrah-protocol>=0.2.0a0"]
 authors = [{name = "chenxya", email = "chenxya@ghrah.org"}]
 license = "Apache-2.0"
@@ -20,7 +20,7 @@ packages = ["src/ghrah"]
 exclude = ["**/__pycache__", "**/.pytest_cache", "**/.mypy_cache", "**/.ruff_cache"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py315"
 line-length = 100
 
 [tool.ruff.lint]
@@ -31,5 +31,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.15"
 strict = true
