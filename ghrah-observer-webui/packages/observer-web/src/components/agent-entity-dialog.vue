@@ -23,6 +23,7 @@ const modelCatalogError = ref("");
 const name = ref("");
 const cluster = ref("");
 const prompt = ref("");
+const entityPrompt = ref<string | null>(null);
 const startNow = ref(false);
 const source = ref<"types" | "manifest">("types");
 const manifest = ref("");
@@ -92,6 +93,7 @@ const catalog = ref<z.infer<typeof catalogSchema> | null>(null);
 const sessionId = ref("");
 const branchId = ref("");
 const sessionName = ref("");
+const sessionPrompt = ref("");
 const branches = computed(
   () => catalog.value?.branches.filter((b) => b.session_id === sessionId.value) ?? [],
 );
@@ -134,6 +136,7 @@ const deliveryStates = new Set([
 ]);
 
 function applySnapshot(value: AgentSnapshot) {
+  if (entityPrompt.value === null) entityPrompt.value = value.specification.system_prompt;
   snapshot.value = value;
   modelName.value = value.specification.endpoint_name ?? "";
   modelNames.value = stringArrayOrNull(value.abilities.model_config_names) ?? [];
@@ -320,8 +323,21 @@ function saveAbilities() {
 function activateSession() {
   return mutate(() => entity().context.activateSession(sessionId.value));
 }
-function createSession() {
-  return mutate(() => entity().context.createSession(sessionName.value || undefined));
+async function createSession() {
+  if (!canContext.value) return;
+  await mutate(async () => {
+    const result = await entity().context.createSession(
+      sessionName.value.trim() || undefined,
+      sessionPrompt.value.trim() ? sessionPrompt.value : undefined,
+    );
+    const { session } = z.object({ session: z.object({ session_id: z.string() }) }).parse(result);
+    sessionId.value = session.session_id;
+    await entity().context.activateSession(session.session_id);
+  });
+  if (!error.value && !uncertain.value) {
+    sessionName.value = "";
+    sessionPrompt.value = "";
+  }
 }
 onMounted(() => {
   void refresh();
@@ -518,6 +534,18 @@ onMounted(() => {
                 {{ t("agentEntity.saveModel") }}
               </button>
             </template>
+            <div class="entity-stack entity-card">
+              <label>
+                {{ t("agentEntity.entityPrompt") }}
+                <textarea v-model="entityPrompt" rows="5" />
+              </label>
+              <p>{{ t("agentEntity.entityPromptPending") }}</p>
+              <div class="entity-actions">
+                <button class="btn-primary" disabled>
+                  {{ t("common.save") }}
+                </button>
+              </div>
+            </div>
           </section>
           <section v-if="tab === 'abilities'" class="entity-stack">
             <p>
@@ -608,11 +636,22 @@ onMounted(() => {
                 </button>
               </div>
             </template>
-            <form class="entity-actions" @submit.prevent="createSession">
+            <form class="entity-session-form" @submit.prevent="createSession">
               <label
                 >{{ t("agentEntity.sessionName")
-                }}<input v-model="sessionName" :disabled="!canContext" /></label
-              ><button class="btn-secondary" type="submit" :disabled="!canContext">
+                }}<input v-model="sessionName" :disabled="!canContext"
+              /></label>
+              <label
+                >{{ t("agentEntity.sessionPrompt") }}
+                <textarea
+                  v-model="sessionPrompt"
+                  rows="4"
+                  :disabled="!canContext"
+                  :placeholder="t('agentEntity.sessionPromptHint')"
+                />
+              </label>
+              <p>{{ t("agentEntity.sessionPromptHint") }}</p>
+              <button class="btn-secondary" type="submit" :disabled="!canContext">
                 {{ t("agentEntity.createSession") }}
               </button>
             </form>
@@ -728,6 +767,18 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.entity-session-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.entity-session-form p {
+  color: var(--ac-node-subtext);
+  font-size: var(--font-ui-note);
+}
+.entity-session-form button {
+  align-self: flex-start;
+}
 .entity-body,
 .entity-stack,
 label {

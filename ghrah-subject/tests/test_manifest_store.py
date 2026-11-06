@@ -409,6 +409,11 @@ class TestManifestServiceCommand:
         result = handle_manifest_command("manifest_list_abilities", {}, store)
         assert result["success"] is True
         assert "ghrah.fs.read_file" in [a["full_name"] for a in result["data"]["abilities"]]
+        ability = result["data"]["abilities"][0]
+        assert ability["description"] == "Read file contents"
+        assert ability["permissions"]["fs_read_only"] is True
+        assert ability["implementation_type"] == "builtin"
+        assert ability["has_hitl"] is False
 
     def test_list_abilities_with_namespace(self, store: ManifestStore) -> None:
         store.put_ability("ghrah.fs.read_file", VALID_ABILITY_YAML)

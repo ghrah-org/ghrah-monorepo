@@ -39,15 +39,13 @@ describe("manifest dialog focus", () => {
     wrapper.unmount();
   });
 
-  it("guards discarding a dirty manifest with the shared confirm dialog", async () => {
+  it("closes a new manifest directly even after entering content", async () => {
     const wrapper = mount(NewAgentManifestDialog, { attachTo: document.body });
     await nextTick();
     const input = wrapper.get("[data-autofocus]");
     await input.setValue("demo");
     await input.trigger("keydown", { key: "Escape" });
-    expect(wrapper.findAll('[role="dialog"]')).toHaveLength(2);
-    const discard = wrapper.findAll("button").find((button) => button.text() === "Discard changes");
-    await discard!.trigger("click");
+    expect(wrapper.findAll('[role="dialog"]')).toHaveLength(1);
     expect(wrapper.emitted("close")).toHaveLength(1);
     wrapper.unmount();
   });

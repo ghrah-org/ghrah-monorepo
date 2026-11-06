@@ -4,6 +4,7 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import AgentManifestCard from "@/components/config/agent-manifest-card.vue";
 import AgentManifestDetail from "@/components/config/agent-manifest-detail.vue";
+import EditAgentManifestDialog from "@/components/config/edit-agent-manifest-dialog.vue";
 import NewAgentManifestDialog from "@/components/config/new-agent-manifest-dialog.vue";
 import SpawnFromManifestDialog from "@/components/config/spawn-from-manifest-dialog.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
@@ -19,6 +20,15 @@ const showNewDialog = ref(false);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const deleteTarget = ref<string | null>(null);
+const editTarget = ref<string | null>(null);
+function closeEditDialog() {
+  editTarget.value = null;
+  setDialogDirty(false);
+}
+function onAgentSaved() {
+  selected.value =
+    manifests.agentList.find((agent) => agent.full_name === editTarget.value) ?? null;
+}
 
 function setDialogDirty(dirty: boolean) {
   emit("dirtyChange", dirty);
@@ -35,8 +45,12 @@ function closeNewDialog() {
 }
 
 onMounted(async () => {
-  if (manifests.agentList.length === 0) {
-    await listManifestAgents();
+  try {
+    const result = await listManifestAgents();
+    if (!result) error.value = t("config.agent.notConnected");
+    else if (!result.success) error.value = result.error || t("config.agent.loadFailed");
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("config.agent.loadFailed");
   }
 });
 
@@ -50,7 +64,7 @@ function handleSpawn(manifest: AgentManifestInfo) {
 }
 
 function handleEdit(manifest: AgentManifestInfo) {
-  window.postMessage?.({ type: "openFile", fullName: manifest.full_name, kind: "agent" });
+  editTarget.value = manifest.full_name;
 }
 
 async function confirmDelete() {
@@ -114,6 +128,14 @@ async function confirmDelete() {
       @delete="deleteTarget = selected!.full_name"
     />
 
+    <EditAgentManifestDialog
+      v-if="editTarget"
+      :key="editTarget"
+      :full-name="editTarget"
+      @dirty-change="setDialogDirty"
+      @close="closeEditDialog"
+      @saved="onAgentSaved"
+    />
     <SpawnFromManifestDialog
       v-if="showSpawnDialog && selected"
       :manifest="selected"
