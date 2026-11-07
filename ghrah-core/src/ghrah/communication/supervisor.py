@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Collection
+from collections.abc import AsyncIterator, Callable, Collection, Mapping
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -106,6 +106,8 @@ class SupervisorActor:
         message_manager: MessageManager | None = None,
         builtin_abilities: bool = False,
         ability_materializer: Any | None = None,
+        host_command_port: Any | None = None,
+        host_command_grants: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         """初始化 Supervisor。
 
@@ -139,6 +141,10 @@ class SupervisorActor:
             ability_materializer: 授权装配边界（启动核定器）；builtin 模式
                 下由 CoreUnit 装配期构造并注入，子 Agent spawn 工具经它
                 取得同一套授权事实。None = 未接线（builtin spawn 显式失败）。
+            host_command_port: 宿主命令端口（duck-typed HostCommandPort）；
+                None = standalone / 未接线。
+            host_command_grants: 成员/实例 → 允许命令集（opaque 字符串）；
+                空表 = 任何成员都不注入端口。
         """
         if message_manager is not None and not message_manager.session_routing:
             raise ValueError("Supervisor messaging requires session_routing=True")
@@ -155,6 +161,9 @@ class SupervisorActor:
         # duck-typed SkillAbilityProvider | None（装配期显式注入）；消费方：
         # list_abilities 的 skill 面 + ContextManager 的技能目录摘要注入
         self.skill_provider = skill_provider
+        # duck-typed HostCommandPort | None；命令白名单见 host_command_grants
+        self.host_command_port = host_command_port
+        self.host_command_grants: Mapping[str, frozenset[str]] = host_command_grants or {}
         # 集群级 LLM 工厂默认（spawn per-spawn kwarg 覆盖；工具路径继承）
         self._llm_factory = llm_factory
         self._spawn_lock = asyncio.Lock()

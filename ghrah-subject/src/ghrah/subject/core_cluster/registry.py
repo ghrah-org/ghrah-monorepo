@@ -27,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ghrah.protocol.enums import CommandType
 from ghrah.protocol.types import (
     ListAgentsPayload,
     SendMessagePayload,
@@ -47,8 +48,28 @@ if TYPE_CHECKING:
 __all__ = [
     "CoreClusterRegistry",
     "CoreUnitHandle",
+    "PROJECT_AGENT_MANAGE_INSTANCE_ID",
     "default_core_unit_factory",
 ]
+
+# 与 Core startup._instance_id("ghrah.project_agent_manage") 对齐；
+# 仅 Subject 装配层认识此包身份，不进 Core 源码。
+PROJECT_AGENT_MANAGE_INSTANCE_ID = "ghrah-project_agent_manage"
+
+_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS: dict[str, frozenset[str]] = {
+    f"{PROJECT_AGENT_MANAGE_INSTANCE_ID}/add_project_agent": frozenset(
+        {CommandType.PROJECT_ADD_AGENT.value}
+    ),
+    f"{PROJECT_AGENT_MANAGE_INSTANCE_ID}/remove_project_agent": frozenset(
+        {CommandType.PROJECT_REMOVE_AGENT.value}
+    ),
+    f"{PROJECT_AGENT_MANAGE_INSTANCE_ID}/list_project_agents": frozenset(
+        {CommandType.PROJECT_GET.value}
+    ),
+    f"{PROJECT_AGENT_MANAGE_INSTANCE_ID}/get_project_agent": frozenset(
+        {CommandType.PROJECT_GET.value}
+    ),
+}
 
 logger = logging.getLogger(__name__)
 
@@ -574,6 +595,7 @@ def default_core_unit_factory(
             # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
             # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。
             default_abilities=tuple(config.default_spawn_abilities) or None,
+            host_command_grants=_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
         )
         return create_core_unit(core_config)
 

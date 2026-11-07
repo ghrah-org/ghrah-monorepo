@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""``python -m ghrah.ability.tools.build <dir> [--check] [--builtin]``。
+"""``python -m ghrah.ability.tools.build <dir> [--check] [--builtin|--shipped]``。
 
 ``--check`` 只校验不写盘，索引与声明不一致时以非零退出并输出统一 diff；
-``--builtin`` 允许内置包的 ``ghrah`` 命名空间。后续正式命令的 CLI 薄层归
+``--builtin`` 允许内置包的 ``ghrah`` 命名空间；``--shipped`` 允许发行版
+预装包的 ``ghrah`` 命名空间（二者互斥）。后续正式命令的 CLI 薄层归
 ``ghrah-toolchain``。
 """
 
@@ -31,10 +32,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="只校验不写盘；索引与声明不一致时非零退出并输出 diff",
     )
-    parser.add_argument(
+    origin = parser.add_mutually_exclusive_group()
+    origin.add_argument(
         "--builtin",
         action="store_true",
         help="允许内置包的 ghrah 命名空间",
+    )
+    origin.add_argument(
+        "--shipped",
+        action="store_true",
+        help="允许发行版预装包的 ghrah 命名空间（不进内置树）",
     )
     args = parser.parse_args(argv)
     root: Path = args.directory
@@ -43,7 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         result = (
-            check(root, builtin=args.builtin) if args.check else build(root, builtin=args.builtin)
+            check(root, builtin=args.builtin, shipped=args.shipped)
+            if args.check
+            else build(root, builtin=args.builtin, shipped=args.shipped)
         )
     except IndexMismatchError as exc:
         for difference in exc.differences:

@@ -1770,8 +1770,18 @@ class ActorAgent:
             agent_name=self.config.name,
         )
 
-    def _build_services(self, accumulated_data: dict[str, Any]) -> ExecutionServices:
-        """按统一形状组装服务表（所有执行入口共用）。"""
+    def _build_services(
+        self,
+        accumulated_data: dict[str, Any],
+        *,
+        host_command_port: Any | None = None,
+    ) -> ExecutionServices:
+        """按统一形状组装服务表（所有执行入口共用）。
+
+        ``host_command_port`` 默认不注入：仅
+        :meth:`_build_ability_call` 在装配期 grants 命中当前成员时
+        传入 scoped 端口，避免共授其它 operation 经服务表越权派发。
+        """
         return build_execution_services(
             context_manager=self._context_manager,
             supervisor=self._supervisor,
@@ -1791,7 +1801,29 @@ class ActorAgent:
                 getattr(self._context_manager, "ability_content", None), "mcp_service", None
             ),
             message_factory=getattr(self._context_manager, "message_factory", None),
+            host_command_port=host_command_port,
         )
+
+    def _resolve_host_command_port(self, member: MemberReference) -> Any | None:
+        """按装配期 grants 为当前成员解析 scoped 宿主命令端口。"""
+        grants = getattr(self._supervisor, "host_command_grants", None) or {}
+        if not grants:
+            return None
+        instance_id = member.instance_id or ""
+        if not instance_id:
+            return None
+        allowed = grants.get(f"{instance_id}/{member.member}")
+        if allowed is None:
+            allowed = grants.get(instance_id)
+        if allowed is None:
+            return None
+        port = getattr(self._supervisor, "host_command_port", None)
+        if port is None:
+            return None
+        scoped = getattr(port, "scoped", None)
+        if not callable(scoped):
+            return None
+        return scoped(frozenset(allowed))
 
     def _build_hook_call(
         self,
@@ -1844,7 +1876,10 @@ class ActorAgent:
         prepare = getattr(ability, "prepare_call", None)
         if callable(prepare):
             call = prepare(call)
-        return call, self._build_services(accumulated_data)
+        return call, self._build_services(
+            accumulated_data,
+            host_command_port=self._resolve_host_command_port(member),
+        )
 
     def _build_response(self, original: AgentMessage) -> AgentMessage:
         """根据循环结果构建最终回复消息。

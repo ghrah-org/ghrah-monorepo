@@ -1,0 +1,249 @@
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: ghrah
+  name: project_agent_manage
+  version: 0.1.0
+title: Project Agent Manage
+description: 管理 Project 内的 Agent 定义（增、删、查、单查），写入 Project desired-state。
+members:
+  operations:
+    add_project_agent:
+      title: Add Project Agent
+      description: 把一个 Agent 定义加入当前 Project，并让运行时按定义拉起。
+      entry: operations/add_project_agent.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          name:
+            description: 新 Agent 的显示名
+            minLength: 1
+            type: string
+          manifest_ref:
+            default: ''
+            description: Agent manifest 引用；可空
+            type: string
+          endpoint_name:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            description: 可选 endpoint 名
+          system_prompt:
+            default: ''
+            description: 可选系统提示词覆盖
+            type: string
+          abilities:
+            anyOf:
+            - items:
+                type: string
+              type: array
+            - type: 'null'
+            default: null
+            description: 可选能力名列表
+          desired_state:
+            default: running
+            description: 期望运行态
+            enum:
+            - running
+            - stopped
+            type: string
+        required:
+        - name
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          agent_id:
+            description: 稳定 Agent 标识
+            type: string
+          agent_name:
+            description: Agent 显示名
+            type: string
+          runtime_pending:
+            default: false
+            description: 运行时是否仍在等待
+            type: boolean
+          runtime_error:
+            default: ''
+            description: 运行时错误（若有）
+            type: string
+        required:
+        - agent_id
+        - agent_name
+        type: object
+      tags:
+      - agent
+      - lifecycle
+      - project
+      effects:
+      - project:agent-write
+      permissions:
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 120000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    get_project_agent:
+      title: Get Project Agent
+      description: 按 agent_id 或名称查询当前 Project 名册中单个 Agent 的完整定义。
+      entry: operations/get_project_agent.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          agent_name:
+            default: ''
+            description: 按显示名查找
+            type: string
+          agent_id:
+            default: ''
+            description: 按稳定标识查找；优先于名称
+            type: string
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          agent:
+            additionalProperties: true
+            description: Agent 完整定义（Project 名册形状）
+            type: object
+          project_id:
+            description: 所属 Project 标识
+            type: string
+        required:
+        - agent
+        - project_id
+        type: object
+      tags:
+      - agent
+      - discovery
+      - project
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    list_project_agents:
+      title: List Project Agents
+      description: 列出当前 Project 名册中的全部 Agent 及运行状态。读的是 Project desired-state，不是集群运行时注册表。
+      entry: operations/list_project_agents.py
+      input_schema:
+        additionalProperties: false
+        properties: {}
+        type: object
+      output_schema:
+        $defs:
+          AgentSummary:
+            additionalProperties: false
+            properties:
+              agent_id:
+                description: 稳定 Agent 标识
+                type: string
+              name:
+                description: 显示名
+                type: string
+              desired_state:
+                description: 期望运行态
+                type: string
+              runtime_status:
+                description: 运行诊断状态
+                type: string
+              runtime_error:
+                default: ''
+                description: 运行错误（若有）
+                type: string
+              manifest_ref:
+                default: ''
+                description: manifest 引用
+                type: string
+            required:
+            - agent_id
+            - name
+            - desired_state
+            - runtime_status
+            type: object
+        additionalProperties: false
+        properties:
+          agents:
+            description: Project 名册中的 Agent
+            items:
+              $ref: '#/$defs/AgentSummary'
+            type: array
+          count:
+            description: 数量
+            type: integer
+        required:
+        - agents
+        - count
+        type: object
+      tags:
+      - agent
+      - discovery
+      - project
+      effects: []
+      permissions: {}
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 60000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+    remove_project_agent:
+      title: Remove Project Agent
+      description: 从当前 Project 移除一个 Agent 定义，并收敛其运行时实例。
+      entry: operations/remove_project_agent.py
+      input_schema:
+        additionalProperties: false
+        properties:
+          agent_name:
+            description: 要移除的 Agent 显示名
+            minLength: 1
+            type: string
+          agent_id:
+            default: ''
+            description: 稳定 Agent 标识；优先于名称匹配
+            type: string
+        required:
+        - agent_name
+        type: object
+      output_schema:
+        additionalProperties: false
+        properties:
+          agent_id:
+            description: 已移除的稳定 Agent 标识
+            type: string
+          agent_name:
+            description: 已移除的 Agent 显示名
+            type: string
+        required:
+        - agent_id
+        - agent_name
+        type: object
+      tags:
+      - agent
+      - lifecycle
+      - project
+      effects:
+      - project:agent-write
+      permissions:
+        require_hitl: true
+      resources: {}
+      execution:
+        mode: request
+        timeout_ms: 120000
+        cancellation: unsupported
+        on_revoke: drain
+        retry: never
+      expose: true
+  skills: {}

@@ -63,8 +63,8 @@ class InstalledAbilityProvider:
                 f"安装包 {package} 有 {len(versions)} 个候选版本，请显式 select_version"
             )
         item = next((item for item in versions if wanted is None or item.version == wanted), None)
-        if item is None or item.namespace == "ghrah":
-            raise ManifestValidationError(f"安装包版本不存在或来源不支持：{package}@{wanted}")
+        if item is None:
+            raise ManifestValidationError(f"安装包版本不存在：{package}@{wanted}")
         return item
 
     def capture(self, package: str, *, version: str | None = None) -> AbilityVersion:
@@ -99,8 +99,6 @@ class InstalledAbilityProvider:
         """只读候选索引；按引用选择时才校验与捕获资源，不加载未选包内容。"""
         result = {}
         for package in self.store.packages():
-            if package.namespace == "ghrah":
-                continue
             if len(package.versions) != 1 and package.full_name not in self._selected:
                 continue
             item = self._resolve(package.full_name)

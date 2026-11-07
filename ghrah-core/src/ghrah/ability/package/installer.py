@@ -38,6 +38,7 @@ import shutil
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,7 @@ from ghrah.ability.package.paths import (
 __all__ = [
     "MAX_ABSOLUTE_UTF16",
     "AbilityInstaller",
+    "InstallOrigin",
     "InstallResult",
     "InstalledRecord",
     "InstallerError",
@@ -95,8 +97,21 @@ __all__ = [
 MAX_ABSOLUTE_UTF16: int = 240
 """安装后绝对路径上限（UTF-16 码元）；给 Windows 默认 ``MAX_PATH=260`` 留余量。"""
 
-_RESERVED_NAMESPACES: frozenset[str] = frozenset({"ghrah", "mcp"})
-"""``ghrah`` 保留给内置包，``mcp`` 保留给 MCP 快照；外部包安装期拒绝。"""
+
+class InstallOrigin(StrEnum):
+    """安装通道：决定保留命名空间的放行边界。
+
+    ``USER``（缺省）：第三方显式安装；``ghrah`` / ``mcp`` 一律拒绝。
+    ``DISTRO``：发行版预装；允许 ``ghrah``（系统自带），仍拒绝 ``mcp``
+    （``mcp`` 是 ``tools/list`` 快照专用槽，与来源无关）。
+    """
+
+    USER = "user"
+    DISTRO = "distro"
+
+
+_MCP_NAMESPACE: str = "mcp"
+_GHRAH_NAMESPACE: str = "ghrah"
 
 _RESERVED_TOOL_NAMES: frozenset[str] = frozenset(
     {"search_tools", "describe_tool", "execute_tool", "run_script"}
@@ -279,9 +294,12 @@ def _content_limits(definition: AbilityDefinition, root: Path) -> CaptureLimits:
 class AbilityInstaller:
     """安装域入口：一个显式安装根上的安装 / 卸载 / 查询 / 校验。"""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self, root: str | Path, *, origin: InstallOrigin = InstallOrigin.USER
+    ) -> None:
         self._root = Path(root)
         self._store = InstalledStore(self._root)
+        self._origin = InstallOrigin(origin)
 
     @property
     def root(self) -> Path:
@@ -292,6 +310,25 @@ class AbilityInstaller:
     def store(self) -> InstalledStore:
         """只读安装存储枚举器。"""
         return self._store
+
+    @property
+    def origin(self) -> InstallOrigin:
+        """本次安装器绑定的信任来源通道。"""
+        return self._origin
+
+    def _reject_reserved_namespace(self, namespace: str) -> None:
+        """按安装通道拒绝保留命名空间；判定依据是通道，不是包自述。"""
+        if namespace == _MCP_NAMESPACE:
+            raise InstallerError(
+                "reserved_namespace",
+                f"namespace {namespace!r} 保留给 MCP 快照，任何安装通道不得使用",
+            )
+        if namespace == _GHRAH_NAMESPACE and self._origin is not InstallOrigin.DISTRO:
+            raise InstallerError(
+                "reserved_namespace",
+                f"namespace {namespace!r} 保留给内置包或发行版预装；"
+                "用户通道不得安装（请经发行版预装通道）",
+            )
 
     # ------------------------------------------------------------------ install
 
@@ -314,11 +351,7 @@ class AbilityInstaller:
             return asyncio.run(self.install_mcp(source_path))
         definition = self._parse_definition_text(raw, source_path)
         namespace = definition.identity.namespace
-        if namespace in _RESERVED_NAMESPACES:
-            raise InstallerError(
-                "reserved_namespace",
-                f"namespace {namespace!r} 保留给内置包或 MCP 快照，外部包不得使用",
-            )
+        self._reject_reserved_namespace(namespace)
         for key in definition.operations:
             if key in _RESERVED_TOOL_NAMES:
                 raise InstallerError(

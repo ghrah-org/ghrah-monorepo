@@ -112,6 +112,13 @@ class BuildResult:
     warnings: tuple[str, ...] = ()
 
 
+def _allow_ghrah(*, builtin: bool, shipped: bool) -> bool:
+    """``--builtin`` 与 ``--shipped`` 在命名空间校验上等价，产物落位不同。"""
+    if builtin and shipped:
+        raise BuildError("--builtin 与 --shipped 互斥；请只选一个")
+    return builtin or shipped
+
+
 def _load_header(raw: str, *, builtin: bool) -> dict[str, Any]:
     """解析并校验 ``ability.yaml`` 头段。"""
     try:
@@ -157,7 +164,10 @@ def _load_header(raw: str, *, builtin: bool) -> dict[str, Any]:
     if identity["namespace"] == "mcp":
         raise BuildError("mcp 命名空间保留给 MCP 快照；source 包不得使用")
     if identity["namespace"] == "ghrah" and not builtin:
-        raise BuildError("ghrah 命名空间保留给内置包；外部包 build 拒绝（内置包请使用 --builtin）")
+        raise BuildError(
+            "ghrah 命名空间保留给内置包或发行版预装包；"
+            "外部包 build 拒绝（内置包请使用 --builtin，预装包请使用 --shipped）"
+        )
     name = identity.get("name")
     if name is not None and not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
         raise BuildError(f"identity.name 非法: {name!r}")
@@ -416,7 +426,9 @@ def _operation_member(key: str, script: Path) -> dict[str, Any]:
     }
 
 
-def _render(root: Path, *, builtin: bool) -> tuple[str, dict[str, Any], list[str]]:
+def _render(
+    root: Path, *, builtin: bool = False, shipped: bool = False
+) -> tuple[str, dict[str, Any], list[str]]:
     definition_path = root / _DEFINITION_NAME
     if not definition_path.is_file():
         raise BuildError(f"{root}: 缺少 {_DEFINITION_NAME}")
@@ -425,7 +437,7 @@ def _render(root: Path, *, builtin: bool) -> tuple[str, dict[str, Any], list[str
         raise BuildError("ability.yaml 含 BOM（须 UTF-8 无 BOM）")
     if "\r" in raw:
         raise BuildError("ability.yaml 含 CR/CRLF（须 LF 换行）")
-    header = _load_header(raw, builtin=builtin)
+    header = _load_header(raw, builtin=_allow_ghrah(builtin=builtin, shipped=shipped))
     files = ensure_portable_tree(root)
     op_files, skill_files = _walk_members(files)
     operations: dict[str, Any] = {}
@@ -462,10 +474,12 @@ def _render(root: Path, *, builtin: bool) -> tuple[str, dict[str, Any], list[str
     return rendered, members, warnings
 
 
-def render(root: Path, *, builtin: bool = False) -> tuple[str, dict[str, Any], list[str]]:
+def render(
+    root: Path, *, builtin: bool = False, shipped: bool = False
+) -> tuple[str, dict[str, Any], list[str]]:
     """读声明并渲染完整 ``ability.yaml`` 文本（不写盘）。"""
     try:
-        return _render(root, builtin=builtin)
+        return _render(root, builtin=builtin, shipped=shipped)
     except PathRuleError as exc:
         raise BuildError(str(exc)) from exc
 
@@ -496,9 +510,9 @@ def _write_atomic(path: Path, text: str) -> None:
                 tmp.unlink(missing_ok=True)
 
 
-def build(root: Path, *, builtin: bool = False) -> BuildResult:
+def build(root: Path, *, builtin: bool = False, shipped: bool = False) -> BuildResult:
     """生成并写回 ``ability.yaml`` 的 ``members``。"""
-    rendered, members, warnings = render(root, builtin=builtin)
+    rendered, members, warnings = render(root, builtin=builtin, shipped=shipped)
     path = root / _DEFINITION_NAME
     changed = path.read_text(encoding="utf-8") != rendered
     if changed:
@@ -511,9 +525,9 @@ def build(root: Path, *, builtin: bool = False) -> BuildResult:
     )
 
 
-def check(root: Path, *, builtin: bool = False) -> BuildResult:
+def check(root: Path, *, builtin: bool = False, shipped: bool = False) -> BuildResult:
     """``--check``：不写盘，索引与声明不一致时抛 :class:`IndexMismatchError`。"""
-    rendered, members, warnings = render(root, builtin=builtin)
+    rendered, members, warnings = render(root, builtin=builtin, shipped=shipped)
     path = root / _DEFINITION_NAME
     current = path.read_text(encoding="utf-8")
     if current != rendered:

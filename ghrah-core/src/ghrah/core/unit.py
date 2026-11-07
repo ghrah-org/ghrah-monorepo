@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ghrah.protocol.types import (
@@ -105,6 +105,7 @@ from ghrah.core.events import (
     SessionDeletedEvent,
 )
 from ghrah.core.hitl import HITLPromiseRegistry
+from ghrah.core.host_command_port import HostCommandPort
 from ghrah.core.room_protocol import SerialRoomBridge
 from ghrah.core.subject_bridge import SubjectCommandBridge
 from ghrah.types.config_types import AgentConfig
@@ -247,6 +248,10 @@ class CoreUnitConfig:
     ability_grant_policy: Any = None
     # 受信 MCP 装配配置；None = 关闭，不读取 agentconf、不发现端点。
     mcp: Any = None
+    # 宿主命令授权表：key = instance_id 或 f"{instance_id}/{member}"；
+    # value = 允许派发的不透明命令名。空表 = 任何成员都不注入 HostCommandPort。
+    # 领域命令名与包身份由装配方（Subject）写入，Core 不解读。
+    host_command_grants: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 # ----------------------------------------------------------------
@@ -788,6 +793,11 @@ class CoreUnit:
         self._subject_bridge: SubjectCommandBridge | None = (
             SubjectCommandBridge(serial) if callable(serial) else None
         )
+        # 宿主命令端口：仅 Subject 宿主（有 serial）时构造；standalone 为 None。
+        # 成员级允许集见 config.host_command_grants，由 _build_ability_call 查表。
+        self._host_command_port = (
+            HostCommandPort(self._subject_bridge) if self._subject_bridge is not None else None
+        )
 
         if (
             self._config.message_manager is not None
@@ -874,6 +884,8 @@ class CoreUnit:
             message_manager=self._config.message_manager,
             builtin_abilities=assembly.is_builtin,
             ability_materializer=startup_materializer,
+            host_command_port=self._host_command_port,
+            host_command_grants=self._config.host_command_grants,
         )
         self._supervisor = supervisor
 

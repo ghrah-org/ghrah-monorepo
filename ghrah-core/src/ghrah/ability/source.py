@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.ability.execution.base import Ability
 from ghrah.ability.loading import ability_catalog
@@ -20,12 +21,29 @@ from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import ManifestStoreProtocol
 from ghrah.manifest.resolver import ManifestResolver
 
+__all__ = ["AbilityOrigin", "BuiltinAbilitySource"]
+
+
+@dataclass(frozen=True)
+class AbilityOrigin:
+    """一个能力包全名的确定来源。
+
+    Attributes:
+        kind: ``builtin`` 走内置树；``installed`` 走安装存储。
+        root: 安装存储根；仅 ``installed`` 时非 ``None``。
+    """
+
+    kind: Literal["builtin", "installed"]
+    root: Path | None = None
+
 
 class BuiltinAbilitySource:
     """显式选择新内置来源，Agent 声明可委托给现有存储。
 
     不持有可独立写入的目录，不启动 Agent，不注册运行端点。实例创建仅供受信
     装配者选择后端；生效授权、成员绑定及内容版本固定由后续运行接入负责。
+
+    包来源一律查 :attr:`_origins` 登记表，不按 ``ghrah.*`` 前缀猜测。
     """
 
     def __init__(
@@ -41,6 +59,32 @@ class BuiltinAbilitySource:
             key: ability_catalog.ability_class(key) for key in ability_catalog.builtin_handlers()
         }
         self.packages = InstalledAbilityProvider(install_root) if install_root is not None else None
+        self._origins = self._build_origins()
+
+    def _build_origins(self) -> dict[str, AbilityOrigin]:
+        """联合登记内置树与安装存储；同全名双源时明确失败。"""
+        origins: dict[str, AbilityOrigin] = {}
+        for item in ability_catalog.load_ability_definitions().values():
+            origins[item.identity.full_name] = AbilityOrigin(kind="builtin")
+        if self.packages is None:
+            return origins
+        install_root = self.packages.store.root
+        builtin_path = builtin_root().path
+        for package in self.packages.store.packages():
+            name = package.full_name
+            if name in origins:
+                raise ManifestValidationError(
+                    f"能力包全名冲突：{name} 同时存在于内置树"
+                    f"（{builtin_path}）与安装存储（{install_root}）；"
+                    "拒绝静默覆盖"
+                )
+            origins[name] = AbilityOrigin(kind="installed", root=install_root)
+        return origins
+
+    @property
+    def origins(self) -> dict[str, AbilityOrigin]:
+        """只读来源登记表（包全名 → 来源）。"""
+        return self._origins
 
     def definitions(self) -> dict[str, AbilityDefinition]:
         """组合内置与显式安装来源的定义；不导入外部实现。"""
@@ -53,8 +97,13 @@ class BuiltinAbilitySource:
         return definitions
 
     def capture_package(self, package: str) -> AbilityVersion:
-        """按确定来源捕获包版本；安装包必须先通过 lock 校验。"""
-        if not package.startswith("ghrah.") and self.packages is not None:
+        """按登记表捕获包版本；安装包必须先通过 lock 校验。"""
+        origin = self._origins.get(package)
+        if origin is None:
+            raise ManifestValidationError(f"能力包来源不可用：{package}")
+        if origin.kind == "installed":
+            if self.packages is None:
+                raise ManifestValidationError(f"能力包来源不可用：{package}")
             return self.packages.capture(package)
         definition = next(
             (
@@ -73,8 +122,12 @@ class BuiltinAbilitySource:
         )
 
     def version_available(self, version: AbilityVersion) -> bool:
-        """内置版本由当前宿主管理；安装版本由包加载器提供动态可用性。"""
-        if version.definition().identity.namespace == "ghrah":
+        """按登记表判定版本是否仍可用。"""
+        name = version.definition().identity.full_name
+        origin = self._origins.get(name)
+        if origin is None:
+            return False
+        if origin.kind == "builtin":
             return True
         return self.packages is not None and self.packages.available(version)
 
@@ -97,13 +150,19 @@ class BuiltinAbilitySource:
         return AbilityManifest.model_validate(matches[0].model_dump())
 
     def load_ability(self, full_name: str) -> AbilityManifest:
-        """按完整成员名读取内置能力，返回隔离的兼容投影。"""
+        """按完整成员名读取能力，返回隔离的兼容投影。"""
         manifest = self._manifests.get(full_name)
-        if manifest is None:
-            if self.packages is not None:
+        if manifest is not None:
+            return AbilityManifest.model_validate(manifest.model_dump())
+        if self.packages is not None:
+            package, _, _member = full_name.rpartition(".")
+            origin = self._origins.get(package)
+            if origin is not None and origin.kind == "installed":
                 return self.packages.manifest(full_name)
-            raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
-        return AbilityManifest.model_validate(manifest.model_dump())
+            # 非 ghrah 安装包（第三方）仍走 Provider；登记表无条目时也尝试。
+            if origin is None and not package.startswith("ghrah."):
+                return self.packages.manifest(full_name)
+        raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
 
     def list_abilities(self, namespace: str | None = None) -> list[str]:
         """列出新增驱动的内置成员，忽略未选用的旧注册表。"""

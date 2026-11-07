@@ -77,6 +77,7 @@ async def test_full_assembly_all_fibers_active(
             "taskstore",
             "task",
             "desired_state",
+            "shipped_abilities",
             "websocket_observer_endpoint",
             "core_cluster_registry",
             "project",

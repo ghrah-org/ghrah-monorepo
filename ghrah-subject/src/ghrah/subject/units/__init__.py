@@ -30,11 +30,11 @@ async def mount_builtin_units(
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
     均启用）下 coexistence = 8（sandbox/manifest_store/skill/ledger/workspace
-    + taskstore + task/desired_state）；full = 15（coexistence 8 +
-    websocket_observer_endpoint/core_cluster_registry/project/room/recovery +
-    room_filter + ability_bridge）。关闭 ``config.taskstore.enabled`` /
-    ``config.room_filter.enabled`` 时对应 unit 不挂载。**逐个挂载并等 ACTIVE**
-    （对齐旧 engine 顺序 start 语义；
+    + taskstore + task/desired_state）；full = 16（coexistence 8 +
+    shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
+    project/ability_control/room/recovery + room_filter + ability_bridge）。
+    关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
+    unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
 
     RoomUnit 在 ProjectUnit 之后（requires PROJECT_MANAGER）、CoreUnit 经
@@ -88,10 +88,14 @@ async def mount_builtin_units(
         from ghrah.subject.units.recovery import RecoveryUnit
         from ghrah.subject.units.room import RoomUnit
         from ghrah.subject.units.room_filter import RoomFilterUnit
+        from ghrah.subject.units.shipped_abilities import ShippedAbilityUnit
         from ghrah.subject.units.websocket_observer_endpoint import (
             WebSocketObserverEndpointUnit,
         )
 
+        # 预装能力包：desired_state 之后、recovery 之前，保证 reconcile
+        # 拉起 Agent 时发行版预装包已就位。
+        units.append(ShippedAbilityUnit(config))
         units.extend(
             [
                 WebSocketObserverEndpointUnit(config),

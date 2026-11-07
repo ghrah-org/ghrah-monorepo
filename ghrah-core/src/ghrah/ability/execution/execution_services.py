@@ -30,6 +30,7 @@ __all__ = [
     "LOOP",
     "MANIFEST_STORE",
     "MCP_RUNTIME",
+    "HOST_COMMAND_PORT",
     "MESSAGE_FACTORY",
     "SKILL_PROVIDER",
     "SUPERVISOR",
@@ -103,6 +104,8 @@ ABILITY_CONTENT = ServiceKey[Any]("ability_content")
 TOOL_SURFACE = ServiceKey[Any]("tool_surface")
 # duck-typed MessageFactory（策略构造消息用）；None = 未接线。
 MESSAGE_FACTORY = ServiceKey[Any]("message_factory")
+# duck-typed ScopedHostCommandPort；None = standalone / 未授权本成员。
+HOST_COMMAND_PORT = ServiceKey[Any]("host_command_port")
 
 
 def build_execution_services(
@@ -116,6 +119,7 @@ def build_execution_services(
     ability_content: Any = None,
     tool_surface: Any = None,
     message_factory: Any = None,
+    host_command_port: Any = None,
 ) -> ExecutionServices:
     """按统一形状组装一次执行的服务表。
 
@@ -132,6 +136,7 @@ def build_execution_services(
         ability_content: 获授内容读取服务。
         tool_surface: 当前受信 Agent/run 的工具面服务。
         message_factory: 消息构造器。
+        host_command_port: 宿主命令端口（scoped）；仅命中 grants 的成员注入。
 
     Returns:
         已装配的服务表。
@@ -156,4 +161,6 @@ def build_execution_services(
         services.set(TOOL_SURFACE, tool_surface)
     if message_factory is not None:
         services.set(MESSAGE_FACTORY, message_factory)
+    if host_command_port is not None:
+        services.set(HOST_COMMAND_PORT, host_command_port)
     return services

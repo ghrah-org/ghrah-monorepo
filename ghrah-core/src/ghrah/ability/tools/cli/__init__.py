@@ -488,7 +488,7 @@ def _print_refresh(payload: Mapping[str, Any]) -> None:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
-    """``build <dir> [--check] [--builtin]``：原样委托 P0 入口，不重写输出与退出码。"""
+    """``build <dir> [--check] [--builtin|--shipped]``：原样委托 P0 入口。"""
     from ghrah.ability.tools.build import main as build_main
 
     argv = [str(args.directory)]
@@ -496,6 +496,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         argv.append("--check")
     if args.builtin:
         argv.append("--builtin")
+    if getattr(args, "shipped", False):
+        argv.append("--shipped")
     return build_main(argv)
 
 
@@ -631,7 +633,11 @@ def _build_parser() -> argparse.ArgumentParser:
     build = verbs.add_parser("build", help="生成并校验 Ability 包的索引（作者侧，不落安装）")
     build.add_argument("directory", metavar="<dir>", type=Path, help="Ability 源包根目录")
     build.add_argument("--check", action="store_true", help="只校验不写盘；索引不一致时退出 1")
-    build.add_argument("--builtin", action="store_true", help="允许内置包的 ghrah 命名空间")
+    build_origin = build.add_mutually_exclusive_group()
+    build_origin.add_argument("--builtin", action="store_true", help="允许内置包的 ghrah 命名空间")
+    build_origin.add_argument(
+        "--shipped", action="store_true", help="允许发行版预装包的 ghrah 命名空间"
+    )
     build.set_defaults(handler=_cmd_build)
 
     install = verbs.add_parser("install", help="把 Ability 包安装到指定安装存储")

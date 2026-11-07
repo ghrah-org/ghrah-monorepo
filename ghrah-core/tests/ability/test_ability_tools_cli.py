@@ -152,6 +152,28 @@ class TestBuild:
         result = _run("build", str(root), "--builtin")
         assert result.returncode == 0, result.stderr
 
+    def test_build_shipped_flag_allows_ghrah(self, tmp_path: Path) -> None:
+        """``--shipped`` 放行 ghrah 命名空间（发行版预装包）。"""
+        import yaml
+
+        root = _copy_package(tmp_path, fixture="reporting")
+        path = root / "ability.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data["identity"]["namespace"] = "ghrah"
+        data["identity"]["name"] = "reporting"
+        # 清掉 members 让 build 重写
+        data.pop("members", None)
+        path.write_text(
+            yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+            newline="\n",
+        )
+        denied = _run("build", str(root))
+        assert denied.returncode == 1
+        assert "ghrah" in denied.stderr
+        ok = _run("build", str(root), "--shipped")
+        assert ok.returncode == 0, ok.stderr
+
     def test_build_missing_dir_exit_2(self, tmp_path: Path) -> None:
         """源包目录不存在：沿用生成器的参数错误退出码 2。"""
         result = _run("build", str(tmp_path / "not-a-package"))

@@ -279,6 +279,42 @@ def test_install_rejects_reserved_namespaces(tmp_path: Path) -> None:
         _assert_error("reserved_namespace", lambda: installer.install(source))
 
 
+def test_distro_origin_allows_ghrah_but_rejects_mcp(tmp_path: Path) -> None:
+    from ghrah.ability.package.installer import InstallOrigin
+
+    store = tmp_path / "store" / "ability"
+    source = _copy_fixture(tmp_path, "reporting")
+
+    def set_ghrah(definition: dict[str, Any]) -> None:
+        definition["identity"]["namespace"] = "ghrah"
+        definition["identity"]["name"] = "reporting"
+
+    _edit_definition(source, set_ghrah)
+    build(source, shipped=True)
+    distro = AbilityInstaller(store, origin=InstallOrigin.DISTRO)
+    result = distro.install(source)
+    assert result.already_installed is False
+    assert (store / "ghrah" / "reporting" / "0.1.0").is_dir()
+
+    mcp_source = _copy_fixture(tmp_path / "mcp-case", "reporting")
+
+    def set_mcp(definition: dict[str, Any]) -> None:
+        definition["identity"]["namespace"] = "mcp"
+        definition["identity"]["name"] = "reporting"
+
+    _edit_definition(mcp_source, set_mcp)
+    _assert_error("reserved_namespace", lambda: distro.install(mcp_source))
+
+
+def test_distro_origin_still_accepts_third_party(tmp_path: Path) -> None:
+    from ghrah.ability.package.installer import InstallOrigin
+
+    installer = AbilityInstaller(tmp_path / "store" / "ability", origin=InstallOrigin.DISTRO)
+    source = _copy_fixture(tmp_path, "reporting")
+    result = installer.install(source)
+    assert result.already_installed is False
+
+
 def test_install_mcp_reports_missing_configuration(tmp_path: Path, monkeypatch) -> None:
     from ghrah.mcp.agentconf_source import AgentconfMcpSource
     from ghrah.mcp.errors import McpConfigError
