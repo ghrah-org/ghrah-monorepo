@@ -33,6 +33,7 @@ import ProjectSelector from "@/components/nav/project-selector.vue";
 import RoomSelector from "@/components/nav/room-selector.vue";
 import ProjectChangesPanel from "@/components/project-changes-panel.vue";
 import ProjectSettingsPanel from "@/components/project-settings-panel.vue";
+import UiIconButton from "@/components/ui/icon-button.vue";
 import SidebarToggle from "@/components/ui/sidebar-toggle.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useSidebarLayout } from "@/composables/useSidebarLayout";
@@ -369,27 +370,30 @@ watch(
     <section class="workspace-main" :aria-label="t('dashboard.workspaceTabs')">
       <div class="workspace-tabs" role="tablist" :aria-label="t('dashboard.openViews')">
         <div class="tabs-scroll">
-          <button
+          <div
             v-for="tab in tabs"
             :key="tab.id"
-            type="button"
             :class="['workspace-tab', { active: activeTabId === tab.id }]"
             role="tab"
+            tabindex="0"
             :aria-selected="activeTabId === tab.id"
             @click="activateTab(tab)"
+            @keydown.enter.prevent="activateTab(tab)"
+            @keydown.space.prevent="activateTab(tab)"
           >
-            <span :class="['tab-kind', tab.kind]">{{ tabIcon(tab.kind) }}</span
-            ><span class="tab-label">{{ tabLabel(tab) }}</span>
-            <span
-              class="tab-close"
-              role="button"
-              tabindex="0"
-              :aria-label="t('dashboard.closeTab', { label: tabLabel(tab) })"
+            <span :class="['tab-kind', tab.kind]">{{ tabIcon(tab.kind) }}</span>
+            <span class="tab-label">{{ tabLabel(tab) }}</span>
+            <UiIconButton
+              variant="ghost"
+              size="xs"
+              :label="t('dashboard.closeTab', { label: tabLabel(tab) })"
               @click.stop="void closeTab(tab)"
-              @keydown.enter.stop="void closeTab(tab)"
-              >×</span
+              @keydown.enter.stop
+              @keydown.space.stop
             >
-          </button>
+              ×
+            </UiIconButton>
+          </div>
         </div>
         <span class="tab-count">{{ t("dashboard.openCount", { count: tabs.length }) }}</span>
       </div>

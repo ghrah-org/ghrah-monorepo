@@ -39,6 +39,15 @@ export default defineConfig({
       "bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-ghost":
       "bg-transparent text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed",
+    "icon-button":
+      "inline-flex shrink-0 items-center justify-center rounded border-none p-0 cursor-pointer text-base leading-none transition-colors duration-200",
+    "icon-button-xs": "icon-button h-[1.375rem] w-[1.375rem]",
+    "icon-button-sm": "icon-button h-7 w-7",
+    "icon-button-md": "icon-button h-8 w-8",
+    "icon-button-ghost":
+      "bg-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100",
+    "icon-button-solid":
+      "bg-[#f0f2f5] text-[#6f7786] hover:bg-[#e3e6ec] hover:text-[#3f4858] dark:bg-[#242a34] dark:text-[#eef0f5] dark:hover:bg-[#262b36]",
     panel: "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded",
     badge: "inline-block px-2 py-0.5 rounded-full text-xs font-medium",
   },
