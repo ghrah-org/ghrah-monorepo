@@ -15,6 +15,7 @@ import SidebarRow from "@/components/ui/sidebar-row.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import UiButton from "@/components/ui/button.vue";
+import UiTextField from "@/components/ui/text-field.vue";
 
 const { t } = useI18n();
 const rooms = useRoomsStore();
@@ -163,12 +164,12 @@ async function runLifecycle() {
       </UiButton>
     </div>
     <form v-if="creating" class="mb-2 flex gap-1" @submit.prevent="submitCreate">
-      <input
+      <UiTextField
         v-model="newName"
         data-autofocus
         type="text"
         :placeholder="t('nav.room.namePlaceholder')"
-        class="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        class="flex-1 min-w-0 px-2 py-1 text-sm dark:text-gray-100"
         @keydown.esc="cancelCreate"
       />
       <UiButton

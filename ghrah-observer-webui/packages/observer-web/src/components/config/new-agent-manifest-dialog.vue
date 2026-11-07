@@ -11,6 +11,7 @@ import { Document, parseDocument } from "yaml";
 import BaseModal from "@/components/ui/base-modal.vue";
 import { useObserver } from "@/composables/useObserver";
 import UiButton from "@/components/ui/button.vue";
+import UiTextField from "@/components/ui/text-field.vue";
 
 const emit = defineEmits<{ close: []; dirtyChange: [dirty: boolean] }>();
 
@@ -243,13 +244,13 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.namespace") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.namespace"
                 data-autofocus
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_.]*[a-z0-9]$"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
                 placeholder="e.g. ghrah.examples"
               />
             </div>
@@ -257,12 +258,12 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.name") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.name"
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_]*$"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
                 placeholder="e.g. designer"
               />
             </div>
@@ -271,10 +272,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.titleField")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.title"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-2 py-1.5 text-sm"
               placeholder="e.g. Designer"
             />
           </div>
@@ -282,10 +283,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.description")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.description"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-2 py-1.5 text-sm"
               :placeholder="t('config.manifest.descriptionPlaceholder')"
             />
           </div>
@@ -293,10 +294,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.tags")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.tags"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-2 py-1.5 text-sm"
               :placeholder="t('config.manifest.tagsPlaceholder')"
             />
           </div>
@@ -312,11 +313,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.endpointName") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.endpoint_name"
                 type="text"
                 required
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
                 placeholder="e.g. gpt-4o-mini"
               />
             </div>
@@ -324,11 +325,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.maxIterations")
               }}</label>
-              <input
+              <UiTextField
                 v-model.number="form.max_iterations"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
               />
             </div>
           </div>
@@ -337,13 +338,13 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.temperature")
               }}</label>
-              <input
+              <UiTextField
                 v-model="form.temperature"
                 type="number"
                 step="0.1"
                 min="0"
                 max="2"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
                 :placeholder="t('config.manifest.temperaturePlaceholder')"
               />
             </div>
@@ -351,11 +352,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.maxTokens")
               }}</label>
-              <input
+              <UiTextField
                 v-model="form.max_tokens"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1.5 text-sm"
                 :placeholder="t('config.manifest.maxTokensPlaceholder')"
               />
             </div>
@@ -367,13 +368,14 @@ async function handleSubmit(save = true) {
           <legend class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
             {{ t("config.manifest.systemPrompt") }}
           </legend>
-          <textarea
+          <UiTextField
             v-model="form.system_prompt"
+            multiline
             required
             rows="4"
-            class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            class="w-full px-2 py-1.5 text-sm font-mono"
             placeholder="You are a helpful assistant."
-          ></textarea>
+          />
         </fieldset>
 
         <!-- Abilities Section -->
@@ -397,11 +399,11 @@ async function handleSubmit(save = true) {
                 <option value="type">{{ t("config.manifest.typeBuiltIn") }}</option>
                 <option value="ref">{{ t("config.manifest.ref") }}</option>
               </select>
-              <input
+              <UiTextField
                 v-model="ability.value"
                 type="text"
                 required
-                class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="flex-1 px-2 py-1.5 text-sm"
                 :placeholder="
                   ability.mode === 'type'
                     ? 'e.g. end_task, conversation'
