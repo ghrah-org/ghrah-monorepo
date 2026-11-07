@@ -156,10 +156,11 @@ async def test_serve_restores_signal_handlers_when_assembly_fails(
         raise marker
 
     monkeypatch.setattr(assembly_module, "assemble_subject", _boom)
-    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    watched = app_module._stop_signals()
+    before = {sig: signal.getsignal(sig) for sig in watched}
     with pytest.raises(RuntimeError, match="assembly boom"):
         await app_module.serve()
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in watched:
         assert signal.getsignal(sig) is before[sig]
 
 
@@ -184,3 +185,55 @@ async def test_serve_degrades_when_signal_handlers_cannot_be_installed(
         patched.setattr(signal, "signal", _refuse)
         with pytest.raises(RuntimeError, match="assembly boom"):
             await app_module.serve()
+
+
+def test_stop_signals_include_sigbreak_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SIGBREAK 只在 signal 模块提供该常量时进入停机信号集。"""
+    baseline = app_module._stop_signals()
+    assert signal.SIGINT in baseline
+    assert signal.SIGTERM in baseline
+    if hasattr(signal, "SIGBREAK"):
+        assert signal.SIGBREAK in baseline
+        return
+    assert set(baseline) == {signal.SIGINT, signal.SIGTERM}
+    monkeypatch.setattr(signal, "SIGBREAK", 21, raising=False)
+    assert app_module._stop_signals() == (signal.SIGINT, signal.SIGTERM, 21)
+
+
+def test_windows_replay_does_not_kill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 收尾后正常返回：os.kill 对这几个信号是 TerminateProcess。"""
+    actions: list[tuple[object, ...]] = []
+
+    def _signal(sig: int, handler: object) -> object:
+        actions.append(("signal", sig, handler))
+        return signal.SIG_DFL
+
+    def _kill(pid: int, sig: int) -> None:
+        actions.append(("kill", pid, sig))
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(signal, "signal", _signal)
+    monkeypatch.setattr(os, "kill", _kill)
+    app_module._replay_stop_signals([int(signal.SIGINT), int(signal.SIGTERM)])
+    assert actions == []
+
+
+def test_posix_replay_resets_default_and_kills(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSIX 收尾后把处理器设回默认处置，再向自己补发信号。"""
+    recorded: list[tuple[object, ...]] = []
+
+    def _signal(sig: int, handler: object) -> object:
+        recorded.append(("signal", sig, handler))
+        return signal.SIG_DFL
+
+    def _kill(pid: int, sig: int) -> None:
+        recorded.append(("kill", pid, sig))
+
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(signal, "signal", _signal)
+    monkeypatch.setattr(os, "kill", _kill)
+    app_module._replay_stop_signals([int(signal.SIGTERM)])
+    assert recorded == [
+        ("signal", signal.SIGTERM, signal.SIG_DFL),
+        ("kill", os.getpid(), signal.SIGTERM),
+    ]

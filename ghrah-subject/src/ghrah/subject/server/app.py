@@ -61,11 +61,48 @@ def create_app(
     return unit.app
 
 
+def _stop_signals() -> tuple[int, ...]:
+    """uvicorn 会在停机后重放的信号。
+
+    POSIX 上是 SIGINT 与 SIGTERM。Windows 另有 SIGBREAK（Ctrl+Break）；
+    该常量只存在于 Windows 的 signal 模块。
+    """
+    import signal
+
+    signals = [signal.SIGINT, signal.SIGTERM]
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signals.append(sigbreak)
+    return tuple(signals)
+
+
+def _replay_stop_signals(deferred: list[int]) -> None:
+    """Context 收尾完成后补发停止信号。
+
+    POSIX：把处理器设回默认处置再 ``os.kill`` 自己，父进程看到负信号号。
+    Windows 的 ``os.kill`` 对 SIGINT / SIGTERM / SIGBREAK 是 TerminateProcess，
+    会砍掉解释器剩余收尾；这里直接返回，进程以退出码 0 结束。
+    """
+    import contextlib
+    import os
+    import signal
+
+    if not deferred:
+        return
+    if os.name == "nt":
+        logger.info("收到停止信号 %s：Context 收尾完成，进程正常返回", deferred)
+        return
+    logger.info("收到停止信号 %s：Context 收尾完成，按信号退出", deferred)
+    for sig in deferred:
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(sig, signal.SIG_DFL)
+        os.kill(os.getpid(), sig)
+
+
 async def serve() -> None:
     """启动 Subject Observer 服务器（Ouroboros 装配 + uvicorn）。"""
     import asyncio
     import contextlib
-    import os
     import signal
 
     import uvicorn
@@ -78,21 +115,22 @@ async def serve() -> None:
     subject_config = SubjectConfig.from_env()
 
     # uvicorn 0.5x 的 Server.capture_signals 会在优雅停机后恢复原信号处理器，并
-    # 重放捕获到的 SIGTERM/SIGINT（"try to trigger the expected behaviour now"）。
-    # 进程启动时的原处理器是默认处置，重放会直接终止进程，于是下面
-    # ``async with Context()`` 的 __aexit__ 永不执行——unit.stop →
-    # Supervisor.shutdown → 能力启动注册的 release 全部被跳过，注册占位残留，
-    # 下次启动 reconcile 重 spawn 同一稳定 agent_id 时抛 conflict。
-    # 先把信号登记成"只记录不终止"的处理器：uvicorn 会把它当作原处理器在重放前
-    # 恢复，重放落回这里被吞下；等 Context 退出、各 unit 收尾完成后，再按原语义
-    # 补发信号，保留调用方期望的退出码约定。
+    # 重放捕获到的信号（"try to trigger the expected behaviour now"）。POSIX 上是
+    # SIGTERM/SIGINT；Windows 上还有 SIGBREAK（Ctrl+Break）。进程启动时的原处理器
+    # 是默认处置，重放会直接终止进程，于是下面 ``async with Context()`` 的
+    # __aexit__ 永不执行——unit.stop → Supervisor.shutdown → 能力启动注册的
+    # release 全部被跳过，注册占位残留，下次启动 reconcile 重 spawn 同一稳定
+    # agent_id 时抛 conflict。
+    # 先把这些信号登记成"只记录不终止"的处理器：uvicorn 会把它当作原处理器在重放前
+    # 恢复，重放落回这里被吞下。Context 退出、各 unit 收尾完成后，POSIX 再按默认
+    # 处置补发信号，保留负信号号退出码；Windows 直接返回。
     deferred: list[int] = []
 
     def _defer_termination(signum: int, _frame: object) -> None:
         deferred.append(signum)
 
     previous_handlers: dict[int, object] = {}
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in _stop_signals():
         try:
             previous_handlers[sig] = signal.signal(sig, _defer_termination)
         except ValueError, OSError:
@@ -123,12 +161,7 @@ async def serve() -> None:
         for sig, handler in previous_handlers.items():
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, handler)
-    if deferred:
-        logger.info("收到停止信号 %s：Context 收尾完成，按原语义退出", deferred)
-    for sig in deferred:
-        with contextlib.suppress(ValueError, OSError):
-            signal.signal(sig, signal.SIG_DFL)
-        os.kill(os.getpid(), sig)
+    _replay_stop_signals(deferred)
 
 
 def main() -> None:
