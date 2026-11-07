@@ -204,7 +204,7 @@ class ExecuteCommandAbility(Ability):
                 data={"error": "command is required"},
             )
 
-        verdict = self._checker.check_command(command)
+        verdict = self._checker.check_command(command, working_dir=working_dir)
         if verdict.category == CommandSafetyCategory.DANGEROUS:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,

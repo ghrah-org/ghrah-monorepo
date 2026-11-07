@@ -164,6 +164,8 @@ def _instantiate_ability(
     if handler == "execute_command":
         command_checker, hooks = _make_command_approval(
             permissions,
+            workspace_root=workspace_root,
+            template_vars=template_vars,
             auto_approved=auto_approved,
             require_approval_by_default=require_approval_by_default,
             command_runner=command_runner,
@@ -242,6 +244,8 @@ def _make_fs_permission_checker(
 def _make_command_approval(
     permissions: Any,
     *,
+    workspace_root: str | None,
+    template_vars: dict[str, str],
     auto_approved: bool,
     require_approval_by_default: bool,
     command_runner: Any,
@@ -253,7 +257,20 @@ def _make_command_approval(
         require_approval = False
     else:
         require_approval = bool(permissions.require_hitl) or require_approval_by_default
-    command_checker = CommandSafetyChecker(require_approval=require_approval)
+    fs_checker = None
+    if getattr(permissions, "fs_write", False) and not getattr(permissions, "fs_read_only", False):
+        fs_checker = _make_fs_permission_checker(
+            permissions,
+            workspace_root=workspace_root,
+            template_vars=template_vars,
+            auto_approved=auto_approved,
+            require_approval_by_default=require_approval_by_default,
+        )
+    command_checker = CommandSafetyChecker(
+        require_approval=require_approval,
+        fs_checker=fs_checker,
+        workspace_root=workspace_root,
+    )
     # 部署方 safe 白名单扩展（只增不减，与内置并集）
     if safe_extra_commands or safe_extra_sub_commands:
         sub_map = dict(safe_extra_sub_commands) if safe_extra_sub_commands else None

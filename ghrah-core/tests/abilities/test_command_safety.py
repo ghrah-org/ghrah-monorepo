@@ -537,6 +537,72 @@ def test_phase2_legacy_leaks_are_closed(command):
     assert CommandSafetyChecker().check_command(command).category is not CommandSafetyCategory.SAFE
 
 
+def _workspace_checker(root, *, read_only: bool = False):
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+    return CommandSafetyChecker(
+        fs_checker=FSPermissionChecker(
+            workspace_root=str(root),
+            sandbox_roots=(root,),
+            require_approval=True,
+            read_only=read_only,
+        ),
+        workspace_root=str(root),
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir -p a",
+        "touch a/f",
+        "tee a/out",
+        "echo x > a/f",
+        "git add a",
+        "git commit -m x",
+    ],
+)
+def test_phase3_in_workspace_write_is_safe(tmp_path, command: str) -> None:
+    """阶段 3：工作区内 LOCAL_EFFECTS 写入与文件工具同一 FS 检查后自动放行。"""
+    verdict = _workspace_checker(tmp_path).check_command(command, working_dir=str(tmp_path))
+    assert verdict.category is CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir ../outside",
+        "echo x > /etc/passwd",
+        "git worktree add ../wt",
+    ],
+)
+def test_phase3_outside_write_is_not_safe(tmp_path, command: str) -> None:
+    verdict = _workspace_checker(tmp_path).check_command(command, working_dir=str(tmp_path))
+    assert verdict.category is not CommandSafetyCategory.SAFE
+
+
+def test_phase3_rm_inside_workspace_stays_dangerous(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path).check_command("rm -rf a", working_dir=str(tmp_path))
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+def test_phase3_readonly_grant_does_not_auto_approve_writes(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path, read_only=True).check_command(
+        "mkdir -p a", working_dir=str(tmp_path)
+    )
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+def test_phase3_without_fs_checker_write_stays_hitl() -> None:
+    verdict = CommandSafetyChecker().check_command("mkdir -p a")
+    assert verdict.category is CommandSafetyCategory.REQUIRE_HITL
+
+
+def test_phase3_relative_path_uses_workspace_root(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path).check_command("touch a/f")
+    assert verdict.category is CommandSafetyCategory.SAFE
+
+
 def test_node_version_is_safe_via_extends() -> None:
     verdict = CommandSafetyChecker().check_command("node --version")
     assert verdict.category is CommandSafetyCategory.SAFE

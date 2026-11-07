@@ -19,7 +19,9 @@
 6. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
    LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
 7. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
-8. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
+8. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
+   范围内则自动批准；越界硬拒绝；无法投影则继续
+9. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
 
 from __future__ import annotations
@@ -41,10 +43,12 @@ from ghrah.ability.permissions.bash_classify_frontend import (
     segment_base_sub,
 )
 from ghrah.ability.permissions.command_scope import command_entry_covers, parse_command_entry
+from ghrah.ability.permissions.shell_write_projection import try_workspace_write_approval
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.invocation import OperationCall
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
     from ghrah.types.results import ActionResult
 
 logger = logging.getLogger(__name__)
@@ -255,6 +259,8 @@ class CommandSafetyChecker:
         allowed_commands: tuple[str, ...] | list[str] | None = None,
         denied_commands: tuple[str, ...] | list[str] | None = None,
         deny_out_of_scope: bool = False,
+        fs_checker: FSPermissionChecker | None = None,
+        workspace_root: str | None = None,
     ) -> None:
         self._safe_commands = safe_commands if safe_commands is not None else DEFAULT_SAFE_COMMANDS
         self._dangerous_commands = (
@@ -273,6 +279,8 @@ class CommandSafetyChecker:
         self._allowed_commands = None if allowed_commands is None else tuple(allowed_commands)
         self._denied_commands = tuple(denied_commands or ())
         self._deny_out_of_scope = deny_out_of_scope
+        self._fs_checker = fs_checker
+        self._workspace_root = workspace_root
 
     def extend_safe_lists(
         self,
@@ -296,8 +304,13 @@ class CommandSafetyChecker:
                 merged[base.lower()] = merged.get(base.lower(), set()) | {s.lower() for s in subs}
             self._safe_sub_commands = merged
 
-    def check_command(self, command: str) -> CommandSafetyVerdict:
-        """检查命令安全性。"""
+    def check_command(
+        self, command: str, *, working_dir: str | None = None
+    ) -> CommandSafetyVerdict:
+        """检查命令安全性。
+
+        ``working_dir`` 是相对写路径的解析起点；缺省时用注入的 ``workspace_root``。
+        """
         if not command or not command.strip():
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
@@ -381,6 +394,15 @@ class CommandSafetyChecker:
                 reason=f"Unknown command structure cannot auto-execute: {command}",
             )
 
+        projected = self._project_workspace_write(
+            expression,
+            working_dir=working_dir,
+            base_command=primary_base,
+            sub_command=primary_sub,
+        )
+        if projected is not None:
+            return projected
+
         if self._require_approval:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.REQUIRE_HITL,
@@ -402,6 +424,35 @@ class CommandSafetyChecker:
             base_command=primary_base,
             sub_command=primary_sub,
             reason=f"Approval not required: {primary_base}",
+        )
+
+    def _project_workspace_write(
+        self,
+        expression: Any,
+        *,
+        working_dir: str | None,
+        base_command: str,
+        sub_command: str | None,
+    ) -> CommandSafetyVerdict | None:
+        projected = try_workspace_write_approval(
+            expression,
+            fs_checker=self._fs_checker,
+            workspace_root=self._workspace_root,
+            working_dir=working_dir,
+        )
+        if projected is None:
+            return None
+        if projected.kind == "safe":
+            category = CommandSafetyCategory.SAFE
+        elif projected.kind == "dangerous":
+            category = CommandSafetyCategory.DANGEROUS
+        else:
+            category = CommandSafetyCategory.REQUIRE_HITL
+        return CommandSafetyVerdict(
+            category=category,
+            base_command=base_command,
+            sub_command=sub_command,
+            reason=projected.reason,
         )
 
     def _any_segment_in_scope(self, entries: tuple[str, ...], segments: list[Any]) -> bool:
@@ -573,7 +624,8 @@ class CommandApprovalHook(Hook):
     ) -> HookResult:
         tool_args = call.arguments
         command = tool_args.get("command", "")
-        verdict = self._checker.check_command(command)
+        working_dir = tool_args.get("working_dir")
+        verdict = self._checker.check_command(command, working_dir=working_dir)
 
         if verdict.category == CommandSafetyCategory.SAFE:
             return HookResult.continue_()
