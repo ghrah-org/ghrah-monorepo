@@ -25,8 +25,8 @@ from ghrah.types.results import ActionOutcome
 
 from ghrah.subject.config import AbilityConfig, SubjectConfig
 from ghrah.subject.core_cluster.registry import (
-    PROJECT_AGENT_MANAGE_INSTANCE_ID,
     _PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
+    PROJECT_AGENT_MANAGE_INSTANCE_ID,
 )
 from ghrah.subject.units.shipped_abilities import ShippedAbilityUnit
 
