@@ -5,14 +5,16 @@
 import {
   AbilityAdminViewSchema,
   AbilityChangesPageSchema,
+  AbilityTreeChangeResultSchema,
   AbilityTreeViewSchema,
 } from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setAbilityControlClientFactory } from "../ability-client.js";
-import type { AbilityControlClient } from "../ability-control.js";
-import { useAbilityAdminStore } from "./ability-admin.js";
+import { AbilityConflictError, type AbilityControlClient } from "../ability-control.js";
+import { HttpError } from "../http.js";
+import { replacementGrant, useAbilityAdminStore } from "./ability-admin.js";
 
 const tree = AbilityTreeViewSchema.parse({
   project_id: "p1",
@@ -170,5 +172,68 @@ describe("useAbilityAdminStore", () => {
     await store.markStale("p1", "a1");
     expect(treeRead).toHaveBeenCalledTimes(3);
     expect(store.record("p1", "a1")?.stale).toBe(true);
+  });
+
+  it("rereads admin after a grant replacement and does not repeat a conflict", async () => {
+    const updated = AbilityTreeViewSchema.parse({ ...tree, revision: 5 });
+    const putGrant = vi.fn(async () =>
+      AbilityTreeChangeResultSchema.parse({ view: updated, revision: 5 }),
+    );
+    const adminRead = vi
+      .fn()
+      .mockResolvedValueOnce(admin)
+      .mockResolvedValueOnce(AbilityAdminViewSchema.parse({ ...admin, revision: 5 }));
+    setAbilityControlClientFactory(() =>
+      client({ putGrant, admin: adminRead, tree: vi.fn(async () => updated) }),
+    );
+    const store = useAbilityAdminStore();
+    await store.load("p1", "a1");
+    const request = replacementGrant(admin.grants[0]!, admin.revision, {
+      members: ["operations/read_file"],
+      axes: [{ member: "operations/read_file", visible: true, available: false }],
+    });
+    expect(request.members).toEqual(["read_file"]);
+    expect(request.policy).toBeNull();
+    expect(request.whole_container).toBe(false);
+    await store.replaceGrant("p1", "a1", request);
+    expect(putGrant).toHaveBeenCalledTimes(1);
+    expect(putGrant).toHaveBeenCalledWith("a1", request);
+    expect(adminRead).toHaveBeenCalledTimes(2);
+    expect(store.record("p1", "a1")?.revision).toBe(5);
+    expect(store.record("p1", "a1")?.conflict).toBe(false);
+
+    putGrant.mockRejectedValueOnce(
+      new AbilityConflictError(
+        new HttpError({
+          code: "conflict",
+          status: 409,
+          message: "relation revision changed",
+          detail: { revision: 9, view: AbilityTreeViewSchema.parse({ ...tree, revision: 9 }) },
+        }),
+      ),
+    );
+    await store.replaceGrant("p1", "a1", { ...request, expected_revision: 5 });
+    expect(putGrant).toHaveBeenCalledTimes(2);
+    expect(adminRead).toHaveBeenCalledTimes(2);
+    expect(store.record("p1", "a1")?.conflict).toBe(true);
+    expect(store.record("p1", "a1")?.revision).toBe(9);
+    expect(store.record("p1", "a1")?.tree?.revision).toBe(9);
+    expect(store.record("p1", "a1")?.failed).toBe(false);
+  });
+
+  it("keeps skill content when replacing an operation grant", () => {
+    const request = replacementGrant(
+      {
+        ...admin.grants[0]!,
+        content: ["skill/files", "skill/files/assets/guide"],
+        roots: ["/workspace"],
+      },
+      4,
+      { members: ["read_file"], axes: [] },
+    );
+    expect(request.skills).toEqual([
+      { key: "files", body: true, assets: ["guide"], references: [], scripts: [] },
+    ]);
+    expect(request.allowed_roots).toEqual(["/workspace"]);
   });
 });

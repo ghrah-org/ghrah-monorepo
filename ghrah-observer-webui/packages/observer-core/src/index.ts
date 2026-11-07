@@ -81,6 +81,8 @@ export {
   abilityAdminKey,
   type AbilityAdminRecord,
   type AbilityFocus,
+  grantOperationKeys,
+  replacementGrant,
   useAbilityAdminStore,
 } from "./stores/ability-admin.js";
 export { useAbilityPackagesStore } from "./stores/ability-packages.js";

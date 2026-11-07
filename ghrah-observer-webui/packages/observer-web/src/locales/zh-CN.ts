@@ -830,6 +830,9 @@ export default {
       available: "可用",
       hidden: "隐藏",
       unavailable: "不可用",
+      operations: "已获授操作",
+      save: "保存授权",
+      revoke: "撤销授权",
     },
     tree: {
       empty: "没有运行时能力树。",
@@ -843,7 +846,14 @@ export default {
       pendingRemoved: "待移除：{tools}",
       mode: "工具面模式 {mode}",
       readonly: "工具面只读。",
+      selection: "工具选择写在授权关系上，在这个 Agent 下次启动后生效。",
+      visibleNotExecutable: "可见但不可执行。",
     },
+    tools: {
+      selected: "提供给模型",
+    },
+    respawn: "这些变更在这个 Agent 下次启动后生效。",
+    conflict: "关系已变化。请核对修订 {revision} 后再提交。",
     versions: {
       current: "版本 {digest}",
       unavailable: "版本选择和包目录都不可用。",

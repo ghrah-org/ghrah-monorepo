@@ -2,11 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AbilityAdminView, AbilityChangeView, AbilityTreeView } from "@ghrah/protocol";
+import type {
+  AbilityAdminView,
+  AbilityChangeView,
+  AbilityGrantView,
+  AbilityTreeView,
+  BindToolRequest,
+  GrantAbilityRequest,
+  MemberAxes,
+  SkillReadScope,
+} from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { ref, triggerRef } from "vue";
 
 import { abilityControlClient } from "../ability-client.js";
+import { AbilityConflictError } from "../ability-control.js";
 
 export function abilityAdminKey(projectId: string, agentId: string): string {
   return `${projectId}:${agentId}`;
@@ -24,6 +34,7 @@ export interface AbilityAdminRecord {
   loading: boolean;
   stale: boolean;
   failed: boolean;
+  conflict: boolean;
   errorMessage: string | null;
   loadedAt: number | null;
 }
@@ -48,6 +59,7 @@ function blank(projectId: string, agentId: string): AbilityAdminRecord {
     loading: false,
     stale: false,
     failed: false,
+    conflict: false,
     errorMessage: null,
     loadedAt: null,
   };
@@ -55,6 +67,75 @@ function blank(projectId: string, agentId: string): AbilityAdminRecord {
 
 function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "request failed";
+}
+
+const OPERATION_KEY = /^[a-z][a-z0-9_-]{0,63}$/;
+const OPERATION_ADDRESS = /^operations\/([a-z][a-z0-9_-]{0,63})$/;
+const CONTENT_ADDRESS =
+  /^skill\/([a-z][a-z0-9_-]{0,63})(?:\/(assets|references|scripts)\/([a-z][a-z0-9_-]{0,63}))?$/;
+
+function operationKey(member: string): string | null {
+  if (OPERATION_KEY.test(member)) return member;
+  return OPERATION_ADDRESS.exec(member)?.[1] ?? null;
+}
+
+/** 把授权视图里的成员收成可提交的 Operation 键。带前缀的地址只取键。 */
+export function grantOperationKeys(members: readonly string[]): string[] {
+  const keys: string[] = [];
+  for (const member of members) {
+    const key = operationKey(member);
+    if (key && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+function skillsFromContent(content: readonly string[]): SkillReadScope[] {
+  const scopes = new Map<
+    string,
+    { body: boolean; assets: string[]; references: string[]; scripts: string[] }
+  >();
+  for (const item of content) {
+    const match = CONTENT_ADDRESS.exec(item);
+    if (!match?.[1]) continue;
+    const scope = scopes.get(match[1]) ?? { body: false, assets: [], references: [], scripts: [] };
+    const role = match[2];
+    if (!role) scope.body = true;
+    else if (match[3] && (role === "assets" || role === "references" || role === "scripts")) {
+      scope[role].push(match[3]);
+    }
+    scopes.set(match[1], scope);
+  }
+  return [...scopes.entries()].map(([key, scope]) => ({
+    key,
+    body: scope.body,
+    assets: scope.assets,
+    references: scope.references,
+    scripts: scope.scripts,
+  }));
+}
+
+/** 用当前授权的实例、根路径和内容范围组装整条替换请求，不新增成员。 */
+export function replacementGrant(
+  grant: AbilityGrantView,
+  expectedRevision: number,
+  selection: { members: readonly string[]; axes: readonly MemberAxes[] },
+): GrantAbilityRequest {
+  const members = grantOperationKeys(selection.members);
+  const allowed = new Set(members.map((key) => `operations/${key}`));
+  return {
+    alias: grant.alias,
+    instance_id: grant.instance_id,
+    members,
+    allowed_roots: [...grant.roots],
+    skill: null,
+    skills: skillsFromContent(grant.content),
+    whole_container: false,
+    axes: selection.axes.filter(
+      (axis) => allowed.has(axis.member) || axis.member.startsWith("skill/"),
+    ),
+    policy: null,
+    expected_revision: expectedRevision,
+  };
 }
 
 export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
@@ -160,6 +241,7 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
         entry.hasMore = changesResult.value.has_more;
       }
       entry.stale = false;
+      entry.conflict = false;
       entry.loadedAt = Date.now();
     } catch (error) {
       if (generation.get(key) !== current) return;
@@ -194,6 +276,82 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
       entry.loading = false;
       publish();
     }
+  }
+
+  async function settleWrite(
+    projectId: string,
+    agentId: string,
+    action: () => Promise<{ view: AbilityTreeView | null; revision: number }>,
+  ): Promise<void> {
+    const entry = record(projectId, agentId);
+    if (!entry || entry.revision === null || entry.loading) return;
+    entry.loading = true;
+    entry.failed = false;
+    entry.errorMessage = null;
+    publish();
+    try {
+      const result = await action();
+      entry.conflict = false;
+      entry.revision = result.revision;
+      if (result.view) entry.tree = result.view;
+      publish();
+    } catch (error) {
+      if (error instanceof AbilityConflictError) {
+        entry.conflict = true;
+        entry.failed = false;
+        if (error.revision !== undefined) entry.revision = error.revision;
+        if (error.view) entry.tree = error.view;
+        entry.errorMessage = error.message;
+        entry.loading = false;
+        publish();
+        return;
+      }
+      entry.failed = true;
+      entry.errorMessage = errorText(error);
+      entry.loading = false;
+      publish();
+      return;
+    }
+    await load(projectId, agentId);
+  }
+
+  function replaceGrant(
+    projectId: string,
+    agentId: string,
+    request: GrantAbilityRequest,
+  ): Promise<void> {
+    return settleWrite(projectId, agentId, () =>
+      abilityControlClient(projectId).putGrant(agentId, request),
+    );
+  }
+
+  function revokeGrant(projectId: string, agentId: string, alias: string): Promise<void> {
+    const revision = record(projectId, agentId)?.revision;
+    if (revision === null || revision === undefined) return Promise.resolve();
+    return settleWrite(projectId, agentId, () =>
+      abilityControlClient(projectId).revokeGrant(agentId, {
+        alias,
+        expected_revision: revision,
+        members: null,
+      }),
+    );
+  }
+
+  function bindTool(projectId: string, agentId: string, request: BindToolRequest): Promise<void> {
+    return settleWrite(projectId, agentId, () =>
+      abilityControlClient(projectId).bindTool(agentId, request),
+    );
+  }
+
+  function unbindTool(projectId: string, agentId: string, toolName: string): Promise<void> {
+    const revision = record(projectId, agentId)?.revision;
+    if (revision === null || revision === undefined) return Promise.resolve();
+    return settleWrite(projectId, agentId, () =>
+      abilityControlClient(projectId).unbindTool(agentId, {
+        tool_name: toolName,
+        expected_revision: revision,
+      }),
+    );
   }
 
   async function markStale(projectId: string, agentId: string): Promise<void> {
@@ -234,6 +392,10 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
     setVisible,
     load,
     loadMore,
+    replaceGrant,
+    revokeGrant,
+    bindTool,
+    unbindTool,
     markStale,
     reloadVisible,
     clearProject,

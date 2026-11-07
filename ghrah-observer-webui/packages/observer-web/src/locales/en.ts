@@ -865,6 +865,9 @@ export default {
       available: "Available",
       hidden: "Hidden",
       unavailable: "Unavailable",
+      operations: "Granted operations",
+      save: "Save grant",
+      revoke: "Revoke grant",
     },
     tree: {
       empty: "No runtime ability tree.",
@@ -878,7 +881,15 @@ export default {
       pendingRemoved: "Pending remove: {tools}",
       mode: "Surface mode {mode}",
       readonly: "Tool surface is read only.",
+      selection:
+        "Tool selection is stored on the relation and applies the next time this agent starts.",
+      visibleNotExecutable: "Visible but not executable.",
     },
+    tools: {
+      selected: "Selected for the model",
+    },
+    respawn: "These changes apply the next time this agent starts.",
+    conflict: "The relation changed. Review revision {revision} and submit again.",
     versions: {
       current: "Version {digest}",
       unavailable: "Version selection and the package catalog are not available.",

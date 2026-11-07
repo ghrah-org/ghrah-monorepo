@@ -12,6 +12,9 @@ import SchemeAbilitiesPanel from "@/components/scheme-abilities-panel.vue";
 import AbilityAdminView from "./ability-admin-view.vue";
 import AbilityChangesView from "./ability-changes-view.vue";
 import AbilityTreeView from "./ability-tree-view.vue";
+import GrantEditor from "./grant-editor.vue";
+import RespawnBanner from "./respawn-banner.vue";
+import ToolSelector from "./tool-selector.vue";
 
 const props = defineProps<{ projectId: string; agentId: string }>();
 const admin = useAbilityAdminStore();
@@ -27,6 +30,8 @@ const record = computed(() => {
   return {
     loading: current.loading,
     failed: current.failed,
+    conflict: current.conflict,
+    revision: current.revision,
     admin: current.admin,
     tree: current.tree,
     changes: current.changes.slice(),
@@ -35,6 +40,11 @@ const record = computed(() => {
 });
 const treeEnabled = computed(() => packages.status?.features.tree === true);
 const view = computed(() => record.value?.admin ?? null);
+const canWrite = computed(() => {
+  const status = packages.status;
+  if (!status || status.ability_source === "legacy" || status.legacy_deprecated) return false;
+  return status.features.grants_write === true;
+});
 
 function show() {
   if (shown) return;
@@ -90,6 +100,11 @@ onUnmounted(hide);
       >
         {{ t("assembly.retry") }}
       </button>
+      <RespawnBanner
+        :requires-respawn="view?.lifecycle.requires_respawn === true"
+        :conflict="record?.conflict === true"
+        :revision="record?.revision ?? view?.revision ?? null"
+      />
       <div class="assembly-tabs" role="tablist">
         <button
           v-for="name in tabs"
@@ -123,10 +138,34 @@ onUnmounted(hide);
         <p v-else>{{ t("assembly.overview.noPolicy") }}</p>
         <p>{{ t("assembly.overview.effectiveOnly") }}</p>
       </div>
-      <AbilityAdminView v-else-if="tab === 'grants' && view" :admin="view" />
+      <div v-else-if="tab === 'grants' && view" class="assembly-detail-body">
+        <template v-if="canWrite">
+          <GrantEditor
+            v-for="grant in view.grants"
+            :key="grant.alias"
+            :grant="grant"
+            :expected-revision="record?.revision ?? view.revision"
+            :busy="record?.loading === true"
+            @save="admin.replaceGrant(projectId, agentId, $event)"
+            @revoke="admin.revokeGrant(projectId, agentId, grant.alias)"
+          />
+          <p v-if="view.grants.length === 0">{{ t("assembly.grants.empty") }}</p>
+        </template>
+        <AbilityAdminView v-else :admin="view" />
+      </div>
       <div v-else-if="tab === 'tools'" class="assembly-detail-body">
         <template v-if="view">
-          <p>{{ t("assembly.surface.readonly") }}</p>
+          <p v-if="canWrite">{{ t("assembly.surface.selection") }}</p>
+          <p v-else>{{ t("assembly.surface.readonly") }}</p>
+          <ToolSelector
+            v-if="canWrite"
+            :grants="view.grants"
+            :bound-tools="view.bound_tools"
+            :expected-revision="record?.revision ?? view.revision"
+            :busy="record?.loading === true"
+            @bind="admin.bindTool(projectId, agentId, $event)"
+            @unbind="admin.unbindTool(projectId, agentId, $event)"
+          />
           <p>{{ t("assembly.surface.mode", { mode: view.surface.mode }) }}</p>
           <p>
             {{ t("assembly.surface.effective") }}
@@ -137,6 +176,9 @@ onUnmounted(hide);
             {{ view.surface.current_runtime.join(", ") }}
           </p>
           <p v-else>{{ t("assembly.surface.runtimeMissing") }}</p>
+          <p v-if="view.surface.effective.some((entry) => !entry.available)">
+            {{ t("assembly.surface.visibleNotExecutable") }}
+          </p>
           <p>
             {{
               t("assembly.surface.pendingAdded", {
