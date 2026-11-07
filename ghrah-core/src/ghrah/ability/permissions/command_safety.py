@@ -10,13 +10,14 @@
 - CommandSafetyChecker: 命令安全分类器（bash-classify 前端 + 范围外壳）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型（判定顺序，2026-11-07 阶段 1）：
+分类模型（判定顺序，2026-11-07 阶段 2）：
 1. 空命令 → 硬拒绝
 2. ``denied_commands`` 命中任一段 → 硬拒绝
-3. bash-classify（仓内 YAML 覆盖）判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
+3. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
 4. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
-5. 整式 READONLY+LOW（无 parse_warnings）→ 自动批准
-6. 各段均落在部署级 SAFE 名单（含 ``extend_safe_lists``；无重定向）→ 自动批准
+5. 整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
+6. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
+   LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
 7. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
 8. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
@@ -84,7 +85,6 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "stat",
     "wc",
     "ls",
-    "find",
     "tree",
     "pwd",
     "du",
@@ -100,7 +100,6 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "tr",
     "diff",
     "comm",
-    "tee",
     "uname",
     "hostname",
     "whoami",
@@ -112,7 +111,7 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "type",
     "ps",
     "jobs",
-    "pytest",
+    # pytest 在 bash-classify 为 LOCAL_EFFECTS/MEDIUM，受段级门禁约束，不靠名单抬升。
     "ruff",
     "mypy",
     "eslint",
@@ -121,14 +120,12 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "true",
     "false",
     "test",
-    "env",
     "printenv",
     "seq",
     "dirname",
     "basename",
     "realpath",
     "readlink",
-    "xargs",
 }
 
 DEFAULT_DANGEROUS_COMMANDS: set[str] = {
@@ -175,10 +172,7 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
         "remote",
         "ls-remote",
         "ls-files",
-        "branch",
         "tag",
-        "stash",
-        "config",
         "var",
     },
     "npm": {
@@ -198,7 +192,7 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
         "search",
     },
     "uv": {
-        "run",
+        # run 可执行任意入口，不得无条件 SAFE；list/tree 仍受段级门禁。
         "list",
         "tree",
     },
@@ -224,8 +218,6 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
     "cargo": {
         "check",
         "test",
-        "build",
-        "run",
         "doc",
         "search",
         "metadata",
@@ -289,9 +281,8 @@ class CommandSafetyChecker:
     ) -> None:
         """部署方追加 safe 白名单（与内置名单并集，只增不减）。
 
-        配置驱动通道（Subject env → CoreUnitConfig → 装配点）：追加基础
-        命令与子命令白名单，供 type-check / lint / test 类语义只读命令
-        免审批放行。不收窄内置名单——DANGEROUS 名单不受此影响。
+        仅在 bash-classify 段级门禁允许的档位内生效（READONLY+LOW 或
+        LOCAL_EFFECTS+LOW）；不能抬升 UNKNOWN / MEDIUM 写入 / DANGEROUS。
 
         Args:
             extra_commands: 追加的基础命令名（小写归一）
@@ -362,10 +353,10 @@ class CommandSafetyChecker:
                 reason=f"Safe readonly expression: {command}",
             )
 
-        # 部署级 SAFE 名单可抬升 LOCAL_EFFECTS / 库外 UNKNOWN；
-        # 重定向、敏感路径、或「只读但 HIGH」（如 cat ~/.ssh）时不抬升。
+        # 部署级 SAFE 名单：先过段级门禁，再匹配名单（含 extend_safe_lists）。
         if not self._blocks_legacy_safe_promote(expression) and all(
-            self._legacy_segment_safe(segment) for segment in segments
+            self._segment_allows_legacy_promote(segment) and self._legacy_segment_safe(segment)
+            for segment in segments
         ):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.SAFE,
@@ -504,8 +495,17 @@ class CommandSafetyChecker:
             and getattr(expression, "risk", None) is Risk.HIGH
         )
 
+    @staticmethod
+    def _segment_allows_legacy_promote(segment: Any) -> bool:
+        """段级门禁：仅 READONLY+LOW 或 LOCAL_EFFECTS+LOW 可被名单抬升。"""
+        classification = getattr(segment, "classification", None)
+        risk = getattr(segment, "risk", None)
+        if risk is not Risk.LOW:
+            return False
+        return classification in {Classification.READONLY, Classification.LOCAL_EFFECTS}
+
     def _legacy_segment_safe(self, segment: Any) -> bool:
-        """部署级 SAFE 名单兼容：仅在 bash-classify 未判危险时提升为 SAFE。"""
+        """部署级 SAFE 名单匹配（须已通过段级门禁）。"""
         base, sub = segment_base_sub(list(segment.argv))
         if not base:
             return False
