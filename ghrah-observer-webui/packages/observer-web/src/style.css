@@ -70,17 +70,17 @@
   }
 
   .workspace-shell {
-    --project-rail-width: 5.375rem;
-    --room-sidebar-width: clamp(13.125rem, 18vw, 17.25rem);
-    --context-sidebar-width: clamp(14.375rem, 20vw, 19.375rem);
-    --workspace-main-min: 22.5rem;
+    --project-rail-width: 4rem;
+    --room-sidebar-width: 13.5rem;
+    --context-sidebar-width: 0px;
     --sidebar-rail-width: 2.25rem;
 
+    position: relative;
     display: grid;
     grid-template-columns:
       var(--project-rail-width)
       var(--room-sidebar-width)
-      minmax(var(--workspace-main-min), 1fr)
+      minmax(0, 1fr)
       var(--context-sidebar-width);
     height: 100%;
     min-height: 0;
@@ -93,6 +93,50 @@
 
   .workspace-shell.context-sidebar-collapsed {
     --context-sidebar-width: var(--sidebar-rail-width);
+  }
+
+  @media (min-width: 64rem) {
+    .workspace-shell {
+      --context-sidebar-width: var(--sidebar-rail-width);
+    }
+  }
+
+  @media (min-width: 75rem) {
+    .workspace-shell {
+      --room-sidebar-width: 13.5rem;
+      --context-sidebar-width: 13.5rem;
+    }
+  }
+
+  @media (min-width: 90rem) {
+    .workspace-shell {
+      --room-sidebar-width: 14.5rem;
+      --context-sidebar-width: 14.5rem;
+    }
+  }
+
+  @media (max-width: 63.999rem) {
+    .workspace-shell .right-sidebar {
+      position: absolute;
+      inset-block-start: 0;
+      inset-inline-end: 0;
+      align-self: start;
+      width: var(--sidebar-rail-width);
+      height: auto;
+      z-index: 30;
+    }
+  }
+
+  .workspace-shell.context-drawer-open .right-sidebar {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    align-self: stretch;
+    width: min(13.5rem, calc(100% - var(--project-rail-width) - var(--room-sidebar-width)));
+    height: auto;
+    z-index: 30;
+    overflow: hidden;
+    box-shadow: var(--ui-panel-shadow);
   }
 
   .workspace-column {
@@ -989,15 +1033,6 @@
     margin-right: 0.25rem;
     color: #4f5fc7;
     font-family: inherit;
-  }
-
-  @media (max-width: 73.75rem) {
-    .workspace-shell {
-      --project-rail-width: 4.875rem;
-      --room-sidebar-width: 13.125rem;
-      --context-sidebar-width: 14.875rem;
-      --workspace-main-min: 21.25rem;
-    }
   }
 
   @media (prefers-reduced-motion: no-preference) {

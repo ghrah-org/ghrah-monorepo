@@ -36,6 +36,7 @@ import ProjectSettingsPanel from "@/components/project-settings-panel.vue";
 import SidebarToggle from "@/components/ui/sidebar-toggle.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useSidebarLayout } from "@/composables/useSidebarLayout";
+import { useWorkspaceColumns } from "@/composables/useWorkspaceColumns";
 
 type RoomTab = {
   id: string;
@@ -71,6 +72,8 @@ const { t } = useI18n();
 const { switchRoom, switchProject, selectAgent } = useObserver();
 const { roomSidebarCollapsed, contextSidebarCollapsed, toggleRoomSidebar, toggleContextSidebar } =
   useSidebarLayout();
+const columnMode = useWorkspaceColumns();
+const contextDrawerOpen = ref(false);
 const tabs = ref<WorkspaceTab[]>([]);
 const activeTabId = ref<string | null>(null);
 const roomScroll = ref<HTMLElement | null>(null);
@@ -78,11 +81,17 @@ const contextScroll = ref<HTMLElement | null>(null);
 const roomScrollTop = ref(0);
 const contextScrollTop = ref(0);
 
+const contextUsesDrawer = computed(
+  () => columnMode.value === "rail" || columnMode.value === "exclusive",
+);
+const contextVisuallyCollapsed = computed(() =>
+  contextUsesDrawer.value ? !contextDrawerOpen.value : contextSidebarCollapsed.value,
+);
 const roomToggleLabel = computed(() =>
   roomSidebarCollapsed.value ? t("dashboard.expandRooms") : t("dashboard.collapseRooms"),
 );
 const contextToggleLabel = computed(() =>
-  contextSidebarCollapsed.value ? t("dashboard.expandContext") : t("dashboard.collapseContext"),
+  contextVisuallyCollapsed.value ? t("dashboard.expandContext") : t("dashboard.collapseContext"),
 );
 
 async function onToggleRoomSidebar() {
@@ -95,6 +104,10 @@ async function onToggleRoomSidebar() {
 }
 
 async function onToggleContextSidebar() {
+  if (contextUsesDrawer.value) {
+    contextDrawerOpen.value = !contextDrawerOpen.value;
+    return;
+  }
   if (!contextSidebarCollapsed.value) {
     contextScrollTop.value = contextScroll.value?.scrollTop ?? 0;
   }
@@ -106,6 +119,25 @@ async function onToggleContextSidebar() {
 }
 
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
+
+watch(
+  () => [columnMode.value, activeTab.value?.id ?? "", activeTab.value?.kind ?? ""] as const,
+  ([mode, id, kind], previous) => {
+    if (mode === "wide" || mode === "mid") {
+      contextDrawerOpen.value = false;
+      return;
+    }
+    if (mode === "rail") {
+      if (!previous || previous[0] !== "rail") contextDrawerOpen.value = false;
+      return;
+    }
+    const entered = !previous || previous[0] !== "exclusive";
+    const selectionChanged = !previous || previous[1] !== id || previous[2] !== kind;
+    if (entered || selectionChanged) {
+      contextDrawerOpen.value = kind === "room" || kind === "agent";
+    }
+  },
+);
 
 function projectIdOf(tab: WorkspaceTab): string {
   return tab.kind === "agent" ? tab.target.agent.projectId : tab.target.projectId;
@@ -309,7 +341,8 @@ watch(
     class="workspace-shell"
     :class="{
       'room-sidebar-collapsed': roomSidebarCollapsed,
-      'context-sidebar-collapsed': contextSidebarCollapsed,
+      'context-sidebar-collapsed': !contextUsesDrawer && contextSidebarCollapsed,
+      'context-drawer-open': contextUsesDrawer && contextDrawerOpen,
     }"
   >
     <aside class="project-rail workspace-column" :aria-label="t('dashboard.projects')">
@@ -413,14 +446,14 @@ watch(
       <div class="sidebar-head">
         <SidebarToggle
           side="right"
-          :collapsed="contextSidebarCollapsed"
+          :collapsed="contextVisuallyCollapsed"
           controls="context-sidebar-panel"
           :label="contextToggleLabel"
           @toggle="onToggleContextSidebar"
         />
       </div>
       <div
-        v-show="!contextSidebarCollapsed"
+        v-show="!contextVisuallyCollapsed"
         id="context-sidebar-panel"
         ref="contextScroll"
         class="right-sidebar-panel"

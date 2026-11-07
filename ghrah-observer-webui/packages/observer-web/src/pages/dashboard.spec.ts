@@ -64,6 +64,44 @@ vi.mock("@/components/agents-overview-panel.vue", () => ({
 import { useSidebarLayout } from "@/composables/useSidebarLayout";
 import Dashboard from "./dashboard.vue";
 
+const mediaListeners = new Set<() => void>();
+let viewportRem = 100;
+
+function installMatchMedia() {
+  viewportRem = 100;
+  mediaListeners.clear();
+  window.matchMedia = ((query: string) => {
+    const min = Number(/min-width:\s*([\d.]+)rem/.exec(query)?.[1] ?? NaN);
+    return {
+      media: query,
+      get matches() {
+        return Number.isFinite(min) && viewportRem >= min;
+      },
+      addEventListener(_type: string, listener: () => void) {
+        mediaListeners.add(listener);
+      },
+      removeEventListener(_type: string, listener: () => void) {
+        mediaListeners.delete(listener);
+      },
+      addListener(listener: () => void) {
+        mediaListeners.add(listener);
+      },
+      removeListener(listener: () => void) {
+        mediaListeners.delete(listener);
+      },
+      dispatchEvent() {
+        return false;
+      },
+      onchange: null,
+    };
+  }) as unknown as typeof window.matchMedia;
+}
+
+function setViewportRem(rem: number) {
+  viewportRem = rem;
+  for (const listener of mediaListeners) listener();
+}
+
 enableAutoUnmount(afterEach);
 
 const RoomSelectorStub = {
@@ -150,6 +188,7 @@ describe("Dashboard workspace tabs", () => {
     switchRoomMock.mockReset();
     selectAgentMock.mockReset();
 
+    installMatchMedia();
     // 侧边栏状态是模块级单例；每个用例前恢复为展开，避免相互污染。
     localStorage.clear();
     const sidebarLayout = useSidebarLayout();
@@ -413,5 +452,87 @@ describe("Dashboard workspace tabs", () => {
     expect(roomPanel.scrollTop).toBe(120);
     expect(contextPanel.scrollTop).toBe(64);
     contextObserver.disconnect();
+  });
+
+  it("opens the context drawer from the rail without saving a collapse", async () => {
+    const wrapper = mountDashboard();
+    setViewportRem(64);
+    await nextTick();
+
+    const shell = wrapper.get(".workspace-shell");
+    expect(shell.classes()).not.toContain("context-drawer-open");
+    expect(wrapper.get("#context-sidebar-panel").attributes("style")).toContain("display: none");
+
+    await wrapper.get('[aria-controls="context-sidebar-panel"]').trigger("click");
+    await nextTick();
+
+    expect(shell.classes()).toContain("context-drawer-open");
+    expect(shell.classes()).not.toContain("context-sidebar-collapsed");
+    expect(wrapper.get("#context-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBeNull();
+
+    setViewportRem(100);
+    await nextTick();
+
+    expect(shell.classes()).not.toContain("context-drawer-open");
+    expect(shell.classes()).not.toContain("context-sidebar-collapsed");
+    expect(wrapper.get("#context-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBeNull();
+  });
+
+  it("restores a saved context collapse after the viewport rail goes away", async () => {
+    const wrapper = mountDashboard();
+    await wrapper.get('[aria-controls="context-sidebar-panel"]').trigger("click");
+    await nextTick();
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBe("1");
+
+    setViewportRem(64);
+    await nextTick();
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBe("1");
+    expect(wrapper.get(".workspace-shell").classes()).not.toContain("context-sidebar-collapsed");
+
+    setViewportRem(100);
+    await nextTick();
+    expect(wrapper.get(".workspace-shell").classes()).toContain("context-sidebar-collapsed");
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBe("1");
+  });
+
+  it("shows the context drawer over the room column when a room is open below 1024", async () => {
+    const wrapper = mountDashboard();
+    setViewportRem(60);
+    await nextTick();
+
+    expect(wrapper.get("#room-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(wrapper.get("#context-sidebar-panel").attributes("style")).toContain("display: none");
+
+    await wrapper.get("#open-p1-room").trigger("click");
+    await nextTick();
+
+    const shell = wrapper.get(".workspace-shell");
+    expect(shell.classes()).toContain("context-drawer-open");
+    expect(shell.classes()).not.toContain("room-sidebar-collapsed");
+    expect(wrapper.get("#room-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(wrapper.get("#context-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBeNull();
+
+    await wrapper.get('[aria-controls="context-sidebar-panel"]').trigger("click");
+    await nextTick();
+
+    expect(shell.classes()).not.toContain("context-drawer-open");
+    expect(wrapper.get("#room-sidebar-panel").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(wrapper.get("#context-sidebar-panel").attributes("style")).toContain("display: none");
+    expect(localStorage.getItem("ghrah.workspace.context-sidebar.collapsed")).toBeNull();
   });
 });
