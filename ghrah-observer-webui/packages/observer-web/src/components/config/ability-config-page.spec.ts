@@ -36,6 +36,19 @@ describe("Ability YAML editor", () => {
     api.deleteAbility.mockResolvedValue({ success: true });
   });
 
+  it("hides the legacy editor and cached entries when the server disables the library", async () => {
+    api.listManifestAbilities.mockResolvedValue({
+      success: false,
+      error: "legacy_ability_manifest_disabled",
+    });
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    expect(wrapper.text()).toContain("config.ability.legacyDisabled");
+    expect(wrapper.text()).not.toContain("config.ability.create");
+    expect(wrapper.find(".ability-card").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("loads source and discards edits on cancel without saving or closing the card", async () => {
     const wrapper = await openEditor();
     expect(wrapper.get("textarea").element.value).toBe("original");

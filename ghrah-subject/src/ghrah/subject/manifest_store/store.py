@@ -64,9 +64,10 @@ class ManifestStore:
         self._abilities_dir = self._root / "abilities"
         self._agents_dir = self._root / "agents"
 
-    def ensure_dirs(self) -> None:
-        """确保存储目录结构存在。"""
-        self._abilities_dir.mkdir(parents=True, exist_ok=True)
+    def ensure_dirs(self, *, legacy_abilities: bool = True) -> None:
+        """准备 Agent 模板目录，并按来源选择是否初始化旧能力目录。"""
+        if legacy_abilities:
+            self._abilities_dir.mkdir(parents=True, exist_ok=True)
         self._agents_dir.mkdir(parents=True, exist_ok=True)
 
     # ─── Ability 操作 ───

@@ -27,7 +27,6 @@ from ghrah.manifest.agent import (
     AbilityRef,
     AgentManifest,
 )
-from ghrah.manifest.builtins import load_all_builtin_manifests
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import AbilityCatalogPort, ManifestStoreProtocol
 from ghrah.manifest.types import ImplementationDef, PermissionFlags, SurfaceConfig, ToolSchema
@@ -97,6 +96,8 @@ class ResolvedAbility:
                     f"Unknown builtin ability type: '{ability_type}'. "
                     f"Available types: {registry.list_types()}"
                 )
+
+            from ghrah.manifest.builtins import load_all_builtin_manifests
 
             builtins = load_all_builtin_manifests()
             manifest = next(

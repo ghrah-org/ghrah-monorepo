@@ -23,6 +23,7 @@ const {
 const { t } = useI18n();
 const loading = ref(false);
 const error = ref("");
+const legacyDisabled = ref(false);
 const creating = ref(false);
 const highlighted = ref("");
 const abilityListElement = ref<HTMLElement | null>(null);
@@ -95,7 +96,15 @@ async function refresh() {
   try {
     const result = await listManifestAbilities();
     if (!result) error.value = t("config.ability.notConnected");
-    else if (!result.success) error.value = result.error || t("config.ability.loadFailed");
+    else if (result.success) legacyDisabled.value = false;
+    else if (result.error === "legacy_ability_manifest_disabled") {
+      legacyDisabled.value = true;
+      creating.value = false;
+      editing.value = false;
+      deleteTarget.value = "";
+      dismissStatus();
+      closeDetail();
+    } else error.value = result.error || t("config.ability.loadFailed");
   } catch {
     error.value = t("config.ability.loadFailed");
   } finally {
@@ -212,10 +221,13 @@ onUnmounted(() => {
     <header class="ability-header">
       <div>
         <h2 class="text-lg font-semibold">{{ t("config.ability.title") }}</h2>
-        <p class="ability-muted">{{ t("config.ability.listHint") }}</p>
+        <p class="ability-muted">
+          {{ t(legacyDisabled ? "config.ability.legacyDisabled" : "config.ability.listHint") }}
+        </p>
       </div>
       <div class="ability-permissions">
         <button
+          v-if="!legacyDisabled"
           class="btn-primary"
           :disabled="loading || editing || busy || creating"
           @click="startCreating"
@@ -232,7 +244,7 @@ onUnmounted(() => {
       </div>
     </header>
     <NewAbilityManifest v-if="creating" @cancel="creating = false" @created="onCreated" />
-    <p class="ability-muted">
+    <p v-if="!legacyDisabled" class="ability-muted">
       {{ t("config.ability.registered") }} {{ manifests.abilityList.length }}
     </p>
     <p v-if="error" role="alert">{{ error }}</p>
@@ -241,10 +253,14 @@ onUnmounted(() => {
       <span>{{ pageStatus }}</span>
     </div>
     <p v-if="loading" role="status">{{ t("common.loading") }}</p>
-    <p v-else-if="!error && !manifests.abilityList.length" class="ability-muted" role="status">
+    <p
+      v-else-if="!legacyDisabled && !error && !manifests.abilityList.length"
+      class="ability-muted"
+      role="status"
+    >
       {{ t("config.ability.empty") }}
     </p>
-    <ul ref="abilityListElement" class="ability-list">
+    <ul v-if="!legacyDisabled" ref="abilityListElement" class="ability-list">
       <li
         v-for="ability in manifests.abilityList"
         :key="ability.full_name"

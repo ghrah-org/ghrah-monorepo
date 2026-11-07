@@ -8,7 +8,6 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 from ghrah.manifest.agent import AgentManifest
-from ghrah.manifest.builtins import load_all_builtin_manifests
 from ghrah.manifest.errors import ManifestNotFoundError
 
 if TYPE_CHECKING:
@@ -31,6 +30,8 @@ class BuiltinManifestStore:
 
     @cached_property
     def _builtins(self) -> Mapping[str, AbilityManifest]:
+        from ghrah.manifest.builtins import load_all_builtin_manifests
+
         return load_all_builtin_manifests()
 
     def load_ability(self, full_name: str) -> AbilityManifest:

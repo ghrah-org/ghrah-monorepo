@@ -14,6 +14,7 @@ from ghrah.manifest.errors import (
     ManifestNotFoundError,
     ManifestValidationError,
 )
+from ghrah.manifest.parser import validate_manifest
 from ghrah.manifest.resolver import ManifestResolver
 from ghrah.protocol.types import (  # type: ignore[import-untyped]
     MANIFEST_COMMANDS as _MANIFEST_COMMANDS,
@@ -24,6 +25,15 @@ from ghrah.subject.manifest_store.store import ManifestStore
 logger = logging.getLogger(__name__)
 
 __all__ = ["_MANIFEST_COMMANDS", "handle_manifest_command"]
+
+_LEGACY_ABILITY_COMMANDS = frozenset(
+    {
+        "manifest_list_abilities",
+        "manifest_get_ability",
+        "manifest_put_ability",
+        "manifest_delete_ability",
+    }
+)
 
 
 def _config_to_payload_dict(config: Any) -> dict[str, Any]:
@@ -53,6 +63,9 @@ def handle_manifest_command(
     command: str,
     payload: dict[str, Any],
     store: ManifestStore,
+    *,
+    legacy_abilities: bool = True,
+    ability_install_root: str | None = None,
 ) -> dict[str, Any]:
     """分发 manifest 命令，返回响应 dict。
 
@@ -60,10 +73,19 @@ def handle_manifest_command(
         command: 命令类型，如 'manifest_list_abilities'
         payload: 命令载荷
         store: ManifestStore 实例
+        legacy_abilities: 是否使用旧能力清单库。
+        ability_install_root: 新版能力包安装根，供 Agent 模板预览解析使用。
 
     Returns:
         响应 dict，包含 success 字段
     """
+    if not legacy_abilities and command in _LEGACY_ABILITY_COMMANDS:
+        return {
+            "success": False,
+            "error": "legacy_ability_manifest_disabled",
+            "error_detail": "Use v1 Ability packages and the Ability management API",
+        }
+
     try:
         if command == "manifest_list_abilities":
             namespace = payload.get("namespace")
@@ -185,7 +207,14 @@ def handle_manifest_command(
             agent_full_name = payload.get("agent_full_name", "")
             runtime_name = payload.get("runtime_name")
             manifest = store.get_agent(agent_full_name)
-            resolver = ManifestResolver(store)
+            if legacy_abilities:
+                resolver = ManifestResolver(store)
+            else:
+                from ghrah.ability.source import BuiltinAbilitySource
+
+                resolver = BuiltinAbilitySource(
+                    agent_store=store, install_root=ability_install_root
+                ).resolver()
             resolved = resolver.resolve(manifest, runtime_name=runtime_name)
             return {
                 "success": True,
@@ -210,7 +239,11 @@ def handle_manifest_command(
 
         elif command == "manifest_validate":
             content = payload.get("content", "")
-            is_valid, errors = store.validate_manifest(content)
+            is_valid, errors = (
+                store.validate_manifest(content)
+                if legacy_abilities
+                else validate_manifest(content, expected_type="agent")
+            )
             return {"success": True, "data": {"valid": is_valid, "errors": errors}}
 
         else:

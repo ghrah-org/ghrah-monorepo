@@ -9,11 +9,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ghrah.manifest.builtins import load_all_builtin_manifests  # type: ignore[import-untyped]
 from ghrah.manifest.types import PermissionFlags  # type: ignore[import-untyped]
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.manifest_store.builtins import ensure_builtins
 from ghrah.subject.manifest_store.service import handle_manifest_command
 from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime.service_keys import MANIFEST_STORE
@@ -38,6 +36,8 @@ class _ManifestPermissionIndexImpl:
         self.rebuild()
 
     def rebuild(self) -> None:
+        from ghrah.manifest.builtins import load_all_builtin_manifests
+
         permissions: dict[str, PermissionFlags] = {}
 
         for manifest in load_all_builtin_manifests().values():
@@ -105,9 +105,14 @@ class ManifestStoreUnit(SubjectUnit):
     async def init(self, ctx: Any) -> None:
         self._ctx = ctx
         self._store = ManifestStore(self._config.manifest.manifest_root)
-        self._store.ensure_dirs()
-        ensure_builtins(self._store)
-        self._index = _ManifestPermissionIndexImpl(self._store)
+        legacy_abilities = self._config.ability_source == "legacy"
+        self._store.ensure_dirs(legacy_abilities=legacy_abilities)
+        self._index = None
+        if legacy_abilities:
+            from ghrah.subject.manifest_store.builtins import ensure_builtins
+
+            ensure_builtins(self._store)
+            self._index = _ManifestPermissionIndexImpl(self._store)
         ctx.provide(MANIFEST_STORE.name, self._store)
 
     async def handle_command(
@@ -116,7 +121,13 @@ class ManifestStoreUnit(SubjectUnit):
         payload: dict[str, Any],
         cmd_ctx: CommandContext,
     ) -> dict[str, Any]:
-        result = handle_manifest_command(command, payload, self.service)
+        result = handle_manifest_command(
+            command,
+            payload,
+            self.service,
+            legacy_abilities=self._config.ability_source == "legacy",
+            ability_install_root=self._config.ability.install_root,
+        )
         if result.get("success"):
             await self._emit_manifest_change(command, payload, result)
         return result
@@ -132,7 +143,8 @@ class ManifestStoreUnit(SubjectUnit):
         if event_type is None:
             return
 
-        self.refresh_permission_index()
+        if self._index is not None:
+            self.refresh_permission_index()
         ctx.emit(f"event/{event_type}", manifest_result_to_event_payload(result))
 
     def refresh_permission_index(self) -> None:

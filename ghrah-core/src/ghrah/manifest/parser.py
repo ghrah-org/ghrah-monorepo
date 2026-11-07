@@ -32,13 +32,18 @@ def parse_agent_manifest(raw: str, format: str = "yaml") -> AgentManifest:
         raise ManifestValidationError(str(exc)) from exc
 
 
-def validate_manifest(raw: str, format: str = "yaml") -> tuple[bool, list[str]]:
+def validate_manifest(
+    raw: str, format: str = "yaml", *, expected_type: str | None = None
+) -> tuple[bool, list[str]]:
+    """校验 Manifest，并可要求正文声明指定类型。"""
     try:
         data = _load_raw(raw, format)
     except Exception as exc:
         return False, [f"Parse error: {exc}"]
 
     manifest_type = data.get("manifest", "")
+    if expected_type is not None and manifest_type != expected_type:
+        return False, [f"Expected manifest type '{expected_type}', got {manifest_type!r}"]
     if manifest_type == "ability":
         return _validate_model(data, AbilityManifest)
     elif manifest_type == "agent":
