@@ -64,6 +64,9 @@ def create_app(
 async def serve() -> None:
     """启动 Subject Observer 服务器（Ouroboros 装配 + uvicorn）。"""
     import asyncio
+    import contextlib
+    import os
+    import signal
 
     import uvicorn
     from ouroboros import Context
@@ -73,24 +76,59 @@ async def serve() -> None:
 
     observer_config = ObserverServerConfig.from_env()
     subject_config = SubjectConfig.from_env()
-    async with Context() as ctx:
-        await assemble_subject(ctx, subject_config, profile="full")
+
+    # uvicorn 0.5x 的 Server.capture_signals 会在优雅停机后恢复原信号处理器，并
+    # 重放捕获到的 SIGTERM/SIGINT（"try to trigger the expected behaviour now"）。
+    # 进程启动时的原处理器是默认处置，重放会直接终止进程，于是下面
+    # ``async with Context()`` 的 __aexit__ 永不执行——unit.stop →
+    # Supervisor.shutdown → 能力启动注册的 release 全部被跳过，注册占位残留，
+    # 下次启动 reconcile 重 spawn 同一稳定 agent_id 时抛 conflict。
+    # 先把信号登记成"只记录不终止"的处理器：uvicorn 会把它当作原处理器在重放前
+    # 恢复，重放落回这里被吞下；等 Context 退出、各 unit 收尾完成后，再按原语义
+    # 补发信号，保留调用方期望的退出码约定。
+    deferred: list[int] = []
+
+    def _defer_termination(signum: int, _frame: object) -> None:
+        deferred.append(signum)
+
+    previous_handlers: dict[int, object] = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
         try:
-            app = create_app(observer_config, ctx=ctx)
-            server = uvicorn.Server(
-                uvicorn.Config(
-                    app,
-                    host=observer_config.host,
-                    port=observer_config.port,
-                    log_level=observer_config.log_level.lower(),
-                    ws_ping_interval=observer_config.ping_interval,
-                    ws_ping_timeout=observer_config.ping_timeout,
+            previous_handlers[sig] = signal.signal(sig, _defer_termination)
+        except ValueError, OSError:
+            logger.warning("信号处理器安装失败，跳过：%s", sig, exc_info=True)
+    try:
+        async with Context() as ctx:
+            await assemble_subject(ctx, subject_config, profile="full")
+            try:
+                app = create_app(observer_config, ctx=ctx)
+                server = uvicorn.Server(
+                    uvicorn.Config(
+                        app,
+                        host=observer_config.host,
+                        port=observer_config.port,
+                        log_level=observer_config.log_level.lower(),
+                        ws_ping_interval=observer_config.ping_interval,
+                        ws_ping_timeout=observer_config.ping_timeout,
+                    )
                 )
-            )
-            await server.serve()
-        except asyncio.CancelledError:
-            logger.info("observer serve cancelled, disposing via Context exit")
-            raise
+                if deferred:
+                    # 装配期间已收到停止信号：不再进入服务主循环，直接走收尾。
+                    server.should_exit = True
+                await server.serve()
+            except asyncio.CancelledError:
+                logger.info("observer serve cancelled, disposing via Context exit")
+                raise
+    finally:
+        for sig, handler in previous_handlers.items():
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, handler)
+    if deferred:
+        logger.info("收到停止信号 %s：Context 收尾完成，按原语义退出", deferred)
+    for sig in deferred:
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(sig, signal.SIG_DFL)
+        os.kill(os.getpid(), sig)
 
 
 def main() -> None:
