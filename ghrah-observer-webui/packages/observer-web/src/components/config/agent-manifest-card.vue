@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import type { AgentManifestInfo } from "@ghrah/observer-core";
 import { useI18n } from "vue-i18n";
+import UiBadge from "@/components/ui/badge.vue";
 import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
@@ -36,21 +37,15 @@ defineEmits<{
   >
     <div class="flex items-center justify-between mb-1">
       <span class="font-medium text-sm truncate">{{ manifest.title || manifest.name }}</span>
-      <span class="badge bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs">{{
-        manifest.namespace
-      }}</span>
+      <UiBadge>{{ manifest.namespace }}</UiBadge>
     </div>
     <p v-if="manifest.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mb-2">
       {{ manifest.description }}
     </p>
     <div v-if="manifest.ability_refs.length > 0" class="flex flex-wrap gap-1">
-      <span
-        v-for="ref in manifest.ability_refs.slice(0, 5)"
-        :key="ref"
-        class="badge bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-300 text-xs"
-      >
+      <UiBadge v-for="ref in manifest.ability_refs.slice(0, 5)" :key="ref" variant="accent">
         {{ ref.split(".").pop() }}
-      </span>
+      </UiBadge>
       <span v-if="manifest.ability_refs.length > 5" class="text-xs text-gray-400">
         +{{ manifest.ability_refs.length - 5 }}
       </span>

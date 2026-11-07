@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import type { AgentManifestInfo } from "@ghrah/observer-core";
 import { useI18n } from "vue-i18n";
+import UiBadge from "@/components/ui/badge.vue";
 import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
@@ -36,9 +37,7 @@ function truncate(text: string, max: number): string {
   >
     <div class="flex items-center justify-between">
       <h3 class="font-semibold">{{ manifest.title || manifest.name }}</h3>
-      <span class="badge bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs">{{
-        manifest.namespace
-      }}</span>
+      <UiBadge>{{ manifest.namespace }}</UiBadge>
     </div>
 
     <div v-if="manifest.description" class="text-sm text-gray-600 dark:text-gray-400">
@@ -65,12 +64,7 @@ function truncate(text: string, max: number): string {
     </div>
 
     <div v-if="manifest.tags.length > 0" class="flex flex-wrap gap-1">
-      <span
-        v-for="tag in manifest.tags"
-        :key="tag"
-        class="badge bg-gray-100 dark:bg-gray-700 text-xs"
-        >{{ tag }}</span
-      >
+      <UiBadge v-for="tag in manifest.tags" :key="tag">{{ tag }}</UiBadge>
     </div>
 
     <div v-if="manifest.system_prompt" class="space-y-1">

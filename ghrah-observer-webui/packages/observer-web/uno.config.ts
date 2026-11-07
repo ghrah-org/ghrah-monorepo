@@ -57,7 +57,10 @@ export default defineConfig({
     "field-chevron":
       "pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-gray-500",
     panel: "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded",
-    badge: "inline-block px-2 py-0.5 rounded-full text-xs font-medium",
+    "ui-badge":
+      "inline-flex items-center h-5 px-2 rounded-full text-[0.6875rem] font-medium leading-none",
+    "ui-badge-neutral": "ui-badge bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300",
+    "ui-badge-accent": "ui-badge bg-blue-50 text-blue-600 dark:bg-blue-900 dark:text-blue-300",
   },
   theme: {
     colors: {
