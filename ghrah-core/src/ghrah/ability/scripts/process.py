@@ -238,42 +238,85 @@ async def run_script_process(
         logger.warning("script interpreter failed to start: %s", exc)
         return _failure("internal", "脚本解释器无法启动", effect_unknown=False)
     try:
-        assert process.stdin is not None
-        process.stdin.write(envelope)
-        await process.stdin.drain()
-        process.stdin.close()
-        if hasattr(process.stdin, "wait_closed"):
-            await process.stdin.wait_closed()
-        return await _collect(process, deadline_s, grace_s, cancel)
+        return await _collect(process, envelope, deadline_s, grace_s, cancel)
     except asyncio.CancelledError:
         await asyncio.shield(_terminate(process, grace_s))
         raise
 
 
+async def _write_stdin(process: Any, envelope: bytes) -> None:
+    """与输出读取并行发送信封；子进程提前退出时由输出协议判定失败。"""
+    assert process.stdin is not None
+    try:
+        process.stdin.write(envelope)
+        await process.stdin.drain()
+        process.stdin.close()
+        if hasattr(process.stdin, "wait_closed"):
+            await process.stdin.wait_closed()
+    except BrokenPipeError, ConnectionResetError:
+        # 解释器启动后立即报错或脚本提前退出，最终结果仍由 stdout/退出码裁决。
+        pass
+
+
 async def _collect(
     process: Any,
+    envelope: bytes,
     deadline_s: float,
     grace_s: float,
     cancel: asyncio.Event | None,
 ) -> ScriptRun:
     loop = asyncio.get_running_loop()
     started = loop.time()
-    stdout_task = asyncio.create_task(_read_limited(process.stdout, STREAM_LIMIT))
+    overflow = asyncio.Event()
+    stdout_task = asyncio.create_task(_read_limited(process.stdout, STREAM_LIMIT, overflow))
+    overflow_task = asyncio.create_task(overflow.wait())
     stderr_task = asyncio.create_task(_read_stderr(process.stderr))
     cancel_task = asyncio.create_task(cancel.wait()) if cancel is not None else None
-    waiting = {stdout_task}
+    stdin_task = asyncio.create_task(_write_stdin(process, envelope))
+    try:
+        return await _collect_result(
+            process,
+            deadline_s,
+            grace_s,
+            started,
+            stdout_task,
+            stderr_task,
+            cancel_task,
+            overflow_task,
+        )
+    except asyncio.CancelledError:
+        await asyncio.shield(_terminate(process, grace_s))
+        raise
+    finally:
+        await _discard(stdin_task, stdout_task, stderr_task, cancel_task, overflow_task)
+
+
+async def _collect_result(
+    process: Any,
+    deadline_s: float,
+    grace_s: float,
+    started: float,
+    stdout_task: asyncio.Task[tuple[bytes, bool]],
+    stderr_task: asyncio.Task[bytes],
+    cancel_task: asyncio.Task[bool] | None,
+    overflow_task: asyncio.Task[bool],
+) -> ScriptRun:
+    loop = asyncio.get_running_loop()
+    waiting = {stdout_task, overflow_task}
     if cancel_task is not None:
         waiting.add(cancel_task)
     done, _pending = await asyncio.wait(
         waiting, timeout=deadline_s, return_when=asyncio.FIRST_COMPLETED
     )
     if cancel_task is not None and cancel_task in done:
-        await _discard(stdout_task)
         effect_unknown = await _terminate(process, grace_s)
         stderr = await _take_stderr(stderr_task)
         return _failure("cancelled", "脚本已取消", effect_unknown=effect_unknown, stderr=stderr)
+    if overflow_task in done:
+        effect_unknown = await _terminate(process, grace_s)
+        return _failure("result_too_large", "结果超过 1 MiB", effect_unknown=effect_unknown)
     if stdout_task not in done:
-        await _discard(stdout_task, cancel_task)
+        await _discard(cancel_task)
         effect_unknown = await _terminate(process, grace_s)
         stderr = await _take_stderr(stderr_task)
         return _failure("timeout", "脚本超时", effect_unknown=effect_unknown, stderr=stderr)
@@ -282,7 +325,6 @@ async def _collect(
         await _discard(cancel_task)
     stdout, overflow = stdout_task.result()
     if overflow:
-        await _discard(stderr_task)
         effect_unknown = await _terminate(process, grace_s)
         return _failure("result_too_large", "结果超过 1 MiB", effect_unknown=effect_unknown)
     remaining = deadline_s - (loop.time() - started)
@@ -300,20 +342,26 @@ async def _collect(
     return _interpret(stdout, process.returncode, stderr)
 
 
-async def _read_limited(stream: asyncio.StreamReader | None, limit: int) -> tuple[bytes, bool]:
+async def _read_limited(
+    stream: asyncio.StreamReader | None, limit: int, overflow: asyncio.Event
+) -> tuple[bytes, bool]:
     if stream is None:
         return b"", False
     chunks: list[bytes] = []
     total = 0
-    while total <= limit:
+    exceeded = False
+    while True:
         block = await stream.read(65536)
         if not block:
-            return b"".join(chunks), False
+            return b"".join(chunks), exceeded
+        room = max(0, limit - total)
+        if room:
+            chunks.append(block[:room])
         total += len(block)
         if total > limit:
-            return b"".join(chunks), True
-        chunks.append(block)
-    return b"".join(chunks), True
+            exceeded = True
+            overflow.set()
+        # 超限后仍排空管道，避免树杀时 process.wait() 被暂停的传输管道卡住。
 
 
 async def _read_stderr(stream: asyncio.StreamReader | None) -> bytes:
@@ -347,18 +395,12 @@ async def _take_stderr(task: asyncio.Task[bytes]) -> bytes:
 
 
 async def _discard(*tasks: asyncio.Task[Any] | None) -> None:
-    for task in tasks:
-        if task is None or task.done():
-            continue
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
-                raise
-        except Exception:
-            logger.debug("script stream closed", exc_info=True)
+    pending = [task for task in tasks if task is not None]
+    for task in pending:
+        if not task.done():
+            task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def _terminate(process: Any, grace_s: float) -> bool:
