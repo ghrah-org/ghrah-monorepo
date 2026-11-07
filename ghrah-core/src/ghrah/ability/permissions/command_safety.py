@@ -10,23 +10,26 @@
 - CommandSafetyChecker: 命令安全分类器（bash-classify 前端 + 范围外壳）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型（判定顺序，2026-11-07 阶段 2）：
+分类模型（判定顺序，2026-11-08 阶段 4）：
 1. 空命令 → 硬拒绝
 2. ``denied_commands`` 命中任一段 → 硬拒绝
-3. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
-4. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
-5. 整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
-6. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
+3. 仅 ``--version`` / ``-V`` / ``--help``、无委托无重定向 → 自动批准
+4. 无位置参数的 ``git branch`` / ``git tag`` 列表 → 自动批准
+5. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
+6. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
+7. 整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
+8. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
    LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
-7. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
-8. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
-   范围内则自动批准；越界硬拒绝；无法投影则继续
-9. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
+9. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
+10. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
+    范围内则自动批准；越界硬拒绝；无法投影则继续
+11. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
 
 from __future__ import annotations
 
 import logging
+import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -52,6 +55,51 @@ if TYPE_CHECKING:
     from ghrah.types.results import ActionResult
 
 logger = logging.getLogger(__name__)
+
+_VERSION_OR_HELP_FLAGS = frozenset({"--version", "-V", "--help"})
+_GIT_BARE_LIST_SUBS = frozenset({"branch", "tag"})
+
+
+def _is_version_or_help_probe(expression: Any, segments: list[Any]) -> bool:
+    """整式每一段都只是版本或帮助探测，且没有委托、重定向、敏感路径。"""
+    if getattr(expression, "redirects", None) or getattr(expression, "sensitive_paths", None):
+        return False
+    if not segments:
+        return False
+    for segment in segments:
+        if getattr(segment, "inner_commands", None):
+            return False
+        argv = [str(token) for token in (getattr(segment, "argv", ()) or ())]
+        if len(argv) != 2 or argv[1] not in _VERSION_OR_HELP_FLAGS:
+            return False
+    return True
+
+
+def _is_bare_git_list(expression: Any) -> bool:
+    """``git branch`` / ``git tag`` 没有位置参数时只是列出。
+
+    允许 git 全局选项（``-C``、``--no-pager`` 等）。创建、删除和重命名带有
+    位置参数或其他标志，不走这条放行。
+    """
+    if getattr(expression, "redirects", None) or getattr(expression, "sensitive_paths", None):
+        return False
+    commands = list(getattr(expression, "commands", ()) or ())
+    if not commands:
+        return False
+    for command in commands:
+        if getattr(command, "inner_commands", None) or getattr(command, "positionals", None):
+            return False
+        argv = [str(token) for token in (getattr(command, "argv", ()) or ())]
+        parsed = parse_command_entry(shlex.join(argv))
+        if (
+            parsed.ambiguous
+            or parsed.base != "git"
+            or parsed.sub not in _GIT_BARE_LIST_SUBS
+            or parsed.arguments != (parsed.sub,)
+        ):
+            return False
+    return True
+
 
 __all__ = [
     "CommandSafetyCategory",
@@ -335,6 +383,22 @@ class CommandSafetyChecker:
                 base_command=primary_base,
                 sub_command=primary_sub,
                 reason=f"Command denied by declared scope: {command}",
+            )
+
+        if _is_version_or_help_probe(expression, segments):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Version or help probe: {command}",
+            )
+
+        if _is_bare_git_list(expression):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Read-only git listing: {command}",
             )
 
         overlay = self._dangerous_overlay(segments, command)
