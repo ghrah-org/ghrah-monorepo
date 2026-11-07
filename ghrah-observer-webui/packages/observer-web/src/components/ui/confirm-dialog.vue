@@ -30,12 +30,7 @@ const { t } = useI18n();
       <UiButton type="button" variant="secondary" data-autofocus @click="$emit('cancel')">
         {{ cancelLabel ?? t("common.cancel") }}
       </UiButton>
-      <UiButton
-        type="button"
-        variant="primary"
-        :class="danger ? 'confirm-dialog-danger' : undefined"
-        @click="$emit('confirm')"
-      >
+      <UiButton type="button" :variant="danger ? 'danger' : 'primary'" @click="$emit('confirm')">
         {{ confirmLabel ?? t("common.confirm") }}
       </UiButton>
     </template>

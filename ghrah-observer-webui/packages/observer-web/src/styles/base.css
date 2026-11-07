@@ -37,7 +37,7 @@
 
   button:focus-visible,
   [tabindex="0"]:focus-visible {
-    outline: 0.125rem solid #5b6ee1;
+    outline: 0.125rem solid var(--color-selected-line);
     outline-offset: 0.125rem;
   }
 }

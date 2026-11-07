@@ -100,7 +100,7 @@ async function handleRejectSubmit() {
       <textarea
         v-model="rejectReason"
         rows="2"
-        class="min-h-8 w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs dark:text-gray-100 dark:placeholder-gray-500 bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-red-500 resize-none"
+        class="field-reject min-h-8 w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs dark:text-gray-100 dark:placeholder-gray-500 bg-white dark:bg-gray-800 resize-none"
         :placeholder="t('hitl.reasonPlaceholder')"
       />
       <div class="flex gap-2">

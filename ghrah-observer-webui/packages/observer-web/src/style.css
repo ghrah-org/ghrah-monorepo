@@ -346,10 +346,10 @@
     flex: 1;
     height: 2rem;
     padding: 0.375rem 0.5rem;
-    border: 1px solid #cfd5e0;
+    border: 1px solid var(--color-border-strong);
     border-radius: 0.375rem;
-    background: #fff;
-    color: #303746;
+    background: var(--color-surface-2);
+    color: var(--color-text);
     font-size: var(--font-ui-note);
   }
   .room-admin-members {
@@ -416,25 +416,25 @@
     display: grid;
     gap: 0.5rem;
     padding: 0.75rem;
-    border: 1px solid #fecaca;
+    border: 1px solid var(--color-danger);
     border-radius: 0.625rem;
-    background: #fff7f7;
+    background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
   }
   .room-danger-zone strong {
-    color: #a72f3c;
+    color: var(--color-danger);
   }
   .room-danger-button {
     padding: 0.375rem 0.625rem;
-    border: 1px solid #d95a68;
+    border: 1px solid var(--color-danger);
     border-radius: 0.375rem;
-    background: #fff;
-    color: #b52f3e;
+    background: var(--color-surface);
+    color: var(--color-danger);
     cursor: pointer;
     font-size: var(--font-ui-note);
     font-weight: 700;
   }
   .room-danger-button:hover {
-    background: #fff0f1;
+    background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
   }
 
   .project-rail {
@@ -724,10 +724,10 @@
     min-width: 0;
     flex: 1;
     padding: 0.375rem 0.5rem;
-    border: 1px solid #cfd5e0;
+    border: 1px solid var(--color-border-strong);
     border-radius: 0.375rem;
-    background: #fff;
-    color: #272b38;
+    background: var(--color-surface-2);
+    color: var(--color-text);
     font-size: 0.8125rem;
   }
 
@@ -1043,8 +1043,7 @@
   }
 
   :root.dark .project-create-popover,
-  :root.dark .project-create-popover::before,
-  :root.dark .project-create-input {
+  :root.dark .project-create-popover::before {
     border-color: #3b4250;
     background: #20252f;
     color: #eef0f5;
@@ -1548,12 +1547,6 @@
     font-size: var(--font-ui-body);
     line-height: 1.6;
   }
-  .confirm-dialog-danger {
-    background: #c93b4b;
-  }
-  .confirm-dialog-danger:hover {
-    background: #ad2f3e;
-  }
   .manifest-create-form {
     min-height: 0;
   }
@@ -1944,6 +1937,12 @@
     color: #303746;
     font: inherit;
   }
+  .project-settings-form input,
+  .project-settings-form textarea {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-2);
+    color: var(--color-text);
+  }
   .project-settings-form input:not([type="checkbox"]),
   .project-danger-zone > input:not([type="checkbox"]),
   .archived-inline-danger > input:not([type="checkbox"]) {
@@ -2050,14 +2049,14 @@
     display: grid;
     gap: 0.625rem;
     padding: 1rem;
-    border: 1px solid #e4a4ad;
+    border: 1px solid var(--color-danger);
     border-radius: 0.75rem;
-    background: #fff9fa;
+    background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
   }
   .project-danger-zone h3,
   .archived-inline-danger strong {
     margin: 0;
-    color: #a52737;
+    color: var(--color-danger);
   }
   .project-danger-zone p,
   .archived-inline-danger p {
@@ -2067,23 +2066,23 @@
   .archived-inline-danger ul {
     margin: 0;
     padding-left: 1.25rem;
-    color: #71313a;
+    color: var(--color-danger);
     font-size: var(--font-ui-note);
   }
   .project-cascade-check {
     display: flex;
     align-items: flex-start;
     gap: 0.5rem;
-    color: #8c3340;
+    color: var(--color-danger);
     font-size: var(--font-ui-note);
   }
   .project-danger-button {
     width: fit-content;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #ca4353;
+    border: 1px solid var(--color-danger);
     border-radius: 0.4375rem;
-    background: #fff;
-    color: #ad2a3a;
+    background: var(--color-surface);
+    color: var(--color-danger);
     cursor: pointer;
   }
   .project-danger-button:disabled {
@@ -2244,9 +2243,6 @@
   :root.dark .agent-region {
     border-color: #303541;
   }
-  :root.dark .room-rename-form input,
-  :root.dark .project-settings-form input,
-  :root.dark .project-settings-form textarea,
   :root.dark .project-danger-zone > input,
   :root.dark .archived-inline-danger > input,
   :root.dark .project-change-row,
@@ -2256,8 +2252,6 @@
     background: #1d222b;
     color: #eef0f5;
   }
-  :root.dark .project-danger-zone,
-  :root.dark .archived-inline-danger,
   :root.dark .project-panel-error,
   :root.dark .archived-resources-error {
     border-color: #743b46;

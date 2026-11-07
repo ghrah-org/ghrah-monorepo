@@ -32,35 +32,36 @@ export default defineConfig({
     "btn-sm": "btn h-7 px-2 text-xs leading-none",
     "btn-xs": "btn h-[1.375rem] px-2 text-xs leading-none",
     "btn-primary":
-      "bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-[var(--color-action)] text-[color:var(--color-on-action)] hover:bg-[color-mix(in_srgb,var(--color-action)_88%,var(--color-on-action))] disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-danger":
-      "bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-[color-mix(in_srgb,var(--color-danger)_12%,var(--color-surface))] text-[color:var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_20%,var(--color-surface))] disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-secondary":
-      "bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-[var(--color-surface-2)] text-[color:var(--color-text)] hover:bg-[var(--color-surface-3)] disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-ghost":
-      "bg-transparent text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-transparent text-[color:var(--color-text)] hover:bg-[var(--color-surface-3)] disabled:opacity-50 disabled:cursor-not-allowed",
     "icon-button":
       "inline-flex shrink-0 items-center justify-center rounded border-none p-0 cursor-pointer text-base leading-none transition-colors duration-200",
     "icon-button-xs": "icon-button h-[1.375rem] w-[1.375rem]",
     "icon-button-sm": "icon-button h-7 w-7",
     "icon-button-md": "icon-button h-8 w-8",
     "icon-button-ghost":
-      "bg-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100",
+      "bg-transparent text-[color:var(--color-text-muted)] hover:bg-[var(--color-surface-3)] hover:text-[color:var(--color-text)]",
     "icon-button-solid":
-      "bg-[#f0f2f5] text-[#6f7786] hover:bg-[#e3e6ec] hover:text-[#3f4858] dark:bg-[#242a34] dark:text-[#eef0f5] dark:hover:bg-[#262b36]",
+      "bg-[var(--color-surface-2)] text-[color:var(--color-text-muted)] hover:bg-[var(--color-surface-3)] hover:text-[color:var(--color-text)]",
     field:
-      "box-border rounded border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800",
+      "box-border rounded border border-[color:var(--color-border-strong)] bg-[var(--color-surface-2)] text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--color-selected-line)]",
     "field-input": "field h-8 w-full px-2",
     "field-multiline": "field min-h-8 w-full px-2",
     "field-select": "field h-8 w-full appearance-none pl-2 pr-8",
     "field-select-wrap": "relative block min-w-0",
     "field-chevron":
-      "pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-gray-500",
-    panel: "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded",
+      "pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-[color:var(--color-text-muted)]",
+    "field-reject": "focus:outline-none focus:ring-1 focus:ring-[color:var(--color-danger)]",
+    panel: "bg-[var(--color-surface)] border border-[color:var(--color-border)] rounded",
     "ui-badge":
       "inline-flex items-center h-5 px-2 rounded-full text-[0.6875rem] font-medium leading-none",
-    "ui-badge-neutral": "ui-badge bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300",
-    "ui-badge-accent": "ui-badge bg-blue-50 text-blue-600 dark:bg-blue-900 dark:text-blue-300",
+    "ui-badge-neutral": "ui-badge bg-[var(--color-surface-2)] text-[color:var(--color-text-muted)]",
+    "ui-badge-accent": "ui-badge bg-[var(--color-surface-3)] text-[color:var(--color-text)]",
   },
   theme: {
     colors: {
