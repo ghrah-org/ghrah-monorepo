@@ -461,6 +461,7 @@ def default_core_unit_factory(
 
     managers: dict[str, tuple[str, MessageManager, set[str]]] = {}
     memberships: dict[str, str] = {}
+    owned_ability_stores: dict[str, Any] = {}
     manager_lock = asyncio.Lock()
 
     async def prepare(unit: Any, cluster_id: str, project_id: str, locator: str) -> None:
@@ -514,6 +515,7 @@ def default_core_unit_factory(
                         operators=frozenset({"deployment"}),
                         runs=runs,
                     )
+                    owned_ability_stores[cluster_id] = store
                 unit._config = replace(
                     unit._config,
                     ability_store=store,
@@ -522,6 +524,9 @@ def default_core_unit_factory(
 
     async def release(cluster_id: str) -> None:
         async with manager_lock:
+            store = owned_ability_stores.pop(cluster_id, None)
+            if store is not None:
+                await store.close()
             project_id = memberships.pop(cluster_id, None)
             if project_id is None:
                 return
