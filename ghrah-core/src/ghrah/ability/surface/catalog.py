@@ -32,6 +32,7 @@ class SurfaceTool:
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = None
     skills: tuple[str, ...] = ()
+    mcp_route: tuple[str, str] | None = None
 
     def definition(self) -> dict[str, Any]:
         """生成与生产工具表相同形状的函数定义，供 token 估算与后续注入。"""
@@ -81,6 +82,9 @@ def catalog_from_view(
                 effects=tuple(operation.effects),
                 input_schema=operation.input_schema,
                 output_schema=operation.output_schema,
+                mcp_route=(operation.mcp.server, operation.mcp.tool)
+                if operation.mcp is not None
+                else None,
                 skills=tuple(
                     f"{node.alias}/{skill.key}" for skill in node.skills if skill.body_allowed
                 ),

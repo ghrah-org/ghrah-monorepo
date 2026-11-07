@@ -249,6 +249,17 @@ def contract_of(definition: Mapping[str, Any], member: str) -> str | None:
     operation = operations.get(member) if isinstance(operations, Mapping) else None
     if not isinstance(operation, Mapping):
         return None
+    if definition.get("origin") == "mcp":
+        route = operation.get("mcp")
+        if (
+            definition.get("identity", {}).get("namespace") == "mcp"
+            and isinstance(route, Mapping)
+            and route.get("server") == definition.get("mcp", {}).get("server")
+            and isinstance(route.get("tool"), str)
+            and not operation.get("entry")
+        ):
+            return MCP_CONTRACT
+        return None
     entry = operation.get("entry")
     if not isinstance(entry, Mapping) or entry.get("path") != f"operations/{member}.py":
         return None
@@ -267,6 +278,9 @@ def admission_for(definition: Mapping[str, Any], member: str) -> BackendAdmissio
     contract = contract_of(definition, member)
     if contract is None:
         return None
+    if contract == MCP_CONTRACT and definition.get("origin") == "mcp":
+        # 远端 payload 的语义由服务器校验；身份与显式后端可用性由关系接纳核对。
+        return BackendAdmission(contract, (), lambda member, arguments, roots, root: None)
     if contract == PYTHON_CONTRACT:
         operation = definition["operations"][member]
         schema = operation["input_schema"]

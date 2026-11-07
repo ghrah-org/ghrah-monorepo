@@ -44,7 +44,8 @@ from ghrah.ability.content import (
     digest_bytes,
 )
 from ghrah.ability.contracts import operation_result_schema
-from ghrah.ability.provider_contracts import PYTHON_CONTRACT
+from ghrah.ability.execution.invocation import MemberReference
+from ghrah.ability.provider_contracts import MCP_CONTRACT, PYTHON_CONTRACT
 from ghrah.ability.versions import AbilityVersion
 
 if TYPE_CHECKING:
@@ -259,10 +260,27 @@ class AbilityAccessStore:
         )
         self.read_limit = 65536
         self._version_availability: Callable[[AbilityVersion], bool] | None = None
+        self._member_backends: dict[object, Callable[[str, MemberReference], bool]] = {}
 
     def set_version_availability(self, check: Callable[[AbilityVersion], bool]) -> None:
         """由受信宿主注入来源可用性；只派生投影，不改写授权事实。"""
         self._version_availability = check
+
+    def register_member_backend(
+        self, owner: object, available: Callable[[str, MemberReference], bool]
+    ) -> None:
+        """登记受信宿主的成员就绪观测；只影响读投影与接纳，不写授权。"""
+        self._member_backends[owner] = available
+
+    def unregister_member_backend(self, owner: object) -> None:
+        """移除所属宿主观测，不清理其它集群的后端。"""
+        self._member_backends.pop(owner, None)
+
+    def _member_backend_available(
+        self, agent: str, instance: str, alias: str, member: str, digest: str
+    ) -> bool:
+        reference = MemberReference(instance, alias, member, digest)
+        return any(check(agent, reference) for check in self._member_backends.values())
 
     def _version_available(self, row: Any) -> bool:
         if self._version_availability is None:
@@ -1117,7 +1135,16 @@ class AbilityAccessStore:
                             availability=(
                                 "unavailable"
                                 if not available
-                                or definition.get("origin") == "mcp"
+                                or (
+                                    definition.get("origin") == "mcp"
+                                    and not self._member_backend_available(
+                                        agent,
+                                        instance["id"],
+                                        grant["alias"],
+                                        key,
+                                        version["digest"],
+                                    )
+                                )
                                 or not axes.get(f"operations/{key}", {}).get("available", True)
                                 else "unknown"
                             ),
@@ -1466,6 +1493,11 @@ class AbilityAccessStore:
             admission = admission_for(definition, fence.member)
             if admission is None:
                 raise AccessError("unavailable")
+            if admission.contract == MCP_CONTRACT and definition.get("origin") == "mcp":
+                if not self._member_backend_available(
+                    fence.agent_id, fence.instance_id, fence.alias, fence.member, instance["digest"]
+                ):
+                    raise AccessError("unavailable")
             if admission.contract == PYTHON_CONTRACT and self._version_availability is None:
                 raise AccessError("unavailable")
             admission.check(fence.member, arguments, roots, instance["root"])

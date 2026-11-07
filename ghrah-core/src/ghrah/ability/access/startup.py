@@ -961,6 +961,8 @@ class StartupGrantMaterializer:
         async def admit(call: OperationCall) -> str | None:
             if call.member.alias != binding.alias or call.member.member != binding.member:
                 return _denial(binding, "access_denied")
+            if self._mcp_deployment is not None:
+                await self._mcp_deployment.refresh_agent(agent, call.identity.run)
             try:
                 current_run = store.current_run(agent)
             except AccessError:

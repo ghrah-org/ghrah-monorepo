@@ -68,13 +68,41 @@ class McpSkillBinding:
 
 
 @dataclass(frozen=True)
+class McpPackageBinding:
+    """无 Skill 的 MCP 快照包关联；只允许同一确定包版本的显式成员。"""
+
+    project_id: str
+    cluster_id: str
+    agent_id: str
+    server_ref: str
+    server: str
+    members: tuple[McpMemberBinding, ...]
+
+    def __post_init__(self) -> None:
+        validate_agent_id(self.agent_id)
+        validate_server_name(self.server)
+        if not all((self.project_id, self.cluster_id, self.server_ref, self.members)):
+            raise McpConfigError("MCP 包关联缺少作用域、服务器引用或成员白名单")
+        if len({m.tool.name for m in self.members}) != len(self.members):
+            raise McpConfigError("MCP 包关联存在重复工具")
+        if len({m.reference for m in self.members}) != len(self.members):
+            raise McpConfigError("MCP 包关联存在重复成员")
+        packages = {
+            (m.reference.instance_id, m.reference.alias, m.reference.version_digest)
+            for m in self.members
+        }
+        if len(packages) != 1:
+            raise McpConfigError("MCP 包关联必须固定同一包实例与版本")
+
+
+@dataclass(frozen=True)
 class McpDeploymentConfig:
     """进程内受信配置；source/connector 只由部署代码注入，不接收模型输入。
 
     外部 source 由其创建者关闭；没有注入时每个 CoreUnit 自建并最后关闭 source。
     """
 
-    bindings: tuple[McpSkillBinding, ...]
+    bindings: tuple[McpSkillBinding | McpPackageBinding, ...]
     source: Any = field(default=None, repr=False, compare=False)
     connector: Any = field(default=None, repr=False, compare=False)
 
@@ -105,6 +133,17 @@ class McpDeployment:
         self._owned_source = config.source is None
         self._agents: set[AgentMcpService] = set()
         self._closed = False
+        self.store.register_member_backend(self, self.member_available)
+
+    def member_available(self, agent: str, reference: MemberReference) -> bool:
+        """观察当前宿主是否显式接线该快照成员；不产生授权或工具选择。"""
+        return not self._closed and any(
+            isinstance(b, McpPackageBinding)
+            and (b.project_id, b.cluster_id, b.agent_id)
+            == (self.store.project_id, self.cluster_id, agent)
+            and any(m.reference == reference for m in b.members)
+            for b in self._bindings
+        )
 
     def for_agent(self, agent_id: str) -> AgentMcpService:
         """为一次装配创建空激活集合，不联网，也不读取凭据。"""
@@ -120,9 +159,19 @@ class McpDeployment:
         self._agents.add(service)
         return service
 
+    async def refresh_agent(self, agent: str, run: str) -> None:
+        """在执行接纳前释放该 Agent/run 已失效的激活，不读取调用凭据。"""
+        for service in tuple(self._agents):
+            if (service._identity.subject_id, service._identity.run_id) == (agent, run):
+                try:
+                    await service.refresh()
+                except McpNotActivatedError:
+                    pass
+
     async def close(self) -> None:
         """先关闭全部 Agent 接纳，清理会话后才关闭自己创建的配置源。"""
         self._closed = True
+        self.store.unregister_member_backend(self)
         agents = tuple(self._agents)
         for service in agents:
             service.stop_admission()
@@ -136,16 +185,30 @@ class McpDeployment:
 
 @dataclass(frozen=True)
 class _Activation:
-    binding: McpSkillBinding
-    skill: MemberFence
+    binding: McpSkillBinding | McpPackageBinding
+    skill: MemberFence | None
     members: tuple[MemberFence, ...]
+
+    @property
+    def fences(self) -> tuple[MemberFence, ...]:
+        return (self.skill, *self.members) if self.skill is not None else self.members
+
+    @property
+    def owner_name(self) -> str:
+        if self.skill is not None:
+            return f"{self.skill.alias}/{self.skill.member}"
+        reference = self.binding.members[0].reference
+        return f"package/{reference.alias}/{reference.version_digest}"
 
 
 class AgentMcpService:
     """绑定项目、集群、稳定主体与 run 的执行端口；调用不接收 scope 参数。"""
 
     def __init__(
-        self, owner: McpDeployment, agent_id: str, bindings: tuple[McpSkillBinding, ...]
+        self,
+        owner: McpDeployment,
+        agent_id: str,
+        bindings: tuple[McpSkillBinding | McpPackageBinding, ...],
     ) -> None:
         self._owner = owner
         self._bindings = bindings
@@ -228,9 +291,16 @@ class AgentMcpService:
             fence.version_digest,
         )
 
-    async def _members(self, binding: McpSkillBinding) -> tuple[MemberFence, ...]:
+    async def _members(
+        self, binding: McpSkillBinding | McpPackageBinding
+    ) -> tuple[MemberFence, ...]:
         store = self._owner.store
         view = await store.view(self._identity, self._identity.subject_id)
+        catalog = (
+            await store.surface_snapshot(self._identity, self._identity.subject_id)
+            if isinstance(binding, McpPackageBinding)
+            else None
+        )
         fences = []
         for member in binding.members:
             reference = member.reference
@@ -253,6 +323,12 @@ class AgentMcpService:
             operation = next(o for o in node.operations if o.key == reference.member)
             if operation.input_schema != member.tool.input_schema:
                 raise McpConfigError("MCP 本地 schema 与已提交成员不一致")
+            if catalog is not None:
+                target = next(
+                    (t for t in catalog.tools if t.entry.tool_name == selected.name), None
+                )
+                if target is None or target.mcp_route != (binding.server_ref, member.tool.name):
+                    raise McpConfigError("MCP 受信映射与已提交快照不一致")
             fences.append(fence)
         return tuple(fences)
 
@@ -262,7 +338,7 @@ class AgentMcpService:
         await self.refresh()
         epoch = self._epoch
         for binding in self._bindings:
-            if not self._matches(binding.skill, fence):
+            if not isinstance(binding, McpSkillBinding) or not self._matches(binding.skill, fence):
                 continue
             members = await self._members(binding)
             await self._owner.store.authorize(self._identity, fence)
@@ -290,9 +366,7 @@ class AgentMcpService:
         removed = []
         for server, activation in tuple(self._active.items()):
             try:
-                await self._owner.store.authorize_many(
-                    self._identity, (activation.skill, *activation.members)
-                )
+                await self._owner.store.authorize_many(self._identity, activation.fences)
             except AccessError:
                 self._active.pop(server, None)
                 removed.append(activation)
@@ -306,7 +380,9 @@ class AgentMcpService:
         """卸载只清理本服务对应 Skill，不能撤销已发生的外部效果。"""
         self._epoch += 1
         removed = [
-            a for a in self._active.values() if (a.skill.alias, a.skill.member) == (alias, member)
+            a
+            for a in self._active.values()
+            if a.skill is not None and (a.skill.alias, a.skill.member) == (alias, member)
         ]
         for activation in removed:
             self._active.pop(activation.binding.server, None)
@@ -315,6 +391,25 @@ class AgentMcpService:
                 agent_scope=self.scope,
                 skill_full_name=f"{alias}/{member}",
             )
+
+    async def _activate_package(self, binding: McpPackageBinding) -> None:
+        if binding.server in self._active:
+            return
+        epoch = self._epoch
+        members = await self._members(binding)
+        activation = _Activation(binding, None, members)
+        spec = self._owner.source.connection_spec(
+            binding.server_ref,
+            skill_full_name=activation.owner_name,
+            server=binding.server,
+            tools=tuple(m.tool for m in binding.members),
+        )
+        await self._owner.store.authorize_many(self._identity, members)
+        await self._current()
+        if epoch != self._epoch:
+            raise McpNotActivatedError("MCP package activation ended")
+        await self._runtime.activate(spec, agent_scope=self.scope)
+        self._active[binding.server] = activation
 
     async def invoke(self, call: OperationCall) -> ToolOutcome:
         """按固定成员调用；参数只作为远端 payload，不能切换身份或服务器。"""
@@ -325,16 +420,21 @@ class AgentMcpService:
             self._identity.run_id,
         ):
             raise AccessError("access_denied")
+        for binding in self._bindings:
+            if isinstance(binding, McpPackageBinding) and any(
+                m.reference == call.member for m in binding.members
+            ):
+                await self._activate_package(binding)
         for activation in tuple(self._active.values()):
             for member, fence in zip(activation.binding.members, activation.members, strict=True):
                 if call.member != member.reference:
                     continue
-                await self._owner.store.authorize_many(self._identity, (activation.skill, fence))
+                await self._owner.store.authorize_many(self._identity, activation.fences)
                 await self._current()
                 binding = activation.binding
                 current = self._owner.source.connection_spec(
                     binding.server_ref,
-                    skill_full_name=f"{activation.skill.alias}/{activation.skill.member}",
+                    skill_full_name=activation.owner_name,
                     server=binding.server,
                     tools=tuple(m.tool for m in binding.members),
                 )
@@ -346,9 +446,7 @@ class AgentMcpService:
                     await self._runtime.deactivate_server(
                         agent_scope=self.scope, server=binding.server
                     )
-                    await self._owner.store.authorize_many(
-                        self._identity, (activation.skill, fence)
-                    )
+                    await self._owner.store.authorize_many(self._identity, activation.fences)
                     await self._current()
                     await self._runtime.activate(current, agent_scope=self.scope)
                 return await self._runtime.call(

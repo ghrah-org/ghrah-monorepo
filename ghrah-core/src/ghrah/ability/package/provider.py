@@ -63,7 +63,7 @@ class InstalledAbilityProvider:
                 f"安装包 {package} 有 {len(versions)} 个候选版本，请显式 select_version"
             )
         item = next((item for item in versions if wanted is None or item.version == wanted), None)
-        if item is None or item.namespace in {"ghrah", "mcp"}:
+        if item is None or item.namespace == "ghrah":
             raise ManifestValidationError(f"安装包版本不存在或来源不支持：{package}@{wanted}")
         return item
 
@@ -86,7 +86,9 @@ class InstalledAbilityProvider:
         if (
             definition.identity.full_name != package
             or definition.identity.version != item.version
-            or definition.origin != "source"
+            or (definition.identity.namespace == "mcp") != (definition.origin == "mcp")
+            or (definition.origin == "mcp")
+            != (item.source is not None and item.source.kind == "mcp")
         ):
             raise ManifestValidationError(f"安装槽与包身份不一致：{package}@{item.version}")
         self._captured[captured.digest] = (item, captured)
@@ -97,7 +99,7 @@ class InstalledAbilityProvider:
         """只读候选索引；按引用选择时才校验与捕获资源，不加载未选包内容。"""
         result = {}
         for package in self.store.packages():
-            if package.namespace in {"ghrah", "mcp"}:
+            if package.namespace == "ghrah":
                 continue
             if len(package.versions) != 1 and package.full_name not in self._selected:
                 continue
@@ -112,7 +114,9 @@ class InstalledAbilityProvider:
             if (
                 definition.identity.full_name == package.full_name
                 and definition.identity.version == item.version
-                and definition.origin == "source"
+                and (definition.identity.namespace == "mcp") == (definition.origin == "mcp")
+                and (definition.origin == "mcp")
+                == (item.source is not None and item.source.kind == "mcp")
             ):
                 result[package.full_name] = definition
         return result
@@ -175,11 +179,14 @@ class InstalledAbilityProvider:
             and (current.root / "ability.yaml").is_file()
             and not is_link(self.store.root)
             and not is_link(current.root.parent.parent)
-            and all(
-                operation.entry is not None
-                and (current.root / operation.entry.path).is_file()
-                and not is_link(current.root / operation.entry.path)
-                for operation in version.definition().operations.values()
+            and (
+                version.definition().origin == "mcp"
+                or all(
+                    operation.entry is not None
+                    and (current.root / operation.entry.path).is_file()
+                    and not is_link(current.root / operation.entry.path)
+                    for operation in version.definition().operations.values()
+                )
             )
         )
 
@@ -199,6 +206,8 @@ class InstalledAbilityProvider:
         # 加载前再次 verify，拒绝捕获后发生的篡改；已有对象不原地 reload。
         if not self._installer.verify(package, item.version)[0].ok:
             raise ManifestValidationError(f"安装包校验失败：{package}")
+        if version.definition().origin == "mcp":
+            return McpSnapshotOperation(member)
         key = (digest, member)
         module = self._loaded.get(key)
         if module is None:
@@ -232,6 +241,28 @@ class InstalledAbilityProvider:
             workspace_root=workspace_root,
             writes=bool(operation.permissions.get("fs_write")),
         )
+
+
+class McpSnapshotOperation(Ability):
+    """快照成员的进程内适配；只把已固定调用交给受信 MCP 端口。"""
+
+    def __init__(self, member: str) -> None:
+        self._member = member
+
+    @property
+    def name(self) -> str:
+        """返回包内成员键。"""
+        return self._member
+
+    def get_hooks(self) -> list[Any]:
+        """权限与审批由启动物化器的统一包装层装配。"""
+        return []
+
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        """逐成员执行，不允许参数选择服务器、凭据或工具。"""
+        from ghrah.ability.mcp_wiring import execute_mcp_member
+
+        return await execute_mcp_member(call, services)
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
