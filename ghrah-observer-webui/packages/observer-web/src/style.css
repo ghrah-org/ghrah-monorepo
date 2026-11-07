@@ -1354,7 +1354,7 @@
     right: 0.4375rem;
     z-index: 4;
   }
-  .room-list-row .sidebar-row {
+  .sidebar-row.room-list-row {
     padding-right: 2.75rem;
   }
   .sidebar-row-menu-trigger {
@@ -1448,6 +1448,8 @@
     display: grid;
     min-width: 0;
     flex: 1;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
     gap: 0.375rem;
   }
   .sidebar-row-primary {
@@ -1458,6 +1460,8 @@
     gap: 0.5rem;
   }
   .sidebar-row-label {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     font-size: var(--font-ui-body);
     text-overflow: ellipsis;
@@ -1471,9 +1475,17 @@
   }
   .sidebar-row-secondary {
     min-width: 0;
+    max-width: 100%;
     color: #858d9c;
     font-size: var(--font-ui-note);
     font-weight: 400;
+  }
+  .room-member-stack {
+    display: flex;
+    max-width: 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .instance-settings-main {
@@ -2407,13 +2419,20 @@
     color: #3f4653;
     background: #eef0f4;
   }
+  .agent-list > ul > li {
+    position: relative;
+    min-width: 0;
+  }
+  .agent-list > ul > li:has(.agent-menu) {
+    z-index: 2;
+  }
   .agent-menu {
     position: absolute;
     right: 0;
-    top: 100%;
-    margin-top: 0.25rem;
-    width: 13rem;
+    top: calc(100% + 0.25rem);
     z-index: 40;
+    box-sizing: border-box;
+    width: min(13rem, 100%);
     border: 1px solid #e3e6ec;
     border-radius: 0.5rem;
     background: #ffffff;

@@ -99,8 +99,8 @@ function selectAgent(agent: AgentInfo) {
         ]"
         @click="selectAgent(agent)"
       >
-        <span class="truncate">{{ agent.agentName }}</span>
-        <div class="flex items-center gap-1">
+        <span class="min-w-0 truncate">{{ agent.agentName }}</span>
+        <div class="flex shrink-0 items-center gap-1">
           <span
             v-for="roomName in roomsOf(agent)"
             :key="roomName"

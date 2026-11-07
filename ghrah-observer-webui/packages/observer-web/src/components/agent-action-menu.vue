@@ -76,7 +76,7 @@ async function handleTerminate() {
 </script>
 
 <template>
-  <div v-if="agents.selectedAgentName" class="relative">
+  <div v-if="agents.selectedAgentName">
     <button
       type="button"
       class="agent-menu-trigger"
