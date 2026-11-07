@@ -110,15 +110,10 @@ class TestCheckCommandSafe:
         assert verdict.category == CommandSafetyCategory.SAFE
         assert verdict.sub_command == "diff"
 
-    def test_safe_command_npm_test(self) -> None:
-        verdict = CommandSafetyChecker().check_command("npm test")
+    def test_safe_command_npm_pack(self) -> None:
+        verdict = CommandSafetyChecker().check_command("npm pack")
         assert verdict.category == CommandSafetyCategory.SAFE
-        assert verdict.sub_command == "test"
-
-    def test_safe_command_npm_run(self) -> None:
-        verdict = CommandSafetyChecker().check_command("npm run build")
-        assert verdict.category == CommandSafetyCategory.SAFE
-        assert verdict.sub_command == "run"
+        assert verdict.sub_command == "pack"
 
     def test_safe_command_pip_list(self) -> None:
         verdict = CommandSafetyChecker().check_command("pip list")
@@ -161,6 +156,17 @@ class TestCheckCommandDangerous:
         assert verdict.category == CommandSafetyCategory.DANGEROUS
         assert verdict.sub_command == "publish"
 
+    def test_npm_run_and_test_are_dangerous(self) -> None:
+        # bash-classify ≥0.14：package 脚本不可静态证明安全。
+        assert (
+            CommandSafetyChecker().check_command("npm run build").category
+            is CommandSafetyCategory.DANGEROUS
+        )
+        assert (
+            CommandSafetyChecker().check_command("npm test").category
+            is CommandSafetyCategory.DANGEROUS
+        )
+
     def test_dangerous_subcommand_docker_rmi(self) -> None:
         verdict = CommandSafetyChecker().check_command("docker rmi myimage")
         assert verdict.category == CommandSafetyCategory.DANGEROUS
@@ -191,18 +197,21 @@ class TestCheckCommandRequireHitl:
         assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
         assert verdict.sub_command == "install"
 
-    def test_python_script_requires_approval(self) -> None:
+    def test_python_script_is_dangerous(self) -> None:
+        # bash-classify 将「解释器跑脚本」定为 DANGEROUS；阶段 1 直接硬拒绝。
         verdict = CommandSafetyChecker().check_command("python script.py")
-        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
+        assert verdict.category == CommandSafetyCategory.DANGEROUS
         assert verdict.base_command == "python"
 
-    def test_bash_requires_approval(self) -> None:
+    def test_bash_unwraps_readonly_inner_as_safe(self) -> None:
+        # 前端拆开 bash -c 后内层只读，整式可为 SAFE（不再整条 HITL）。
         verdict = CommandSafetyChecker().check_command("bash -c 'echo hello'")
-        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
+        assert verdict.category == CommandSafetyCategory.SAFE
 
-    def test_git_no_args_requires_approval(self) -> None:
+    def test_git_no_args_is_dangerous(self) -> None:
+        # bash-classify ≥0.14：裸 `git` 视为危险/不可自动执行。
         verdict = CommandSafetyChecker().check_command("git")
-        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
+        assert verdict.category == CommandSafetyCategory.DANGEROUS
 
 
 class TestCheckCommandEdgeCases:
@@ -320,32 +329,37 @@ class TestExtendSafeLists:
 
     def test_extra_base_command_becomes_safe(self) -> None:
         checker = CommandSafetyChecker(require_approval=True)
-        verdict_before = checker.check_command("pnpm build")
-        assert verdict_before.category == CommandSafetyCategory.REQUIRE_HITL
+        assert checker.check_command("make").category == CommandSafetyCategory.REQUIRE_HITL
 
-        checker.extend_safe_lists(extra_commands={"pnpm", "make"})
-        assert checker.check_command("pnpm build").category == CommandSafetyCategory.SAFE
+        checker.extend_safe_lists(extra_commands={"make"})
         assert checker.check_command("make").category == CommandSafetyCategory.SAFE
 
     def test_extra_sub_commands_become_safe(self) -> None:
-        checker = CommandSafetyChecker(require_approval=True)
-        checker.extend_safe_lists(extra_sub_commands={"pnpm": {"test", "type-check"}})
-        assert checker.check_command("pnpm test").category == CommandSafetyCategory.SAFE
-        assert (
-            checker.check_command("pnpm exec biome check").category
-            == CommandSafetyCategory.REQUIRE_HITL  # 未列入的子命令仍需审批
+        checker = CommandSafetyChecker(
+            require_approval=True,
+            safe_sub_commands={"mytool": set()},
+            dangerous_sub_commands={"mytool": set()},
         )
+        assert checker.check_command("mytool info").category == CommandSafetyCategory.REQUIRE_HITL
+        checker.extend_safe_lists(extra_sub_commands={"mytool": {"info", "list"}})
+        assert checker.check_command("mytool info").category == CommandSafetyCategory.SAFE
+        assert checker.check_command("mytool deploy").category == CommandSafetyCategory.REQUIRE_HITL
 
     def test_extension_does_not_touch_dangerous(self) -> None:
         checker = CommandSafetyChecker(require_approval=True)
-        checker.extend_safe_lists(extra_commands={"rm"}, extra_sub_commands={"git": {"clean"}})
-        # 只增不减：扩展不能把 DANGEROUS 名单中的命令翻成 SAFE
+        checker.extend_safe_lists(
+            extra_commands={"rm", "pnpm"},
+            extra_sub_commands={"git": {"clean"}},
+        )
+        # 只增不减：扩展不能把 DANGEROUS（含 bash-classify 升格项）翻成 SAFE
         assert checker.check_command("rm -rf /").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("git clean -fdx").category == CommandSafetyCategory.DANGEROUS
+        assert checker.check_command("pnpm build").category == CommandSafetyCategory.DANGEROUS
+        assert checker.check_command("npm run build").category == CommandSafetyCategory.DANGEROUS
 
     def test_builtin_safe_list_preserved_after_extension(self) -> None:
         checker = CommandSafetyChecker(require_approval=True)
-        checker.extend_safe_lists(extra_commands={"pnpm"})
+        checker.extend_safe_lists(extra_commands={"make"})
         assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
 
 
@@ -456,3 +470,46 @@ def test_command_and_scope_share_leading_option_parsing(command):
     assert checker.check_command(command).category is CommandSafetyCategory.SAFE
     checker = CommandSafetyChecker(allowed_commands=("git",), denied_commands=("git status",))
     assert checker.check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls -la | head -20",
+        "git status && git diff --stat",
+        "pytest tests/ -q && ruff check .",
+    ],
+)
+def test_readonly_shell_composition_is_safe(command):
+    """管道 / && 等合法只读组合不再因元字符整条硬拒绝。"""
+    assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls && rm -rf /tmp/x",
+        "echo hi > /etc/passwd",
+    ],
+)
+def test_destructive_shell_composition_stays_dangerous(command):
+    assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git frobnicate",
+        "pnpm exec rm -rf /tmp/x",
+        "npm exec -- rm -rf /tmp/x",
+    ],
+)
+def test_fail_closed_unmatched_or_exec_is_not_safe(command):
+    """bash-classify ≥0.14 内置 fail-closed：未知子命令 / exec 委托不得 SAFE。"""
+    assert CommandSafetyChecker().check_command(command).category is not CommandSafetyCategory.SAFE
+
+
+def test_sensitive_path_read_is_not_auto_safe() -> None:
+    """0.12+ 敏感路径：只读也不得因 READONLY 自动放行（risk HIGH / sensitive_paths）。"""
+    verdict = CommandSafetyChecker().check_command("cat ~/.ssh/id_rsa")
+    assert verdict.category is not CommandSafetyCategory.SAFE
