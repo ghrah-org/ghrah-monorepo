@@ -91,7 +91,7 @@ async function handleSubmit() {
           data-autofocus
           type="text"
           required
-          class="w-full px-3 py-2 text-sm"
+          class="w-full"
           :placeholder="t('config.spawn.runtimeNamePlaceholder')"
         />
       </div>

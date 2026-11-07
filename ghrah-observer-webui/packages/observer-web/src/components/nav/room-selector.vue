@@ -169,7 +169,7 @@ async function runLifecycle() {
         data-autofocus
         type="text"
         :placeholder="t('nav.room.namePlaceholder')"
-        class="flex-1 min-w-0 px-2 py-1 text-sm dark:text-gray-100"
+        class="flex-1 min-w-0 dark:text-gray-100"
         @keydown.esc="cancelCreate"
       />
       <UiButton type="submit" size="sm" variant="primary" :disabled="busy || !newName.trim()">

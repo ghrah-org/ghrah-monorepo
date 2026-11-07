@@ -13,6 +13,7 @@ import { z } from "zod";
 import BaseModal from "./ui/base-modal.vue";
 import { useAgentEntityRequest } from "@/composables/useAgentEntity";
 import UiButton from "@/components/ui/button.vue";
+import UiSelect from "@/components/ui/select.vue";
 
 const props = defineProps<{ projectId: string; agentId?: string }>();
 const emit = defineEmits<{ close: []; changed: []; created: [agentId: string] }>();
@@ -386,29 +387,29 @@ onMounted(() => {
           /></label>
           <label
             >{{ t("agentEntity.cluster")
-            }}<select v-model="cluster" :disabled="busy" required>
+            }}<UiSelect v-model="cluster" :disabled="busy" required>
               <option value="" disabled>{{ t("agentEntity.choose") }}</option>
               <option v-for="id in project?.cluster_ids ?? []" :key="id" :value="id">
                 {{ id }}
               </option>
-            </select></label
+            </UiSelect></label
           >
           <label
             >{{ t("agentEntity.prompt") }}<textarea v-model="prompt" :disabled="busy" rows="3" />
           </label>
           <label
             >{{ t("agentEntity.source")
-            }}<select v-model="source" :disabled="busy">
+            }}<UiSelect v-model="source" :disabled="busy">
               <option value="types">{{ t("agentEntity.types") }}</option>
               <option value="manifest">{{ t("agentEntity.manifest") }}</option>
-            </select></label
+            </UiSelect></label
           >
           <label v-if="source === 'types'"
             >{{ t("agentEntity.modelConfig") }}
-            <select v-model="modelName" :disabled="busy" required data-testid="model-config">
+            <UiSelect v-model="modelName" :disabled="busy" required data-testid="model-config">
               <option value="" disabled>{{ t("agentEntity.choose") }}</option>
               <option v-for="item in modelNames" :key="item" :value="item">{{ item }}</option>
-            </select>
+            </UiSelect>
           </label>
           <p v-if="source === 'types' && !modelNames.length">
             {{ t("agentEntity.noModelConfigs") }}
@@ -524,12 +525,12 @@ onMounted(() => {
             <template v-else>
               <label
                 >{{ t("agentEntity.modelConfig") }}
-                <select v-model="modelName" :disabled="!canConfigure" data-testid="model-config">
+                <UiSelect v-model="modelName" :disabled="!canConfigure" data-testid="model-config">
                   <option value="" disabled>
                     {{ snapshot.specification.name }} ({{ t("agentEntity.legacyModel") }})
                   </option>
                   <option v-for="item in modelNames" :key="item" :value="item">{{ item }}</option>
-                </select>
+                </UiSelect>
               </label>
               <p v-if="!modelNames.length">{{ t("agentEntity.noModelConfigs") }}</p>
               <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
@@ -593,7 +594,7 @@ onMounted(() => {
               ><p v-if="!catalog.sessions.length">{{ t("agentEntity.noSessions") }}</p>
               <label
                 >{{ t("agentEntity.session")
-                }}<select v-model="sessionId" :disabled="busy" @change="chooseSession">
+                }}<UiSelect v-model="sessionId" :disabled="busy" @change="chooseSession">
                   <option
                     v-for="session in catalog.sessions"
                     :key="session.session_id"
@@ -606,11 +607,11 @@ onMounted(() => {
                         : ""
                     }}
                   </option>
-                </select></label
+                </UiSelect></label
               >
               <label
                 >{{ t("agentEntity.branch")
-                }}<select
+                }}<UiSelect
                   v-model="branchId"
                   :disabled="busy"
                   @change="
@@ -625,7 +626,7 @@ onMounted(() => {
                   >
                     {{ branch.name }} · {{ branch.branch_id }}
                   </option>
-                </select></label
+                </UiSelect></label
               >
               <div class="entity-actions">
                 <UiButton
@@ -680,7 +681,7 @@ onMounted(() => {
           <section v-if="tab === 'mailbox'" class="entity-stack">
             <label
               >{{ t("agentEntity.direction")
-              }}<select
+              }}<UiSelect
                 v-model="direction"
                 :disabled="busy"
                 @change="
@@ -690,7 +691,7 @@ onMounted(() => {
               >
                 <option value="inbox">{{ t("agentEntity.inbox") }}</option>
                 <option value="outbox">{{ t("agentEntity.outbox") }}</option>
-              </select></label
+              </UiSelect></label
             >
             <UiButton variant="secondary" :disabled="busy || !connected" @click="loadMail()">
               {{ t("agentEntity.reloadMessages") }}
@@ -815,7 +816,6 @@ fieldset {
   min-width: 0;
 }
 input,
-select,
 textarea {
   font: inherit;
   color: inherit;
@@ -824,6 +824,10 @@ textarea {
   border-radius: var(--radius-md);
   padding: var(--spacing-2);
   min-width: 0;
+}
+input:not([type="checkbox"]),
+textarea {
+  min-height: 2rem;
 }
 .entity-facts {
   display: grid;

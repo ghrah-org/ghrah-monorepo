@@ -11,6 +11,7 @@ import { Document, parseDocument } from "yaml";
 import BaseModal from "@/components/ui/base-modal.vue";
 import { useObserver } from "@/composables/useObserver";
 import UiButton from "@/components/ui/button.vue";
+import UiSelect from "@/components/ui/select.vue";
 import UiTextField from "@/components/ui/text-field.vue";
 
 const emit = defineEmits<{ close: []; dirtyChange: [dirty: boolean] }>();
@@ -250,7 +251,7 @@ async function handleSubmit(save = true) {
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_.]*[a-z0-9]$"
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
                 placeholder="e.g. ghrah.examples"
               />
             </div>
@@ -263,7 +264,7 @@ async function handleSubmit(save = true) {
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_]*$"
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
                 placeholder="e.g. designer"
               />
             </div>
@@ -275,7 +276,7 @@ async function handleSubmit(save = true) {
             <UiTextField
               v-model="form.title"
               type="text"
-              class="w-full px-2 py-1.5 text-sm"
+              class="w-full"
               placeholder="e.g. Designer"
             />
           </div>
@@ -286,7 +287,7 @@ async function handleSubmit(save = true) {
             <UiTextField
               v-model="form.description"
               type="text"
-              class="w-full px-2 py-1.5 text-sm"
+              class="w-full"
               :placeholder="t('config.manifest.descriptionPlaceholder')"
             />
           </div>
@@ -297,7 +298,7 @@ async function handleSubmit(save = true) {
             <UiTextField
               v-model="form.tags"
               type="text"
-              class="w-full px-2 py-1.5 text-sm"
+              class="w-full"
               :placeholder="t('config.manifest.tagsPlaceholder')"
             />
           </div>
@@ -317,7 +318,7 @@ async function handleSubmit(save = true) {
                 v-model="form.endpoint_name"
                 type="text"
                 required
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
                 placeholder="e.g. gpt-4o-mini"
               />
             </div>
@@ -329,7 +330,7 @@ async function handleSubmit(save = true) {
                 v-model.number="form.max_iterations"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
               />
             </div>
           </div>
@@ -344,7 +345,7 @@ async function handleSubmit(save = true) {
                 step="0.1"
                 min="0"
                 max="2"
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
                 :placeholder="t('config.manifest.temperaturePlaceholder')"
               />
             </div>
@@ -356,7 +357,7 @@ async function handleSubmit(save = true) {
                 v-model="form.max_tokens"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 text-sm"
+                class="w-full"
                 :placeholder="t('config.manifest.maxTokensPlaceholder')"
               />
             </div>
@@ -373,7 +374,7 @@ async function handleSubmit(save = true) {
             multiline
             required
             rows="4"
-            class="w-full px-2 py-1.5 text-sm font-mono"
+            class="w-full font-mono"
             placeholder="You are a helpful assistant."
           />
         </fieldset>
@@ -392,18 +393,15 @@ async function handleSubmit(save = true) {
               :key="index"
               class="flex items-center gap-2"
             >
-              <select
-                v-model="ability.mode"
-                class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+              <UiSelect v-model="ability.mode">
                 <option value="type">{{ t("config.manifest.typeBuiltIn") }}</option>
                 <option value="ref">{{ t("config.manifest.ref") }}</option>
-              </select>
+              </UiSelect>
               <UiTextField
                 v-model="ability.value"
                 type="text"
                 required
-                class="flex-1 px-2 py-1.5 text-sm"
+                class="flex-1"
                 :placeholder="
                   ability.mode === 'type'
                     ? 'e.g. end_task, conversation'

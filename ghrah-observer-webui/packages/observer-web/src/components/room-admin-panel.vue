@@ -12,6 +12,7 @@ import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import UiButton from "@/components/ui/button.vue";
+import UiSelect from "@/components/ui/select.vue";
 
 const emit = defineEmits<{
   roomInvalidated: [target: { projectId: string; roomId: string }];
@@ -243,8 +244,9 @@ async function refreshRoom() {
           </li>
         </ul>
         <form class="room-member-add" @submit.prevent="addMember">
-          <select
+          <UiSelect
             v-model="selectedAgentId"
+            class="min-w-0 flex-1"
             :aria-label="t('roomAdmin.addAgent')"
             :disabled="busy !== null || candidateAgents.length === 0"
           >
@@ -256,7 +258,7 @@ async function refreshRoom() {
             <option v-for="agent in candidateAgents" :key="agent.agentId" :value="agent.agentId">
               {{ agent.agentName }}
             </option>
-          </select>
+          </UiSelect>
           <UiButton type="submit" variant="secondary" :disabled="!selectedAgentId || busy !== null">
             {{ t("roomAdmin.add") }}
           </UiButton>

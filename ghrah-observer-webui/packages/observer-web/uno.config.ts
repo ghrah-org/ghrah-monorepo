@@ -48,6 +48,14 @@ export default defineConfig({
       "bg-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100",
     "icon-button-solid":
       "bg-[#f0f2f5] text-[#6f7786] hover:bg-[#e3e6ec] hover:text-[#3f4858] dark:bg-[#242a34] dark:text-[#eef0f5] dark:hover:bg-[#262b36]",
+    field:
+      "box-border rounded border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800",
+    "field-input": "field h-8 w-full px-2",
+    "field-multiline": "field min-h-8 w-full px-2",
+    "field-select": "field h-8 w-full appearance-none pl-2 pr-8",
+    "field-select-wrap": "relative block min-w-0",
+    "field-chevron":
+      "pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-gray-500",
     panel: "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded",
     badge: "inline-block px-2 py-0.5 rounded-full text-xs font-medium",
   },

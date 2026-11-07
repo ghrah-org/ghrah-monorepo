@@ -162,7 +162,7 @@ const placeholder = computed(() =>
         multiline
         rows="1"
         :disabled="props.disabled"
-        class="flex-1 px-3 py-2 text-sm dark:text-gray-100 dark:placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-y-auto max-h-40"
+        class="flex-1 dark:text-gray-100 dark:placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-y-auto max-h-40"
         :placeholder="placeholder"
         @keydown="onKeydown"
       />

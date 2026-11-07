@@ -45,7 +45,7 @@ defineExpose({
     v-if="multiline"
     ref="root"
     v-bind="$attrs"
-    class="ui-text-field border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    class="ui-text-field field-multiline"
     :value="modelValue ?? ''"
     @input="onInput"
   />
@@ -53,7 +53,7 @@ defineExpose({
     v-else
     ref="root"
     v-bind="$attrs"
-    class="ui-text-field border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    class="ui-text-field field-input"
     :value="modelValue ?? ''"
     @input="onInput"
   />
