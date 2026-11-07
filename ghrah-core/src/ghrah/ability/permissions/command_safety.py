@@ -7,24 +7,18 @@
 提供：
 - CommandSafetyCategory: 命令安全分类枚举（SAFE / DANGEROUS / REQUIRE_HITL）
 - CommandSafetyVerdict: 分类裁定结果
-- CommandSafetyChecker: 命令安全分类器（含子命令路由）
+- CommandSafetyChecker: 命令安全分类器（bash-classify 前端 + 范围外壳）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型（判定顺序，2026-11-05 裁决）：
-1. ``denied_commands`` 命中 → 硬拒绝（不弹审批）
-2. 内置危险命令分类 → 硬拒绝
-3. ``allowed_commands`` 命中 → 自动批准（声明范围）
-4. 内置安全命令 → 自动批准（部署级基线）
-5. 范围外兜底：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope``
-   决定拒绝还是放行
-
-``allowed_commands`` 是**自动批准范围**，不是执行权限本身；声明了范围时，
-范围外仍要按兜底规则处理。内置安全列表是部署级基线，与声明范围并集生效。
-
-多面性命令（git, npm, pip 等）支持子命令级分类：
-- git status → SAFE
-- git clean → DANGEROUS
-- git commit → REQUIRE_HITL
+分类模型（判定顺序，2026-11-07 阶段 1）：
+1. 空命令 → 硬拒绝
+2. ``denied_commands`` 命中任一段 → 硬拒绝
+3. bash-classify（仓内 YAML 覆盖）判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
+4. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
+5. 整式 READONLY+LOW（无 parse_warnings）→ 自动批准
+6. 各段均落在部署级 SAFE 名单（含 ``extend_safe_lists``；无重定向）→ 自动批准
+7. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
+8. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
 
 from __future__ import annotations
@@ -32,10 +26,20 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from bash_classify import Classification, Risk
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
-from ghrah.ability.permissions.command_scope import command_in_scope, parse_command_entry
+from ghrah.ability.permissions.bash_classify_frontend import (
+    classify_command_expression,
+    expression_is_dangerous,
+    expression_is_unknown,
+    is_readonly_low,
+    iter_classified_segments,
+    segment_base_sub,
+)
+from ghrah.ability.permissions.command_scope import command_entry_covers, parse_command_entry
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
@@ -178,8 +182,7 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
         "var",
     },
     "npm": {
-        "run",
-        "test",
+        # run/test 在 bash-classify ≥0.14 为 DANGEROUS（任意 package 脚本），不得列入 SAFE。
         "list",
         "ls",
         "view",
@@ -248,17 +251,7 @@ DEFAULT_DANGEROUS_SUB_COMMANDS: dict[str, set[str]] = {
 
 
 class CommandSafetyChecker:
-    """命令安全分类器，含子命令路由。
-
-    分类优先级：
-    1. 基础命令在 DANGEROUS_COMMANDS → DANGEROUS（不考虑子命令）
-    2. 基础命令有子命令路由表：
-       a. 子命令在 DANGEROUS_SUB_COMMANDS → DANGEROUS
-       b. 子命令在 SAFE_SUB_COMMANDS → SAFE
-       c. 其他子命令 → REQUIRE_HITL
-    3. 基础命令在 SAFE_COMMANDS → SAFE
-    4. 默认 → REQUIRE_HITL（当 require_approval=True）
-    """
+    """命令安全分类器：bash-classify 前端 + 声明范围与危险叠加。"""
 
     def __init__(
         self,
@@ -313,14 +306,7 @@ class CommandSafetyChecker:
             self._safe_sub_commands = merged
 
     def check_command(self, command: str) -> CommandSafetyVerdict:
-        """检查命令安全性。
-
-        Args:
-            command: 命令字符串（如 "git status -s"）
-
-        Returns:
-            CommandSafetyVerdict 包含分类结果和原因
-        """
+        """检查命令安全性。"""
         if not command or not command.strip():
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
@@ -328,117 +314,216 @@ class CommandSafetyChecker:
                 reason="Empty command",
             )
 
-        parsed = parse_command_entry(command)
-        base_cmd, sub_cmd = parsed.base, parsed.sub
-        if parsed.ambiguous:
+        expression = classify_command_expression(command)
+        segments = iter_classified_segments(expression)
+        if not segments:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd,
-                reason="Failed to parse command structure or leading options safely",
+                base_command="",
+                reason="Failed to parse command structure safely",
             )
 
-        base_cmd_lower = base_cmd.lower()
+        primary_base, primary_sub = segment_base_sub(list(segments[0].argv))
 
-        if self._denied_commands and command_in_scope(self._denied_commands, command):
+        if self._denied_commands and self._any_segment_in_scope(self._denied_commands, segments):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
+                base_command=primary_base,
+                sub_command=primary_sub,
                 reason=f"Command denied by declared scope: {command}",
             )
 
-        if base_cmd_lower in self._dangerous_commands:
-            return CommandSafetyVerdict(
-                category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
-                reason=f"Dangerous command: {base_cmd_lower}",
-            )
+        overlay = self._dangerous_overlay(segments, command)
+        if overlay is not None:
+            return overlay
 
-        destructive = (
-            (base_cmd_lower == "git" and sub_cmd == "reset" and "--hard" in parsed.arguments)
-            or (
-                base_cmd_lower == "git"
-                and sub_cmd == "push"
-                and any(
-                    arg.startswith("--force")
-                    or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
-                    for arg in parsed.arguments
-                )
-            )
-            or (base_cmd_lower == "docker" and sub_cmd == "rm")
-            or (base_cmd_lower == "docker" and sub_cmd == "system" and "prune" in parsed.arguments)
-        )
-        if destructive:
+        if expression_is_dangerous(expression):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
+                base_command=primary_base,
+                sub_command=primary_sub,
                 reason=f"Dangerous command: {command}",
             )
 
-        dangerous_subs = self._dangerous_sub_commands.get(base_cmd_lower, set())
-        if sub_cmd and sub_cmd.lower() in dangerous_subs:
-            return CommandSafetyVerdict(
-                category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd.lower(),
-                reason=f"Dangerous sub-command: {base_cmd_lower} {sub_cmd.lower()}",
-            )
-
-        if self._allowed_commands is not None and command_in_scope(self._allowed_commands, command):
-            return CommandSafetyVerdict(
-                category=CommandSafetyCategory.SAFE,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
-                reason=f"Command in declared scope: {command}",
-            )
-
-        has_sub_routing = (
-            base_cmd_lower in self._safe_sub_commands
-            or base_cmd_lower in self._dangerous_sub_commands
-        )
-        if has_sub_routing and sub_cmd:
-            sub_cmd_lower = sub_cmd.lower()
-            safe_subs = self._safe_sub_commands.get(base_cmd_lower, set())
-            if sub_cmd_lower in safe_subs:
+        if self._allowed_commands is not None and not expression_is_unknown(expression):
+            if self._all_segments_in_scope(self._allowed_commands, segments):
                 return CommandSafetyVerdict(
                     category=CommandSafetyCategory.SAFE,
-                    base_command=base_cmd_lower,
-                    sub_command=sub_cmd_lower,
-                    reason=f"Safe sub-command: {base_cmd_lower} {sub_cmd_lower}",
+                    base_command=primary_base,
+                    sub_command=primary_sub,
+                    reason=f"Command in declared scope: {command}",
                 )
 
-        if base_cmd_lower in self._safe_commands:
+        if is_readonly_low(expression):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.SAFE,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
-                reason=f"Safe command: {base_cmd_lower}",
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Safe readonly expression: {command}",
+            )
+
+        # 部署级 SAFE 名单可抬升 LOCAL_EFFECTS / 库外 UNKNOWN；
+        # 重定向、敏感路径、或「只读但 HIGH」（如 cat ~/.ssh）时不抬升。
+        if not self._blocks_legacy_safe_promote(expression) and all(
+            self._legacy_segment_safe(segment) for segment in segments
+        ):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Safe command: {primary_base}",
+            )
+
+        # 看不懂的结构：宽 allowed 已在上方跳过；关闭审批时硬拒绝。
+        if expression_is_unknown(expression):
+            if self._require_approval:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.REQUIRE_HITL,
+                    base_command=primary_base,
+                    sub_command=primary_sub,
+                    reason=f"Command requires approval: {command}",
+                )
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.DANGEROUS,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Unknown command structure cannot auto-execute: {command}",
             )
 
         if self._require_approval:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.REQUIRE_HITL,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
+                base_command=primary_base,
+                sub_command=primary_sub,
                 reason=f"Command requires approval: {command}",
             )
 
         if self._deny_out_of_scope and self._allowed_commands is not None:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
-                base_command=base_cmd_lower,
-                sub_command=sub_cmd,
+                base_command=primary_base,
+                sub_command=primary_sub,
                 reason=(f"Command outside declared scope and approval is disabled: {command}"),
             )
 
         return CommandSafetyVerdict(
             category=CommandSafetyCategory.SAFE,
-            base_command=base_cmd_lower,
-            sub_command=sub_cmd,
-            reason=f"Approval not required: {base_cmd_lower}",
+            base_command=primary_base,
+            sub_command=primary_sub,
+            reason=f"Approval not required: {primary_base}",
         )
+
+    def _any_segment_in_scope(self, entries: tuple[str, ...], segments: list[Any]) -> bool:
+        for segment in self._scope_segments(segments):
+            base, sub = segment_base_sub(list(segment.argv))
+            if base and any(command_entry_covers(entry, base, sub) for entry in entries):
+                return True
+        return False
+
+    def _all_segments_in_scope(self, entries: tuple[str, ...], segments: list[Any]) -> bool:
+        checked = self._scope_segments(segments)
+        if not checked:
+            return False
+        for segment in checked:
+            base, sub = segment_base_sub(list(segment.argv))
+            if not base or not any(command_entry_covers(entry, base, sub) for entry in entries):
+                return False
+        return True
+
+    @staticmethod
+    def _scope_segments(segments: list[Any]) -> list[Any]:
+        """范围检查只看顶层调用，跳过委托展开的内层（避免 rm 被当成独立入口）。"""
+        checked: list[Any] = []
+        seen: set[tuple[str, ...]] = set()
+        for segment in segments:
+            if getattr(segment, "delegation_mode", None):
+                continue
+            key = tuple(segment.argv)
+            if key in seen:
+                continue
+            seen.add(key)
+            checked.append(segment)
+        return checked or list(segments)
+
+    def _dangerous_overlay(self, segments: list[Any], command: str) -> CommandSafetyVerdict | None:
+        for segment in segments:
+            argv = list(segment.argv)
+            base, sub = segment_base_sub(argv)
+            base_lower = base.lower()
+            sub_lower = sub.lower() if sub else None
+            arguments = tuple(argv[1:]) if len(argv) > 1 else ()
+
+            if base_lower in self._dangerous_commands:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.DANGEROUS,
+                    base_command=base_lower,
+                    sub_command=sub_lower,
+                    reason=f"Dangerous command: {base_lower}",
+                )
+
+            destructive = (
+                (base_lower == "git" and sub_lower == "reset" and "--hard" in arguments)
+                or (
+                    base_lower == "git"
+                    and sub_lower == "push"
+                    and any(
+                        arg.startswith("--force")
+                        or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
+                        for arg in arguments
+                    )
+                )
+                or (base_lower == "docker" and sub_lower == "rm")
+                or (base_lower == "docker" and sub_lower == "system" and "prune" in arguments)
+            )
+            if destructive:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.DANGEROUS,
+                    base_command=base_lower,
+                    sub_command=sub_lower,
+                    reason=f"Dangerous command: {command}",
+                )
+
+            dangerous_subs = self._dangerous_sub_commands.get(base_lower, set())
+            if sub_lower and sub_lower in dangerous_subs:
+                return CommandSafetyVerdict(
+                    category=CommandSafetyCategory.DANGEROUS,
+                    base_command=base_lower,
+                    sub_command=sub_lower,
+                    reason=f"Dangerous sub-command: {base_lower} {sub_lower}",
+                )
+        return None
+
+    @staticmethod
+    def _blocks_legacy_safe_promote(expression: Any) -> bool:
+        if getattr(expression, "redirects", None):
+            return True
+        if getattr(expression, "sensitive_paths", None):
+            return True
+        return (
+            getattr(expression, "classification", None) is Classification.READONLY
+            and getattr(expression, "risk", None) is Risk.HIGH
+        )
+
+    def _legacy_segment_safe(self, segment: Any) -> bool:
+        """部署级 SAFE 名单兼容：仅在 bash-classify 未判危险时提升为 SAFE。"""
+        base, sub = segment_base_sub(list(segment.argv))
+        if not base:
+            return False
+        base_lower = base.lower()
+        if base_lower in self._dangerous_commands:
+            return False
+        sub_lower = sub.lower() if sub else None
+        if sub_lower and sub_lower in self._dangerous_sub_commands.get(base_lower, set()):
+            return False
+
+        has_sub_routing = (
+            base_lower in self._safe_sub_commands or base_lower in self._dangerous_sub_commands
+        )
+        if has_sub_routing and sub_lower:
+            return sub_lower in self._safe_sub_commands.get(base_lower, set())
+        if has_sub_routing and not sub_lower:
+            return False
+        return base_lower in self._safe_commands
 
     @staticmethod
     def parse_command(command: str) -> tuple[str, str | None]:
