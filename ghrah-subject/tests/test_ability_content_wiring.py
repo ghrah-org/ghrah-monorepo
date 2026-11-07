@@ -372,3 +372,202 @@ async def test_mcp_spawn_rollback_releases_only_failed_agent_resources(tmp_path,
             assert existing._closed and not unit._mcp_deployment._agents
         finally:
             await registry.stop()
+
+
+async def test_installed_package_complete_task_and_uninstall_rejects_respawn(tmp_path):
+    """经 Subject spawn 完成安装包长尾调用、内容和脚本回灌，再验证卸载失效。"""
+    from ast import literal_eval
+
+    from ghrah.ability.surface.runtime import _cost
+
+    source = tmp_path / "source"
+    operations = source / "operations"
+    operations.mkdir(parents=True)
+    (source / "ability.yaml").write_text(
+        "format: ghrah.ability-definition\nschema_version: '1'\n"
+        "identity: {namespace: acme, name: joint, version: '1.0.0'}\n"
+        "title: Joint tools\ndescription: Installed acceptance package\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    module = """from pydantic import BaseModel, ConfigDict
+from ghrah.types.results import ActionResult, ActionOutcome
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: int
+class Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: int
+TITLE = "Calculate value"
+SUMMARY = "Calculate a numbered value"
+TAGS = ["calculate"]
+EFFECTS = []
+PERMISSIONS = {}
+TIMEOUT_MS = 1000
+async def execute(call, services):
+    return ActionResult(ActionOutcome.SUCCESS, {"value": call.arguments["value"] + NUMBER})
+"""
+    for number in range(50):
+        (operations / f"op_{number:03}.py").write_text(
+            module.replace("NUMBER", str(number)),
+            encoding="utf-8",
+            newline="\n",
+        )
+    skill = source / "skills" / "guide"
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "references").mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: guide\ndescription: Joint guide\n---\n# Joint guide body\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (skill / "references" / "style.md").write_text("Use short paragraphs.\n", encoding="utf-8")
+    (skill / "scripts" / "export.py").write_text(
+        "import json,sys\nfrom pathlib import Path\nrequest=json.load(sys.stdin)\n"
+        "Path('exported.txt').write_text(request['arguments']['text'],encoding='utf-8')\n"
+        "json.dump({'ok':True,'data':{'written':'exported.txt','call':request['call']['tool_call_id']}},sys.stdout)\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    build(source)
+    installer = AbilityInstaller(tmp_path / "installed")
+    installed = installer.install(source)
+    shutil.rmtree(source)
+    manifest = """manifest: agent
+version: '2'
+metadata: {namespace: joint, name: consumer}
+model: {endpoint_name: default}
+system_prompt: Use granted tools and content.
+max_iterations: 10
+abilities:
+  - type: conversation
+  - ref: ghrah.core.load_skill
+  - ref: acme.joint.op_049
+surface:
+  mode: progressive
+  static: [ghrah.core.load_skill]
+  max_static: 12
+"""
+
+    class Store:
+        def load_agent(self, _name):
+            return parse_agent_manifest(manifest)
+
+    class Model(ContentLLM):
+        model_capabilities = {"max_context_length": 128000}
+
+        def __init__(self):
+            requests = [
+                ("search", "search_tools", {"query": "op_049"}),
+                ("describe", "describe_tool", {"name": "op_049"}),
+                ("execute", "execute_tool", {"name": "op_049", "arguments": {"value": 7}}),
+                ("body", "load_skill", {"full_name": "joint/guide"}),
+                (
+                    "attachment",
+                    "load_skill",
+                    {"full_name": "joint/guide", "path": "references/style.md"},
+                ),
+                (
+                    "script",
+                    "run_script",
+                    {
+                        "script": "skills/guide/scripts/export",
+                        "arguments": {"text": "installed script result"},
+                    },
+                ),
+            ]
+            super().__init__([[ToolCallBlock(id=i, name=n, arguments=a)] for i, n, a in requests])
+            self.definitions = []
+
+        async def generate(self, messages, tools=None):
+            self.definitions.append(list(self.tools))
+            return await super().generate(messages, tools)
+
+    llm = Model()
+    cfg = config(
+        tmp_path,
+        policy=GrantPolicy(
+            rules=(
+                GrantRule(package="acme.joint"),
+                GrantRule(package="acme.joint", skill="guide", script="export", available=True),
+            )
+        ),
+    )
+    Path(cfg.workspace_root).mkdir(parents=True)
+    registry = CoreClusterRegistry(
+        unit_factory=default_core_unit_factory(cfg, Store(), lambda _: llm)
+    )
+    async with Context() as ctx:
+        registry.bind(ctx)
+        try:
+            cluster = await registry.ensure_cluster(
+                "cluster", project_id="project", project_root_locator=str(tmp_path / "project")
+            )
+            unit = cluster._unit
+            actor = await spawn(unit, manifest="joint.consumer")
+            assert (
+                await unit.supervisor.send("reader", "Calculate, read the guide and export.")
+                == "read complete"
+            )
+            assert len(llm.calls) == 7
+            names = [[d["function"]["name"] for d in row] for row in llm.definitions]
+            assert "op_049" not in names[0] and "op_049" in names[2]
+            assert max(map(len, names)) <= 16
+            assert all(_cost(row) < 128000 * 0.02 for row in llm.definitions)
+            results = [
+                block for message in llm.calls[-1] for block in getattr(message, "tool_results", [])
+            ]
+            by_id = {result.tool_call_id: result.content for result in results}
+            assert literal_eval(by_id["execute"])["value"] == 56
+            assert "Joint guide body" in by_id["body"]
+            assert "short paragraphs" in by_id["attachment"]
+            assert literal_eval(by_id["script"])["action"] == "script.call"
+            assert literal_eval(by_id["script"])["data"]["call"] == "script"
+            search = literal_eval(by_id["search"])
+            assert len(search["tools"]) <= 8
+            assert all("input_schema" not in row for row in search["tools"])
+            cm = actor._context_manager
+            session = cm.get_active_session()
+            assert actor.get_entity_history(session.session_id, session.active_branch_id, 32)
+            audit = [
+                row
+                for node in cm.chain.nodes
+                for row in node.metadata.get("tool_surface_calls", [])
+            ]
+            assert any(
+                row["kind"] == "meta.call" and row["name"] == "execute_tool" for row in audit
+            )
+            assert any(
+                row["kind"] == "tool.call" and row["tool_call_id"] == "execute" for row in audit
+            )
+            store = unit._config.ability_store
+            admin = AccessIdentity("project", "deployment", "control", True, "deployment")
+            instance = await store.instance("acme-joint")
+            assert (
+                Path(instance["root"]) / "exported.txt"
+            ).read_text() == "installed script result"
+            installer.uninstall(installed.full_name, installed.version)
+            receipt = await unit.handle_command(
+                "execute_ability",
+                {
+                    "request_id": "after-uninstall",
+                    "agent_name": "reader",
+                    "ability_name": "execute_tool",
+                    "tool_args": {"name": "op_049", "arguments": {"value": 7}},
+                },
+                None,
+            )
+            assert not receipt["success"] or not receipt["data"]["success"]
+            assert await store.grants(admin, AGENT)
+            await unit.supervisor.terminate_agent("reader")
+            rejected = await unit.handle_command(
+                "spawn_agent",
+                {
+                    "config": {"name": "replacement", "agent_id": "b" * 32},
+                    "manifest_ref": "joint.consumer",
+                },
+                None,
+            )
+            assert not rejected["success"]
+        finally:
+            await registry.stop()

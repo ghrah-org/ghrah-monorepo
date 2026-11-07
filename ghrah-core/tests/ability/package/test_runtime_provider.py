@@ -431,3 +431,95 @@ async def test_external_package_cannot_shadow_builtin_alias(store, tmp_path):
         await materializer.materialize(
             agent=AGENT, resolved=assembly.manifest_resolver().resolve(manifest)
         )
+
+
+async def test_same_member_in_two_packages_routes_by_qualified_name(store, tmp_path):
+    """真实安装和 Agent 循环验证限定名绑定到各自的包，而非只检查命名函数。"""
+    from ast import literal_eval
+    from dataclasses import replace
+
+    import yaml
+    from _helpers import ToolScriptedLLM
+
+    from ghrah.agents.builder import AgentBuilder
+    from ghrah.chat.content import ToolCallBlock
+    from ghrah.core.message import AgentMessage, MessageType
+
+    first_module = MODULE.replace(
+        'Path(call.arguments["file_path"]).read_text()', '"first package"'
+    )
+    installer, source = _install(tmp_path, first_module)
+    second = tmp_path / "other-source"
+    shutil.copytree(source, second)
+    path = second / "ability.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["identity"]["name"] = "other"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
+    (second / "operations/render.py").write_text(
+        first_module.replace("first package", "second package"), encoding="utf-8", newline="\n"
+    )
+    build(second)
+    installer.install(second)
+    assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
+    manifest = AGENT_YAML + "  - ref: acme.other.render\nsurface: {mode: progressive}\n"
+    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(manifest))
+    resolved.config = replace(resolved.config, agent_id=AGENT, workspace_root=str(tmp_path))
+    materializer = StartupGrantMaterializer(
+        store=store,
+        source=assembly.source,
+        actor=ACTOR,
+        policy=GrantPolicy(),
+        workspace_root=str(tmp_path),
+    )
+    try:
+        table = await materializer.materialize(agent=AGENT, resolved=resolved)
+        await materializer.bind_run(AGENT, table)
+        names = {binding.tool_name for binding in table.tools}
+        assert {"reports__render", "other__render"} <= names and "render" not in names
+        model = ToolScriptedLLM(
+            [
+                [ToolCallBlock(id="search", name="search_tools", arguments={"query": "render"})],
+                [
+                    ToolCallBlock(
+                        id="first",
+                        name="execute_tool",
+                        arguments={"name": "reports__render", "arguments": {}},
+                    )
+                ],
+                [
+                    ToolCallBlock(
+                        id="second",
+                        name="execute_tool",
+                        arguments={"name": "other__render", "arguments": {}},
+                    )
+                ],
+            ]
+        )
+        agent = AgentBuilder.from_config(
+            resolved.config,
+            abilities=table.abilities,
+            llm_factory=lambda _: model,
+            persistence_factory=lambda _: None,
+        )
+        await agent.receive(
+            AgentMessage(
+                sender="user",
+                recipient="consumer",
+                content="Use both reports",
+                type=MessageType.CHAT,
+            )
+        )
+        results = {
+            block.tool_call_id: block.content
+            for message in model.calls[-1]
+            for block in message.content_blocks
+            if getattr(block, "tool_call_id", None)
+        }
+        assert literal_eval(results["first"])["text"] == "first package"
+        assert literal_eval(results["second"])["text"] == "second package"
+        assert {row["name"] for row in literal_eval(results["search"])["tools"]} == {
+            "reports__render",
+            "other__render",
+        }
+    finally:
+        await materializer.close_agent_resources(AGENT)
