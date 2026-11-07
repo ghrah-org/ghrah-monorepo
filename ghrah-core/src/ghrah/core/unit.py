@@ -1671,14 +1671,18 @@ class CoreUnit:
         agent_handle = await supervisor.get_agent_handle(gp.name)
         state = agent_handle.get_state()
         abilities = agent_handle.get_abilities()
-        from ghrah.abilities.registry import AbilityRegistry
+        available_ability_types: list[str] = []
+        if self._require_assembly().is_legacy:
+            from ghrah.abilities.registry import AbilityRegistry
+
+            available_ability_types = sorted(AbilityRegistry.list_types())
 
         return self._ok(
             {
                 "name": gp.name,
                 "state": state,
                 "abilities": abilities,
-                "available_ability_types": sorted(AbilityRegistry.list_types()),
+                "available_ability_types": available_ability_types,
                 "context_usage": agent_handle.get_context_usage_snapshot(),
             }
         )

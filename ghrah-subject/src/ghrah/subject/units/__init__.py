@@ -33,6 +33,7 @@ async def mount_builtin_units(
     + taskstore + task/desired_state）；full = 16（coexistence 8 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
     project/ability_control/room/recovery + room_filter + ability_bridge）。
+    skill 和 ability_bridge 仅在 legacy 来源下挂载。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
@@ -58,7 +59,6 @@ async def mount_builtin_units(
     from ghrah.subject.units.manifest_store import ManifestStoreUnit
     from ghrah.subject.units.recovery import DesiredStateUnit
     from ghrah.subject.units.sandbox import SandboxUnit
-    from ghrah.subject.units.skill import SkillUnit
     from ghrah.subject.units.task import TaskUnit
     from ghrah.subject.units.taskstore import TaskStoreUnit
     from ghrah.subject.units.workspace import WorkspaceUnit
@@ -66,10 +66,12 @@ async def mount_builtin_units(
     units: list[SubjectUnit] = [
         SandboxUnit(config),
         ManifestStoreUnit(config),
-        SkillUnit(config),
-        LedgerUnit(config),
-        WorkspaceUnit(config),
     ]
+    if config.ability_source == "legacy":
+        from ghrah.subject.units.skill import SkillUnit
+
+        units.append(SkillUnit(config))
+    units.extend([LedgerUnit(config), WorkspaceUnit(config)])
 
     # 任务归因内核 unit（可选组件）：enabled=False 时完全不挂载（零隐式；归因
     # 命令回落 Unknown command）。当前经 builtin 链挂载属**待纠正偏离**——目标
@@ -115,12 +117,10 @@ async def mount_builtin_units(
         if config.room_filter.enabled:
             units.append(RoomFilterUnit(config))
 
-        # 能力桥：requires CORE_CLUSTER_REGISTRY（registry 之后）；specs/
-        # ABILITY_BRIDGE 服务均 reconcile 时懒解析，挂载序与插件阶段无关
-        # （初始装配由 plugin_mount 挂载尾部钩子触发重算）
-        from ghrah.subject.runtime.ability_bridge import AbilityBridgeUnit
+        if config.ability_source == "legacy":
+            from ghrah.subject.runtime.ability_bridge import AbilityBridgeUnit
 
-        units.append(AbilityBridgeUnit())
+            units.append(AbilityBridgeUnit())
 
     fibers: dict[str, Fiber] = {}
     for unit in units:

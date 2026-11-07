@@ -505,6 +505,14 @@ surface:
             )
             unit = cluster._unit
             actor = await spawn(unit, manifest="joint.consumer")
+            info = await unit.handle_command(
+                "get_agent_info",
+                {"project_id": "project", "agent_id": AGENT, "name": "reader"},
+                None,
+            )
+            assert info["success"], info
+            assert info["data"]["available_ability_types"] == []
+            assert "conversation" in info["data"]["abilities"]
             assert (
                 await unit.supervisor.send("reader", "Calculate, read the guide and export.")
                 == "read complete"

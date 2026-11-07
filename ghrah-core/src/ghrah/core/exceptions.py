@@ -72,8 +72,8 @@ _RE_EXPORTS = {
     "LLMError": "ghrah.llm.errors",
     "RegistryError": "ghrah.communication.errors",
     "AgentNotFoundError": "ghrah.communication.errors",
-    "AbilityError": "ghrah.abilities.errors",
-    "AbilityNotFoundError": "ghrah.abilities.errors",
+    "AbilityError": "ghrah.ability.execution.errors",
+    "AbilityNotFoundError": "ghrah.ability.execution.errors",
 }
 
 

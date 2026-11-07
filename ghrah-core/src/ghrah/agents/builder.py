@@ -19,7 +19,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
+from ghrah.ability.execution.executor import AbilityExecutor, LocalAbilityExecutor
 from ghrah.agents.base import ActorAgent
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence import create_persistence

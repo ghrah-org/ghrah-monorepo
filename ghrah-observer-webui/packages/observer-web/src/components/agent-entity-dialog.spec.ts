@@ -253,6 +253,25 @@ it("creates a persistent entity with explicit start and selected cluster", async
   expect(w.text()).toContain("name already exists");
   w.unmount();
 });
+it("creates from a template when the server offers no configurable types", async () => {
+  api.list.mockResolvedValue({ success: true, data: { available_ability_types: [] } });
+  api.create.mockResolvedValue({ success: false, error: "template not found" });
+  const w = mount(AgentEntityDialog, {
+    props: { projectId: "p1" },
+    global: { stubs: { Teleport: true } },
+  });
+  await flushPromises();
+  expect(w.find('option[value="types"]').exists()).toBe(false);
+  await w.get("input[data-autofocus]").setValue("new-agent");
+  await w.get("select").setValue("c1");
+  await w.get("input[required]:not([data-autofocus])").setValue("agents.coder");
+  await w.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.create).toHaveBeenCalledWith(
+    expect.objectContaining({ manifest_ref: "agents.coder", ability_types: null }),
+  );
+  w.unmount();
+});
 it("paginates messages and explicitly confirms retry for this recipient", async () => {
   api.snapshot.mockResolvedValue(snapshot(true));
   const item = {

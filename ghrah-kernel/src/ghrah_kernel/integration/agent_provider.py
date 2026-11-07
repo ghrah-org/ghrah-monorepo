@@ -115,8 +115,8 @@ class AgentResources:
 
 async def create_resources(configuration: dict, run_id: str) -> AgentResources:
     """显式依赖注入；先恢复已有检查点，避免初始化覆盖持久历史。"""
-    from ghrah.abilities.builtin.conversation import ConversationAbility
-    from ghrah.abilities.executor import LocalAbilityExecutor
+    from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
     from ghrah.agents.base import ActorAgent
     from ghrah.chat.factory import ChatMessageFactory
     from ghrah.context.manager import ContextManager

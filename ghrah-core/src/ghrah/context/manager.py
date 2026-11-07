@@ -43,7 +43,6 @@ from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
 from ghrah.context.window import WindowManager
 from ghrah.core.window_protocol import MessageFactory
-from ghrah.skills.catalog import digest_catalog, render_catalog_message
 
 if TYPE_CHECKING:
     pass
@@ -1130,6 +1129,8 @@ class ContextManager:
         if not scan.skills and self._skill_catalog_digest is None:
             # 从未发布过且清单为空：无事可报（对齐 DSH），也不占位
             return None
+
+        from ghrah.skills.catalog import digest_catalog, render_catalog_message
 
         digest = digest_catalog(scan.skills)
         first = self._skill_catalog_digest is None

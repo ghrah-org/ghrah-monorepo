@@ -463,7 +463,7 @@ def default_core_unit_factory(
 
      ``config.ability_source`` 透传 CoreUnitConfig.ability_source：同一模式
      决定声明目录、工具实例与 Skill 读取服务；builtin 模式下旧 Skill 根不被
-     读取（SkillUnit 同时跳过目录自举）。
+     传入（SkillUnit 只在 legacy 模式挂载）。
 
     ``llm_factory`` 为可选的 per-cluster LLM 工厂注入（透传
     CoreUnitConfig.llm_factory；None = Core 内建默认 agentconf 解析）。
@@ -561,6 +561,7 @@ def default_core_unit_factory(
         if not project_root_locator:
             raise ValueError("project_root_locator required")
         core_db_path = str(ProjectPaths.from_locator(project_root_locator).action_chain_db_path)
+        legacy = config.ability_source == "legacy"
 
         def persistence_factory(agent_config: Any) -> Any:
             return SqliteBackend(db_path=core_db_path)
@@ -585,7 +586,7 @@ def default_core_unit_factory(
             # skill-ability：根目录由 SubjectConfig 单一决定（skill slice），
             # Core 侧只按此根构造 provider 读 skill（建目录/lock 由 SkillUnit
             # 在装配期完成，Core 不重复初始化）。
-            skill_root=config.skill.root,
+            skill_root=config.skill.root if legacy else None,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_source=config.ability_source,
             ability_install_root=config.ability.install_root,
@@ -594,7 +595,7 @@ def default_core_unit_factory(
             llm_factory=llm_factory,
             # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
             # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。
-            default_abilities=tuple(config.default_spawn_abilities) or None,
+            default_abilities=(tuple(config.default_spawn_abilities) or None) if legacy else None,
             host_command_grants=_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
         )
         return create_core_unit(core_config)

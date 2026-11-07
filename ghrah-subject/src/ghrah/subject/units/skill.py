@@ -22,7 +22,6 @@ import logging
 from typing import Any
 
 from ghrah.ability.assembly import AbilitySourceMode
-from ghrah.skills import SkillAbilityProvider  # type: ignore[import-untyped]
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.unit.base import SubjectUnit, UnitMeta
@@ -62,6 +61,8 @@ class SkillUnit(SubjectUnit):
                 self._config.skill.root,
             )
             return
+        from ghrah.skills import SkillAbilityProvider  # type: ignore[import-untyped]
+
         provider = SkillAbilityProvider.from_root(self._config.skill.root)
         result = provider.initialize()
         created = sum(1 for outcome in result.locks if outcome.created)

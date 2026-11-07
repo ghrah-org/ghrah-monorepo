@@ -54,6 +54,9 @@ const canConfigure = computed(
     snapshot.value.specification.desired_state === "stopped" &&
     !snapshot.value.specification.manifest_ref,
 );
+const hasConfigurableTypes = computed(
+  () => (stringArrayOrNull(snapshot.value?.abilities.available_types)?.length ?? 0) > 0,
+);
 const canCreate = computed(
   () =>
     writable.value &&
@@ -181,6 +184,7 @@ async function refresh() {
       },
       (result) => {
         types.value = result.available_ability_types;
+        if (!types.value.length) source.value = "manifest";
         modelNames.value = result.model_config_names;
         modelCatalogError.value = result.model_catalog_error ?? "";
       },
@@ -398,7 +402,7 @@ onMounted(() => {
           <label
             >{{ t("agentEntity.source")
             }}<select v-model="source" :disabled="busy">
-              <option value="types">{{ t("agentEntity.types") }}</option>
+              <option v-if="types.length" value="types">{{ t("agentEntity.types") }}</option>
               <option value="manifest">{{ t("agentEntity.manifest") }}</option>
             </select></label
           >
@@ -568,7 +572,7 @@ onMounted(() => {
             </p>
             <p>{{ t("agentEntity.abilityHint") }}</p>
             <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.manifestLocked") }}</p>
-            <fieldset :disabled="!canConfigure">
+            <fieldset v-if="hasConfigurableTypes" :disabled="!canConfigure">
               <legend>{{ t("agentEntity.types") }}</legend>
               <div class="entity-options">
                 <label v-for="type in types" :key="type" class="entity-check"
@@ -577,6 +581,7 @@ onMounted(() => {
               </div>
             </fieldset>
             <button
+              v-if="hasConfigurableTypes"
               class="btn-primary"
               :disabled="!canConfigure || !selectedTypes.length"
               @click="saveAbilities"

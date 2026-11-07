@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from ghrah.ability.access import GrantPolicy
 from ghrah.chat.message import ChatMessage
 from ghrah.protocol.payloads.entity import AgentEntityCreatePayload
 from ouroboros import Context
@@ -20,6 +21,74 @@ from ghrah.subject.errors import StableError
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
+
+
+async def test_builtin_entity_uses_template_and_keeps_legacy_configuration_read_only(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.ability_source = "builtin"
+    config.ability_grant_policy = GrantPolicy(mode="merge")
+    async with Context() as ctx:
+        await assemble_subject(ctx, config, profile="full")
+        assert ctx.get("ability_bridge_unit", strict=False) is None
+        project = _data(await bridge_command(ctx, "project_create", {"name": "builtin"}))["project"]
+        pid, cluster = project["project_id"], project["cluster_ids"][0]
+        spec = {"project_id": pid, "cluster_id": cluster, "name": "entity"}
+
+        for fields, error in (
+            ({"start": True}, "agent_manifest_required"),
+            (
+                {"start": False, "ability_types": ["send_message"]},
+                "abilities_managed_by_access_store",
+            ),
+        ):
+            rejected = await bridge_command(ctx, "agent_entity_create", {**spec, **fields})
+            assert rejected["error"] == error
+        listed = _data(await bridge_command(ctx, "agent_entity_list", {"project_id": pid}))
+        assert listed["items"] == []
+        assert listed["available_ability_types"] == []
+
+        manager = ctx.get("project_manager")
+        draft = await manager.agents.create(AgentEntityCreatePayload(**spec, start=False))
+        before = await draft.snapshot()
+        assert before.abilities["available_types"] == []
+        with pytest.raises(StableError, match="abilities_managed_by_access_store"):
+            await draft.abilities.configure(
+                ["send_message"], expected_revision=before.specification_revision
+            )
+        with pytest.raises(StableError, match="agent_manifest_required"):
+            await draft.start()
+        after = await draft.snapshot()
+        assert after.specification.desired_state == "stopped"
+        assert after.specification_revision == before.specification_revision
+
+        ctx.get("manifest_store").put_agent(
+            "agents.entity",
+            """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: agents
+  name: entity
+model:
+  endpoint_name: entity
+system_prompt: Reply to the user.
+abilities:
+  - type: conversation
+  - ref: ghrah.core.session_info
+""",
+        )
+        templated = await manager.agents.create(
+            AgentEntityCreatePayload(
+                **{**spec, "name": "templated"}, manifest_ref="agents.entity", start=True
+            )
+        )
+        running = await templated.snapshot()
+        assert running.runtime.availability == "online"
+        assert running.abilities["available_types"] == []
+        assert "conversation" in running.abilities["loaded_names"]
+        assert "session_info" in running.abilities["loaded_names"]
 
 
 @pytest.fixture(autouse=True)

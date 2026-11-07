@@ -113,8 +113,8 @@ def __getattr__(name: str) -> type:
         import importlib
 
         _domain_map = {
-            "AbilityError": "ghrah.abilities.errors",
-            "AbilityNotFoundError": "ghrah.abilities.errors",
+            "AbilityError": "ghrah.ability.execution.errors",
+            "AbilityNotFoundError": "ghrah.ability.execution.errors",
             "AgentNotFoundError": "ghrah.communication.errors",
             "LLMError": "ghrah.llm.errors",
             "RegistryError": "ghrah.communication.errors",
