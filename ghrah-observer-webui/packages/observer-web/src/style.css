@@ -11,7 +11,7 @@
 @layer components {
   .app-frame {
     position: relative;
-    background: #f3f5f8;
+    background: var(--color-chrome);
   }
 
   .app-workspace {
@@ -84,7 +84,7 @@
       var(--context-sidebar-width);
     height: 100%;
     min-height: 0;
-    background: #eef1f5;
+    background: var(--color-chrome);
   }
 
   .workspace-shell.room-sidebar-collapsed {
@@ -142,12 +142,17 @@
   .workspace-column {
     min-width: 0;
     overflow: hidden auto;
-    background: #f8f9fb;
+  }
+
+  .project-rail,
+  .room-sidebar,
+  .right-sidebar {
+    background: var(--color-chrome);
   }
 
   .project-rail,
   .room-sidebar {
-    border-right: 1px solid #dfe3ea;
+    border-right: 1px solid var(--color-border);
   }
 
   .room-sidebar {
@@ -202,8 +207,8 @@
   .project-fixed-nav {
     flex: 0 0 auto;
     padding: 0.625rem;
-    border-top: 1px solid #dfe3ea;
-    background: #f4f6f9;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-chrome);
   }
 
   .project-fixed-nav .sidebar-list {
@@ -225,7 +230,7 @@
     min-height: 0;
     flex-direction: column;
     overflow: hidden;
-    border-left: 1px solid #dfe3ea;
+    border-left: 1px solid var(--color-border);
   }
 
   .agent-region {
@@ -543,7 +548,7 @@
 
   .project-item.active::before,
   .project-item.active::after {
-    border-color: #5b6ee1;
+    border-color: var(--color-selected-line);
   }
 
   .project-item.active::before {
@@ -634,7 +639,7 @@
     width: 2.125rem;
     height: 1px;
     margin: 0.1875rem 0 0.5625rem;
-    background: #dfe3ea;
+    background: var(--color-border);
   }
 
   .project-add {
@@ -643,18 +648,18 @@
     height: 2.625rem;
     padding: 0;
     place-items: center;
-    border: 1px dashed #b9c0ce;
+    border: 1px dashed var(--color-border-strong);
     border-radius: 50%;
-    background: #fff;
-    color: #6875d8;
+    background: var(--color-surface);
+    color: var(--color-text);
     cursor: pointer;
     font-size: 1.375rem;
     line-height: 1;
   }
 
   .project-add:hover {
-    border-color: #6875d8;
-    background: #eef0ff;
+    border-color: var(--color-text);
+    background: var(--color-surface-3);
   }
 
   .project-create-popover {
@@ -853,9 +858,9 @@
     flex-direction: column;
     margin: 0.5rem;
     overflow: hidden;
-    border: 1px solid #dfe3ea;
+    border: 1px solid var(--color-border);
     border-radius: 0.75rem;
-    background: #fff;
+    background: var(--color-bg);
   }
 
   .workspace-tabs {
@@ -1014,17 +1019,6 @@
     }
   }
 
-  :root.dark .app-frame,
-  :root.dark .workspace-shell {
-    background: #11141a;
-  }
-
-  :root.dark .workspace-main {
-    border-color: #303541;
-    background: #191d25;
-  }
-
-  :root.dark .workspace-column,
   :root.dark .workspace-tabs {
     border-color: #303541;
     background: #151920;
@@ -1038,8 +1032,7 @@
   }
 
   :root.dark .workspace-tab.active,
-  :root.dark .project-avatar,
-  :root.dark .project-add {
+  :root.dark .project-avatar {
     border-color: #343a47;
     background: #20252f;
   }
@@ -1047,24 +1040,6 @@
   :root.dark .project-item.active .project-avatar {
     border-color: #7685f0;
     background: #6878df;
-  }
-
-  :root.dark .project-item.active::before,
-  :root.dark .project-item.active::after {
-    border-color: #7685f0;
-  }
-
-  :root.dark .project-item.active::before {
-    border-right-color: transparent;
-  }
-
-  :root.dark .project-item.active::after {
-    border-top-color: transparent;
-    border-right-color: transparent;
-  }
-
-  :root.dark .project-divider {
-    background: #343a47;
   }
 
   :root.dark .project-create-popover,
@@ -1371,19 +1346,19 @@
     border: 1px solid transparent;
     border-radius: 0.625rem;
     background: transparent;
-    color: #5f6777;
+    color: var(--color-text);
     cursor: pointer;
     text-align: left;
   }
   .sidebar-row:hover {
-    background: #e9ecf2;
-    color: #303746;
+    background: var(--color-surface-3);
+    color: var(--color-text);
   }
   .sidebar-row.active {
-    border-color: #d8dcf7;
-    background: #fff;
-    box-shadow: 0 0.1875rem 0.75rem rgba(41, 48, 63, 0.08);
-    color: #4352bc;
+    border-color: transparent;
+    background: var(--color-surface);
+    box-shadow: inset 0.125rem 0 0 var(--color-selected-line);
+    color: var(--color-text);
     font-weight: 700;
   }
   .sidebar-row-leading {
@@ -1517,11 +1492,11 @@
     max-height: min(52rem, calc(100vh - 3rem));
     overflow: hidden;
     flex-direction: column;
-    border: 1px solid #d8dde6;
+    border: 1px solid var(--color-border);
     border-radius: 0.875rem;
-    background: #fff;
+    background: var(--color-surface);
     box-shadow: 0 1.5rem 4rem rgba(18, 24, 38, 0.24);
-    color: #2c3240;
+    color: var(--color-text);
   }
   .base-modal-sm {
     width: min(100%, 25rem);
@@ -1535,7 +1510,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 1.125rem 1.25rem 1rem;
-    border-bottom: 1px solid #e1e5ec;
+    border-bottom: 1px solid var(--color-border);
   }
   .base-modal-heading {
     display: grid;
@@ -1544,12 +1519,12 @@
   }
   .base-modal-heading h2 {
     margin: 0;
-    color: #282e3b;
+    color: var(--color-text);
     font-size: calc(var(--font-ui-body) + 0.125rem);
   }
   .base-modal-heading p {
     margin: 0;
-    color: #7b8392;
+    color: var(--color-text-muted);
     font-size: var(--font-ui-note);
     line-height: 1.45;
   }
@@ -1564,8 +1539,8 @@
     justify-content: flex-end;
     gap: 0.625rem;
     padding: 0.875rem 1.25rem;
-    border-top: 1px solid #e1e5ec;
-    background: #fafbfc;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface-2);
   }
   .confirm-dialog-message {
     margin: 0;
@@ -1641,12 +1616,8 @@
   :root.dark .instance-settings-toolbar {
     border-color: #303541;
   }
-  :root.dark .sidebar-row:hover,
   :root.dark .instance-settings-button:hover {
     background: #262c36;
-  }
-  :root.dark .sidebar-row {
-    color: #aeb4c0;
   }
   :root.dark .sidebar-row-menu-trigger:hover,
   :root.dark .sidebar-row-menu-trigger[aria-expanded="true"] {
@@ -1667,11 +1638,6 @@
   :root.dark .sidebar-row-menu button.danger {
     color: #f29199;
   }
-  :root.dark .sidebar-row.active {
-    border-color: #343c67;
-    background: #20252f;
-    color: #aeb8ff;
-  }
   :root.dark .sidebar-row-leading {
     background: #2a303b;
     color: #aeb4c0;
@@ -1680,22 +1646,6 @@
     background: #303862;
     color: #c9cfff;
   }
-  :root.dark .base-modal {
-    border-color: #3a414e;
-    background: #1b2028;
-    color: #eef0f5;
-  }
-  :root.dark .base-modal-header,
-  :root.dark .base-modal-footer {
-    border-color: #343a47;
-  }
-  :root.dark .base-modal-footer {
-    background: #242a34;
-  }
-  :root.dark .base-modal-heading h2 {
-    color: #eef0f5;
-  }
-  :root.dark .base-modal-heading p,
   :root.dark .confirm-dialog-message {
     color: #b0b7c3;
   }
@@ -2291,13 +2241,8 @@
     line-height: 1.5;
   }
 
-  :root.dark .project-fixed-nav,
-  :root.dark .right-sidebar,
   :root.dark .agent-region {
     border-color: #303541;
-  }
-  :root.dark .project-fixed-nav {
-    background: #171b23;
   }
   :root.dark .room-rename-form input,
   :root.dark .project-settings-form input,

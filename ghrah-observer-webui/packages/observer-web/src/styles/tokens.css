@@ -1,11 +1,10 @@
 /*
- * 设计变量（迁移期骨架）。
+ * 设计变量。
  *
- * 阶段 0 只做“机械搬运”：把原先散落在 style.css 顶部的 :root / :root.dark
- * 变量块整体移到这里，不改名、不改值、不增减档位。阶段 1 再在文件内部
- * 整理 primitive → semantic 结构。
+ * 语义色是栏、画布、卡面、文字和控件的唯一颜色来源。组件样式只引用
+ * var(--color-*)。字号和间距仍是原来的档位。动作链的 --ac-* 单独保留。
  *
- * 放在 tokens 层而不是 base 层，是为了让后续 tokens 的声明天然优先于
+ * 放在 tokens 层而不是 base 层，是为了让这些声明天然优先于
  * base/components；否则把变量留在 components 层，将来 tokens 层会被反压。
  */
 @layer tokens {
@@ -19,6 +18,21 @@
     --font-ui-note: 0.8125rem;
     --font-ui-code: 0.8125rem;
     --font-ui-body: 0.875rem;
+    --color-chrome: #f0ede4;
+    --color-bg: #fcfaf4;
+    --color-surface: #ffffff;
+    --color-surface-2: #f4f1e8;
+    --color-surface-3: #ebe7db;
+    --color-border: #e2ded2;
+    --color-border-strong: #c9c5b7;
+    --color-text: #1b1a17;
+    --color-text-muted: #56544e;
+    --color-text-subtle: #7e7b73;
+    --color-action: #1b1a17;
+    --color-on-action: #fbfbf7;
+    --color-selected: #ebe7db;
+    --color-selected-line: #1b1a17;
+    --color-danger: #b23a2e;
 
     /* ActionChain 画布（--ac-*）：能力语义色（写 > 读 > 通信 > 未知）与画布结构色 */
     --ac-write: #b45309;
@@ -34,15 +48,30 @@
     --ac-badge-head: #147653;
     --ac-badge-fork: #4f5fc7;
 
-    /* 迁移期结构色（刀 1：room 会话页 IA 重排引入的抽屉/面板），阶段 1 并入语义层 */
-    --ui-panel: #ffffff;
-    --ui-panel-border: #e2e5eb;
-    --ui-panel-muted: #6b7280;
+    /* 抽屉和浮层沿用语义色；遮罩和投影保持原值 */
+    --ui-panel: var(--color-surface);
+    --ui-panel-border: var(--color-border);
+    --ui-panel-muted: var(--color-text-muted);
     --ui-overlay: rgba(15, 23, 42, 0.32);
     --ui-panel-shadow: 0 0.75rem 2rem rgba(15, 23, 42, 0.18);
   }
 
   :root.dark {
+    --color-chrome: #0a0d0c;
+    --color-bg: #101312;
+    --color-surface: #171a18;
+    --color-surface-2: #1f2320;
+    --color-surface-3: #262b27;
+    --color-border: #2b302c;
+    --color-border-strong: #3e443f;
+    --color-text: #ecede8;
+    --color-text-muted: #a9ada6;
+    --color-text-subtle: #7e827c;
+    --color-action: #e9eae4;
+    --color-on-action: #141614;
+    --color-selected: #232824;
+    --color-selected-line: #86b7c2;
+    --color-danger: #e08a80;
     --ac-write: #f59e0b;
     --ac-read: #60a5fa;
     --ac-converse: #22d3ee;
@@ -55,11 +84,6 @@
     --ac-node-subtext: #8f97a6;
     --ac-badge-head: #34d399;
     --ac-badge-fork: #93a5ff;
-
-    /* 迁移期结构色（刀 1），与亮色同名同义 */
-    --ui-panel: #1d222b;
-    --ui-panel-border: #343a47;
-    --ui-panel-muted: #9aa3b2;
     --ui-overlay: rgba(0, 0, 0, 0.55);
     --ui-panel-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.45);
   }
