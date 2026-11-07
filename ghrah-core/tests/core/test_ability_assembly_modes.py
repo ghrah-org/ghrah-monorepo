@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -378,16 +377,6 @@ class TestLegacyMode:
 
         assert receipt["success"], receipt.get("error")
 
-    async def test_skill_root_wires_the_legacy_reader(self, tmp_path: Path) -> None:
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", skill_root=str(tmp_path / "skill-ability"))
-        )
-
-        await unit.init(FakeCtx())
-
-        assert unit.supervisor is not None
-        assert unit.supervisor.skill_provider is not None
-
 
 # ----------------------------------------------------------------
 # 选择新模式：目录、工具实例与读取服务同源
@@ -499,23 +488,6 @@ class TestBuiltinMode:
         # 拒绝发生在改动之前：工具表保持 manifest 投影（撤销成员不在其中）
         assert "read_file" in await _abilities_of(unit, "consumer")
         await ability_store.close()
-
-    async def test_skill_root_is_not_read(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        root = tmp_path / "skill-ability"
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", skill_root=str(root), ability_source="builtin")
-        )
-
-        caplog.set_level(logging.WARNING, logger="ghrah.core.unit")
-        await unit.init(FakeCtx())
-
-        assert unit.supervisor is not None
-        assert unit.supervisor.skill_provider is None
-        assert "ignores skill_root" in caplog.text
-        # 装配不创建旧目录：新模式不读它，就不该让它看起来"已就绪"
-        assert not root.exists()
 
 
 # ----------------------------------------------------------------

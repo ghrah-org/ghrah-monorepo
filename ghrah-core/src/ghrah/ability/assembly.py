@@ -11,8 +11,7 @@
 
 ``legacy``
     **已废弃**，仅保留旧部署兼容：``ghrah.manifest.materialize`` 从旧注册表
-    ``ghrah.abilities`` 实例化工具，``ghrah.skills.SkillAbilityProvider``
-    读取 Skill 目录。它不参与权限治理——有效权限合并、只读约束、权限位检查
+    ``ghrah.abilities`` 实例化工具。它不参与权限治理——有效权限合并、只读约束、权限位检查
     与危险命令白名单等保证只在 ``builtin`` 路径生效，不要把它当作受治理或
     安全的装配方式。旧模式按原总纲的退役路线处理，不再扩展。
 ``builtin``
@@ -20,7 +19,7 @@
     ``BuiltinAbilitySource`` 提供声明与工具实例，授权装配边界为每个 Agent/run
     创建本地获授内容服务，提供 Skill 正文与附件。
 
-选择 ``builtin`` 后，解析失败直接报错：不回退旧注册表，不回退旧 Skill 读取器，
+选择 ``builtin`` 后，解析失败直接报错：不回退旧注册表，
 也不接受只属于旧模式的可写入口（直接传 wire 能力定义、默认能力集、运行期
 注册／注销能力）。这些入口由 :meth:`AbilityAssembly.refuse` 显式拒绝。
 
@@ -55,7 +54,7 @@ class AbilitySourceMode(StrEnum):
     """能力来源装配模式。
 
     Attributes:
-        LEGACY: 旧运行方式（旧注册表 + 旧 Skill 读取器）；**已废弃**，仅兼容
+        LEGACY: 旧运行方式（旧注册表）；**已废弃**，仅兼容
             旧部署，不参与权限治理（有效权限、只读、权限位与危险命令
             白名单保证只在 ``builtin`` 生效）。
         BUILTIN: 受支持的治理路径：新版 ``ghrah.ability`` 来源（新声明、新工具
@@ -88,22 +87,6 @@ class AbilitySourceMode(StrEnum):
             raise AbilityAssemblyError(
                 f"unknown ability source mode: {value!r} (expected one of: {known})"
             ) from None
-
-
-def _legacy_skill_provider(root: str | None) -> Any:
-    """构造旧 Skill 读取器（仅 legacy 模式使用）。
-
-    Args:
-        root: 旧 Skill 目录根；None／空串表示不接线。
-
-    Returns:
-        ``ghrah.skills.SkillAbilityProvider`` 或 None。
-    """
-    if not root:
-        return None
-    from ghrah.skills import SkillAbilityProvider
-
-    return SkillAbilityProvider.from_root(root)
 
 
 @dataclass(frozen=True)
@@ -258,23 +241,6 @@ class AbilityAssembly:
             safe_extra_commands=safe_extra_commands,
             safe_extra_sub_commands=safe_extra_sub_commands,
         )
-
-    def skill_provider(self, root: str | None) -> Any:
-        """按模式给出 Skill 读取服务。
-
-        legacy 模式（已废弃，仅旧部署兼容）按根目录构造旧读取器；builtin 模式
-        的内容服务由授权装配边界按 Agent/run 创建，因此这里返回 None，
-        **不构造**旧读取器——同一 Agent 不允许一边用新来源一边读旧目录。
-
-        Args:
-            root: 配置里的 Skill 根目录。
-
-        Returns:
-            读取服务或 None。
-        """
-        if self.source is not None:
-            return None
-        return _legacy_skill_provider(root)
 
     def refuse(self, entry: str, detail: str) -> NoReturn:
         """拒绝只属于另一模式的入口，不做静默降级。

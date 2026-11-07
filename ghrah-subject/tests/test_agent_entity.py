@@ -31,7 +31,6 @@ async def test_builtin_entity_uses_template_and_keeps_legacy_configuration_read_
     config.ability_grant_policy = GrantPolicy(mode="merge")
     async with Context() as ctx:
         await assemble_subject(ctx, config, profile="full")
-        assert ctx.get("ability_bridge_unit", strict=False) is None
         project = _data(await bridge_command(ctx, "project_create", {"name": "builtin"}))["project"]
         pid, cluster = project["project_id"], project["cluster_ids"][0]
         spec = {"project_id": pid, "cluster_id": cluster, "name": "entity"}

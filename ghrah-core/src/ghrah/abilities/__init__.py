@@ -41,10 +41,6 @@
 
 from ghrah.abilities.base import Ability
 from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.command_proxy import (
-    CommandProxyAbility,
-    CommandProxyDescriptor,
-)
 from ghrah.abilities.builtin.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
@@ -65,7 +61,6 @@ from ghrah.abilities.builtin.fs_permissions import (
 )
 from ghrah.abilities.builtin.list_abilities import ListAbilitiesAbility
 from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
-from ghrah.abilities.builtin.load_skill import LoadSkillAbility
 from ghrah.abilities.builtin.move_file import MoveFileAbility
 from ghrah.abilities.builtin.query_agents import QueryAgentsAbility
 from ghrah.abilities.builtin.query_manifests import QueryManifestsAbility
@@ -86,7 +81,6 @@ from ghrah.abilities.execution_services import (
     MANIFEST_STORE,
     MCP_RUNTIME,
     MESSAGE_FACTORY,
-    SKILL_PROVIDER,
     SUPERVISOR,
     ExecutionServices,
     ServiceKey,
@@ -155,7 +149,6 @@ def _register_builtin_abilities() -> None:
     AbilityRegistry.register("delete_file", DeleteFileAbility)
     AbilityRegistry.register("search_files", SearchFilesAbility)
     AbilityRegistry.register("execute_command", ExecuteCommandAbility)
-    AbilityRegistry.register("command_proxy", CommandProxyAbility)
     AbilityRegistry.register("query_agents", QueryAgentsAbility)
     AbilityRegistry.register("send_message", SendMessageAbility)
     AbilityRegistry.register("broadcast_message", BroadcastMessageAbility)
@@ -163,7 +156,6 @@ def _register_builtin_abilities() -> None:
     AbilityRegistry.register("terminate_agent", TerminateAgentAbility)
     AbilityRegistry.register("query_manifests", QueryManifestsAbility)
     AbilityRegistry.register("list_abilities", ListAbilitiesAbility)
-    AbilityRegistry.register("load_skill", LoadSkillAbility)
     AbilityRegistry.register("recall_context", RecallContextAbility)
     AbilityRegistry.register("send", SendAbility)
     AbilityRegistry.register("session_info", SessionInfoAbility)
@@ -193,7 +185,6 @@ __all__ = [
     "SUPERVISOR",
     "LOOP",
     "MANIFEST_STORE",
-    "SKILL_PROVIDER",
     "MCP_RUNTIME",
     "ABILITY_CONTENT",
     "MESSAGE_FACTORY",
@@ -220,9 +211,6 @@ __all__ = [
     "SearchFilesAbility",
     "ExecuteCommandAbility",
     "ExecuteCommandInput",
-    # 插件能力桥（command_proxy）
-    "CommandProxyAbility",
-    "CommandProxyDescriptor",
     # 集群通信 Ability
     "QueryAgentsAbility",
     "SendMessageAbility",
@@ -231,7 +219,6 @@ __all__ = [
     "TerminateAgentAbility",
     "QueryManifestsAbility",
     "ListAbilitiesAbility",
-    "LoadSkillAbility",
     "RecallContextAbility",
     "SendAbility",
     "SessionInfoAbility",

@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import pytest
@@ -435,19 +434,12 @@ class TestFromEnv:
         config = SubjectConfig.from_env()
         assert config.taskstore.enabled is True
 
-    def test_skill_defaults(self) -> None:
-        """skill slice：默认根目录是 skill-ability（测试期由 conftest 隔离为临时目录）。"""
-        config = SubjectConfig()
-        assert config.skill.root.endswith("skill-ability")
-
-    def test_from_env_skill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_from_env_reports_retired_skill_root(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         monkeypatch.setenv("GHRAH_SUBJECT_SKILL_ROOT", "/srv/ghrah/skill-ability")
-        assert SubjectConfig.from_env().skill.root == "/srv/ghrah/skill-ability"
-
-    def test_from_env_skill_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """delenv 后断言生产默认值（from_env 显式传字面量，不受 conftest 覆写影响）。"""
-        monkeypatch.delenv("GHRAH_SUBJECT_SKILL_ROOT", raising=False)
-        assert SubjectConfig.from_env().skill.root == os.path.expanduser("~/.ghrah/skill-ability")
+        SubjectConfig.from_env()
+        assert "GHRAH_SUBJECT_SKILL_ROOT has been retired" in caplog.text
 
     def test_ability_source_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """未选择时保持现有运行方式（legacy）。"""

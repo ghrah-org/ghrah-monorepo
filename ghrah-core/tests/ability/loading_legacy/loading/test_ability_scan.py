@@ -145,18 +145,20 @@ def _write_package(
 
 
 class TestRoots:
-    def test_default_pool_sees_user_directory(
+    def test_external_source_requires_an_explicit_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """默认池 = 内置树 + 用户目录：装进去的用户包能被扫到。"""
-        monkeypatch.setattr(roots, "default_user_root", lambda: tmp_path)
-        _write_package(tmp_path, "research")
+        """历史用户目录只在显式传入时参与扫描。"""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        old_root = tmp_path / ".ghrah" / "skill-ability"
+        _write_package(old_root, "research")
 
         result = scan_ability_definitions()
 
         assert BUILTIN_CONTAINERS <= {entry.container for entry in result.entries}
-        assert "research" in result.definitions
-        assert [root.source for root in result.roots] == ["builtin", "skill-ability"]
+        assert "research" not in result.definitions
+        explicit = scan_ability_definitions((*roots.builtin_pool(), roots.path_root(old_root)))
+        assert "research" in explicit.definitions
 
     def test_missing_required_root_is_reported(self, tmp_path: Path) -> None:
         """``required`` 根缺失要报出来：那是环境坏了，不是"空目录"。"""

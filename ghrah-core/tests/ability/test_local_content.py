@@ -272,13 +272,9 @@ async def test_rebase_requires_explicit_service_for_target_identity_and_run(cont
 
 
 @pytest.mark.parametrize("operation", [LoadSkillAbility, ListAbilitiesAbility])
-async def test_new_operations_never_fall_back_to_old_skill_provider(operation):
-    class Poison:
-        def __getattr__(self, name):
-            raise AssertionError("旧 Skill 读取器不能被调用")
-
+async def test_operations_require_granted_content_provider(operation):
     result = await operation().execute(
-        make_call(arguments={"full_name": "reports/guide"}), make_services(skill_provider=Poison())
+        make_call(arguments={"full_name": "reports/guide"}), make_services()
     )
     assert result.outcome == ActionOutcome.FAILURE
     assert "not wired" in result.data["error"]

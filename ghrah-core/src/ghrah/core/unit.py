@@ -173,17 +173,12 @@ class CoreUnitConfig:
             供 manifest_ref spawn 解析 agent manifest。None = standalone
             模式（manifest_ref spawn 明确报错，对齐 ROOM_BRIDGE_UNAVAILABLE
             模式）。Subject 挂载模式下注入其 ManifestStore。
-        skill_root: skill-ability 根目录（绝对路径字符串）。None = 不接线：
-            skill 目录不被扫描、上下文不注入技能目录摘要；对应消费方显式
-            说明缺席（零隐式）。Subject 挂载模式下注入 ``SkillConfig.root``。
-            选择 ``ability_source="builtin"`` 时该根**不被读取**（旧读取器不
-            构造），只记警告——同一 Agent 不允许一边用新来源一边读旧目录。
         ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。
             ``legacy`` **已废弃**：仅保留旧部署兼容，不在权限治理范围内
             （有效权限合并、只读、权限位与危险命令白名单等保证只在
             ``builtin`` 生效），不要把它当作受治理或安全的装配方式。
             ``builtin`` 是受支持的路径：能力声明、工具实例与 Skill 读取
-            服务同源，解析失败直接报错，不回退旧注册表或旧 Skill 读取器。
+            服务同源，解析失败直接报错，不回退旧注册表。
         default_abilities: spawn 未显式传 abilities 时注入的能力名列表
             （透传 SupervisorActor.default_abilities——部署方显式声明，
             非隐式兜底；None = 未配置，spawn(None) raise）。
@@ -221,10 +216,7 @@ class CoreUnitConfig:
     llm_factory: Callable[[Any], Any] | None = None
     # duck-typed ManifestStoreProtocol；None = standalone（manifest_ref spawn 报错）
     manifest_store: Any = None
-    # skill-ability 根目录（装配期显式注入的字符串路径）。None = 不接线：
-    # skill 目录不被扫描、上下文不注入技能目录摘要（消费方显式说明缺席）。
-    skill_root: str | None = None
-    # 能力来源装配模式（legacy = 旧注册表 + 旧 Skill 读取器，已废弃且不参与
+    # 能力来源装配模式（legacy = 旧注册表，已废弃且不参与
     # 权限治理；builtin = 新版 ghrah.ability 受治理路径）。装配点显式选择；
     # 未选择时保持 legacy 仅为旧部署兼容。
     ability_source: str = "legacy"
@@ -599,62 +591,6 @@ def _create_ability_from_def(
     return AbilityRegistry.create(ability_type, **params)
 
 
-def _materialize_command_proxy(
-    params: dict[str, Any],
-    subject_bridge: SubjectCommandBridge | None,
-    *,
-    auto_approve_abilities: tuple[str, ...] = (),
-) -> AbilityProtocol:
-    """command_proxy descriptor → Ability 实例（Core 侧物化）。
-
-    过渡形态（REGISTER_ABILITY params 通道）的物化入口，三段职责：
-
-    1. descriptor 校验：``CommandProxyDescriptor`` pydantic 模型
-       （``extra="forbid"``，未知字段拒绝，hooks 类字段无从混入）；
-    2. 强制闸门：HITL 默认开启，仅 ``auto_approve_abilities`` 白名单
-       可关闭；descriptor 的 ``require_hitl`` 声明不具自批效力
-       （挂载面声明不得削弱部署方信任闸）；
-    3. 非白名单包装：``HITLRequiredAbility``（内核固定实现，复用自
-       materialize 物化器的通用 HITL 接线）。
-
-    Args:
-        params: REGISTER_ABILITY 命令的 ``ability.params``（descriptor dict）
-        subject_bridge: 宿主命令面桥（standalone 时为 None——工具执行
-            时明确报错，注册不拒绝）
-        auto_approve_abilities: 部署方强制放行的能力名白名单
-
-    Returns:
-        已物化的 Ability 实例（非白名单时含 HITL 包装）
-
-    Raises:
-        pydantic.ValidationError: descriptor 不合法（未知字段/缺必填/
-            非法值）
-    """
-    from ghrah.abilities.builtin.command_proxy import CommandProxyDescriptor
-    from ghrah.abilities.hitl import HITLRequiredAbility
-    from ghrah.abilities.registry import AbilityRegistry
-
-    descriptor = CommandProxyDescriptor.model_validate(params)
-    ability = AbilityRegistry.create(
-        "command_proxy",
-        tool_name=descriptor.tool_name,
-        description=descriptor.description,
-        parameters=descriptor.parameters,
-        bridge=subject_bridge,
-        command=descriptor.command,
-        timeout=descriptor.timeout,
-    )
-    if descriptor.tool_name in auto_approve_abilities:
-        return ability
-    return HITLRequiredAbility(
-        ability,
-        ability_name=descriptor.tool_name,
-        reason=(
-            f"command_proxy '{descriptor.command}' requires HITL approval (plugin-provided ability)"
-        ),
-    )
-
-
 # ----------------------------------------------------------------
 # CoreUnit
 # ----------------------------------------------------------------
@@ -786,17 +722,8 @@ class CoreUnit:
         # （duck-typed；standalone 场景无 serial → bridge 为 None，send 工具明确报错）
         serial = getattr(ctx, "serial", None)
         room_bridge = SerialRoomBridge(serial) if callable(serial) else None
-
-        # Subject command bridge（command_proxy 工具回路）：同一 serial 桥接
-        # 协议命令面（standalone 场景无 serial → bridge 为 None，工具执行
-        # 时明确报错，注册不拒绝——对齐 send/ROOM_BRIDGE_UNAVAILABLE 模式）
-        self._subject_bridge: SubjectCommandBridge | None = (
-            SubjectCommandBridge(serial) if callable(serial) else None
-        )
-        # 宿主命令端口：仅 Subject 宿主（有 serial）时构造；standalone 为 None。
-        # 成员级允许集见 config.host_command_grants，由 _build_ability_call 查表。
         self._host_command_port = (
-            HostCommandPort(self._subject_bridge) if self._subject_bridge is not None else None
+            HostCommandPort(SubjectCommandBridge(serial)) if callable(serial) else None
         )
 
         if (
@@ -805,8 +732,7 @@ class CoreUnit:
         ):
             raise ValueError("MessageManager project does not match CoreUnit")
         # 装配模式：一次选择同时决定能力目录、工具实例与 Skill 读取服务。
-        # 未选择（legacy）保持原有接线；选择 builtin 后不回退旧注册表或旧
-        # Skill 读取器，只属于旧模式的可写入口在各自 handler 里显式拒绝。
+        # 只属于旧模式的可写入口由 builtin 模式显式拒绝。
         assembly = AbilityAssembly.select(
             self._config.ability_source,
             agent_store=self._config.manifest_store,
@@ -823,23 +749,12 @@ class CoreUnit:
             self._mcp_deployment = McpDeployment(
                 self._config.mcp, self._config.ability_store, self._config.cluster_id
             )
-        if assembly.is_builtin:
-            # 旧模式的目录与默认能力集在新模式下不生效：显式告警而不是
-            # 静默沿用（沿用就是新旧混装，静默忽略就是让工具面无声缺口）。
-            if self._config.skill_root:
-                logger.warning(
-                    "CoreUnit: ability_source=builtin ignores skill_root=%r — the granted "
-                    "content service is assembled per Agent/run from committed versions",
-                    self._config.skill_root,
-                )
-            if self._config.default_abilities is not None:
-                logger.warning(
-                    "CoreUnit: ability_source=builtin ignores default_abilities=%r — "
-                    "spawn an agent through a manifest_ref instead",
-                    self._config.default_abilities,
-                )
-        # 旧读取器按模式选择；builtin 的内容端口随每次授权装配创建。
-        skill_provider: Any = assembly.skill_provider(self._config.skill_root)
+        if assembly.is_builtin and self._config.default_abilities is not None:
+            logger.warning(
+                "CoreUnit: ability_source=builtin ignores default_abilities=%r — "
+                "spawn an agent through a manifest_ref instead",
+                self._config.default_abilities,
+            )
 
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
         # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
@@ -879,7 +794,6 @@ class CoreUnit:
             ),
             max_cluster_members=self._config.max_cluster_members,
             manifest_store=self._config.manifest_store,
-            skill_provider=skill_provider,
             llm_factory=self._config.llm_factory,
             message_manager=self._config.message_manager,
             builtin_abilities=assembly.is_builtin,
@@ -1534,21 +1448,11 @@ class CoreUnit:
             )
         rp = RegisterAbilityPayload.model_validate(payload)
         self._validate_agent(rp.project_id, rp.agent_id, rp.agent_name)
-        if rp.ability.ability_type == "command_proxy":
-            # 插件能力桥：descriptor 校验 + 强制闸门在物化器内完成，
-            # 实例经专用通道注册（不经 params 工厂）
-            ability = _materialize_command_proxy(
-                rp.ability.params,
-                self._subject_bridge,
-                auto_approve_abilities=self._config.auto_approve_abilities,
-            )
-            result = await supervisor.register_ability_instance_for_agent(rp.agent_name, ability)
-        else:
-            result = await supervisor.register_ability_for_agent(
-                agent_name=rp.agent_name,
-                ability_type=rp.ability.ability_type,
-                ability_params=rp.ability.params,
-            )
+        result = await supervisor.register_ability_for_agent(
+            agent_name=rp.agent_name,
+            ability_type=rp.ability.ability_type,
+            ability_params=rp.ability.params,
+        )
         return self._ok({"agent_name": rp.agent_name, "ability": result, "registered": True})
 
     async def _handle_unregister_ability(

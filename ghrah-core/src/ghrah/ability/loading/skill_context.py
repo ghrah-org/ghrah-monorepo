@@ -319,8 +319,7 @@ def load_skill_catalog(pool: Sequence[AbilityRoot] | None = None) -> SkillCatalo
     """扫目录池，产出模型技能面（目录文案 + 正文读取入口）。
 
     Args:
-        pool: 目录池；None 表示用 :func:`default_pool`（内置树 rank 0 +
-            用户目录 ``~/.ghrah/skill-ability`` rank 100）。
+        pool: 目录池；None 表示用 :func:`default_pool`（仅内置树）。
 
     Returns:
         :class:`SkillCatalog`。问题收集式：单个包定义非法不影响其余包。

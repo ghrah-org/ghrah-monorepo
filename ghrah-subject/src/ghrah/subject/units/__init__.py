@@ -29,11 +29,10 @@ async def mount_builtin_units(
     """Mount built-in units as Ouroboros plugins.
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
-    均启用）下 coexistence = 8（sandbox/manifest_store/skill/ledger/workspace
-    + taskstore + task/desired_state）；full = 16（coexistence 8 +
+    均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
+    + taskstore + task/desired_state）；full = 14（coexistence 7 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
-    project/ability_control/room/recovery + room_filter + ability_bridge）。
-    skill 和 ability_bridge 仅在 legacy 来源下挂载。
+    project/ability_control/room/recovery + room_filter）。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
@@ -66,12 +65,9 @@ async def mount_builtin_units(
     units: list[SubjectUnit] = [
         SandboxUnit(config),
         ManifestStoreUnit(config),
+        LedgerUnit(config),
+        WorkspaceUnit(config),
     ]
-    if config.ability_source == "legacy":
-        from ghrah.subject.units.skill import SkillUnit
-
-        units.append(SkillUnit(config))
-    units.extend([LedgerUnit(config), WorkspaceUnit(config)])
 
     # 任务归因内核 unit（可选组件）：enabled=False 时完全不挂载（零隐式；归因
     # 命令回落 Unknown command）。当前经 builtin 链挂载属**待纠正偏离**——目标
@@ -116,11 +112,6 @@ async def mount_builtin_units(
         # enabled=False 时完全不挂载（零隐式行为，配置切片控制）
         if config.room_filter.enabled:
             units.append(RoomFilterUnit(config))
-
-        if config.ability_source == "legacy":
-            from ghrah.subject.runtime.ability_bridge import AbilityBridgeUnit
-
-            units.append(AbilityBridgeUnit())
 
     fibers: dict[str, Fiber] = {}
     for unit in units:

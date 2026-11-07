@@ -30,7 +30,6 @@ _BUILTIN_YAML_NAMES: tuple[str, ...] = (
     "ghrah.cluster.query_manifests",
     "ghrah.core.recall_context",
     "ghrah.core.list_abilities",
-    "ghrah.core.load_skill",
     "ghrah.core.session_info",
 )
 

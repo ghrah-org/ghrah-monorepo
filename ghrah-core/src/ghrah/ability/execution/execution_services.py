@@ -32,7 +32,6 @@ __all__ = [
     "MCP_RUNTIME",
     "HOST_COMMAND_PORT",
     "MESSAGE_FACTORY",
-    "SKILL_PROVIDER",
     "SUPERVISOR",
     "TOOL_SURFACE",
     "ExecutionServices",
@@ -93,9 +92,6 @@ LOOP: ServiceKey[LoopData] = ServiceKey("loop", LoopData)
 # duck-typed ManifestStoreProtocol（load_agent/list_agents）；
 # None = 未接线（manifest 类工具须显式 FAILURE 指路，绝不猜测）。
 MANIFEST_STORE = ServiceKey[Any]("manifest_store")
-# duck-typed SkillAbilityProvider（scan/get_skill/query_fingerprints）；
-# None = 未接线（skill 类工具须显式说明缺席，绝不猜测目录）。
-SKILL_PROVIDER = ServiceKey[Any]("skill_provider")
 # duck-typed McpRuntime（activate/deactivate/call/close）；
 # None = 未接线（MCP 类工具须显式 FAILURE 指路，绝不猜测可用性）。
 MCP_RUNTIME = ServiceKey[Any]("mcp_runtime")
@@ -114,7 +110,6 @@ def build_execution_services(
     supervisor: SupervisorProtocol | None = None,
     loop: LoopData | None = None,
     manifest_store: Any = None,
-    skill_provider: Any = None,
     mcp_runtime: Any = None,
     ability_content: Any = None,
     tool_surface: Any = None,
@@ -131,7 +126,6 @@ def build_execution_services(
         supervisor: 集群 supervisor（集群类成员与 manifest 查询用）。
         loop: 本次执行的循环数据快照。
         manifest_store: Agent 声明存储。
-        skill_provider: 旧 Skill 读取器（仅旧模式接线）。
         mcp_runtime: MCP 运行时。
         ability_content: 获授内容读取服务。
         tool_surface: 当前受信 Agent/run 的工具面服务。
@@ -151,8 +145,6 @@ def build_execution_services(
         services.set(LOOP, loop)
     if manifest_store is not None:
         services.set(MANIFEST_STORE, manifest_store)
-    if skill_provider is not None:
-        services.set(SKILL_PROVIDER, skill_provider)
     if mcp_runtime is not None:
         services.set(MCP_RUNTIME, mcp_runtime)
     if ability_content is not None:

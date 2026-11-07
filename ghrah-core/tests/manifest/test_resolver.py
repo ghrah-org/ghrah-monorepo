@@ -82,7 +82,8 @@ class TestBuiltinManifestStore:
     def test_list_abilities_no_filter(self) -> None:
         store = BuiltinManifestStore()
         names = store.list_abilities()
-        assert len(names) == 20
+        assert len(names) == 19
+        assert "ghrah.core.load_skill" not in names
         assert "ghrah.core.conversation" in names
         assert "ghrah.core.session_info" in names
 

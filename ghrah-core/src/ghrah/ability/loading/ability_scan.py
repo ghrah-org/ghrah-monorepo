@@ -15,7 +15,7 @@
 
 与 ``ability_catalog`` 的分工（两者不是第二权威，只是两种口径的读法）：
 
-- **本模块 = 目录面**：扫整个池（内置树 + 用户目录），一次给出「有哪些能力包、
+- **本模块 = 目录面**：扫整个池（仅内置树），一次给出「有哪些能力包、
   各自声明了什么成员、哪些包有问题」。收集式——单个包坏了记一条问题继续扫，
   因为外部目录是**输入**，一份坏文件不该让整面不可读。
 - ``ability_catalog`` = 实现面：只读内置树、严格抛错、按点分路径 import 实现
@@ -535,7 +535,7 @@ def scan_ability_definitions(
     记一条问题（可见，不静默覆盖）。
 
     Args:
-        pool: 目录池；None 取 ``ability_roots.default_pool()``（内置树 + 用户目录）。
+        pool: 目录池；None 取 ``ability_roots.default_pool()``（仅内置树）。
 
     Returns:
         :class:`AbilityScanResult`：命中的包、全部 skill 成员、扫描期问题。
@@ -817,8 +817,7 @@ def scan_abilities(pool: Sequence[AbilityRoot] | None = None) -> tuple[AbilityCo
     会在胜出者的 :attr:`AbilityContainer.issues` 里留一条记录（可见，不静默覆盖）。
 
     Args:
-        pool: 目录池；None 取 ``ability_roots.default_pool()``
-            （内置包树 rank 0 + ``~/.ghrah/skill-ability`` rank 100）。
+        pool: 目录池；None 只扫描内置包树。
 
     Returns:
         容器元组，按容器名升序。**根级问题**（某个 ``required`` 根不存在）不属于

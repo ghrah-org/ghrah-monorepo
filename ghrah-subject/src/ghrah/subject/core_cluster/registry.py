@@ -457,14 +457,6 @@ def default_core_unit_factory(
     ``CoreClusterRegistryUnit.init`` 从 ctx 取 ``MANIFEST_STORE`` 后传入
     （挂载顺序保证 store 先于 CoreUnit，见 mount_builtin_units）。
 
-     ``config.skill.root`` 注入 CoreUnitConfig.skill_root：Core 侧据此构造
-     SkillAbilityProvider（skill 清单 + 上下文目录摘要）。建目录与补齐 lock
-     仍由 SkillUnit 在装配期完成——Core 只读，不重复初始化。
-
-     ``config.ability_source`` 透传 CoreUnitConfig.ability_source：同一模式
-     决定声明目录、工具实例与 Skill 读取服务；builtin 模式下旧 Skill 根不被
-     传入（SkillUnit 只在 legacy 模式挂载）。
-
     ``llm_factory`` 为可选的 per-cluster LLM 工厂注入（透传
     CoreUnitConfig.llm_factory；None = Core 内建默认 agentconf 解析）。
     部署方显式声明 LLM 出口的程序化接缝——SubjectConfig 暂不暴露用户级
@@ -583,10 +575,6 @@ def default_core_unit_factory(
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
             manifest_store=manifest_store,
-            # skill-ability：根目录由 SubjectConfig 单一决定（skill slice），
-            # Core 侧只按此根构造 provider 读 skill（建目录/lock 由 SkillUnit
-            # 在装配期完成，Core 不重复初始化）。
-            skill_root=config.skill.root if legacy else None,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_source=config.ability_source,
             ability_install_root=config.ability.install_root,

@@ -35,7 +35,6 @@ async def test_coexistence_assembly_all_fibers_active(tmp_path: Path) -> None:
         assert set(fibers) == {
             "sandbox",
             "manifest_store",
-            "skill",
             "ledger",
             "workspace",
             "taskstore",
@@ -47,8 +46,6 @@ async def test_coexistence_assembly_all_fibers_active(tmp_path: Path) -> None:
         for fiber in fibers.values():
             assert fiber.state is FiberState.ACTIVE
 
-        # skill 根目录由 SkillUnit.init() 在装配期创建（配置驱动路径）
-        assert Path(config.skill.root).is_dir()
         assert ctx.get("sandbox_executor") is not None
         assert ctx.get("manifest_store") is not None
         # ledger 不再发布实例级服务（chain 永远读 Project Root）。
@@ -71,7 +68,6 @@ async def test_full_assembly_all_fibers_active(
         assert set(fibers) == {
             "sandbox",
             "manifest_store",
-            "skill",
             "ledger",
             "workspace",
             "taskstore",
@@ -85,7 +81,6 @@ async def test_full_assembly_all_fibers_active(
             "room",
             "recovery",
             "room_filter",
-            "ability_bridge",
         }
 
         # 计划 0.4：逐 fiber ACTIVE 断言（工厂已等 ACTIVE，此处显式兜底）
@@ -99,4 +94,3 @@ async def test_full_assembly_all_fibers_active(
         assert ctx.get("room_manager") is not None
         assert ctx.get("room_store") is not None
         assert ctx.get("reconciliation_service") is not None
-        assert ctx.get("ability_bridge_unit") is not None

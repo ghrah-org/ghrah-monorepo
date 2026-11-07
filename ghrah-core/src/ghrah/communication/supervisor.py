@@ -101,7 +101,6 @@ class SupervisorActor:
         default_abilities: list[str] | None = None,
         max_cluster_members: int = 20,
         manifest_store: Any | None = None,
-        skill_provider: Any | None = None,
         llm_factory: Callable[[AgentConfig], Any] | None = None,
         message_manager: MessageManager | None = None,
         builtin_abilities: bool = False,
@@ -125,9 +124,6 @@ class SupervisorActor:
                 spawn/query_manifests 等 manifest 类工具经
                 ExecutionServices 服务表显式接线；
                 None = 未接线（对应工具显式 FAILURE 指路）。
-            skill_provider: SkillAbilityProvider（duck-typed），供 skill 面消费
-                （list_abilities 的 skill 清单、上下文技能目录摘要注入）；
-                None = 未接线（skill 面显式说明缺席）。
             message_manager: 显式注入已打开的项目消息服务，须启用固定会话路由；
                 生命周期由装配方管理，未配置时 agent 间发送拒绝。
             llm_factory: 集群级 LLM 工厂默认（``(AgentConfig) ->
@@ -158,9 +154,6 @@ class SupervisorActor:
         self.room_bridge = room_bridge
         # duck-typed ManifestStoreProtocol | None（装配期显式注入）
         self.manifest_store = manifest_store
-        # duck-typed SkillAbilityProvider | None（装配期显式注入）；消费方：
-        # list_abilities 的 skill 面 + ContextManager 的技能目录摘要注入
-        self.skill_provider = skill_provider
         # duck-typed HostCommandPort | None；命令白名单见 host_command_grants
         self.host_command_port = host_command_port
         self.host_command_grants: Mapping[str, frozenset[str]] = host_command_grants or {}
@@ -1002,10 +995,6 @@ class SupervisorActor:
         ability: Any,
     ) -> str:
         """为指定 Agent 注册已实例化的 Ability。
-
-        command_proxy 等经 Core 侧物化器（descriptor 校验 + 强制闸门 +
-        HITL 包装）构造的能力实例走本通道——不经 AbilityRegistry 的
-        params 工厂（物化器对构造面负责，注册面只负责落到 Agent）。
 
         Args:
             agent_name: Agent 名称

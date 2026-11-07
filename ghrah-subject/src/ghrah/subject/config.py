@@ -187,20 +187,6 @@ class AbilityConfig:
         )
 
 
-@dataclass
-class SkillConfig:
-    """skill Unit 配置切片。
-
-    装配期由 ``SkillUnit`` 据此根目录做一次初始化：目录自举 + 扫描 + 缺失
-    ``ability.lock.yaml`` 补齐。扫描结果的消费方在 Core 侧，按需自行扫盘。
-
-    Attributes:
-        root: skill 存储根路径（每个 skill 一个子目录，内含 SKILL.md）
-    """
-
-    root: str = os.path.expanduser("~/.ghrah/skill-ability")
-
-
 # transport kind 配置（当前仅实现 websocket，预留 ipc/grpc）
 @dataclass
 class TransportKindConfig:
@@ -362,7 +348,6 @@ class SubjectConfig:
     room_filter_slice: InitVar[RoomFilterConfig | None] = None
     plugin_trust_slice: InitVar[PluginTrustConfig | None] = None
     taskstore_slice: InitVar[TaskStoreConfig | None] = None
-    skill_slice: InitVar[SkillConfig | None] = None
     ability: AbilityConfig = field(default_factory=AbilityConfig)
 
     # 非 slice 的新字段（有默认值，可直接构造）。
@@ -406,7 +391,6 @@ class SubjectConfig:
     _room_filter: RoomFilterConfig = field(init=False)
     _plugin_trust: PluginTrustConfig = field(init=False)
     _taskstore: TaskStoreConfig = field(init=False)
-    _skill: SkillConfig = field(init=False)
 
     def __post_init__(
         self,
@@ -419,7 +403,6 @@ class SubjectConfig:
         room_filter_slice: RoomFilterConfig | None,
         plugin_trust_slice: PluginTrustConfig | None,
         taskstore_slice: TaskStoreConfig | None,
-        skill_slice: SkillConfig | None,
     ) -> None:
         self._persistence = persistence_slice or PersistenceConfig(db_path=self.db_path)
         self._sandbox = sandbox_slice or SandboxUnitConfig(
@@ -441,7 +424,6 @@ class SubjectConfig:
         self._room_filter = room_filter_slice or RoomFilterConfig()
         self._plugin_trust = plugin_trust_slice or PluginTrustConfig()
         self._taskstore = taskstore_slice or TaskStoreConfig()
-        self._skill = skill_slice or SkillConfig()
 
         # 能力来源模式：非法值在装配前报错——拼错的模式不能让系统悄悄
         # 跑回旧注册表，也不能让「选了新模式」只体现在配置文件注释里。
@@ -505,10 +487,6 @@ class SubjectConfig:
     def taskstore(self) -> TaskStoreConfig:
         return self._taskstore
 
-    @property
-    def skill(self) -> SkillConfig:
-        return self._skill
-
     @classmethod
     def from_env(cls) -> SubjectConfig:
         """从环境变量创建配置。
@@ -534,7 +512,6 @@ class SubjectConfig:
         - GHRAH_SUBJECT_PLUGIN_TRUST（逗号分隔，插件信任清单 plugin_id）
         - GHRAH_SUBJECT_TASKSTORE_ENABLED（任务归因内核 unit 挂载开关）
         - GHRAH_SUBJECT_TASKSTORE_DB（任务归因内核 sqlite 路径）
-        - GHRAH_SUBJECT_SKILL_ROOT（skill 存储根路径，装配期自举 + 补 lock）
         - GHRAH_SUBJECT_ABILITY_SOURCE（能力来源装配模式：legacy|builtin；
           legacy 已废弃、仅旧部署兼容且不在权限治理范围内，选择 builtin 后
           声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
@@ -714,12 +691,10 @@ class SubjectConfig:
             ),
         )
 
-        # skill slice（skill 根目录；装配期由 SkillUnit 做一次初始化检查）
-        skill_slice = SkillConfig(
-            root=os.environ.get(
-                "GHRAH_SUBJECT_SKILL_ROOT", os.path.expanduser("~/.ghrah/skill-ability")
-            ),
-        )
+        if os.environ.get("GHRAH_SUBJECT_SKILL_ROOT"):
+            logger.warning(
+                "GHRAH_SUBJECT_SKILL_ROOT has been retired; install Skills as v1 Ability packages"
+            )
 
         # 启动期授权策略：env 内联 JSON（不新开策略文件），非法内容直接报错。
         grant_policy_raw = os.environ.get("GHRAH_SUBJECT_ABILITY_GRANT_POLICY", "").strip()
@@ -761,7 +736,6 @@ class SubjectConfig:
             room_filter_slice=room_filter_slice,
             plugin_trust_slice=plugin_trust_slice,
             taskstore_slice=taskstore_slice,
-            skill_slice=skill_slice,
             ability_grant_policy=ability_grant_policy,
             observer_http_api_enabled=os.environ.get(
                 "GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", "false"

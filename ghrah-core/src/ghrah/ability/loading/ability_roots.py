@@ -40,10 +40,8 @@ __all__ = [
     "builtin_pool",
     "builtin_root",
     "default_pool",
-    "default_user_root",
     "ensure_roots",
     "path_root",
-    "user_root",
 ]
 
 BUILTIN_PACKAGE = "ghrah.ability.builtin"
@@ -64,7 +62,7 @@ USER_ROOT_RANK: int = 100
 """用户能力目录的优先级：低于内置树，与 skill 目录池的默认 rank 一致。"""
 
 USER_ROOT_SOURCE: str = "skill-ability"
-"""用户能力目录的来源标签（也是目录名 ``~/.ghrah/skill-ability``）。"""
+"""显式传入的外部源目录标签。"""
 
 
 @dataclass(frozen=True)
@@ -128,37 +126,6 @@ def builtin_root() -> AbilityRoot:
     )
 
 
-def default_user_root() -> Path:
-    """默认用户能力目录：``~/.ghrah/skill-ability``。
-
-    路径只在这里定义一次（``ghrah.skills.roots`` 转调本函数，skill 面与能力面
-    看的是同一批包）。
-
-    Returns:
-        用户能力目录路径（不保证存在）。
-    """
-    return Path.home() / ".ghrah" / USER_ROOT_SOURCE
-
-
-def user_root(root: str | Path | None = None) -> AbilityRoot:
-    """用户能力目录（可覆盖默认位置）。
-
-    用在配置驱动根路径的场景（如 subject 的 ``SkillConfig.root``）：把配置值直接
-    传进来，``rank`` / ``source`` 语义仍由本模块统一决定。
-
-    Args:
-        root: 覆盖默认目录；None 取 :func:`default_user_root`。
-
-    Returns:
-        用户目录根；``required=False``（不存在属正常状态）。
-    """
-    return AbilityRoot(
-        locator=Path(root) if root is not None else default_user_root(),
-        rank=USER_ROOT_RANK,
-        source=USER_ROOT_SOURCE,
-    )
-
-
 def path_root(
     path: str | Path,
     *,
@@ -190,14 +157,8 @@ def builtin_pool() -> tuple[AbilityRoot, ...]:
 
 
 def default_pool() -> tuple[AbilityRoot, ...]:
-    """默认池：内置树（rank 0）→ 用户目录（rank 100）。
-
-    **目录面**（外部展示、装配体检、调试脚本）用它——用户装了什么就能看到什么。
-
-    Returns:
-        按优先级升序的池。
-    """
-    return (builtin_root(), user_root())
+    """默认只扫描随产品交付的内置树，外部目录由调用方显式传入。"""
+    return builtin_pool()
 
 
 def ensure_roots(pool: Sequence[AbilityRoot]) -> tuple[Path, ...]:

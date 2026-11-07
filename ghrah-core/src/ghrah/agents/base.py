@@ -1794,7 +1794,6 @@ class ActorAgent:
                 )
             ),
             manifest_store=getattr(self._supervisor, "manifest_store", None),
-            skill_provider=getattr(self._supervisor, "skill_provider", None),
             ability_content=getattr(self._context_manager, "ability_content", None),
             tool_surface=getattr(self, "_tool_surface", None),
             mcp_runtime=getattr(

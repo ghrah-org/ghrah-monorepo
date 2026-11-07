@@ -4,16 +4,15 @@
 
 """ListAbilitiesAbility 测试：ability 发现面。
 
-- 一次查询全查（没有 source 参数）；行内 kind 区分 core-ability / skill-ability
+- 一次查询覆盖内置档案和文件系统档案
 - 列表（档案面为行主键 + in_registry 标注）/ 单条详情（tool schema）
 - diff 显式暴露两面差异（registered_without_manifest 等）
-- ManifestStore / SkillAbilityProvider 未接线 → sources 说明缺席（零隐式）
+- ManifestStore 未接线时由 sources 报告
 - 文件系统 store 的自定义定义并入、损坏项跳过不阻断
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from _helpers import make_call, make_services
@@ -24,7 +23,6 @@ from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.types import ImplementationDef, PermissionFlags
-from ghrah.skills import SKILL_FILE_NAME, SkillAbilityProvider
 
 
 def _ability_manifest(
@@ -71,26 +69,12 @@ class _BrokenStore:
 def _make_context(
     store: Any = None,
     tool_args: dict[str, Any] | None = None,
-    skill_provider: Any = None,
 ) -> tuple[OperationCall, ExecutionServices]:
     """创建测试用 (OperationCall, ExecutionServices)。"""
     return (
         make_call(member="list_abilities", arguments=tool_args or {}),
-        make_services(manifest_store=store, skill_provider=skill_provider),
+        make_services(manifest_store=store),
     )
-
-
-def _write_skill(
-    root: Path, dir_name: str, description: str = "对关系型数据库执行只读查询。"
-) -> Path:
-    """写一个最小 skill 包（SKILL.md with frontmatter）。"""
-    skill_dir = root / dir_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / SKILL_FILE_NAME).write_text(
-        f"---\nname: {dir_name}\ndescription: {description}\n---\n\n正文。\n",
-        encoding="utf-8",
-    )
-    return skill_dir
 
 
 def _rows_by_name(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -122,7 +106,6 @@ class TestListAbilitiesAbility:
         # 内置定义在列（18 项里加载白名单的每一项都应出现）
         assert "ghrah.fs.read_file" in rows
         assert "ghrah.core.list_abilities" in rows
-        # 行标记：core-ability（skill-ability 行在 data["skills"]）
         assert all(row["kind"] == "core-ability" for row in data["abilities"])
         # in_registry 标注：read_file 的 handler 已注册
         assert rows["ghrah.fs.read_file"]["in_registry"] is True
@@ -136,9 +119,8 @@ class TestListAbilitiesAbility:
         """registry-only 项（无 manifest 的注册 handler）进 diff 段。"""
         result = await ListAbilitiesAbility().execute(*_make_context())
         diff = result.data["diff"]
-        # 现状已知：command_proxy / send 有注册无 yaml
-        assert "command_proxy" in diff["registered_without_manifest"]
         assert "send" in diff["registered_without_manifest"]
+        assert "command_proxy" not in diff["registered_without_manifest"]
 
     async def test_list_with_fs_store_merges_custom(self) -> None:
         """接线的 store：文件系统自定义定义并入列表。"""
@@ -195,7 +177,7 @@ class TestListAbilitiesAbility:
     async def test_detail_registry_only_handler(self) -> None:
         """registry-only 项按 handler 名查询 → SUCCESS + note 说明无档案。"""
         result = await ListAbilitiesAbility().execute(
-            *_make_context(tool_args={"full_name": "command_proxy"})
+            *_make_context(tool_args={"full_name": "send"})
         )
         assert result.outcome == ActionOutcome.SUCCESS
         assert result.data["in_registry"] is True
@@ -243,102 +225,3 @@ class TestListAbilitiesAbility:
         tool = ListAbilitiesAbility().bind_tool()
         assert manifest.tool is not None
         assert manifest.tool.name == tool["function"]["name"] == "list_abilities"
-
-
-class TestListAbilitiesSkillAbility:
-    """skill-ability 行：与 core-ability 同一次查询返回、kind 区分、未接线说明缺席。"""
-
-    async def test_both_kinds_returned_and_marked(self, tmp_path: Path) -> None:
-        _write_skill(tmp_path, "db-query")
-        result = await ListAbilitiesAbility().execute(
-            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
-        )
-
-        assert result.outcome == ActionOutcome.SUCCESS
-        # 同一次查询里两种 kind 并存：core 行在 abilities，skill 行在 skills
-        assert {row["kind"] for row in result.data["abilities"]} == {"core-ability"}
-        rows = {row["full_name"]: row for row in result.data["skills"]}
-        assert rows["db-query"]["kind"] == "skill-ability"
-        assert rows["db-query"]["root"] == "skill-ability"
-        assert rows["db-query"]["description"] == "对关系型数据库执行只读查询。"
-        assert result.data["sources"]["skill_ability"] is True
-
-    async def test_ability_rows_unchanged_and_count_includes_skills(self, tmp_path: Path) -> None:
-        """ability 行契约不变；count = ability 行 + skill 行 + registry-only 项。"""
-        baseline = await ListAbilitiesAbility().execute(*_make_context())
-        _write_skill(tmp_path, "db-query")
-        wired = await ListAbilitiesAbility().execute(
-            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
-        )
-
-        assert [row["full_name"] for row in wired.data["abilities"]] == [
-            row["full_name"] for row in baseline.data["abilities"]
-        ]
-        assert wired.data["count"] == baseline.data["count"] + 1
-
-    async def test_unwired_provider_reports_absence(self) -> None:
-        result = await ListAbilitiesAbility().execute(*_make_context())
-
-        assert result.data["skills"] == []
-        assert result.data["sources"]["skill_ability"] is False
-        assert "not wired" in result.data["sources"]["skills_absent_reason"]
-
-    async def test_skill_detail_by_full_name(self, tmp_path: Path) -> None:
-        skill_dir = _write_skill(tmp_path, "db-query")
-        result = await ListAbilitiesAbility().execute(
-            *_make_context(
-                tool_args={"full_name": "db-query"},
-                skill_provider=SkillAbilityProvider.from_root(tmp_path),
-            )
-        )
-
-        assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["kind"] == "skill-ability"
-        assert result.data["skill_dir"] == str(skill_dir)
-        assert result.data["frontmatter"]["name"] == "db-query"
-        # 尚无 lock → 未登记（recorded None），不是漂移
-        assert result.data["fingerprint"] == {
-            "current": result.data["fingerprint"]["current"],
-            "recorded": None,
-            "drifted": False,
-            "lock_issue": None,
-        }
-
-    async def test_unknown_full_name_still_fails(self, tmp_path: Path) -> None:
-        """skill 面接线后，真正的未命中仍是 FAILURE（不为 skill 放宽 ability 文案）。"""
-        _write_skill(tmp_path, "db-query")
-        result = await ListAbilitiesAbility().execute(
-            *_make_context(
-                tool_args={"full_name": "no.such.anything"},
-                skill_provider=SkillAbilityProvider.from_root(tmp_path),
-            )
-        )
-
-        assert result.outcome == ActionOutcome.FAILURE
-        assert "not found" in result.data["error"].lower()
-
-    async def test_broken_provider_does_not_break_list(self) -> None:
-        class _BrokenProvider:
-            def scan(self) -> None:
-                raise RuntimeError("skill root unavailable")
-
-        result = await ListAbilitiesAbility().execute(
-            *_make_context(skill_provider=_BrokenProvider())
-        )
-
-        assert result.outcome == ActionOutcome.SUCCESS
-        assert result.data["skills"] == []
-        assert result.data["abilities"]  # ability 面不受 skill 面故障影响
-
-    async def test_unreadable_skill_is_omitted_not_fatal(self, tmp_path: Path) -> None:
-        """坏 SKILL.md 不进清单（由 provider 的 issues 承载），其余技能照常列出。"""
-        _write_skill(tmp_path, "db-query")
-        broken = tmp_path / "broken"
-        broken.mkdir()
-        (broken / SKILL_FILE_NAME).write_text("没有 frontmatter\n", encoding="utf-8")
-
-        result = await ListAbilitiesAbility().execute(
-            *_make_context(skill_provider=SkillAbilityProvider.from_root(tmp_path))
-        )
-
-        assert [row["full_name"] for row in result.data["skills"]] == ["db-query"]

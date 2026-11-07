@@ -46,11 +46,13 @@ ghrah-subject
 `builtin` 的存量环境；默认值仍为 `legacy` 只是为了避免旧部署启动失败，不代表
 推荐使用。
 
-legacy 模式**不在权限治理范围内**：能力声明、工具实例与 Skill 读取仍走旧注册表
+legacy 模式**不在权限治理范围内**：能力声明和工具实例仍走旧注册表
 和旧物化路径，不计算有效权限，不执行只读约束、`fs_write`/`net_access`/
 `shell_access` 权限位检查，命令检查器也不消费 `allowed_commands`/
 `denied_commands`。因此不要把它当作受治理或安全的装配方式；新部署应显式设置
 `GHRAH_SUBJECT_ABILITY_SOURCE=builtin` 并按下一节配置授权策略。
+
+旧 `GHRAH_SUBJECT_SKILL_ROOT` 和 `~/.ghrah/skill-ability` 目录读取已退役。将仍需使用的 Skill 按 v1 能力包安装，再在 `builtin` 模式授予对应成员。旧的 `command_proxy` 自动注册桥已移除。插件若需向 Agent 提供工具，可以交付可授权的 v1 Operation。
 
 ## builtin 能力的授权与旧库处理
 

@@ -37,13 +37,13 @@ def manifest() -> AgentManifest:
 
 def test_current_resolver_uses_new_source_without_legacy_lookup(monkeypatch) -> None:
     from ghrah.abilities.registry import AbilityRegistry
-    from ghrah.manifest import resolver as legacy_resolver
+    from ghrah.manifest import builtins as legacy_builtins
 
     def reject_legacy_lookup(*args, **kwargs):
         raise AssertionError("selected source must not fall back to the legacy registry")
 
     monkeypatch.setattr(AbilityRegistry, "has", reject_legacy_lookup)
-    monkeypatch.setattr(legacy_resolver, "load_all_builtin_manifests", reject_legacy_lookup)
+    monkeypatch.setattr(legacy_builtins, "load_all_builtin_manifests", reject_legacy_lookup)
     resolved = BuiltinAbilitySource().resolver().resolve(manifest())
     assert resolved.config.endpoint_name == "local/ability"
     assert [entry.ability_name for entry in resolved.abilities] == [

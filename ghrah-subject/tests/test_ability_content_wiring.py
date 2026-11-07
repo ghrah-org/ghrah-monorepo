@@ -130,7 +130,7 @@ async def test_subject_spawn_catalog_body_attachment_and_tool_result_persistence
             actor = await spawn(unit)
             cm = actor._context_manager
             provider = cm.ability_content
-            assert provider is not None and cm.skill_provider is None
+            assert provider is not None
             assert provider._identity.run_id == unit.supervisor.incarnation_id("reader")
             assert GUIDE in await provider.catalog_text()
 

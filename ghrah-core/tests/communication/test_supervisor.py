@@ -128,7 +128,7 @@ class TestSupervisorActor:
     async def test_register_ability_instance_channel(
         self, supervisor: SupervisorActor, registered_agent
     ) -> None:
-        """实例通道：预构造 Ability 直接注册（command_proxy 物化路径）。"""
+        """实例通道：预构造 Ability 直接注册。"""
         ability = ConversationAbility()
         registered_agent.register_ability.return_value = "conversation"
 
