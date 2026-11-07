@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ghrah.protocol.types import ProjectStatus
@@ -28,6 +29,7 @@ from ghrah.subject.core_cluster.registry import (
 )
 from ghrah.subject.errors import StableError
 from ghrah.subject.runtime.service_keys import (
+    ABILITY_ACCESS,
     CORE_CLUSTER_REGISTRY,
     MANIFEST_STORE,
     SANDBOX_EXECUTOR,
@@ -121,8 +123,35 @@ def _is_version_conflict(project_id: str, error: str) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _AbilityHandle:
+    """ability_control unit 消费的项目能力句柄。"""
+
+    project_id: str
+    store: Any
+    operator: Any
+
+
+class _AbilityAccessService:
+    """ABILITY_ACCESS 服务实现：按项目懒打开 store，操作员身份由服务端注入。"""
+
+    def __init__(self, registry: CoreClusterRegistry) -> None:
+        self._registry = registry
+
+    async def acquire(self, project_id: str, project_root_locator: str) -> _AbilityHandle:
+        store = await self._registry.ability_store(project_id, project_root_locator)
+        operator = self._registry.operator_identity(project_id)
+        return _AbilityHandle(project_id=project_id, store=store, operator=operator)
+
+    async def agent_tool_snapshot(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
+        return await self._registry.agent_tool_snapshot(project_id, agent_id)
+
+    async def close(self) -> None:
+        await self._registry.close_ability_stores()
+
+
 class CoreClusterRegistryUnit(SubjectUnit):
-    """Provides the CORE_CLUSTER_REGISTRY service (cluster = CoreUnit 实例)."""
+    """Provides the CORE_CLUSTER_REGISTRY / ABILITY_ACCESS services."""
 
     def __init__(
         self,
@@ -143,7 +172,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
         self._meta = UnitMeta(
             name="core_cluster_registry",
             requires=frozenset({MANIFEST_STORE, WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
-            provides=frozenset({CORE_CLUSTER_REGISTRY}),
+            provides=frozenset({CORE_CLUSTER_REGISTRY, ABILITY_ACCESS}),
             routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS),
         )
 
@@ -182,18 +211,29 @@ class CoreClusterRegistryUnit(SubjectUnit):
                     if not isinstance(result, dict) or not result.get("success"):
                         raise RuntimeError(str(result))
 
+            registry_holder: list[CoreClusterRegistry] = []
+
+            async def resolve_ability_store(project_id: str, locator: str) -> Any:
+                return await registry_holder[0].ability_store(project_id, locator)
+
             self._unit_factory = default_core_unit_factory(
                 self._config,
                 manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
+                ability_store_resolver=resolve_ability_store,
             )
         registry = CoreClusterRegistry(
             unit_factory=self._unit_factory,
+            ability_source=self._config.ability_source,
+            ability_grant_policy=self._config.ability_grant_policy,
         )
+        if self._unit_factory is not None and "registry_holder" in locals():
+            registry_holder.append(registry)
         registry.bind(ctx)
         self._registry = registry
         ctx.provide(CORE_CLUSTER_REGISTRY.name, registry)
+        ctx.provide(ABILITY_ACCESS.name, _AbilityAccessService(registry))
 
     async def start(self) -> None:
         # CoreUnit 实例按需懒挂载（ensure_cluster），无启动期动作。

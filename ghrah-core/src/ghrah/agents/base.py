@@ -307,6 +307,16 @@ class ActorAgent:
         """获取所有已注册的能力名称列表。"""
         return list(self._abilities.keys())
 
+    def visible_tool_names(self) -> tuple[str, ...]:
+        """当前模型工具面里的工具名（只读派生视图，不产生授权事实）。"""
+        names: list[str] = []
+        for tool in self._bound_tools:
+            function = tool.get("function") if isinstance(tool, dict) else None
+            name = function.get("name") if isinstance(function, dict) else None
+            if isinstance(name, str) and name:
+                names.append(name)
+        return tuple(sorted(names))
+
     @property
     def busy(self) -> bool:
         """公开运行忙闲状态，供实体管理端口在安全边界执行操作。"""

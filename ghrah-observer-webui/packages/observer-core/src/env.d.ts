@@ -7,6 +7,7 @@
 // is a library so we declare the minimal shape consumed by stores.
 interface ImportMetaEnv {
   readonly VITE_GHRAH_SUBJECT_WS_URL?: string;
+  readonly VITE_GHRAH_SUBJECT_HTTP_API_TOKEN?: string;
 }
 
 interface ImportMeta {

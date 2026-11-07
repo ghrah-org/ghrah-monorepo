@@ -1566,6 +1566,19 @@ class CoreUnit:
     # 查询命令
     # ----------------------------------------------------------------
 
+    async def tool_snapshot(self, agent_id: str) -> list[str] | None:
+        """按稳定 Agent ID 读取当前模型工具面工具名（只读；不在运行返回 None）。"""
+        supervisor = self._supervisor
+        if supervisor is None:
+            return None
+        handle = await supervisor.get_agent_handle_by_id(agent_id)
+        if handle is None:
+            return None
+        getter = getattr(handle, "visible_tool_names", None)
+        if not callable(getter):
+            return None
+        return list(getter())
+
     async def _handle_list_agents(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         request = ListAgentsPayload.model_validate(payload)

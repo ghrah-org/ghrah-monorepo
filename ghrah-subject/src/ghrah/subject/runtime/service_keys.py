@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ghrah.subject.project.models import AgentSpec, ProjectRecord
 
 __all__ = [
+    "ABILITY_ACCESS",
     "ABILITY_BRIDGE",
     "ABILITY_BRIDGE_UNIT",
     "COMMAND_BRIDGE",
@@ -69,6 +70,35 @@ class SubjectServiceKey[T]:
 
     name: str
     service_type: type[Any] | tuple[type[Any], ...] = object
+
+
+class AbilityAccessHandle(Protocol):
+    """按项目取到的能力关系库句柄（store + 受信操作员身份）。"""
+
+    @property
+    def project_id(self) -> str:
+        """项目标识。"""
+
+    @property
+    def store(self) -> Any:
+        """``AbilityAccessStore`` 实例（唯一写入口，调用方不得再开第二个连接）。"""
+
+    @property
+    def operator(self) -> Any:
+        """受信操作员 ``AccessIdentity``（source=admin）。"""
+
+
+class AbilityAccessService(Protocol):
+    """能力关系库的服务面：按项目懒打开/复用/关闭，操作员身份由服务端注入。"""
+
+    async def acquire(self, project_id: str, project_root_locator: str) -> AbilityAccessHandle:
+        """取项目的能力访问句柄；项目/能力来源不可用时抛明确错误。"""
+
+    async def agent_tool_snapshot(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
+        """读取 Agent 当前可见工具名；不在运行返回 None。"""
+
+    async def close(self) -> None:
+        """关闭全部项目的 store（unit stop 时调用）。"""
 
 
 class WorkspaceService(Protocol):
@@ -248,6 +278,7 @@ TASK_STORE = SubjectServiceKey[TaskStore]("task_store", TaskStore)
 TASKSTORE_SERVICE = SubjectServiceKey[Any]("taskstore_service")
 TASKSTORE_CHECKERS = SubjectServiceKey[Any]("taskstore_checkers")
 CORE_CLUSTER_REGISTRY = SubjectServiceKey[CoreClusterRegistryService]("core_cluster_registry")
+ABILITY_ACCESS = SubjectServiceKey[AbilityAccessService]("ability_access")
 PROJECT_MANAGER = SubjectServiceKey[ProjectManagerService]("project_manager")
 PROJECT_STORE = SubjectServiceKey["ProjectStore"]("project_store")
 ROOM_MANAGER = SubjectServiceKey[RoomManagerService]("room_manager")

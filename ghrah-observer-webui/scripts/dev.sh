@@ -8,31 +8,37 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Mock mode: ./scripts/dev.sh --mock [--scenario demo] [--port 4113]
-# Starts only the protocol-level mock server + SPA; the SPA connects to the
-# mock via VITE_GHRAH_SUBJECT_WS_URL. No Core/Subject needed.
+# Mock mode: ./scripts/dev.sh --mock [--scenario demo] [--port 4113] [--http-port 4114]
+# Starts the protocol-level mock server (WS + optional HTTP management mock)
+# and the SPA; the SPA connects to the mock via VITE_GHRAH_SUBJECT_WS_URL /
+# VITE_GHRAH_SUBJECT_HTTP_URL. No Core/Subject needed.
 if [[ "${1:-}" == "--mock" ]]; then
   shift
   SCENARIO="demo"
   PORT="4113"
+  HTTP_PORT="4114"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --scenario) SCENARIO="$2"; shift 2 ;;
       --port) PORT="$2"; shift 2 ;;
+      --http-port) HTTP_PORT="$2"; shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
   done
 
-  echo "=== Starting Mock Server (scenario: $SCENARIO, port: $PORT) ==="
-  (cd "$ROOT_DIR/packages/mock-server" && pnpm build >/dev/null && node dist/cli.js --port "$PORT" --scenario "$SCENARIO") &
+  echo "=== Starting Mock Server (scenario: $SCENARIO, ws: $PORT, http: $HTTP_PORT) ==="
+  (cd "$ROOT_DIR/packages/mock-server" && pnpm build >/dev/null && node dist/cli.js --port "$PORT" --http-port "$HTTP_PORT" --scenario "$SCENARIO") &
   MOCK_PID=$!
 
-  echo "=== Starting Observer SPA dev server (WS -> mock) ==="
-  (cd "$ROOT_DIR/packages/observer-web" && VITE_GHRAH_SUBJECT_WS_URL="ws://localhost:$PORT/ws" pnpm dev) &
+  echo "=== Starting Observer SPA dev server (WS/HTTP -> mock) ==="
+  (cd "$ROOT_DIR/packages/observer-web" && \
+    VITE_GHRAH_SUBJECT_WS_URL="ws://localhost:$PORT/ws" \
+    VITE_GHRAH_SUBJECT_HTTP_URL="http://localhost:$HTTP_PORT" \
+    pnpm dev) &
   SPA_PID=$!
 
   echo "=== Mock mode started ==="
-  echo "  Mock server PID: $MOCK_PID (ws://localhost:$PORT/ws, scenario: $SCENARIO)"
+  echo "  Mock server PID: $MOCK_PID (ws://localhost:$PORT/ws, http://localhost:$HTTP_PORT, scenario: $SCENARIO)"
   echo "  SPA PID: $SPA_PID"
   echo ""
   echo "Press Ctrl+C to stop all services."

@@ -385,6 +385,17 @@ class SubjectConfig:
     # 仅进程内受信部署代码设置；不从 Skill 正文、annotations 或模型输入解析。
     mcp: McpDeploymentConfig | None = None
 
+    # 观测端能力管理面（REST /api/v1）开关与认证。默认关闭：管理面可写授权、
+    # 卸载包，开启前必须显式承认部署面。启用后回环请求视为受信；非回环
+    # 请求必须携带 ``Authorization: Bearer <token>``。CORS 只是浏览器策略，
+    # 不是安全边界；公网部署要求 TLS + token 或同源反代。
+    observer_http_api_enabled: bool = False
+    observer_http_api_token: str = ""
+    observer_cors_origins: tuple[str, ...] = (
+        "http://localhost:5173",
+        "http://localhost:5180",
+    )
+
     # private backing（init=False，__post_init__ 后必有值；保证 property 非 Optional）。
     _persistence: PersistenceConfig = field(init=False)
     _sandbox: SandboxUnitConfig = field(init=False)
@@ -529,6 +540,11 @@ class SubjectConfig:
           声明目录、工具实例与 Skill 读取服务同源，不回退旧实现）
         - GHRAH_SUBJECT_ABILITY_GRANT_POLICY（启动期授权策略的 JSON 文本；
           空 = 不授予任何能力，非法内容直接报错）
+        - GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED（观测端能力管理面开关，
+          默认 false；开启后可写授权/工具选择）
+        - GHRAH_SUBJECT_OBSERVER_HTTP_API_TOKEN（非回环请求的 Bearer token；
+          回环部署可留空）
+        - GHRAH_SUBJECT_OBSERVER_CORS_ORIGINS（逗号分隔的浏览器来源白名单）
         - GHRAH_SUBJECT_ROOM_FILTER_ENABLED
         - GHRAH_SUBJECT_ROOM_FILTER_ABILITIES（逗号分隔白名单能力名）
         - GHRAH_SUBJECT_SAFE_EXTRA_COMMANDS（逗号/分号/空白分隔，追加基础命令 safe 白名单）
@@ -747,6 +763,19 @@ class SubjectConfig:
             taskstore_slice=taskstore_slice,
             skill_slice=skill_slice,
             ability_grant_policy=ability_grant_policy,
+            observer_http_api_enabled=os.environ.get(
+                "GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", "false"
+            ).lower()
+            in ("true", "1", "yes"),
+            observer_http_api_token=os.environ.get("GHRAH_SUBJECT_OBSERVER_HTTP_API_TOKEN", ""),
+            observer_cors_origins=tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "GHRAH_SUBJECT_OBSERVER_CORS_ORIGINS",
+                    "http://localhost:5173,http://localhost:5180",
+                ).split(",")
+                if item.strip()
+            ),
         )
 
 

@@ -127,7 +127,7 @@ function getWebviewContent(context: ExtensionContext, _panel: WebviewPanel): str
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${cspSource}; style-src ${cspSource} 'unsafe-inline'; connect-src ws://localhost:* wss://localhost:*;">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${cspSource}; style-src ${cspSource} 'unsafe-inline'; connect-src ws://localhost:* wss://localhost:* http://localhost:* https://localhost:*;">
       <title>Ghrah Dashboard</title>
       <link rel="stylesheet" href="${styleUri}">
     </head>

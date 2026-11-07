@@ -202,6 +202,9 @@ class EventType(StrEnum):
     AGENT_ERROR = "agent_error"
     HEALTH_STATUS = "health_status"
     ABILITY_RESULT = "ability_result"
+    # ─── 能力管理面变更事件（Subject → Observer；只作失效信号）───
+    ABILITY_TREE_CHANGED = "ability_tree_changed"
+    ABILITY_PACKAGE_CHANGED = "ability_package_changed"
     HITL_REQUEST = "hitl_request"
     HITL_RESOLVED = "hitl_resolved"
     CONTEXT_USAGE_UPDATED = "context_usage_updated"

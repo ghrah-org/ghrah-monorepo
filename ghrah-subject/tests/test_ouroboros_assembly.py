@@ -80,6 +80,7 @@ async def test_full_assembly_all_fibers_active(
             "websocket_observer_endpoint",
             "core_cluster_registry",
             "project",
+            "ability_control",
             "room",
             "recovery",
             "room_filter",
