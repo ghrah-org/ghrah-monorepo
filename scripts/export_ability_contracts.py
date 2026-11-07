@@ -167,6 +167,7 @@ def _generate(
         'import { z } from "zod";',
         *preamble,
     ]
+    preamble_end = len(lines)
     imported: set[str] = set()
     emitted: set[str] = set()
 
@@ -189,7 +190,7 @@ def _generate(
         emit(model.__name__)
     if imported:
         names = ", ".join(f"{name}Schema" for name in sorted(imported))
-        lines.insert(2, f'import {{ {names} }} from "./ability-tree.generated.js";')
+        lines.insert(preamble_end, f'import {{ {names} }} from "./ability-tree.generated.js";')
     return "\n".join(lines) + "\n"
 
 
