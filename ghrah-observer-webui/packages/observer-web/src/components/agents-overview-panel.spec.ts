@@ -92,6 +92,14 @@ describe("AgentsOverviewPanel", () => {
     expect(wrapper.findAll("li")[1].find("button").attributes("disabled")).toBeDefined();
   });
 
+  it("opens assembly for an agent without requiring an action chain", async () => {
+    const wrapper = mount(AgentsOverviewPanel, { props: { projectId: "p1" } });
+    const buttons = wrapper.findAll("button").filter((button) => button.text() === "Open assembly");
+    expect(buttons[1].attributes("disabled")).toBeUndefined();
+    await buttons[0].trigger("click");
+    expect(wrapper.emitted("openAssembly")).toEqual([[{ projectId: "p1", agentId: "a1" }]]);
+  });
+
   it("selects Session and Branch explicitly before opening ActionChain", async () => {
     const wrapper = mount(AgentsOverviewPanel, { props: { projectId: "p1" } });
     await wrapper.findAll("li")[0].find("button").trigger("click");

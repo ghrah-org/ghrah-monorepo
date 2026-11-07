@@ -12,6 +12,7 @@ import {
   type ChainTarget,
   sameAgent,
   sessionKey,
+  useAbilityAdminStore,
   useAgentsStore,
   useBranchesStore,
   useProjectsStore,
@@ -20,6 +21,7 @@ import {
 } from "@ghrah/observer-core";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AssemblyPanel from "@/components/ability/assembly-panel.vue";
 import ActionChainPanel from "@/components/action-chain/action-chain-panel.vue";
 import AgentList from "@/components/agent-list.vue";
 import AgentsOverviewPanel from "@/components/agents-overview-panel.vue";
@@ -49,7 +51,7 @@ type AgentTab = {
 };
 type ProjectTab = {
   id: string;
-  kind: "changes" | "project" | "agents";
+  kind: "changes" | "project" | "agents" | "assembly";
   target: { projectId: string };
   fallbackLabel: string;
 };
@@ -59,6 +61,7 @@ type ProjectViewKind = ProjectTab["kind"];
 const emit = defineEmits<{
   openSettings: [section: "general" | "agents" | "abilities"];
 }>();
+const abilityAdmin = useAbilityAdminStore();
 const rooms = useRoomsStore();
 const agents = useAgentsStore();
 const projects = useProjectsStore();
@@ -119,11 +122,17 @@ function tabLabel(tab: WorkspaceTab): string {
   const projectName = projects.projects.get(tab.target.projectId)?.name ?? tab.fallbackLabel;
   if (tab.kind === "changes") return t("dashboard.tabChanges", { project: projectName });
   if (tab.kind === "agents") return t("dashboard.tabAgents", { project: projectName });
+  if (tab.kind === "assembly") return t("dashboard.tabAssembly", { project: projectName });
   return t("dashboard.tabProject", { project: projectName });
 }
 
 function tabIcon(kind: WorkspaceTab["kind"]): string {
-  return { room: "#", agent: "◎", changes: "△", agents: "◆", project: "▣" }[kind];
+  return { room: "#", agent: "◎", changes: "△", agents: "◆", assembly: "◇", project: "▣" }[kind];
+}
+
+function openAssembly(target: { projectId: string; agentId: string }) {
+  abilityAdmin.focusAgent(target.projectId, target.agentId);
+  openProjectView({ kind: "assembly", projectId: target.projectId });
 }
 
 function currentChain(agent: AgentTarget): ChainTarget | null {
@@ -380,6 +389,12 @@ watch(
             :key="activeTab.id"
             :project-id="activeTab.target.projectId"
             @open-agent="openAgent"
+            @open-assembly="openAssembly"
+          />
+          <AssemblyPanel
+            v-else-if="activeTab?.kind === 'assembly'"
+            :key="activeTab.id"
+            :project-id="activeTab.target.projectId"
           />
         </KeepAlive>
         <div v-if="!activeTab" class="workspace-empty">

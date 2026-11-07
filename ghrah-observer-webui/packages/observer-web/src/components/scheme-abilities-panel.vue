@@ -5,7 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import { type AbilityTreeClient } from "@ghrah/observer-core";
+import {
+  type AbilityTreeClient,
+  createAbilityControlClient,
+  createAbilityTreeClient,
+  createRestAbilityTreeTransport,
+  HttpClient,
+  useConnectionStore,
+} from "@ghrah/observer-core";
 import {
   BindToolRequestSchema,
   type AbilityTreeView,
@@ -14,7 +21,15 @@ import {
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-const props = defineProps<{ agentId: string; client: AbilityTreeClient }>();
+const props = withDefaults(
+  defineProps<{
+    agentId: string;
+    client?: AbilityTreeClient;
+    projectId?: string;
+    readonly?: boolean;
+  }>(),
+  { readonly: false, client: undefined, projectId: undefined },
+);
 const { t } = useI18n();
 const view = ref<AbilityTreeView | null>(null);
 const selected = ref("");
@@ -50,6 +65,18 @@ const request = computed(() => {
   return result.success ? result.data : null;
 });
 
+function resolveClient(): AbilityTreeClient | null {
+  if (props.client) return props.client;
+  if (!props.projectId) return null;
+  const connection = useConnectionStore();
+  const http = new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
+  const control = createAbilityControlClient(http, { projectId: props.projectId });
+  return createAbilityTreeClient(
+    props.projectId,
+    createRestAbilityTreeTransport(control, props.projectId),
+  );
+}
+
 async function refresh() {
   const current = ++epoch;
   const target = props.agentId;
@@ -62,7 +89,9 @@ async function refresh() {
   saving.value = false;
   error.value = "";
   try {
-    const snapshot = await props.client.read(target);
+    const client = resolveClient();
+    if (!client) throw new Error("missing client");
+    const snapshot = await client.read(target);
     if (current !== epoch) return;
     if (snapshot.agent_id !== target) throw new Error("Target mismatch");
     view.value = snapshot;
@@ -74,18 +103,20 @@ async function refresh() {
 }
 
 async function change(tool?: string) {
-  if (!view.value || saving.value || (!tool && !request.value)) return;
+  if (props.readonly || !view.value || saving.value || (!tool && !request.value)) return;
+  const client = resolveClient();
+  if (!client) return;
   const current = epoch;
   const target = props.agentId;
   saving.value = true;
   error.value = "";
   try {
     const result = tool
-      ? await props.client.unbindTool(target, {
+      ? await client.unbindTool(target, {
           tool_name: tool,
           expected_revision: view.value.revision,
         })
-      : await props.client.bindTool(target, request.value!);
+      : await client.bindTool(target, request.value!);
     if (current !== epoch) return;
     if (result.error) {
       error.value = t(`schemeAbilities.errors.${result.error}`);
@@ -107,7 +138,9 @@ async function readContent(alias: string, member: string, version: string, offse
   content.value = null;
   contentTarget.value = { alias, member, version };
   try {
-    const result = await props.client.readContent(props.agentId, alias, member, version, offset);
+    const client = resolveClient();
+    if (!client) throw new Error("missing client");
+    const result = await client.readContent(props.agentId, alias, member, version, offset);
     if (current === epoch) content.value = result;
   } catch {
     if (current === epoch) error.value = t("schemeAbilities.contentFailed");
@@ -131,7 +164,11 @@ function downloadChunk() {
   URL.revokeObjectURL(url);
 }
 
-watch([() => props.agentId, () => props.client], () => void refresh(), { immediate: true });
+watch(
+  () => [props.agentId, props.client, props.projectId] as const,
+  () => void refresh(),
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -147,7 +184,7 @@ watch([() => props.agentId, () => props.client], () => void refresh(), { immedia
       <p>{{ t("schemeAbilities.revision", { revision: view.revision, run: view.run_id }) }}</p>
       <p v-if="!choices.length">{{ t("schemeAbilities.empty") }}</p>
       <p v-if="choices.some((item) => !item.available)">{{ t("schemeAbilities.unavailable") }}</p>
-      <form @submit.prevent="change()">
+      <form v-if="!readonly" @submit.prevent="change()">
         <label>
           {{ t("schemeAbilities.operation") }}
           <select v-model="selected" :disabled="saving">
@@ -243,7 +280,13 @@ watch([() => props.agentId, () => props.client], () => void refresh(), { immedia
         <li v-for="tool in view.bound_tools" :key="tool.name">
           <code>{{ tool.name }}</code>
           <span>{{ tool.alias }}/{{ tool.member }}</span>
-          <button type="button" class="btn-secondary" :disabled="saving" @click="change(tool.name)">
+          <button
+            v-if="!readonly"
+            type="button"
+            class="btn-secondary"
+            :disabled="saving"
+            @click="change(tool.name)"
+          >
             {{ t("schemeAbilities.unbind") }}
           </button>
         </li>
@@ -254,6 +297,8 @@ watch([() => props.agentId, () => props.client], () => void refresh(), { immedia
 
 <style scoped>
 .scheme-abilities {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: var(--font-ui-body);
 }
 </style>

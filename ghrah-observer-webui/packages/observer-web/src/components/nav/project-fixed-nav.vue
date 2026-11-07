@@ -10,7 +10,7 @@ import { useI18n } from "vue-i18n";
 import SidebarList from "@/components/ui/sidebar-list.vue";
 import SidebarRow from "@/components/ui/sidebar-row.vue";
 
-type ProjectViewKind = "changes" | "agents" | "project";
+type ProjectViewKind = "changes" | "agents" | "assembly" | "project";
 const emit = defineEmits<{
   openProjectView: [view: { kind: ProjectViewKind; projectId: string }];
 }>();
@@ -31,6 +31,9 @@ function open(kind: ProjectViewKind) {
       </SidebarRow>
       <SidebarRow :disabled="!projects.activeProjectId" @select="open('agents')">
         <template #leading>◆</template>{{ t("projectNav.agents") }}
+      </SidebarRow>
+      <SidebarRow :disabled="!projects.activeProjectId" @select="open('assembly')">
+        <template #leading>◇</template>{{ t("projectNav.assembly") }}
       </SidebarRow>
       <SidebarRow :disabled="!projects.activeProjectId" @select="open('project')">
         <template #leading>▣</template>{{ t("projectNav.settings") }}

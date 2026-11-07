@@ -40,7 +40,10 @@ watch(
     createEntity.value = false;
   },
 );
-const emit = defineEmits<{ openAgent: [target: ChainTarget] }>();
+const emit = defineEmits<{
+  openAgent: [target: ChainTarget];
+  openAssembly: [target: { projectId: string; agentId: string }];
+}>();
 const projects = useProjectsStore();
 const agents = useAgentsStore();
 const sessions = useSessionsStore();
@@ -209,6 +212,14 @@ function openAgent(row: (typeof rows.value)[number]) {
             @click="abilitiesTarget = { projectId, agentId: row.agentId, agentName: row.name }"
           >
             {{ t("agentAbilities.manage") }}
+          </button>
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="!row.agentId"
+            @click="emit('openAssembly', { projectId, agentId: row.agentId })"
+          >
+            {{ t("assembly.open") }}
           </button>
         </div>
         <p v-if="!row.chainTarget" class="agents-overview-chain-hint">

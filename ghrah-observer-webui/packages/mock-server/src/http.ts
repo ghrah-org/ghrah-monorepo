@@ -133,8 +133,15 @@ function statusView(projectId: string) {
   });
 }
 
+function writeCors(response: ServerResponse): void {
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+}
+
 function json(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
+  writeCors(response);
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(payload),
@@ -179,6 +186,13 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
     const url = new URL(request.url ?? "/", "http://mock");
     const path = url.pathname;
 
+    if (method === "OPTIONS") {
+      writeCors(response);
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+
     if (method === "GET" && path === "/api/v1/abilities/status") {
       json(response, 200, statusView(projectId));
       return;
@@ -218,17 +232,18 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
     }
     const [, pid, aid, rest = ""] = match;
 
-    if (pid !== projectId || aid !== agentId) {
+    const view = pid === projectId && aid === agentId ? tree : defaultTree(pid, aid);
+    if ((pid !== projectId || aid !== agentId) && method !== "GET") {
       json(response, 404, { error: { code: "not_found", message: "unknown agent" } });
       return;
     }
 
     if (method === "GET" && rest === "/ability-tree") {
-      json(response, 200, tree);
+      json(response, 200, view);
       return;
     }
     if (method === "GET" && rest === "/ability-admin") {
-      json(response, 200, adminView(tree));
+      json(response, 200, adminView(view));
       return;
     }
     if (method === "GET" && rest === "/ability-changes") {

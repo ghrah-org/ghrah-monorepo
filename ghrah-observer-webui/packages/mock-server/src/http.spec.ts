@@ -38,6 +38,14 @@ describe("MockHttpServer", () => {
     }>(`${base}/api/v1/projects/project-1/agents/agent-1/ability-admin`);
     expect(admin.format).toBe("ghrah.ability-control.admin.v1");
     expect(admin.surface?.effective?.length).toBeGreaterThan(0);
+    const other = await fetch(
+      `${base}/api/v1/projects/demo-project/agents/demo-architect/ability-admin`,
+    );
+    expect(other.status).toBe(200);
+    expect(other.headers.get("access-control-allow-origin")).toBe("*");
+    const body = (await other.json()) as { project_id?: string; agent_id?: string };
+    expect(body.project_id).toBe("demo-project");
+    expect(body.agent_id).toBe("demo-architect");
   });
 
   it("serves deterministic conflict responses for write endpoints", async () => {

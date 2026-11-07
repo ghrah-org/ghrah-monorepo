@@ -9,6 +9,11 @@ export {
   type AbilityTreeTransport,
 } from "./ability-tree.js";
 export {
+  abilityControlClient,
+  setAbilityControlClientFactory,
+  type AbilityControlClientFactory,
+} from "./ability-client.js";
+export {
   AbilityConflictError,
   createAbilityControlClient,
   type AbilityAdminQuery,
@@ -72,6 +77,13 @@ export {
   type ProjectionDiagnostic,
   useActionChainsStore,
 } from "./stores/action-chains.js";
+export {
+  abilityAdminKey,
+  type AbilityAdminRecord,
+  type AbilityFocus,
+  useAbilityAdminStore,
+} from "./stores/ability-admin.js";
+export { useAbilityPackagesStore } from "./stores/ability-packages.js";
 export { type AgentInfo, type AgentListItem, useAgentsStore } from "./stores/agents.js";
 export { type BranchProjection, useBranchesStore } from "./stores/branches.js";
 export { useChangesStore } from "./stores/changes.js";
