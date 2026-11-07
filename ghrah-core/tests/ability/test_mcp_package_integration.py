@@ -65,6 +65,7 @@ async def environment(tmp_path, endpoint, *, wired=True, route="echo", large=Fal
         "identity: {namespace: mcp, name: local, version: '0.0.1'}\n"
         "title: Local\ndescription: Local tools\nmcp: {server: local-server}\n",
         encoding="utf-8",
+        newline="\n",
     )
     installer = AbilityInstaller(tmp_path / "installed")
     installed = await installer.install_mcp(declaration, source=source)
@@ -77,17 +78,22 @@ async def environment(tmp_path, endpoint, *, wired=True, route="echo", large=Fal
         "identity: {namespace: acme, name: content, version: '1.0.0'}\n"
         "title: Content\ndescription: Granted local content\n",
         encoding="utf-8",
+        newline="\n",
     )
     (skill / "SKILL.md").write_text(
         "---\nname: guide\ndescription: Local guide\n---\n# Full task guide\n",
         encoding="utf-8",
+        newline="\n",
     )
-    (skill / "references" / "note.md").write_text("Local task reference.\n", encoding="utf-8")
+    (skill / "references" / "note.md").write_text(
+        "Local task reference.\n", encoding="utf-8", newline="\n"
+    )
     (skill / "scripts" / "export.py").write_text(
         "import json,sys\nfrom pathlib import Path\nrequest=json.load(sys.stdin)\n"
         "Path('script-output.txt').write_text('local script effect',encoding='utf-8')\n"
         "json.dump({'ok':True,'data':{'call':request['call']['tool_call_id']}},sys.stdout)\n",
         encoding="utf-8",
+        newline="\n",
     )
     if large:
         operations = local / "operations"
@@ -110,7 +116,7 @@ async def execute(call, services):
 """
         for number in range(49):
             (operations / f"op_{number:03}.py").write_text(
-                module.replace("NUMBER", str(number)), encoding="utf-8"
+                module.replace("NUMBER", str(number)), encoding="utf-8", newline="\n"
             )
     build(local)
     installer.install(local)
@@ -373,7 +379,7 @@ async def test_snapshot_changes_reject_calls_and_release_sessions(
                 .read_text()
                 .replace("version: 0.0.1", "version: 0.0.2")
             )
-            (declaration / "ability.yaml").write_text(raw, encoding="utf-8")
+            (declaration / "ability.yaml").write_text(raw, encoding="utf-8", newline="\n")
             await env.installer.install_mcp(declaration, source=env.source)
             version = env.unit._assembly.source.packages.capture("mcp.local", version="0.0.2")
             await env.store.commit_version(ADMIN, version)

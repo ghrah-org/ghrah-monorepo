@@ -38,6 +38,7 @@ def declaration(tmp_path: Path) -> Path:
             }
         ),
         encoding="utf-8",
+        newline="\n",
     )
     return root
 
@@ -163,7 +164,7 @@ async def test_invalid_declaration_rejected_before_connection(tmp_path, change):
     path = root / "ability.yaml"
     data = yaml.safe_load(path.read_text())
     change(data)
-    path.write_text(yaml.safe_dump(data))
+    path.write_text(yaml.safe_dump(data), encoding="utf-8", newline="\n")
     endpoint = Endpoint()
     with pytest.raises(InstallerError) as error:
         await AbilityInstaller(tmp_path / "store").install_mcp(
