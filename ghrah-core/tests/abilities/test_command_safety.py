@@ -96,9 +96,10 @@ class TestCheckCommandSafe:
         verdict = CommandSafetyChecker().check_command("cat /etc/hosts")
         assert verdict.category == CommandSafetyCategory.SAFE
 
-    def test_safe_command_pytest(self) -> None:
+    def test_pytest_requires_approval(self) -> None:
+        # bash-classify：LOCAL_EFFECTS/MEDIUM，段级门禁禁止名单抬升。
         verdict = CommandSafetyChecker().check_command("pytest tests/ -v")
-        assert verdict.category == CommandSafetyCategory.SAFE
+        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
 
     def test_safe_command_git_status(self) -> None:
         verdict = CommandSafetyChecker().check_command("git status")
@@ -110,10 +111,10 @@ class TestCheckCommandSafe:
         assert verdict.category == CommandSafetyCategory.SAFE
         assert verdict.sub_command == "diff"
 
-    def test_safe_command_npm_pack(self) -> None:
+    def test_npm_pack_requires_approval(self) -> None:
+        # 未入库子命令为 UNKNOWN，段级门禁禁止名单抬升。
         verdict = CommandSafetyChecker().check_command("npm pack")
-        assert verdict.category == CommandSafetyCategory.SAFE
-        assert verdict.sub_command == "pack"
+        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
 
     def test_safe_command_pip_list(self) -> None:
         verdict = CommandSafetyChecker().check_command("pip list")
@@ -228,10 +229,11 @@ class TestCheckCommandEdgeCases:
         verdict = checker.check_command("curl https://example.com")
         assert verdict.category == CommandSafetyCategory.SAFE
 
-    def test_custom_safe_commands(self) -> None:
+    def test_custom_safe_commands_cannot_bypass_unknown_tier(self) -> None:
+        # 库外命令为 UNKNOWN：名单不能单独翻成 SAFE。纯版本探测另走只读豁免。
         checker = CommandSafetyChecker(safe_commands={"mytool"})
-        verdict = checker.check_command("mytool --version")
-        assert verdict.category == CommandSafetyCategory.SAFE
+        verdict = checker.check_command("mytool frobnicate")
+        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
 
     def test_custom_dangerous_commands(self) -> None:
         checker = CommandSafetyChecker(dangerous_commands={"mydanger"})
@@ -243,7 +245,7 @@ class TestCheckCommandEdgeCases:
             safe_sub_commands={"mytool": {"info", "list"}},
             dangerous_sub_commands={"mytool": {"nuke"}},
         )
-        assert checker.check_command("mytool info").category == CommandSafetyCategory.SAFE
+        assert checker.check_command("mytool info").category == CommandSafetyCategory.REQUIRE_HITL
         assert checker.check_command("mytool nuke").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("mytool deploy").category == CommandSafetyCategory.REQUIRE_HITL
 
@@ -325,41 +327,47 @@ class TestCommandApprovalHook:
 
 
 class TestExtendSafeLists:
-    """部署方 safe 白名单扩展（配置驱动，只增不减）。"""
+    """部署方 safe 白名单扩展：只增不减，且仍受段级门禁约束。"""
 
-    def test_extra_base_command_becomes_safe(self) -> None:
+    def test_extra_base_command_becomes_safe_when_tier_allows(self) -> None:
+        # touch = LOCAL_EFFECTS/LOW，门禁允许后名单可抬升。
         checker = CommandSafetyChecker(require_approval=True)
+        assert checker.check_command("touch x").category == CommandSafetyCategory.REQUIRE_HITL
+
+        checker.extend_safe_lists(extra_commands={"touch"})
+        assert checker.check_command("touch x").category == CommandSafetyCategory.SAFE
+
+    def test_extra_cannot_promote_medium_or_unknown(self) -> None:
+        checker = CommandSafetyChecker(require_approval=True)
+        checker.extend_safe_lists(extra_commands={"make", "mytool"})
+        # make = LOCAL_EFFECTS/MEDIUM；mytool = UNKNOWN——门禁挡住
         assert checker.check_command("make").category == CommandSafetyCategory.REQUIRE_HITL
-
-        checker.extend_safe_lists(extra_commands={"make"})
-        assert checker.check_command("make").category == CommandSafetyCategory.SAFE
-
-    def test_extra_sub_commands_become_safe(self) -> None:
-        checker = CommandSafetyChecker(
-            require_approval=True,
-            safe_sub_commands={"mytool": set()},
-            dangerous_sub_commands={"mytool": set()},
+        unknown = checker.check_command("mytool frobnicate")
+        assert unknown.category == CommandSafetyCategory.REQUIRE_HITL
+        # 默认名单已移除 tee：未 extend 时写入须审批
+        assert (
+            CommandSafetyChecker().check_command("tee out.txt").category
+            == CommandSafetyCategory.REQUIRE_HITL
         )
-        assert checker.check_command("mytool info").category == CommandSafetyCategory.REQUIRE_HITL
-        checker.extend_safe_lists(extra_sub_commands={"mytool": {"info", "list"}})
-        assert checker.check_command("mytool info").category == CommandSafetyCategory.SAFE
-        assert checker.check_command("mytool deploy").category == CommandSafetyCategory.REQUIRE_HITL
 
     def test_extension_does_not_touch_dangerous(self) -> None:
         checker = CommandSafetyChecker(require_approval=True)
         checker.extend_safe_lists(
             extra_commands={"rm", "pnpm"},
-            extra_sub_commands={"git": {"clean"}},
+            extra_sub_commands={"git": {"clean", "config"}},
         )
-        # 只增不减：扩展不能把 DANGEROUS（含 bash-classify 升格项）翻成 SAFE
         assert checker.check_command("rm -rf /").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("git clean -fdx").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("pnpm build").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("npm run build").category == CommandSafetyCategory.DANGEROUS
+        assert (
+            checker.check_command("git config --global user.email a@b").category
+            == CommandSafetyCategory.REQUIRE_HITL
+        )
 
     def test_builtin_safe_list_preserved_after_extension(self) -> None:
         checker = CommandSafetyChecker(require_approval=True)
-        checker.extend_safe_lists(extra_commands={"make"})
+        checker.extend_safe_lists(extra_commands={"touch"})
         assert checker.check_command("git status").category == CommandSafetyCategory.SAFE
 
 
@@ -477,7 +485,7 @@ def test_command_and_scope_share_leading_option_parsing(command):
     [
         "ls -la | head -20",
         "git status && git diff --stat",
-        "pytest tests/ -q && ruff check .",
+        "ruff check . && git status",
     ],
 )
 def test_readonly_shell_composition_is_safe(command):
@@ -513,3 +521,139 @@ def test_sensitive_path_read_is_not_auto_safe() -> None:
     """0.12+ 敏感路径：只读也不得因 READONLY 自动放行（risk HIGH / sensitive_paths）。"""
     verdict = CommandSafetyChecker().check_command("cat ~/.ssh/id_rsa")
     assert verdict.category is not CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git config --global user.email a@b",
+        "tee out.txt",
+        "xargs -0 echo",
+    ],
+)
+def test_phase2_legacy_leaks_are_closed(command):
+    """阶段 2：名单抬升不得放过写配置 / tee / UNKNOWN xargs。"""
+    assert CommandSafetyChecker().check_command(command).category is not CommandSafetyCategory.SAFE
+
+
+def _workspace_checker(root, *, read_only: bool = False):
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+    return CommandSafetyChecker(
+        fs_checker=FSPermissionChecker(
+            workspace_root=str(root),
+            sandbox_roots=(root,),
+            require_approval=True,
+            read_only=read_only,
+        ),
+        workspace_root=str(root),
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir -p a",
+        "touch a/f",
+        "tee a/out",
+        "echo x > a/f",
+        "git add a",
+        "git commit -m x",
+    ],
+)
+def test_phase3_in_workspace_write_is_safe(tmp_path, command: str) -> None:
+    """阶段 3：工作区内 LOCAL_EFFECTS 写入与文件工具同一 FS 检查后自动放行。"""
+    verdict = _workspace_checker(tmp_path).check_command(command, working_dir=str(tmp_path))
+    assert verdict.category is CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir ../outside",
+        "echo x > /etc/passwd",
+        "git worktree add ../wt",
+    ],
+)
+def test_phase3_outside_write_is_not_safe(tmp_path, command: str) -> None:
+    verdict = _workspace_checker(tmp_path).check_command(command, working_dir=str(tmp_path))
+    assert verdict.category is not CommandSafetyCategory.SAFE
+
+
+def test_phase3_rm_inside_workspace_stays_dangerous(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path).check_command("rm -rf a", working_dir=str(tmp_path))
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+def test_phase3_readonly_grant_does_not_auto_approve_writes(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path, read_only=True).check_command(
+        "mkdir -p a", working_dir=str(tmp_path)
+    )
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+def test_phase3_without_fs_checker_write_stays_hitl() -> None:
+    verdict = CommandSafetyChecker().check_command("mkdir -p a")
+    assert verdict.category is CommandSafetyCategory.REQUIRE_HITL
+
+
+def test_phase3_relative_path_uses_workspace_root(tmp_path) -> None:
+    verdict = _workspace_checker(tmp_path).check_command("touch a/f")
+    assert verdict.category is CommandSafetyCategory.SAFE
+
+
+def test_node_version_is_safe_via_extends() -> None:
+    verdict = CommandSafetyChecker().check_command("node --version")
+    assert verdict.category is CommandSafetyCategory.SAFE
+    assert CommandSafetyChecker().check_command("node script.js").category is (
+        CommandSafetyCategory.DANGEROUS
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rustc --version",
+        "ruff -V",
+        "pytest --version",
+        "curl --version",
+        "bash --version",
+        "git branch",
+        "git -C repo branch",
+        "git tag",
+        "bash -lc 'ls'",
+        "git -C repo status",
+        "gh pr view 1",
+        "python -V",
+    ],
+)
+def test_phase4_readonly_false_positives_are_safe(command: str) -> None:
+    """阶段 4：版本探测、无参数 git 列表、粘连 -lc 的只读委托自动放行。"""
+    assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git branch feat",
+        "git branch -d foo",
+        "git tag v1",
+        "python -m pytest",
+        "pnpm vitest run",
+        "rustc main.rs",
+    ],
+)
+def test_phase4_mutations_and_exec_stay_unapproved(command: str) -> None:
+    assert CommandSafetyChecker().check_command(command).category is not CommandSafetyCategory.SAFE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git branch -D main",
+        "rm -rf /tmp/x",
+        "bash -lc 'rm -rf /tmp/x'",
+    ],
+)
+def test_phase4_destructive_forms_stay_dangerous(command: str) -> None:
+    assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.DANGEROUS

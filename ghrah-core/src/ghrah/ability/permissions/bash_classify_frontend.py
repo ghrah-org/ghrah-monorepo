@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +36,9 @@ __all__ = [
 OVERRIDES_DIR = Path(__file__).resolve().parent / "bash_classify_commands"
 
 _Segment = CommandResult | InnerCommandResult
+_SHELLS_WITH_C = frozenset({"bash", "sh", "dash"})
+_SHELL_SEPARATORS = frozenset({"&&", "||", "|", ";", "&"})
+_CLUSTERED_SHORT = re.compile(r"^-[A-Za-z]+$")
 
 
 @lru_cache(maxsize=1)
@@ -44,8 +48,51 @@ def get_command_database() -> CommandDatabase:
 
 
 def classify_command_expression(command: str) -> ExpressionResult:
-    """对整条 shell 表达式做 bash-classify 分级。"""
-    return classify_expression(command, database=get_command_database())
+    """对整条 shell 表达式做 bash-classify 分级。
+
+    ``bash`` / ``sh`` / ``dash`` 把 ``-c`` 粘进短选项簇（如 ``-lc``）时，只改写
+    送给分类器的 argv，不改调用方即将执行的原字符串。
+    """
+    return classify_expression(_expand_clustered_shell_c(command), database=get_command_database())
+
+
+def _expand_clustered_shell_c(command: str) -> str:
+    """把含 ``c`` 的粘连短选项拆开，便于 ``-c`` 委托展开。"""
+    if "\n" in command:
+        return command
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+    expanded: list[str] = []
+    changed = False
+    expect_command = True
+    index = 0
+    while index < len(parts):
+        token = parts[index]
+        if token in _SHELL_SEPARATORS:
+            expanded.append(token)
+            expect_command = True
+            index += 1
+            continue
+        expanded.append(token)
+        index += 1
+        if not expect_command:
+            continue
+        expect_command = False
+        if Path(token).name.lower() not in _SHELLS_WITH_C:
+            continue
+        while index < len(parts) and _CLUSTERED_SHORT.fullmatch(parts[index]):
+            cluster = parts[index]
+            if "c" in cluster[1:]:
+                expanded.extend(f"-{letter}" for letter in cluster[1:])
+                changed = True
+            else:
+                expanded.append(cluster)
+            index += 1
+    if not changed:
+        return command
+    return shlex.join(expanded)
 
 
 def iter_classified_segments(expression_result: ExpressionResult) -> list[_Segment]:

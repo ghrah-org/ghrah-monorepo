@@ -1,0 +1,6 @@
+# ghrah：纯版本探测视为只读，不放宽脚本执行默认 DANGEROUS。
+command: node
+extends: builtin
+global_options:
+  --version: {overrides: READONLY}
+  -v: {overrides: READONLY}

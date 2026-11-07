@@ -10,20 +10,26 @@
 - CommandSafetyChecker: 命令安全分类器（bash-classify 前端 + 范围外壳）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型（判定顺序，2026-11-07 阶段 1）：
+分类模型（判定顺序，2026-11-08 阶段 4）：
 1. 空命令 → 硬拒绝
 2. ``denied_commands`` 命中任一段 → 硬拒绝
-3. bash-classify（仓内 YAML 覆盖）判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
-4. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
-5. 整式 READONLY+LOW（无 parse_warnings）→ 自动批准
-6. 各段均落在部署级 SAFE 名单（含 ``extend_safe_lists``；无重定向）→ 自动批准
-7. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
-8. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
+3. 仅 ``--version`` / ``-V`` / ``--help``、无委托无重定向 → 自动批准
+4. 无位置参数的 ``git branch`` / ``git tag`` 列表 → 自动批准
+5. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
+6. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
+7. 整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
+8. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
+   LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
+9. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
+10. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
+    范围内则自动批准；越界硬拒绝；无法投影则继续
+11. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
 
 from __future__ import annotations
 
 import logging
+import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -40,13 +46,60 @@ from ghrah.ability.permissions.bash_classify_frontend import (
     segment_base_sub,
 )
 from ghrah.ability.permissions.command_scope import command_entry_covers, parse_command_entry
+from ghrah.ability.permissions.shell_write_projection import try_workspace_write_approval
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.invocation import OperationCall
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
     from ghrah.types.results import ActionResult
 
 logger = logging.getLogger(__name__)
+
+_VERSION_OR_HELP_FLAGS = frozenset({"--version", "-V", "--help"})
+_GIT_BARE_LIST_SUBS = frozenset({"branch", "tag"})
+
+
+def _is_version_or_help_probe(expression: Any, segments: list[Any]) -> bool:
+    """整式每一段都只是版本或帮助探测，且没有委托、重定向、敏感路径。"""
+    if getattr(expression, "redirects", None) or getattr(expression, "sensitive_paths", None):
+        return False
+    if not segments:
+        return False
+    for segment in segments:
+        if getattr(segment, "inner_commands", None):
+            return False
+        argv = [str(token) for token in (getattr(segment, "argv", ()) or ())]
+        if len(argv) != 2 or argv[1] not in _VERSION_OR_HELP_FLAGS:
+            return False
+    return True
+
+
+def _is_bare_git_list(expression: Any) -> bool:
+    """``git branch`` / ``git tag`` 没有位置参数时只是列出。
+
+    允许 git 全局选项（``-C``、``--no-pager`` 等）。创建、删除和重命名带有
+    位置参数或其他标志，不走这条放行。
+    """
+    if getattr(expression, "redirects", None) or getattr(expression, "sensitive_paths", None):
+        return False
+    commands = list(getattr(expression, "commands", ()) or ())
+    if not commands:
+        return False
+    for command in commands:
+        if getattr(command, "inner_commands", None) or getattr(command, "positionals", None):
+            return False
+        argv = [str(token) for token in (getattr(command, "argv", ()) or ())]
+        parsed = parse_command_entry(shlex.join(argv))
+        if (
+            parsed.ambiguous
+            or parsed.base != "git"
+            or parsed.sub not in _GIT_BARE_LIST_SUBS
+            or parsed.arguments != (parsed.sub,)
+        ):
+            return False
+    return True
+
 
 __all__ = [
     "CommandSafetyCategory",
@@ -84,7 +137,6 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "stat",
     "wc",
     "ls",
-    "find",
     "tree",
     "pwd",
     "du",
@@ -100,7 +152,6 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "tr",
     "diff",
     "comm",
-    "tee",
     "uname",
     "hostname",
     "whoami",
@@ -112,7 +163,7 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "type",
     "ps",
     "jobs",
-    "pytest",
+    # pytest 在 bash-classify 为 LOCAL_EFFECTS/MEDIUM，受段级门禁约束，不靠名单抬升。
     "ruff",
     "mypy",
     "eslint",
@@ -121,14 +172,12 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "true",
     "false",
     "test",
-    "env",
     "printenv",
     "seq",
     "dirname",
     "basename",
     "realpath",
     "readlink",
-    "xargs",
 }
 
 DEFAULT_DANGEROUS_COMMANDS: set[str] = {
@@ -175,10 +224,7 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
         "remote",
         "ls-remote",
         "ls-files",
-        "branch",
         "tag",
-        "stash",
-        "config",
         "var",
     },
     "npm": {
@@ -198,7 +244,7 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
         "search",
     },
     "uv": {
-        "run",
+        # run 可执行任意入口，不得无条件 SAFE；list/tree 仍受段级门禁。
         "list",
         "tree",
     },
@@ -224,8 +270,6 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
     "cargo": {
         "check",
         "test",
-        "build",
-        "run",
         "doc",
         "search",
         "metadata",
@@ -263,6 +307,8 @@ class CommandSafetyChecker:
         allowed_commands: tuple[str, ...] | list[str] | None = None,
         denied_commands: tuple[str, ...] | list[str] | None = None,
         deny_out_of_scope: bool = False,
+        fs_checker: FSPermissionChecker | None = None,
+        workspace_root: str | None = None,
     ) -> None:
         self._safe_commands = safe_commands if safe_commands is not None else DEFAULT_SAFE_COMMANDS
         self._dangerous_commands = (
@@ -281,6 +327,8 @@ class CommandSafetyChecker:
         self._allowed_commands = None if allowed_commands is None else tuple(allowed_commands)
         self._denied_commands = tuple(denied_commands or ())
         self._deny_out_of_scope = deny_out_of_scope
+        self._fs_checker = fs_checker
+        self._workspace_root = workspace_root
 
     def extend_safe_lists(
         self,
@@ -289,9 +337,8 @@ class CommandSafetyChecker:
     ) -> None:
         """部署方追加 safe 白名单（与内置名单并集，只增不减）。
 
-        配置驱动通道（Subject env → CoreUnitConfig → 装配点）：追加基础
-        命令与子命令白名单，供 type-check / lint / test 类语义只读命令
-        免审批放行。不收窄内置名单——DANGEROUS 名单不受此影响。
+        仅在 bash-classify 段级门禁允许的档位内生效（READONLY+LOW 或
+        LOCAL_EFFECTS+LOW）；不能抬升 UNKNOWN / MEDIUM 写入 / DANGEROUS。
 
         Args:
             extra_commands: 追加的基础命令名（小写归一）
@@ -305,8 +352,13 @@ class CommandSafetyChecker:
                 merged[base.lower()] = merged.get(base.lower(), set()) | {s.lower() for s in subs}
             self._safe_sub_commands = merged
 
-    def check_command(self, command: str) -> CommandSafetyVerdict:
-        """检查命令安全性。"""
+    def check_command(
+        self, command: str, *, working_dir: str | None = None
+    ) -> CommandSafetyVerdict:
+        """检查命令安全性。
+
+        ``working_dir`` 是相对写路径的解析起点；缺省时用注入的 ``workspace_root``。
+        """
         if not command or not command.strip():
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
@@ -331,6 +383,22 @@ class CommandSafetyChecker:
                 base_command=primary_base,
                 sub_command=primary_sub,
                 reason=f"Command denied by declared scope: {command}",
+            )
+
+        if _is_version_or_help_probe(expression, segments):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Version or help probe: {command}",
+            )
+
+        if _is_bare_git_list(expression):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Read-only git listing: {command}",
             )
 
         overlay = self._dangerous_overlay(segments, command)
@@ -362,10 +430,10 @@ class CommandSafetyChecker:
                 reason=f"Safe readonly expression: {command}",
             )
 
-        # 部署级 SAFE 名单可抬升 LOCAL_EFFECTS / 库外 UNKNOWN；
-        # 重定向、敏感路径、或「只读但 HIGH」（如 cat ~/.ssh）时不抬升。
+        # 部署级 SAFE 名单：先过段级门禁，再匹配名单（含 extend_safe_lists）。
         if not self._blocks_legacy_safe_promote(expression) and all(
-            self._legacy_segment_safe(segment) for segment in segments
+            self._segment_allows_legacy_promote(segment) and self._legacy_segment_safe(segment)
+            for segment in segments
         ):
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.SAFE,
@@ -390,6 +458,15 @@ class CommandSafetyChecker:
                 reason=f"Unknown command structure cannot auto-execute: {command}",
             )
 
+        projected = self._project_workspace_write(
+            expression,
+            working_dir=working_dir,
+            base_command=primary_base,
+            sub_command=primary_sub,
+        )
+        if projected is not None:
+            return projected
+
         if self._require_approval:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.REQUIRE_HITL,
@@ -411,6 +488,35 @@ class CommandSafetyChecker:
             base_command=primary_base,
             sub_command=primary_sub,
             reason=f"Approval not required: {primary_base}",
+        )
+
+    def _project_workspace_write(
+        self,
+        expression: Any,
+        *,
+        working_dir: str | None,
+        base_command: str,
+        sub_command: str | None,
+    ) -> CommandSafetyVerdict | None:
+        projected = try_workspace_write_approval(
+            expression,
+            fs_checker=self._fs_checker,
+            workspace_root=self._workspace_root,
+            working_dir=working_dir,
+        )
+        if projected is None:
+            return None
+        if projected.kind == "safe":
+            category = CommandSafetyCategory.SAFE
+        elif projected.kind == "dangerous":
+            category = CommandSafetyCategory.DANGEROUS
+        else:
+            category = CommandSafetyCategory.REQUIRE_HITL
+        return CommandSafetyVerdict(
+            category=category,
+            base_command=base_command,
+            sub_command=sub_command,
+            reason=projected.reason,
         )
 
     def _any_segment_in_scope(self, entries: tuple[str, ...], segments: list[Any]) -> bool:
@@ -504,8 +610,17 @@ class CommandSafetyChecker:
             and getattr(expression, "risk", None) is Risk.HIGH
         )
 
+    @staticmethod
+    def _segment_allows_legacy_promote(segment: Any) -> bool:
+        """段级门禁：仅 READONLY+LOW 或 LOCAL_EFFECTS+LOW 可被名单抬升。"""
+        classification = getattr(segment, "classification", None)
+        risk = getattr(segment, "risk", None)
+        if risk is not Risk.LOW:
+            return False
+        return classification in {Classification.READONLY, Classification.LOCAL_EFFECTS}
+
     def _legacy_segment_safe(self, segment: Any) -> bool:
-        """部署级 SAFE 名单兼容：仅在 bash-classify 未判危险时提升为 SAFE。"""
+        """部署级 SAFE 名单匹配（须已通过段级门禁）。"""
         base, sub = segment_base_sub(list(segment.argv))
         if not base:
             return False
@@ -573,7 +688,8 @@ class CommandApprovalHook(Hook):
     ) -> HookResult:
         tool_args = call.arguments
         command = tool_args.get("command", "")
-        verdict = self._checker.check_command(command)
+        working_dir = tool_args.get("working_dir")
+        verdict = self._checker.check_command(command, working_dir=working_dir)
 
         if verdict.category == CommandSafetyCategory.SAFE:
             return HookResult.continue_()

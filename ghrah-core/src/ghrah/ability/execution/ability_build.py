@@ -261,11 +261,21 @@ def _make_command_approval(
         require_approval = False
     else:
         require_approval = bool(effective.require_hitl) or require_approval_by_default
+    fs_checker = None
+    if effective.fs_write and not effective.fs_read_only:
+        fs_checker = _make_fs_permission_checker(
+            permissions,
+            workspace_root=workspace_root,
+            scope=effective,
+            auto_approved=auto_approved,
+        )
     command_checker = CommandSafetyChecker(
         require_approval=require_approval,
         allowed_commands=effective.allowed_commands,
         denied_commands=effective.denied_commands,
         deny_out_of_scope=not auto_approved,
+        fs_checker=fs_checker,
+        workspace_root=workspace_root,
     )
     # 部署方 safe 白名单扩展（只增不减，与内置并集）
     if safe_extra_commands or safe_extra_sub_commands:
