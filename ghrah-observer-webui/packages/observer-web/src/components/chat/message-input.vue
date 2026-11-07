@@ -180,12 +180,7 @@ const placeholder = computed(() =>
           @{{ agent.name }}
         </li>
       </ul>
-      <UiButton
-        type="submit"
-        :disabled="props.disabled || !input.trim()"
-        class="text-sm"
-        variant="primary"
-      >
+      <UiButton type="submit" :disabled="props.disabled || !input.trim()" variant="primary">
         {{ t("chat.input.send") }}
       </UiButton>
     </div>

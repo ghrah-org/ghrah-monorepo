@@ -97,7 +97,7 @@ async function confirmDelete() {
   <div class="flex flex-col h-full gap-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold">{{ t("config.agent.title") }}</h2>
-      <UiButton class="text-xs" variant="primary" @click="showNewDialog = true">
+      <UiButton variant="primary" @click="showNewDialog = true">
         {{ t("config.agent.newManifest") }}
       </UiButton>
     </div>

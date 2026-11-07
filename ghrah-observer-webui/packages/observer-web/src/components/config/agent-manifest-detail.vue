@@ -98,13 +98,13 @@ function truncate(text: string, max: number): string {
     </div>
 
     <div class="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-800">
-      <UiButton class="text-xs" variant="primary" @click="$emit('spawn')">
+      <UiButton variant="primary" @click="$emit('spawn')">
         {{ t("config.spawn.title") }}
       </UiButton>
-      <UiButton class="text-xs" variant="secondary" @click="$emit('edit')">
+      <UiButton variant="secondary" @click="$emit('edit')">
         {{ t("config.agent.editYaml") }}
       </UiButton>
-      <UiButton class="text-xs" variant="danger" @click="$emit('delete')">
+      <UiButton variant="danger" @click="$emit('delete')">
         {{ t("config.agent.delete") }}
       </UiButton>
     </div>

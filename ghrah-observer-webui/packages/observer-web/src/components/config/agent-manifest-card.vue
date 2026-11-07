@@ -56,13 +56,13 @@ defineEmits<{
       </span>
     </div>
     <div class="flex gap-1 mt-2">
-      <UiButton class="text-xs px-2 py-0.5" variant="primary" @click.stop="$emit('spawn')">
+      <UiButton size="xs" variant="primary" @click.stop="$emit('spawn')">
         {{ t("config.agent.spawn") }}
       </UiButton>
-      <UiButton class="text-xs px-2 py-0.5" variant="secondary" @click.stop="$emit('edit')">
+      <UiButton size="xs" variant="secondary" @click.stop="$emit('edit')">
         {{ t("config.agent.editYaml") }}
       </UiButton>
-      <UiButton class="text-xs px-2 py-0.5" variant="danger" @click.stop="$emit('delete')">
+      <UiButton size="xs" variant="danger" @click.stop="$emit('delete')">
         {{ t("config.agent.delete") }}
       </UiButton>
     </div>

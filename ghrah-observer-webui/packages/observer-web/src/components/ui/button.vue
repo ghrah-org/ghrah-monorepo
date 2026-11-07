@@ -9,16 +9,27 @@ import { ref } from "vue";
 
 defineOptions({ name: "UiButton", inheritAttrs: false });
 
-defineProps<{
-  variant: "primary" | "secondary" | "danger";
-  type?: "button" | "submit" | "reset";
-  disabled?: boolean;
-}>();
+withDefaults(
+  defineProps<{
+    variant: "primary" | "secondary" | "danger" | "ghost";
+    size?: "md" | "sm" | "xs";
+    type?: "button" | "submit" | "reset";
+    disabled?: boolean;
+  }>(),
+  { size: "md" },
+);
 
-const shortcut = {
+const variantClass = {
   primary: "btn-primary",
   secondary: "btn-secondary",
   danger: "btn-danger",
+  ghost: "btn-ghost",
+} as const;
+
+const sizeClass = {
+  md: "btn-md",
+  sm: "btn-sm",
+  xs: "btn-xs",
 } as const;
 
 const root = ref<HTMLButtonElement | null>(null);
@@ -38,7 +49,7 @@ defineExpose({
     ref="root"
     v-bind="$attrs"
     class="ui-button"
-    :class="[`ui-button-${variant}`, shortcut[variant]]"
+    :class="[`ui-button-${variant}`, variantClass[variant], sizeClass[size]]"
     :type="type"
     :disabled="disabled"
   >

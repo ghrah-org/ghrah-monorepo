@@ -151,7 +151,7 @@ async function runLifecycle() {
       <UiButton
         v-if="!creating"
         type="button"
-        class="text-xs px-2 py-0.5"
+        size="xs"
         variant="primary"
         :disabled="!projects.activeProjectId"
         :title="t('nav.room.new')"
@@ -172,17 +172,10 @@ async function runLifecycle() {
         class="flex-1 min-w-0 px-2 py-1 text-sm dark:text-gray-100"
         @keydown.esc="cancelCreate"
       />
-      <UiButton
-        type="submit"
-        class="text-xs px-2 py-1"
-        variant="primary"
-        :disabled="busy || !newName.trim()"
-      >
+      <UiButton type="submit" size="sm" variant="primary" :disabled="busy || !newName.trim()">
         {{ busy ? "…" : t("common.create") }}
       </UiButton>
-      <UiButton type="button" class="text-xs px-2 py-1" variant="secondary" @click="cancelCreate"
-        >✕</UiButton
-      >
+      <UiButton type="button" size="sm" variant="secondary" @click="cancelCreate">✕</UiButton>
     </form>
     <SidebarList v-if="visibleRooms.length > 0" :label="t('nav.room.rooms')">
       <SidebarRow

@@ -27,13 +27,18 @@ export default defineConfig({
     }),
   ],
   shortcuts: {
-    btn: "px-3 py-1.5 rounded border-none cursor-pointer text-sm font-medium transition-colors duration-200",
+    btn: "inline-flex items-center justify-center rounded border-none cursor-pointer font-medium leading-none whitespace-nowrap transition-colors duration-200",
+    "btn-md": "btn h-8 px-3 text-xs leading-none",
+    "btn-sm": "btn h-7 px-2 text-xs leading-none",
+    "btn-xs": "btn h-[1.375rem] px-2 text-xs leading-none",
     "btn-primary":
-      "btn bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-danger":
-      "btn bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed",
     "btn-secondary":
-      "btn bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed",
+      "bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed",
+    "btn-ghost":
+      "bg-transparent text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed",
     panel: "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded",
     badge: "inline-block px-2 py-0.5 rounded-full text-xs font-medium",
   },
