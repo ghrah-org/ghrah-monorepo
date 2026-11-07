@@ -17,9 +17,9 @@ from typing import Any
 import pytest
 from ghrah.protocol.types import CommandType, EventType
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.base import Ability
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.events import ContextUsageUpdatedEvent, HITLRequestEvent
 from ghrah.core.unit import (

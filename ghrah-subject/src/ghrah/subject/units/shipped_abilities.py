@@ -62,16 +62,12 @@ def load_required_abilities(distro_toml: Path) -> list[RequiredAbility]:
     items: list[RequiredAbility] = []
     for index, raw in enumerate(required):
         if not isinstance(raw, dict):
-            logger.error(
-                "shipped abilities: required[%s] 必须是 table (%s)", index, distro_toml
-            )
+            logger.error("shipped abilities: required[%s] 必须是 table (%s)", index, distro_toml)
             continue
         name = raw.get("name", "")
         version = raw.get("version", "")
         if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
-            logger.error(
-                "shipped abilities: required[%s] 缺 name/version (%s)", index, distro_toml
-            )
+            logger.error("shipped abilities: required[%s] 缺 name/version (%s)", index, distro_toml)
             continue
         items.append(RequiredAbility(name=name, version=version))
     return items
@@ -111,9 +107,7 @@ class ShippedAbilityUnit(SubjectUnit):
         del ctx
         install_root = self._config.ability.install_root
         if not install_root:
-            logger.info(
-                "shipped abilities: ability.install_root 未配置，跳过预装检查"
-            )
+            logger.info("shipped abilities: ability.install_root 未配置，跳过预装检查")
             return
         root = Path(install_root)
         distro_toml = root.parent / "distro.toml"
@@ -127,8 +121,7 @@ class ShippedAbilityUnit(SubjectUnit):
         source_root = _shipped_source_root()
         if source_root is None or not source_root.is_dir():
             logger.error(
-                "shipped abilities: 找不到 shipped_abilities 源目录；"
-                "清单有 %d 项但无法安装",
+                "shipped abilities: 找不到 shipped_abilities 源目录；清单有 %d 项但无法安装",
                 len(required),
             )
             return
@@ -150,9 +143,7 @@ class ShippedAbilityUnit(SubjectUnit):
             pass
         dirname = _package_dir_name(item.name)
         if dirname is None:
-            logger.error(
-                "shipped abilities: 非法预装全名 %r（须为 ghrah.<name>）", item.name
-            )
+            logger.error("shipped abilities: 非法预装全名 %r（须为 ghrah.<name>）", item.name)
             return
         source = source_root / dirname
         if not source.is_dir() or not (source / "ability.yaml").is_file():
@@ -181,9 +172,7 @@ class ShippedAbilityUnit(SubjectUnit):
             )
             return
         if result.already_installed:
-            logger.info(
-                "shipped abilities: %s@%s 已就位（跳过）", item.name, item.version
-            )
+            logger.info("shipped abilities: %s@%s 已就位（跳过）", item.name, item.version)
         else:
             logger.info(
                 "shipped abilities: 已安装 %s@%s → %s",

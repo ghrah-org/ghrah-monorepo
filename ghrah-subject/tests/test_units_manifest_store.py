@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Any
 
 from ghrah.ability.package.installer import AbilityInstaller, InstallOrigin
 from ouroboros import Context  # type: ignore[import-untyped]
@@ -90,55 +89,6 @@ def test_manifest_result_to_event_payload_keeps_wire_shape() -> None:
         "manifest": {"manifest": "ability"},
         "source": "manifest: ability",
     }
-
-
-async def test_manifest_store_unit_refreshes_permission_index_after_crud(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path)
-    unit = ManifestStoreUnit(config)
-    emitted: list[tuple[str, Any]] = []
-
-    async with Context() as ctx:
-        # 同步 collector：ctx.emit 内联调用，命令返回后即完成
-        ctx.on(
-            "event/manifest_ability_created",
-            lambda payload: emitted.append(("manifest_ability_created", payload)),
-        )
-
-        fiber = ctx.plugin(mount_unit(unit))
-        await wait_active(fiber)
-        permission_index = unit.permission_index
-
-        assert "custom_needs_hitl" not in permission_index.get_permissions()
-
-        put_result = await unit.handle_command(
-            "manifest_put_ability",
-            {"full_name": "custom.needs_hitl", "content": CUSTOM_ABILITY_YAML},
-            CommandContext.internal(),
-        )
-
-        permissions = permission_index.get_permissions()
-        assert put_result["success"] is True
-        assert permissions["custom_needs_hitl"].require_hitl is True
-        assert (
-            "manifest_ability_created",
-            {
-                "full_name": "custom.needs_hitl",
-                "namespace": "custom",
-                "manifest": put_result["data"]["manifest"],
-                "source": put_result["data"]["source"],
-            },
-        ) in emitted
-
-        delete_result = await unit.handle_command(
-            "manifest_delete_ability",
-            {"full_name": "custom.needs_hitl"},
-            CommandContext.internal(),
-        )
-
-        assert delete_result["success"] is True
-        assert "custom_needs_hitl" not in permission_index.get_permissions()
 
 
 async def test_builtin_manifest_unit_uses_v1_sources_and_leaves_legacy_files_untouched(

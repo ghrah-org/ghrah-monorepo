@@ -43,14 +43,12 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ghrah.abilities.builtin import (
-    ConversationAbility,
-    EndTaskAbility,
-    FSPermissionChecker,
-    ListDirectoryAbility,
-    ReadFileAbility,
-    WriteFileAbility,
-)
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
+from ghrah.ability.builtin.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.builtin.fs.operations.write_file import WriteFileAbility
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.communication import SupervisorActor
 from ghrah.types.config_types import AgentConfig, ContextConfig
 

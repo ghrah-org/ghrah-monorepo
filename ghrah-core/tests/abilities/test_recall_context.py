@@ -20,7 +20,10 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.builtin.recall_context import RecallContextAbility, RecallContextInput
+from ghrah.ability.builtin.core.operations.recall_context import (
+    RecallContextAbility,
+    RecallContextInput,
+)
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.factory import ChatMessageFactory
@@ -362,14 +365,14 @@ class TestBoundary:
 
 class TestRegistration:
     def test_registry_has_recall_context(self) -> None:
-        from ghrah.abilities import AbilityRegistry
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        assert AbilityRegistry.has("recall_context")
+        assert BuiltinAbilitySource().load_builtin("recall_context")
 
     def test_builtin_manifest_loads(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        manifest = load_builtin_manifest("ghrah.core.recall_context")
+        manifest = BuiltinAbilitySource().load_ability("ghrah.core.recall_context")
         assert manifest.implementation.type == "builtin"
         assert manifest.implementation.handler == "recall_context"
         assert manifest.metadata.permissions.require_hitl is False
@@ -381,9 +384,9 @@ class TestRegistration:
         assert resolved.ability_name == "ghrah.core.recall_context"
 
     def test_manifest_tool_parameters_match_input_model(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        manifest = load_builtin_manifest("ghrah.core.recall_context")
+        manifest = BuiltinAbilitySource().load_ability("ghrah.core.recall_context")
         assert manifest.tool is not None
         params = manifest.tool.parameters
         assert set(params) == set(RecallContextInput.model_fields)

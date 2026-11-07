@@ -8,10 +8,10 @@ import pytest
 from _helpers import ToolScriptedLLM
 from ghrah.protocol.ability_tree import RevokeAbilityRequest
 
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.access import AbilityAccessStore, AccessIdentity, GrantPolicy, GrantRule
 from ghrah.ability.access.startup import StartupGrantMaterializer
 from ghrah.ability.assembly import AbilityAssembly
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.package.generate import build
 from ghrah.ability.package.installer import AbilityInstaller
 from ghrah.ability.surface.config import SurfaceConfig
@@ -105,7 +105,7 @@ async def environment(tmp_path, installed):
         tmp_path / "surface.db", "project", operators=frozenset({"deployment"}), runs=runs.get
     )
     assembly = AbilityAssembly.select("builtin", install_root=str(installed.root))
-    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(MANIFEST))
+    resolved = assembly.source.resolver().resolve(parse_agent_manifest(MANIFEST))
     resolved.config = replace(resolved.config, agent_id=AGENT, workspace_root=str(tmp_path))
     materializer = StartupGrantMaterializer(
         store=store,
@@ -365,9 +365,9 @@ async def test_run_end_clears_loaded_state_without_revoking_grants(environment):
 
 async def test_nested_deferred_keeps_target_and_wrapper_post_hooks():
     """延迟回复到达时，目标与包装的 POST 各执行一次，不被同一消息键覆盖。"""
-    from ghrah.abilities.executor import LocalAbilityExecutor
     from ghrah.ability.execution.base import Ability
     from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
     from ghrah.ability.execution.invocation import OperationCall
 
     seen = []
@@ -471,7 +471,7 @@ async def test_meta_only_agent_cannot_borrow_another_agents_members(environment,
     bob = "b" * 32
     runs[bob] = "bob-run"
     assembly = AbilityAssembly.select("builtin")
-    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(MANIFEST))
+    resolved = assembly.source.resolver().resolve(parse_agent_manifest(MANIFEST))
     resolved.config = replace(resolved.config, agent_id=bob, workspace_root=str(tmp_path))
     resolved.surface = SurfaceConfig(mode="progressive")
     restricted = StartupGrantMaterializer(

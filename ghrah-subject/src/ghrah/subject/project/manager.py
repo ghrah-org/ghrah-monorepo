@@ -30,7 +30,6 @@ from ghrah.protocol.payloads.entity import (
     AgentEntityPayload,
 )
 from ghrah.protocol.types import (
-    AbilityDefinitionPayload,
     AgentConfigPayload,
     ProjectAddAgentPayload,
     ProjectCreatePayload,
@@ -178,9 +177,7 @@ class ProjectManager:
         on_event: OnEvent | None = None,
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
-        ability_source: str = "legacy",
     ) -> None:
-        self._ability_source = ability_source
         self._store = store
         self._workspace_mgr = workspace_mgr
         self._task_mgr = task_mgr
@@ -194,11 +191,6 @@ class ProjectManager:
         self._scoped_resources: list[Any] = []
         self._room_store: Any | None = None
         self.agents = AgentEntityManager(self)
-
-    @property
-    def ability_source(self) -> str:
-        """返回项目运行时使用的能力来源。"""
-        return self._ability_source
 
     async def handle_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = _HANDLERS.get(command)
@@ -368,10 +360,9 @@ class ProjectManager:
 
     def _validate_agent(self, agent: AgentSpec, project: ProjectRecord) -> None:
         """agent_id/name 在 Project 内唯一 + cluster 归属/授权校验。"""
-        if self._ability_source == "builtin":
-            from ghrah.ability.access.identity import validate_agent_id
+        from ghrah.ability.access.identity import validate_agent_id
 
-            validate_agent_id(agent.agent_id)
+        validate_agent_id(agent.agent_id)
         if agent.cluster_id not in project.cluster_ids:
             raise ValueError(f"agent {agent.name!r} cluster_id {agent.cluster_id!r} not in project")
         for existing in project.agents:
@@ -389,8 +380,6 @@ class ProjectManager:
 
     def _agent_start_error(self, agent: AgentSpec) -> StableError | None:
         """检查新版装配入口要求的持久启动字段。"""
-        if self._ability_source != "builtin":
-            return None
         if not agent.agent_id:
             return StableError(
                 "stable_agent_id_required", "Update the persisted Project spec before restore"
@@ -758,7 +747,7 @@ class ProjectManager:
             ],
         )
         self._validate_agent(agent, existing)
-        if self._ability_source == "builtin" and agent.abilities:
+        if agent.abilities:
             raise StableError(
                 "abilities_managed_by_access_store",
                 "Specify an Agent template and use ability grants and tool selection",
@@ -919,11 +908,6 @@ class ProjectManager:
                 endpoint_name=agent.endpoint_name,
                 model_overrides=agent.model_overrides,
                 system_prompt=agent.system_prompt or "",
-            ),
-            abilities=(
-                [AbilityDefinitionPayload(ability_type=name, params={}) for name in agent.abilities]
-                if agent.abilities and self._ability_source == "legacy"
-                else None
             ),
             manifest_ref=agent.manifest_ref or None,
         )

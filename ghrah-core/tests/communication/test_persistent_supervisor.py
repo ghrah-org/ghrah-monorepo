@@ -12,9 +12,9 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM, make_call, make_services
 
-from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.send_message import SendMessageAbility
+from ghrah.ability.builtin.cluster.operations.broadcast_message import BroadcastMessageAbility
+from ghrah.ability.builtin.cluster.operations.send_message import SendMessageAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import DeliveryState, MessageKind, MessageManager, SupervisorActor
@@ -271,7 +271,7 @@ async def test_wrong_backend_is_rejected_before_registering_or_binding(tmp_path)
 
 
 async def test_room_send_fails_before_log_or_background_delivery():
-    from ghrah.abilities.builtin.send import SendAbility
+    from ghrah.ability.builtin.cluster.operations.send import SendAbility
 
     class Bridge:
         def __init__(self):

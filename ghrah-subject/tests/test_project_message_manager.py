@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.core.config import AgentConfig
@@ -194,7 +194,7 @@ async def test_observer_explicit_send_ability_cross_cluster(tmp_path):
     """观察端显式能力信封真实经过源 agent 原子提交和跨 cluster MM。"""
     import json
 
-    from ghrah.abilities.builtin.send_message import SendMessageAbility
+    from ghrah.ability.builtin.cluster.operations.send_message import SendMessageAbility
 
     config = SubjectConfig(
         workspace_root=str(tmp_path / "ws"), db_path=str(tmp_path / "subject.sqlite")
@@ -316,8 +316,6 @@ async def test_missing_observer_ability_is_rejected_before_enqueue(tmp_path):
             )
             assert info["success"], info
             assert "send_message" in info["data"]["abilities"]
-            from ghrah.abilities.registry import AbilityRegistry
-
-            assert info["data"]["available_ability_types"] == sorted(AbilityRegistry.list_types())
+            assert info["data"]["available_ability_types"] == []
         finally:
             await registry.stop()

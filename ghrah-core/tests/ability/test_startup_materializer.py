@@ -809,7 +809,7 @@ async def test_restored_member_without_execution_object_stays_out_of_projection(
 
 @pytest.mark.parametrize("auto_approve", [(), ("write_file",)])
 async def test_readonly_template_blocks_write_at_effect_boundary(store, tmp_path, auto_approve):
-    from ghrah.abilities.executor import LocalAbilityExecutor
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
 
     text = AGENT_YAML.replace(
         "  - ref: ghrah.fs.list_directory",

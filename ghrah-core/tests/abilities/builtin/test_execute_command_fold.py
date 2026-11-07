@@ -10,12 +10,12 @@ from typing import Any
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.execute_command import (
+from ghrah.ability.builtin.shell.operations.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     _fold_text,
 )
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 
@@ -84,7 +84,7 @@ class TestFoldTextUnit:
         assert "[... 920 lines omitted ...]" in folded
 
     def test_head_and_tail_sizes(self) -> None:
-        from ghrah.abilities.builtin.execute_command import (
+        from ghrah.ability.builtin.shell.operations.execute_command import (
             _FOLD_HEAD_LINES,
             _FOLD_TAIL_LINES,
         )

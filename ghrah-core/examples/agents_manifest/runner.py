@@ -29,19 +29,17 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.builtin import (
-    ConversationAbility,
-    EndTaskAbility,
-    FSPermissionChecker,
-    ListDirectoryAbility,
-    ReadFileAbility,
-    WriteFileAbility,
-)
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
+from ghrah.ability.builtin.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.builtin.fs.operations.write_file import WriteFileAbility
+from ghrah.ability.execution.base import Ability
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.parser import parse_agent_manifest
 from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
-from ghrah.manifest.store import BuiltinManifestStore
 from ghrah.manifest.types import PermissionFlags
 from ghrah.types.config_types import AgentConfig
 
@@ -71,7 +69,7 @@ class ManifestRunner:
             "persistence_dir": str(persistence_dir),
             "session_id": session_id,
         }
-        store = BuiltinManifestStore()
+        store = BuiltinAbilitySource()
         self._resolver = ManifestResolver(store)
 
     @property

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from _helpers import make_action_result
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
+from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.message import ChatMessage
 from ghrah.context.manager import ContextManager

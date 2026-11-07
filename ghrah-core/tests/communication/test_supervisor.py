@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
 from ghrah.chat.message import ChatMessage
 from ghrah.communication.errors import AgentNotFoundError, RegistryError
 from ghrah.communication.supervisor import SupervisorActor
@@ -81,61 +81,6 @@ class TestSupervisorActor:
     # ----------------------------------------------------------------
     # register_ability 命令路径守卫
     # ----------------------------------------------------------------
-
-    @pytest.fixture
-    def registered_agent(self, supervisor: SupervisorActor, sample_config: AgentConfig):
-        """预注册一个 Agent（mock handle），返回 handle。"""
-        mock_handle = MagicMock()
-        mock_handle.register_ability.return_value = "conversation"
-        supervisor._registry.register("guarded-agent", sample_config, mock_handle)
-        return mock_handle
-
-    @pytest.mark.asyncio
-    async def test_register_ability_rejects_hooks_param(
-        self, supervisor: SupervisorActor, registered_agent
-    ) -> None:
-        """params 含 hooks → 拒绝（hook 注入通道收窄）。"""
-        with pytest.raises(ValueError, match="kernel materialization keys"):
-            await supervisor.register_ability_for_agent(
-                "guarded-agent", "conversation", {"hooks": []}
-            )
-        registered_agent.register_ability.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_register_ability_rejects_checker_params(
-        self, supervisor: SupervisorActor, registered_agent
-    ) -> None:
-        """params 含 permission_checker/command_checker/command_runner → 拒绝。"""
-        with pytest.raises(ValueError, match="kernel materialization keys"):
-            await supervisor.register_ability_for_agent(
-                "guarded-agent", "read_file", {"permission_checker": object()}
-            )
-        with pytest.raises(ValueError, match="kernel materialization keys"):
-            await supervisor.register_ability_for_agent(
-                "guarded-agent", "execute_command", {"command_runner": object()}
-            )
-
-    @pytest.mark.asyncio
-    async def test_register_ability_allows_plain_params(
-        self, supervisor: SupervisorActor, registered_agent
-    ) -> None:
-        """普通构造参数照常透传（守卫只拦内核物化保留键）。"""
-        result = await supervisor.register_ability_for_agent("guarded-agent", "conversation", {})
-        assert result == "conversation"
-        registered_agent.register_ability.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_register_ability_instance_channel(
-        self, supervisor: SupervisorActor, registered_agent
-    ) -> None:
-        """实例通道：预构造 Ability 直接注册。"""
-        ability = ConversationAbility()
-        registered_agent.register_ability.return_value = "conversation"
-
-        result = await supervisor.register_ability_instance_for_agent("guarded-agent", ability)
-
-        assert result == "conversation"
-        registered_agent.register_ability.assert_called_once_with(ability)
 
     @pytest.mark.asyncio
     async def test_terminate_agent(self, supervisor: SupervisorActor) -> None:
@@ -243,35 +188,15 @@ class TestSupervisorActor:
     async def test_spawn_empty_abilities_raises(self) -> None:
         """[] -> raise：零能力 agent 是僵尸（无法回复，烧满 max_iterations）。"""
         supervisor = SupervisorActor()
-        with pytest.raises(RegistryError, match="zero abilities"):
+        with pytest.raises(RegistryError, match="requires a non-empty explicit"):
             await supervisor.spawn_agent(AgentConfig(name="zombie"), abilities=[])
 
     @pytest.mark.asyncio
     async def test_spawn_none_without_default_raises(self) -> None:
         """None + 未配置 default_abilities -> raise，指路显式通道。"""
         supervisor = SupervisorActor()
-        with pytest.raises(RegistryError, match="no default_abilities configured"):
+        with pytest.raises(RegistryError, match="requires a non-empty explicit"):
             await supervisor.spawn_agent(AgentConfig(name="orphan"))
-
-    @pytest.mark.asyncio
-    async def test_spawn_none_with_default_abilities_injects(self) -> None:
-        """None + 已配置 default_abilities -> 注入配置集（部署方显式声明）。"""
-        supervisor = SupervisorActor(
-            default_abilities=["conversation", "end_task"],
-            max_cluster_members=10,
-        )
-        await supervisor.spawn_agent(AgentConfig(name="configured"))
-
-        handle = await supervisor.get_agent_handle("configured")
-        ability_names = set(handle._abilities.keys())
-        assert {"conversation", "end_task"} <= ability_names
-
-    @pytest.mark.asyncio
-    async def test_spawn_none_with_unknown_default_ability_raises(self) -> None:
-        """配置集含 unknown 名 -> spawn 期 fail-closed（装配错误启动期暴露）。"""
-        supervisor = SupervisorActor(default_abilities=["conversation", "no_such_ability"])
-        with pytest.raises(RegistryError, match="unknown ability type 'no_such_ability'"):
-            await supervisor.spawn_agent(AgentConfig(name="broken-assembly"))
 
     @pytest.mark.asyncio
     async def test_spawn_respects_max_cluster_members(self) -> None:

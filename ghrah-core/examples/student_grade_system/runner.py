@@ -24,23 +24,18 @@ from typing import Any
 from abilities_impl.init_project import InitProjectAbility
 from abilities_impl.list_directory import StudentGradeListDirectoryAbility
 
-from ghrah.abilities.base import Ability
-from ghrah.abilities.builtin import (
-    ConversationAbility,
-    EditFileAbility,
-    EndTaskAbility,
-    FSPermissionChecker,
-    ReadFileAbility,
-    WriteFileAbility,
-)
-from ghrah.manifest.ability import AbilityManifest
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
+from ghrah.ability.builtin.fs.operations.edit_file import EditFileAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.builtin.fs.operations.write_file import WriteFileAbility
+from ghrah.ability.execution.base import Ability
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+from ghrah.ability.source import BuiltinAbilitySource
+from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.agent import AgentManifest
-from ghrah.manifest.errors import ManifestNotFoundError
-from ghrah.manifest.parser import parse_ability_manifest
-from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility
-from ghrah.manifest.store import BuiltinManifestStore
-from ghrah.manifest.types import PermissionFlags
+from ghrah.manifest.resolver import ResolvedAbility
+from ghrah.manifest.types import ImplementationDef, PermissionFlags
 from ghrah.types.config_types import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -56,43 +51,33 @@ _HANDLER_TO_ABILITY: dict[str, type[Ability]] = {
 }
 
 
-class CompositeManifestStore(ManifestStoreProtocol):
-    """组合 ManifestStore：builtin stores + 自定义 abilities。
-
-    支持从 builtin 加载标准 abilities，同时允许注册自定义 ability manifests，
-    使得 Agent Manifest 可以通过 ref 引用自定义 abilities。
-    """
-
-    def __init__(self) -> None:
-        self._builtin = BuiltinManifestStore()
-        self._custom_abilities: dict[str, AbilityManifest] = {}
-
-    def register_ability(self, manifest: AbilityManifest) -> None:
-        full_name = manifest.full_name
-        self._custom_abilities[full_name] = manifest
-        logger.info("Registered custom ability manifest: %s", full_name)
-
-    def register_ability_from_file(self, yaml_path: Path) -> None:
-        raw = yaml_path.read_text(encoding="utf-8")
-        manifest = parse_ability_manifest(raw)
-        self.register_ability(manifest)
+class ExampleCatalog(BuiltinAbilitySource):
+    """示例进程显式装配的本地工具，声明由工具实现及这里的权限提供。"""
 
     def load_ability(self, full_name: str) -> AbilityManifest:
-        if full_name in self._custom_abilities:
-            return self._custom_abilities[full_name]
-        return self._builtin.load_ability(full_name)
-
-    def load_agent(self, full_name: str) -> AgentManifest:
-        raise ManifestNotFoundError(f"Agent manifest not found: {full_name}")
-
-    def list_abilities(self, namespace: str | None = None) -> list[str]:
-        builtin_list = self._builtin.list_abilities(namespace)
-        custom_list = [
-            name
-            for name in self._custom_abilities
-            if namespace is None or name.startswith(namespace)
-        ]
-        return builtin_list + custom_list
+        permissions = {
+            "student_grade.init_project": PermissionFlags(
+                fs_write=True, allowed_paths=["{{workspace}}/**"]
+            ),
+            "student_grade.list_directory": PermissionFlags(fs_read_only=True),
+        }
+        if full_name not in permissions:
+            return super().load_ability(full_name)
+        namespace, handler = full_name.rsplit(".", 1)
+        return AbilityManifest(
+            manifest="ability",
+            version="1",
+            metadata=AbilityMetadata(
+                namespace=namespace,
+                name=handler,
+                description={
+                    "init_project": "Initialize backend or frontend project scaffolding.",
+                    "list_directory": "List directory contents while excluding generated files.",
+                }[handler],
+                permissions=permissions[full_name],
+            ),
+            implementation=ImplementationDef(type="builtin", handler=handler),
+        )
 
 
 @dataclass
@@ -120,8 +105,7 @@ class StudentGradeRunner:
             "persistence_dir": str(persistence_dir),
             "session_id": session_id,
         }
-        self._store = CompositeManifestStore()
-        self._resolver = ManifestResolver(self._store)
+        self._resolver = ExampleCatalog().resolver()
 
     @property
     def workspace(self) -> Path:
@@ -134,9 +118,6 @@ class StudentGradeRunner:
     @property
     def session_id(self) -> str:
         return self._session_id
-
-    def register_ability_manifest(self, yaml_path: Path) -> None:
-        self._store.register_ability_from_file(yaml_path)
 
     def load_manifest(self, yaml_path: Path) -> AgentManifest:
         from ghrah.manifest.parser import parse_agent_manifest

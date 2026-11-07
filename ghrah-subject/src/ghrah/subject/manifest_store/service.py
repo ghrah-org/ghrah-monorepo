@@ -8,14 +8,13 @@ import dataclasses
 import logging
 from typing import Any
 
+from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.manifest.errors import (
     DuplicateManifestError,
     ManifestError,
     ManifestNotFoundError,
     ManifestValidationError,
 )
-from ghrah.manifest.parser import validate_manifest
-from ghrah.manifest.resolver import ManifestResolver
 from ghrah.protocol.types import (  # type: ignore[import-untyped]
     MANIFEST_COMMANDS as _MANIFEST_COMMANDS,
 )
@@ -64,7 +63,6 @@ def handle_manifest_command(
     payload: dict[str, Any],
     store: ManifestStore,
     *,
-    legacy_abilities: bool = True,
     ability_install_root: str | None = None,
 ) -> dict[str, Any]:
     """分发 manifest 命令，返回响应 dict。
@@ -73,13 +71,12 @@ def handle_manifest_command(
         command: 命令类型，如 'manifest_list_abilities'
         payload: 命令载荷
         store: ManifestStore 实例
-        legacy_abilities: 是否使用旧能力清单库。
         ability_install_root: 新版能力包安装根，供 Agent 模板预览解析使用。
 
     Returns:
         响应 dict，包含 success 字段
     """
-    if not legacy_abilities and command in _LEGACY_ABILITY_COMMANDS:
+    if command in _LEGACY_ABILITY_COMMANDS:
         return {
             "success": False,
             "error": "legacy_ability_manifest_disabled",
@@ -87,64 +84,7 @@ def handle_manifest_command(
         }
 
     try:
-        if command == "manifest_list_abilities":
-            namespace = payload.get("namespace")
-            names = store.list_abilities(namespace=namespace)
-            abilities = []
-            for name in names:
-                try:
-                    m = store.get_ability(name)
-                    abilities.append(
-                        {
-                            "full_name": m.full_name,
-                            "namespace": m.metadata.namespace,
-                            "name": m.metadata.name,
-                            "title": m.metadata.title,
-                            "description": m.metadata.description,
-                            "tags": m.metadata.tags,
-                            "permissions": m.metadata.permissions.model_dump(mode="python"),
-                            "implementation_type": m.implementation.type,
-                            "has_hitl": m.metadata.permissions.require_hitl,
-                        }
-                    )
-                except Exception:
-                    abilities.append({"full_name": name})
-            return {"success": True, "data": {"abilities": abilities}}
-
-        elif command == "manifest_get_ability":
-            full_name = payload.get("full_name", "")
-            manifest = store.get_ability(full_name)
-            source = store.get_ability_source(full_name)
-            return {
-                "success": True,
-                "data": {
-                    "manifest": manifest.model_dump(mode="python"),
-                    "source": source,
-                },
-            }
-
-        elif command == "manifest_put_ability":
-            full_name = payload.get("full_name", "")
-            content = payload.get("content", "")
-            overwrite = payload.get("overwrite", False)
-            store.put_ability(full_name, content, overwrite=overwrite)
-            manifest = store.get_ability(full_name)
-            source = store.get_ability_source(full_name)
-            return {
-                "success": True,
-                "data": {
-                    "full_name": full_name,
-                    "manifest": manifest.model_dump(mode="python"),
-                    "source": source,
-                },
-            }
-
-        elif command == "manifest_delete_ability":
-            full_name = payload.get("full_name", "")
-            store.delete_ability(full_name)
-            return {"success": True, "data": {"full_name": full_name}}
-
-        elif command == "manifest_list_agents":
+        if command == "manifest_list_agents":
             namespace = payload.get("namespace")
             names = store.list_agents(namespace=namespace)
             agents = []
@@ -207,14 +147,9 @@ def handle_manifest_command(
             agent_full_name = payload.get("agent_full_name", "")
             runtime_name = payload.get("runtime_name")
             manifest = store.get_agent(agent_full_name)
-            if legacy_abilities:
-                resolver = ManifestResolver(store)
-            else:
-                from ghrah.ability.source import BuiltinAbilitySource
-
-                resolver = BuiltinAbilitySource(
-                    agent_store=store, install_root=ability_install_root
-                ).resolver()
+            resolver = BuiltinAbilitySource(
+                agent_store=store, install_root=ability_install_root
+            ).resolver()
             resolved = resolver.resolve(manifest, runtime_name=runtime_name)
             return {
                 "success": True,
@@ -239,11 +174,7 @@ def handle_manifest_command(
 
         elif command == "manifest_validate":
             content = payload.get("content", "")
-            is_valid, errors = (
-                store.validate_manifest(content)
-                if legacy_abilities
-                else validate_manifest(content, expected_type="agent")
-            )
+            is_valid, errors = store.validate_manifest(content)
             return {"success": True, "data": {"valid": is_valid, "errors": errors}}
 
         else:

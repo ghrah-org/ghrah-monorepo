@@ -234,7 +234,6 @@ class CoreClusterRegistry:
         self,
         *,
         unit_factory: Callable[[str, str, str], Any],
-        ability_source: str = "legacy",
         ability_grant_policy: Any = None,
     ) -> None:
         self._unit_factory = unit_factory
@@ -246,7 +245,6 @@ class CoreClusterRegistry:
         self._locks: dict[str, asyncio.Lock] = {}
         # 能力关系库按项目共享（观测端管理面与 Core 执行面必须同一实例）；
         # 生命周期到 registry.stop()，cluster 重启不重开、不关闭。
-        self._ability_source = ability_source
         self._ability_grant_policy = ability_grant_policy
         self._ability_stores: dict[str, Any] = {}
         self._ability_store_lock = asyncio.Lock()
@@ -360,11 +358,6 @@ class CoreClusterRegistry:
 
     async def ability_store(self, project_id: str, project_root_locator: str) -> Any:
         """按项目懒打开并复用能力关系库；关闭由 registry.stop() 统一负责。"""
-        if self._ability_source != "builtin":
-            raise StableError(
-                "ability_source_legacy",
-                "ability management requires ability_source=builtin",
-            )
         if not project_id:
             raise ValueError("project_id required")
         if not project_root_locator:
@@ -504,36 +497,35 @@ def default_core_unit_factory(
             # builtin 模式：授权关系库按项目共享（观测端管理面与 Core 执行面
             # 必须看到同一实例）；cluster 重启不重开、不关闭，统一由
             # registry.stop() 收口。
-            if unit._config.ability_source == "builtin":
-                if ability_store_resolver is not None:
-                    store = await ability_store_resolver(project_id, locator)
-                else:
-                    # 兼容直接构造 default_core_unit_factory 的嵌入/测试路径：
-                    # 无 registry 服务时本地打开；生产挂载路径始终注入
-                    # resolver，保证与观测端管理面共享同一 store。
-                    from ghrah.ability.access import AbilityAccessStore
+            if ability_store_resolver is not None:
+                store = await ability_store_resolver(project_id, locator)
+            else:
+                # 兼容直接构造 default_core_unit_factory 的嵌入/测试路径：
+                # 无 registry 服务时本地打开；生产挂载路径始终注入
+                # resolver，保证与观测端管理面共享同一 store。
+                from ghrah.ability.access import AbilityAccessStore
 
-                    def runs(agent: str) -> str | None:
-                        supervisor = getattr(unit, "supervisor", None)
-                        if supervisor is None:
-                            return None
-                        try:
-                            return supervisor.incarnation_for_agent(agent)
-                        except Exception:
-                            return None
+                def runs(agent: str) -> str | None:
+                    supervisor = getattr(unit, "supervisor", None)
+                    if supervisor is None:
+                        return None
+                    try:
+                        return supervisor.incarnation_for_agent(agent)
+                    except Exception:
+                        return None
 
-                    store = await AbilityAccessStore.open(
-                        path,
-                        project_id,
-                        operators=frozenset({"deployment"}),
-                        runs=runs,
-                    )
-                    owned_ability_stores[cluster_id] = store
-                unit._config = replace(
-                    unit._config,
-                    ability_store=store,
-                    ability_grant_policy=config.ability_grant_policy,
+                store = await AbilityAccessStore.open(
+                    path,
+                    project_id,
+                    operators=frozenset({"deployment"}),
+                    runs=runs,
                 )
+                owned_ability_stores[cluster_id] = store
+            unit._config = replace(
+                unit._config,
+                ability_store=store,
+                ability_grant_policy=config.ability_grant_policy,
+            )
 
     async def release(cluster_id: str) -> None:
         async with manager_lock:
@@ -553,7 +545,6 @@ def default_core_unit_factory(
         if not project_root_locator:
             raise ValueError("project_root_locator required")
         core_db_path = str(ProjectPaths.from_locator(project_root_locator).action_chain_db_path)
-        legacy = config.ability_source == "legacy"
 
         def persistence_factory(agent_config: Any) -> Any:
             return SqliteBackend(db_path=core_db_path)
@@ -576,14 +567,10 @@ def default_core_unit_factory(
             persistence_factory=persistence_factory,
             manifest_store=manifest_store,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
-            ability_source=config.ability_source,
             ability_install_root=config.ability.install_root,
             ability_filesystem_roots=config.ability.filesystem_roots,
             mcp=config.mcp,
             llm_factory=llm_factory,
-            # 部署方显式声明（fail-closed 兼容通道）：空配置 → None →
-            # 无 abilities 快速 spawn 在 core 侧 raise 指路 manifest_ref。
-            default_abilities=(tuple(config.default_spawn_abilities) or None) if legacy else None,
             host_command_grants=_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
         )
         return create_core_unit(core_config)

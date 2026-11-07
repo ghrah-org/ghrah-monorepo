@@ -6,10 +6,6 @@
 
 提供 YAML manifest 的解析、验证和运行时桥接。
 
-注意：
-    ghrah.manifest.builtins 子模块需通过显式 import 访问：
-        from ghrah.manifest.builtins import load_builtin_manifest
-    不再支持 ghrah.manifest.builtins 惰性属性访问。
 """
 
 from __future__ import annotations
@@ -43,7 +39,6 @@ from ghrah.manifest.responses import (
     ResolvedAgentData,
     ValidateResult,
 )
-from ghrah.manifest.store import BuiltinManifestStore
 from ghrah.manifest.types import (
     SUPPORTED_ABILITY_VERSIONS,
     SUPPORTED_AGENT_VERSIONS,
@@ -64,7 +59,6 @@ __all__ = [
     "AgentManifest",
     "AgentManifestData",
     "AgentMetadata",
-    "BuiltinManifestStore",
     "ContextOverrides",
     "DuplicateManifestError",
     "HookDef",

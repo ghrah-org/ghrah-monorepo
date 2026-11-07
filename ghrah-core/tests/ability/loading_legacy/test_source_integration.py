@@ -17,7 +17,6 @@ from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.resolver import ResolvedAbility
 from ghrah.types.results import ActionOutcome
 
 
@@ -35,15 +34,7 @@ def manifest() -> AgentManifest:
     )
 
 
-def test_current_resolver_uses_new_source_without_legacy_lookup(monkeypatch) -> None:
-    from ghrah.abilities.registry import AbilityRegistry
-    from ghrah.manifest import builtins as legacy_builtins
-
-    def reject_legacy_lookup(*args, **kwargs):
-        raise AssertionError("selected source must not fall back to the legacy registry")
-
-    monkeypatch.setattr(AbilityRegistry, "has", reject_legacy_lookup)
-    monkeypatch.setattr(legacy_builtins, "load_all_builtin_manifests", reject_legacy_lookup)
+def test_current_resolver_uses_one_v1_catalog_for_type_and_ref() -> None:
     resolved = BuiltinAbilitySource().resolver().resolve(manifest())
     assert resolved.config.endpoint_name == "local/ability"
     assert [entry.ability_name for entry in resolved.abilities] == [
@@ -60,8 +51,6 @@ def test_unknown_and_special_assembly_members_are_not_implicitly_resolved() -> N
         source.load_builtin("send")
     with pytest.raises(ManifestNotFoundError):
         source.create_operation("arbitrary.module.execute")
-    with pytest.raises(ValueError, match="registry and catalog"):
-        ResolvedAbility.from_builtin("read_file", registry=Mock(), catalog=source)
 
 
 def test_agent_delegation_and_ability_views_are_read_only() -> None:

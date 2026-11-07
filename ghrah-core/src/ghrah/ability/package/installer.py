@@ -294,9 +294,7 @@ def _content_limits(definition: AbilityDefinition, root: Path) -> CaptureLimits:
 class AbilityInstaller:
     """安装域入口：一个显式安装根上的安装 / 卸载 / 查询 / 校验。"""
 
-    def __init__(
-        self, root: str | Path, *, origin: InstallOrigin = InstallOrigin.USER
-    ) -> None:
+    def __init__(self, root: str | Path, *, origin: InstallOrigin = InstallOrigin.USER) -> None:
         self._root = Path(root)
         self._store = InstalledStore(self._root)
         self._origin = InstallOrigin(origin)

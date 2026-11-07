@@ -264,17 +264,15 @@ def build_ability_control_router(
 ) -> APIRouter:
     """构造管理面路由；依赖由 unit 从受信 ctx 注入（测试可直接构造）。"""
     router = APIRouter(prefix="/api/v1")
-    enabled = config.ability_source == "builtin" and config.observer_http_api_enabled
+    enabled = config.observer_http_api_enabled
 
     async def _ensure_enabled() -> None:
         if enabled:
             return
-        reason = (
-            "新版能力系统未启用（ability_source 不是 builtin）"
-            if config.ability_source != "builtin"
-            else "观测端能力管理面未启用（observer_http_api_enabled=false）"
+        raise AbilityApiError(
+            "capability_unavailable",
+            "观测端能力管理面未启用（observer_http_api_enabled=false）",
         )
-        raise AbilityApiError("capability_unavailable", reason)
 
     async def _resolve(request: Request, project_id: str) -> _Resolved:
         if not _authorized(request, config):
@@ -412,9 +410,7 @@ def build_ability_control_router(
 
     async def status() -> dict[str, Any]:
         reason: str | None = None
-        if config.ability_source != "builtin":
-            reason = "legacy 已废弃、不受新授权治理保证"
-        elif not enabled:
+        if not enabled:
             reason = "观测端能力管理面未启用（observer_http_api_enabled=false）"
         features = AbilityApiFeatures(
             tree=enabled,
@@ -426,8 +422,7 @@ def build_ability_control_router(
             surface_write=False,
         )
         payload = AbilityApiStatus(
-            ability_source=config.ability_source,  # type: ignore[arg-type]
-            legacy_deprecated=config.ability_source != "builtin",
+            ability_source="builtin",
             operator="deployment" if enabled else None,
             features=features,
             reason=reason,
@@ -730,7 +725,7 @@ class AbilityControlUnit(SubjectUnit):
         self._router = router
         logger.info(
             "ability control REST mounted (enabled=%s, ability_source=%s)",
-            self._config.ability_source == "builtin" and self._config.observer_http_api_enabled,
+            self._config.observer_http_api_enabled,
             self._config.ability_source,
         )
 

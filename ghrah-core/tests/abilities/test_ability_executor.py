@@ -19,15 +19,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import (
     LOOP,
     MANIFEST_STORE,
     SUPERVISOR,
     ExecutionServices,
 )
+from ghrah.ability.execution.executor import AbilityExecutor, LocalAbilityExecutor
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.event_publisher import EventPublisher, NullEventPublisher

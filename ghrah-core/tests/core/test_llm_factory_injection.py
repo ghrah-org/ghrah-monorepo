@@ -16,7 +16,7 @@ from typing import Any
 from _helpers import ScriptedLLM
 from test_core_unit import FakeCtx
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.core.message import AgentMessage, MessageType
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
 from ghrah.types.config_types import AgentConfig

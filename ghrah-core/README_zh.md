@@ -29,7 +29,7 @@ uv run agentconf
 如果不使用 agentconf，可以直接构造 `ChatFormat` 并注入到 Agent 中：
 
 ```python
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.base import ActorAgent
 from ghrah.chat.format.openai import OpenAIFormat
 from ghrah.core.config import AgentConfig

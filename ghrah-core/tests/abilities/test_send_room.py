@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.send import SendAbility
+from ghrah.ability.builtin.cluster.operations.send import SendAbility
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.room_protocol import ROOM_BRIDGE_UNAVAILABLE_ERROR, SerialRoomBridge

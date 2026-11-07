@@ -14,14 +14,14 @@ from unittest.mock import MagicMock
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
-from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
-from ghrah.abilities.builtin.read_file import ReadFileAbility, ReadFileInput
-from ghrah.abilities.hooks import Hook, HookPoint
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility, ReadFileInput
+from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hooks import Hook, HookPoint
 from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 
 # ── 辅助 ──
 
@@ -70,7 +70,7 @@ class TestConversationAbility:
 
     def test_get_hooks_default_has_done_hook(self) -> None:
         """默认内置 ConversationDoneHook。"""
-        from ghrah.abilities.builtin.conversation import ConversationDoneHook
+        from ghrah.ability.builtin.core.operations.conversation import ConversationDoneHook
 
         ability = ConversationAbility()
         hooks = ability.get_hooks()
@@ -163,7 +163,7 @@ class TestEndTaskAbility:
 
     def test_get_hooks_default_has_done_hook(self) -> None:
         """默认内置 EndTaskDoneHook（toolcall 模式终止循环所需）。"""
-        from ghrah.abilities.builtin.end_task import EndTaskDoneHook
+        from ghrah.ability.builtin.core.operations.end_task import EndTaskDoneHook
 
         ability = EndTaskAbility()
         hooks = ability.get_hooks()
@@ -180,7 +180,7 @@ class TestEndTaskAbility:
 
     async def test_done_hook_triggers_only_for_end_task(self) -> None:
         """EndTaskDoneHook 仅在 call.member.member == 'end_task' 时触发。"""
-        from ghrah.abilities.builtin.end_task import EndTaskDoneHook
+        from ghrah.ability.builtin.core.operations.end_task import EndTaskDoneHook
 
         hook = EndTaskDoneHook()
         assert hook.hook_point == HookPoint.AFTER_ACTION
@@ -191,7 +191,7 @@ class TestEndTaskAbility:
 
     async def test_done_hook_execute_stops_loop(self) -> None:
         """EndTaskDoneHook.execute 返回 should_continue=False。"""
-        from ghrah.abilities.builtin.end_task import EndTaskDoneHook
+        from ghrah.ability.builtin.core.operations.end_task import EndTaskDoneHook
 
         hook = EndTaskDoneHook()
         call, services = make_call(member="end_task"), make_services()

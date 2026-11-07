@@ -17,9 +17,9 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.broadcast_message import BroadcastMessageAbility
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.send_message import SendMessageAbility
+from ghrah.ability.builtin.cluster.operations.broadcast_message import BroadcastMessageAbility
+from ghrah.ability.builtin.cluster.operations.send_message import SendMessageAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.chat.content import TextBlock, ToolCallBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.communication import DeliveryState, MessageManager, SupervisorActor
@@ -340,8 +340,8 @@ async def test_structured_input_and_reply_blocks_survive_persistent_route(tmp_pa
 
 
 async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
-    from ghrah.abilities.hooks import Hook, HookPoint, HookResult
     from ghrah.ability.execution.execution_services import ExecutionServices
+    from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
     from ghrah.ability.execution.invocation import OperationCall
 
     observed = []

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
+from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import (
     ExecutionServices,
     build_execution_services,

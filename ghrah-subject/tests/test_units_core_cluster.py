@@ -462,6 +462,21 @@ class TestProjectRuntimeStateGuards:
             await registry.stop()
             await ctx.__aexit__(None, None, None)
 
+    async def test_retired_registration_does_not_mount_cluster(self, tmp_path: Path) -> None:
+        ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("active"))
+        try:
+            for command in ("register_ability", "unregister_ability"):
+                result = await unit.handle_command(
+                    command, {"project_id": PROJECT_ID}, CommandContext.internal()
+                )
+                assert result["success"] is False
+                assert result["error"] == "legacy_ability_registration_disabled"
+            assert created == []
+            assert not registry.has_cluster("c1")
+        finally:
+            await registry.stop()
+            await ctx.__aexit__(None, None, None)
+
     async def test_stopped_project_reads_and_terminate_without_mount(self, tmp_path: Path) -> None:
         ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("stopped"))
         try:
@@ -979,7 +994,7 @@ class TestDefaultFactoryGrantStoreWiring:
         finally:
             await factory.release("cluster-1")
 
-    async def test_legacy_mode_does_not_open_grant_store(self, tmp_path: Path) -> None:
+    async def test_default_mode_opens_grant_store(self, tmp_path: Path) -> None:
         locator = (tmp_path / "project-root").as_uri()
         root = tmp_path / "project-root"
         root.mkdir()
@@ -989,7 +1004,7 @@ class TestDefaultFactoryGrantStoreWiring:
         unit = factory("cluster-1", "project-1", locator)
         try:
             await factory.prepare(unit, "cluster-1", "project-1", locator)
-            assert unit._config.ability_store is None
+            assert unit._config.ability_store is not None
         finally:
             await factory.release("cluster-1")
 

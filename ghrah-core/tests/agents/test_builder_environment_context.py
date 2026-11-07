@@ -13,8 +13,8 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.types.config_types import AgentConfig
 

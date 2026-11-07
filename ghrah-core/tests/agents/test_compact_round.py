@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
+from ghrah.ability.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import TextBlock
@@ -138,7 +138,7 @@ class TestThresholdTriggerGate:
     @pytest.mark.asyncio
     async def test_compact_round_does_not_drain_queue_or_run_hooks(self) -> None:
         """compact 回合不排空消息队列、不执行 agent 级 HookPoint。"""
-        from ghrah.abilities.hooks import Hook, HookPoint
+        from ghrah.ability.execution.hooks import Hook, HookPoint
 
         class _CountingHook(Hook):
             hook_point = HookPoint.BEFORE_ACTION
@@ -157,7 +157,7 @@ class TestThresholdTriggerGate:
                 services: ExecutionServices,
                 result: Any = None,
             ) -> Any:
-                from ghrah.abilities.hooks import HookResult
+                from ghrah.ability.execution.hooks import HookResult
 
                 self.calls += 1
                 return HookResult.continue_()

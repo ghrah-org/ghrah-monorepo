@@ -11,13 +11,13 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.builtin.command_safety import (
+from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.permissions.command_safety import (
     CommandApprovalHook,
     CommandSafetyCategory,
     CommandSafetyChecker,
 )
-from ghrah.ability.execution.execution_services import ExecutionServices
-from ghrah.ability.execution.invocation import OperationCall
 
 
 def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:

@@ -101,14 +101,6 @@ async def main() -> None:
         session_id=session_id,
     )
 
-    ability_yaml = EXAMPLES_DIR / "abilities" / "student_grade.init_project.yaml"
-    runner.register_ability_manifest(ability_yaml)
-    print(f"\nRegistered custom ability: {ability_yaml.name}")
-
-    ability_list_dir_yaml = EXAMPLES_DIR / "abilities" / "student_grade.list_directory.yaml"
-    runner.register_ability_manifest(ability_list_dir_yaml)
-    print(f"Registered custom ability: {ability_list_dir_yaml.name}")
-
     agents_dir = EXAMPLES_DIR / "agents"
     manifests = runner.load_manifests_from_dir(agents_dir)
     print(f"\nLoaded {len(manifests)} Agent manifests:")

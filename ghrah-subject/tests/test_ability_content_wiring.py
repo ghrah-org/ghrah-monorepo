@@ -118,6 +118,13 @@ async def test_subject_spawn_catalog_body_attachment_and_tool_result_persistence
             ],
         ]
     )
+    # 外部内容经过安装校验与同一来源捕获，再显式选择和授予。
+    source = tmp_path / "source"
+    example = Path(__file__).resolve().parents[2] / "ghrah-core/examples/ability_content/reporting"
+    shutil.copytree(example, source)
+    build(source)
+    AbilityInstaller(tmp_path / "installed").install(source)
+
     factory = default_core_unit_factory(config(tmp_path), ManifestStore(), lambda _: llm)
     registry = CoreClusterRegistry(unit_factory=factory)
     async with Context() as ctx:
@@ -134,15 +141,6 @@ async def test_subject_spawn_catalog_body_attachment_and_tool_result_persistence
             assert provider._identity.run_id == unit.supervisor.incarnation_id("reader")
             assert GUIDE in await provider.catalog_text()
 
-            # 外部内容经过安装校验与同一来源捕获，再显式选择和授予。
-            source = tmp_path / "source"
-            example = (
-                Path(__file__).resolve().parents[2]
-                / "ghrah-core/examples/ability_content/reporting"
-            )
-            shutil.copytree(example, source)
-            build(source)
-            AbilityInstaller(tmp_path / "installed").install(source)
             store = unit._config.ability_store
             admin = AccessIdentity("project", "deployment", "control", True, "deployment")
             version = unit._assembly.source.capture_package("reporting")

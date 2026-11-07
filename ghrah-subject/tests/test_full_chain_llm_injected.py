@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import RecoveryConfig, SubjectConfig
@@ -48,6 +49,7 @@ max_iterations: 3
 abilities:
   - type: conversation
   - type: end_task
+  - ref: ghrah.core.session_info
 """
 
 PRESET_REPLY = "预设回复：任务已接收"
@@ -87,6 +89,7 @@ def _config(tmp_path: Path) -> SubjectConfig:
         workspace_root=str(tmp_path / "ws"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
         recovery_slice=RecoveryConfig(
             enabled=True,
             reconcile_on_start=False,
@@ -224,32 +227,19 @@ async def test_full_chain_manifest_spawn_scripted_reply_persisted(tmp_path: Path
         assert PRESET_REPLY in messages
 
 
-async def test_spawn_with_direct_abilities_uses_injected_llm(tmp_path: Path) -> None:
-    """直传 abilities 路径同样消费注入 LLM（receive 回复断言）。"""
-    llm = ScriptedLLM(replies=["收到，马上处理"])
+async def test_spawn_rejects_direct_abilities(tmp_path: Path) -> None:
+    llm = ScriptedLLM(replies=[])
     async with _stack(tmp_path, llm) as ctx:
         project = _data(await bridge_command(ctx, "project_create", {"name": "direct"}))["project"]
-        spawn = _data(
-            await bridge_command(
-                ctx,
-                "spawn_agent",
-                {
-                    "project_id": project["project_id"],
-                    "config": {"name": "worker", "system_prompt": "t", "max_iterations": 1},
-                    "abilities": [{"ability_type": "conversation", "params": {}}],
-                },
-            )
+        result = await bridge_command(
+            ctx,
+            "spawn_agent",
+            {
+                "project_id": project["project_id"],
+                "config": {"name": "worker"},
+                "abilities": [{"ability_type": "conversation", "params": {}}],
+            },
         )
-        assert spawn["name"] == "worker"
-
-        # 经 supervisor 驱动一次 receive → ScriptedLLM 被调用
-        registry = ctx.get("core_cluster_registry")
-        supervisor = registry.get_handle(project["cluster_ids"][0])._unit.supervisor
-        actor = supervisor._registry.get_info("worker").actor_handle
-
-        from ghrah.core.message import AgentMessage, MessageType
-
-        await actor.receive(
-            AgentMessage(sender="user", recipient="worker", content="ping", type=MessageType.CHAT)
-        )
-        assert len(llm.calls) == 1
+        assert result["success"] is False
+        assert result["error"] == "abilities_managed_by_access_store"
+        assert not llm.calls

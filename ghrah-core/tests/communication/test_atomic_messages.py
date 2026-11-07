@@ -17,7 +17,7 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -257,7 +257,7 @@ async def test_process_crash_before_and_after_atomic_commit(tmp_path, point):
     script = """
 import asyncio, os, sys
 from ghrah.agents.builder import AgentBuilder
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.communication.message_manager import MessageManager, MessageKind
 from ghrah.core.config import AgentConfig

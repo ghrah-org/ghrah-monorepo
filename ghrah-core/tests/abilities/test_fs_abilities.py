@@ -13,15 +13,15 @@ from typing import Any
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.delete_file import DeleteFileAbility
-from ghrah.abilities.builtin.edit_file import EditFileAbility
-from ghrah.abilities.builtin.fs_permissions import FSPermissionChecker
-from ghrah.abilities.builtin.list_directory import ListDirectoryAbility
-from ghrah.abilities.builtin.move_file import MoveFileAbility
-from ghrah.abilities.builtin.write_file import WriteFileAbility
+from ghrah.ability.builtin.fs.operations.delete_file import DeleteFileAbility
+from ghrah.ability.builtin.fs.operations.edit_file import EditFileAbility
+from ghrah.ability.builtin.fs.operations.list_directory import ListDirectoryAbility
+from ghrah.ability.builtin.fs.operations.move_file import MoveFileAbility
+from ghrah.ability.builtin.fs.operations.write_file import WriteFileAbility
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
 
 
 def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:

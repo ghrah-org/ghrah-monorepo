@@ -231,7 +231,7 @@ async def test_unit_mounts_router_and_status_route_on_observer_app() -> None:
         )
 
 
-async def test_status_reports_enabled_legacy_and_disabled() -> None:
+async def test_status_reports_enabled_and_disabled() -> None:
     enabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
     router = build_ability_control_router(
         config=enabled,
@@ -244,18 +244,6 @@ async def test_status_reports_enabled_legacy_and_disabled() -> None:
     assert payload["ability_source"] == "builtin"
     assert payload["features"]["tree"] is True
     assert payload["legacy_deprecated"] is False
-
-    legacy = SubjectConfig(ability_source="legacy", observer_http_api_enabled=True)
-    router = build_ability_control_router(
-        config=legacy,
-        project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
-        event_bus=_Bus(),
-    )
-    status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
-    payload = await status()
-    assert payload["legacy_deprecated"] is True
-    assert "legacy" in str(payload["reason"])
 
     disabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=False)
     router = build_ability_control_router(

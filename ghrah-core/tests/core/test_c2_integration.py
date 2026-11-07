@@ -19,10 +19,10 @@ from typing import Any
 
 from ghrah.protocol.types import EventType
 
+from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
 from ghrah.manifest.parser import parse_agent_manifest
 from ghrah.manifest.protocols import ManifestStoreProtocol
-from ghrah.manifest.store import BuiltinManifestStore
 
 _PARENT_YAML = """\
 manifest: agent
@@ -63,7 +63,7 @@ class _CompositeStore(ManifestStoreProtocol):
     """builtin abilities + 自定义 agent manifests。"""
 
     def __init__(self) -> None:
-        self._builtin = BuiltinManifestStore()
+        self._builtin = BuiltinAbilitySource()
         self._agents = {
             "smoke.orchestrator": parse_agent_manifest(_PARENT_YAML),
             "smoke.worker": parse_agent_manifest(_CHILD_YAML),

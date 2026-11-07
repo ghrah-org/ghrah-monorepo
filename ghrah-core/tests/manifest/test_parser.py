@@ -9,7 +9,7 @@ import json
 import pytest
 
 from ghrah.manifest.errors import ManifestValidationError
-from ghrah.manifest.parser import parse_ability_manifest, parse_agent_manifest, validate_manifest
+from ghrah.manifest.parser import parse_agent_manifest, validate_manifest
 
 VALID_ABILITY_YAML = """\
 manifest: ability
@@ -71,128 +71,6 @@ hooks:
     - type: builtin
       handler: log_action
 """
-
-
-class TestParseAbilityManifest:
-    def test_yaml_parse(self) -> None:
-        manifest = parse_ability_manifest(VALID_ABILITY_YAML)
-        assert manifest.manifest == "ability"
-        assert manifest.metadata.namespace == "ghrah.fs"
-        assert manifest.metadata.name == "read_file"
-        assert manifest.full_name == "ghrah.fs.read_file"
-        assert manifest.tool.name == "read_file"
-        assert "file_path" in manifest.tool.parameters
-        assert manifest.tool.parameters["encoding"].enum == ["utf-8", "ascii"]
-        assert manifest.implementation.type == "builtin"
-        assert manifest.implementation.handler == "read_file"
-        assert len(manifest.hooks.pre_execute) == 1
-
-    def test_json_parse(self) -> None:
-        data = {
-            "manifest": "ability",
-            "version": "1",
-            "metadata": {
-                "namespace": "ghrah.fs",
-                "name": "write_file",
-                "description": "Write file",
-                "permissions": {"fs_write": True},
-            },
-            "tool": {
-                "name": "write_file",
-                "description": "Write file",
-            },
-            "implementation": {"type": "builtin", "handler": "write_file"},
-        }
-        manifest = parse_ability_manifest(json.dumps(data), format="json")
-        assert manifest.full_name == "ghrah.fs.write_file"
-
-    def test_missing_manifest_type(self) -> None:
-        with pytest.raises(ManifestValidationError, match="manifest"):
-            parse_ability_manifest(
-                "manifest: ability\nversion: '1'\nmetadata:\n"
-                "  namespace: xx\n  name: y\n  description: z\n"
-                "  permissions: {}"
-            )
-
-    def test_wrong_manifest_type(self) -> None:
-        yaml_str = """
-manifest: agent
-version: "2"
-metadata:
-  namespace: x
-  name: y
-  description: z
-  permissions: {}
-tool:
-  name: t
-  description: d
-implementation:
-  type: builtin
-  handler: h
-"""
-        with pytest.raises(ManifestValidationError):
-            parse_ability_manifest(yaml_str)
-
-    def test_unsupported_version(self) -> None:
-        with pytest.raises(ManifestValidationError, match="Unsupported"):
-            parse_ability_manifest(VALID_ABILITY_YAML.replace('version: "1"', 'version: "2"'))
-
-    def test_missing_required_field(self) -> None:
-        with pytest.raises(ManifestValidationError):
-            parse_ability_manifest("manifest: ability\nversion: '1'")
-
-    def test_invalid_format(self) -> None:
-        with pytest.raises(ValueError, match="Unsupported format"):
-            parse_ability_manifest("{}", format="toml")
-
-    def test_ability_without_tool(self) -> None:
-        yaml_str = """\
-manifest: ability
-version: "1"
-metadata:
-  namespace: ghrah.core
-  name: conversation
-  description: Conversation ability
-  permissions: {}
-implementation:
-  type: builtin
-  handler: conversation
-"""
-        manifest = parse_ability_manifest(yaml_str)
-        assert manifest.tool is None
-        assert manifest.implementation.type == "builtin"
-
-    def test_ability_without_tool_sandbox_forbidden(self) -> None:
-        yaml_str = """\
-manifest: ability
-version: "1"
-metadata:
-  namespace: ghrah.fs
-  name: remote_tool
-  description: Remote tool
-  permissions: {}
-implementation:
-  type: sandbox
-  handler: remote_tool
-"""
-        with pytest.raises(ManifestValidationError, match="tool is required"):
-            parse_ability_manifest(yaml_str)
-
-    def test_ability_without_tool_wasm_forbidden(self) -> None:
-        yaml_str = """\
-manifest: ability
-version: "1"
-metadata:
-  namespace: ghrah.fs
-  name: wasm_tool
-  description: Wasm tool
-  permissions: {}
-implementation:
-  type: wasm
-  module_ref: ghrah_fs_wasm
-"""
-        with pytest.raises(ManifestValidationError, match="tool is required"):
-            parse_ability_manifest(yaml_str)
 
 
 class TestParseAgentManifest:
@@ -319,53 +197,30 @@ abilities:
 
 
 class TestValidateManifest:
-    def test_valid_ability(self) -> None:
+    def test_old_ability_yaml_is_rejected(self) -> None:
         ok, errors = validate_manifest(VALID_ABILITY_YAML)
-        assert ok is True
-        assert errors == []
+        assert ok is False
+        assert errors
 
     def test_valid_agent(self) -> None:
         ok, errors = validate_manifest(VALID_AGENT_YAML)
         assert ok is True
         assert errors == []
 
-    def test_invalid_ability(self) -> None:
-        yaml_str = "manifest: ability\nversion: '1'"
-        ok, errors = validate_manifest(yaml_str)
-        assert ok is False
-        assert len(errors) > 0
-
     def test_unknown_manifest_type(self) -> None:
         ok, errors = validate_manifest('manifest: "unknown"\nversion: "1"')
         assert ok is False
-        assert any("Unknown or missing" in e for e in errors)
+        assert any("Expected manifest type" in e for e in errors)
 
     def test_missing_manifest_type(self) -> None:
         ok, errors = validate_manifest('version: "1"')
         assert ok is False
-        assert any("Unknown or missing" in e for e in errors)
+        assert any("Expected manifest type" in e for e in errors)
 
     def test_invalid_yaml_syntax(self) -> None:
         ok, errors = validate_manifest("{{invalid yaml}}")
         assert ok is False
         assert len(errors) > 0
-
-    def test_json_format(self) -> None:
-        data = {
-            "manifest": "ability",
-            "version": "1",
-            "metadata": {
-                "namespace": "ghrah.fs",
-                "name": "read_file",
-                "description": "Read",
-                "permissions": {},
-            },
-            "tool": {"name": "read_file", "description": "Read"},
-            "implementation": {"type": "builtin", "handler": "read_file"},
-        }
-        ok, errors = validate_manifest(json.dumps(data), format="json")
-        assert ok is True
-        assert errors == []
 
     def test_yaml_non_mapping(self) -> None:
         ok, errors = validate_manifest("- item1\n- item2")

@@ -4,9 +4,9 @@
 
 """Ability 最小接口协议定义。
 
-通过 Protocol（structural subtyping）定义 Ability、Registry、Executor 的接口契约，
+通过 Protocol（structural subtyping）定义 Ability、Executor 的接口契约，
 使 core 层可以仅依赖这些协议而非 abilities 层的具体实现。
-abilities.base.Ability 等具体类天然满足这些协议，无需显式继承。
+ghrah.ability.execution.base.Ability 等具体类天然满足这些协议，无需显式继承。
 方法签名中使用 Any 替代执行层的具体类型（OperationCall / ExecutionServices），
 避免 protocol 层反向依赖实现模块。
 """
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AbilityProtocol",
-    "RegistryProtocol",
     "ExecutorProtocol",
 ]
 
@@ -29,7 +28,7 @@ __all__ = [
 class AbilityProtocol(Protocol):
     """Ability 最小接口协议 — core 层仅依赖此协议。
 
-    与 abilities.base.Ability 不同，Protocol 不要求继承，
+    与 ghrah.ability.execution.base.Ability 不同，Protocol 不要求继承，
     任何实现了 name/execute/bind_tool/get_hooks 的对象都满足此协议。
     """
 
@@ -43,21 +42,6 @@ class AbilityProtocol(Protocol):
     def get_hooks(self) -> list[Any]: ...
 
     def get_default_state(self) -> dict[str, Any]: ...
-
-
-@runtime_checkable
-class RegistryProtocol(Protocol):
-    """Ability 工厂注册表协议 — core 层仅依赖此协议。
-
-    定义 create()、has() 和 list_types() 方法，
-    router.py 和 resolver.py 不需要知道具体注册细节。
-    """
-
-    def create(self, ability_type: str, **params: Any) -> AbilityProtocol: ...
-
-    def has(self, ability_type: str) -> bool: ...
-
-    def list_types(self) -> list[str]: ...
 
 
 @runtime_checkable

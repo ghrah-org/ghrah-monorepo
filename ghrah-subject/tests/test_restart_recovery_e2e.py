@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ghrah.ability.access import GrantPolicy
 from ghrah.chat.message import ChatMessage
 from ouroboros import Context  # type: ignore[import-untyped]
 
@@ -26,6 +27,7 @@ def _config(tmp_path: Path) -> SubjectConfig:
         workspace_root=str(tmp_path / "ws"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
         recovery_slice=RecoveryConfig(
             enabled=True,
             reconcile_on_start=True,
@@ -35,6 +37,24 @@ def _config(tmp_path: Path) -> SubjectConfig:
             bootstrap_workspace_locator=str(tmp_path / "ws/default"),
             default_root_locator_template=str(tmp_path / "projects/{project_id}"),
         ),
+    )
+
+
+def _write_agent_manifest(ctx: Context) -> None:
+    ctx.get("manifest_store").put_agent(
+        "recovery.agent",
+        """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: recovery
+  name: agent
+model:
+  endpoint_name: default
+system_prompt: Test recovery.
+abilities:
+  - ref: ghrah.core.session_info
+""",
     )
 
 
@@ -61,6 +81,7 @@ async def test_subject_restart_restores_two_durable_agents_from_project_store(
 
     async with Context() as first_ctx:
         await assemble_subject(first_ctx, config, profile="full")
+        _write_agent_manifest(first_ctx)
         project = _data(
             await bridge_command(first_ctx, "project_create", {"name": "recovery-e2e"})
         )["project"]
@@ -77,7 +98,7 @@ async def test_subject_restart_restores_two_durable_agents_from_project_store(
                         "agent": {
                             "name": name,
                             "cluster_id": cluster_id,
-                            "system_prompt": f"durable {name}",
+                            "manifest_ref": "recovery.agent",
                         },
                     },
                 )
@@ -181,6 +202,7 @@ async def test_corrupt_agent_snapshot_fails_closed_without_blocking_peer(
 
     async with Context() as first_ctx:
         await assemble_subject(first_ctx, config, profile="full")
+        _write_agent_manifest(first_ctx)
         project = _data(
             await bridge_command(first_ctx, "project_create", {"name": "corruption-e2e"})
         )["project"]
@@ -193,7 +215,11 @@ async def test_corrupt_agent_snapshot_fails_closed_without_blocking_peer(
                     "project_add_agent",
                     {
                         "project_id": project["project_id"],
-                        "agent": {"name": name, "cluster_id": cluster_id},
+                        "agent": {
+                            "name": name,
+                            "cluster_id": cluster_id,
+                            "manifest_ref": "recovery.agent",
+                        },
                     },
                 )
             )

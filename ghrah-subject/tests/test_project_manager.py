@@ -466,6 +466,7 @@ class TestProjectAddRemoveAgent:
                 "agent": {
                     "name": "a1",
                     "cluster_id": cluster_id,
+                    "manifest_ref": "tests.agent",
                     "path_grants": [{"workspace_id": workspace_id, "subpath": "."}],
                 },
             },
@@ -514,6 +515,7 @@ class TestProjectAddRemoveAgent:
                 "agent": {
                     "name": "pending-agent",
                     "cluster_id": project["cluster_ids"][0],
+                    "manifest_ref": "tests.agent",
                 },
             },
         )
@@ -535,7 +537,11 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "same-name", "cluster_id": cluster_id},
+                "agent": {
+                    "name": "same-name",
+                    "cluster_id": cluster_id,
+                    "manifest_ref": "tests.agent",
+                },
             },
         )
         assert first["success"]
@@ -543,7 +549,11 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "same-name", "cluster_id": cluster_id},
+                "agent": {
+                    "name": "same-name",
+                    "cluster_id": cluster_id,
+                    "manifest_ref": "tests.agent",
+                },
             },
         )
         assert duplicate["success"] is False
@@ -560,7 +570,7 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "a1", "cluster_id": cluster_id},
+                "agent": {"name": "a1", "cluster_id": cluster_id, "manifest_ref": "tests.agent"},
             },
         )
         result = await mgr.handle_command(
@@ -596,7 +606,14 @@ class TestProjectAddRemoveAgent:
         transport._handle.fail_spawn = True
         failed = await mgr.handle_command(
             "project_add_agent",
-            {"project_id": pid, "agent": {"name": "broken", "cluster_id": cluster_id}},
+            {
+                "project_id": pid,
+                "agent": {
+                    "name": "broken",
+                    "cluster_id": cluster_id,
+                    "manifest_ref": "tests.agent",
+                },
+            },
         )
         assert failed["success"]
         assert failed["data"]["runtime_pending"] is True
@@ -610,7 +627,14 @@ class TestProjectAddRemoveAgent:
         transport._handle.fail_spawn = False
         ok_add = await mgr.handle_command(
             "project_add_agent",
-            {"project_id": pid, "agent": {"name": "healthy", "cluster_id": cluster_id}},
+            {
+                "project_id": pid,
+                "agent": {
+                    "name": "healthy",
+                    "cluster_id": cluster_id,
+                    "manifest_ref": "tests.agent",
+                },
+            },
         )
         assert ok_add["success"]
         stored = await store.get(pid)
@@ -648,7 +672,11 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "a1", "cluster_id": project["cluster_ids"][0]},
+                "agent": {
+                    "name": "a1",
+                    "cluster_id": project["cluster_ids"][0],
+                    "manifest_ref": "tests.agent",
+                },
             },
         )
         transport._handle.terminate_error = "core transport down"
@@ -689,7 +717,11 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "a1", "cluster_id": project["cluster_ids"][0]},
+                "agent": {
+                    "name": "a1",
+                    "cluster_id": project["cluster_ids"][0],
+                    "manifest_ref": "tests.agent",
+                },
             },
         )
         transport._handle.terminate_error = "agent_identity_mismatch"
@@ -729,7 +761,11 @@ class TestProjectAddRemoveAgent:
             "project_add_agent",
             {
                 "project_id": project["project_id"],
-                "agent": {"name": "a1", "cluster_id": project["cluster_ids"][0]},
+                "agent": {
+                    "name": "a1",
+                    "cluster_id": project["cluster_ids"][0],
+                    "manifest_ref": "tests.agent",
+                },
             },
         )
         result = await mgr.handle_command(

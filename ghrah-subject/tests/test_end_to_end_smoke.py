@@ -12,8 +12,8 @@
 - terminate_agent → agent 注销 + core:agent_terminated 事件
 - chain_history 读侧直连 Core sqlite 连通
 
-真实 LLM 不参与（不跑 agent loop）；spawn 用最小 config（conversation
-默认能力）。聚合裁决后 HITL 单路径（core:hitl_request）的端到端归
+真实 LLM 不参与（不跑 agent loop）；spawn 使用最小 v2 Agent 模板。
+HITL 单路径（core:hitl_request）的端到端归
 WebUI 联调，本文件覆盖装配闭环。
 """
 
@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from ghrah.ability.access import GrantPolicy
 from ghrah.protocol.types import EventType
 from ouroboros import Context  # type: ignore[import-untyped]
 
@@ -36,6 +37,7 @@ def _config(tmp_path: Path) -> SubjectConfig:
         workspace_root=str(tmp_path / "ws"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
         project_slice=ProjectConfig(
             bootstrap_workspace_locator=str(tmp_path / "ws/projects/default"),
             default_root_locator_template=str(tmp_path / "projects/{project_id}"),
@@ -47,6 +49,21 @@ def _config(tmp_path: Path) -> SubjectConfig:
 async def _stack(tmp_path: Path) -> AsyncIterator[Context]:
     async with Context() as ctx:
         await assemble_subject(ctx, _config(tmp_path), profile="full")
+        ctx.get("manifest_store").put_agent(
+            "smoke.agent",
+            """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: smoke
+  name: agent
+model:
+  endpoint_name: default
+system_prompt: Test agent.
+abilities:
+  - ref: ghrah.core.session_info
+""",
+        )
         yield ctx
 
 
@@ -75,7 +92,8 @@ class TestEndToEndSmoke:
                     "spawn_agent",
                     {
                         "project_id": project["project_id"],
-                        "config": {"name": "shared-name", "system_prompt": "test"},
+                        "manifest_ref": "smoke.agent",
+                        "config": {"name": "shared-name"},
                     },
                 )
                 assert result["success"], result.get("error")
@@ -101,7 +119,8 @@ class TestEndToEndSmoke:
                 "spawn_agent",
                 {
                     "project_id": project["project_id"],
-                    "config": {"name": "smoke-agent", "system_prompt": "test"},
+                    "manifest_ref": "smoke.agent",
+                    "config": {"name": "smoke-agent"},
                 },
             )
             assert spawn["success"], spawn.get("error")
@@ -150,7 +169,8 @@ class TestEndToEndSmoke:
                 "spawn_agent",
                 {
                     "project_id": project["project_id"],
-                    "config": {"name": "evt-agent", "system_prompt": "test"},
+                    "manifest_ref": "smoke.agent",
+                    "config": {"name": "evt-agent"},
                 },
             )
             await bridge_command(
@@ -181,7 +201,8 @@ class TestEndToEndSmoke:
                 "spawn_agent",
                 {
                     "project_id": project["project_id"],
-                    "config": {"name": "ledger-smoke", "system_prompt": "test"},
+                    "manifest_ref": "smoke.agent",
+                    "config": {"name": "ledger-smoke"},
                 },
             )
             sessions = await bridge_command(
@@ -238,7 +259,8 @@ class TestEndToEndSmoke:
                 "spawn_agent",
                 {
                     "project_id": project["project_id"],
-                    "config": {"name": "sess-agent", "system_prompt": "test"},
+                    "manifest_ref": "smoke.agent",
+                    "config": {"name": "sess-agent"},
                 },
             )
             create = await bridge_command(

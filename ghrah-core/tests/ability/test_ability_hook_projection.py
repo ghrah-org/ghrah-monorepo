@@ -119,8 +119,8 @@ async def test_done_hooks_stop_only_their_own_ability() -> None:
 
 async def test_done_hooks_stop_through_legacy_runner() -> None:
     """旧 HookStore / HookRunner 能选出并执行新内置成员挂载的终止 hook。"""
-    from ghrah.abilities.hook_runner import HookRunner
-    from ghrah.abilities.hook_store import HookStore
+    from ghrah.ability.execution.hook_runner import HookRunner
+    from ghrah.ability.execution.hook_store import HookStore
 
     store = HookStore()
     store.add_hooks("conversation", ConversationAbility().get_hooks())

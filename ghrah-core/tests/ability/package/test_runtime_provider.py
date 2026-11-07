@@ -110,7 +110,7 @@ async def store(tmp_path):
 
 async def _materialize(store, tmp_path, installer, *, policy=GrantPolicy()):
     assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
-    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(AGENT_YAML))
+    resolved = assembly.source.resolver().resolve(parse_agent_manifest(AGENT_YAML))
     materializer = StartupGrantMaterializer(
         store=store,
         source=assembly.source,
@@ -169,7 +169,7 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
     with pytest.raises(ManifestValidationError, match="版本不存在"):
         await materializer.materialize(
             agent=AGENT,
-            resolved=assembly.manifest_resolver().resolve(parse_agent_manifest(AGENT_YAML)),
+            resolved=assembly.source.resolver().resolve(parse_agent_manifest(AGENT_YAML)),
         )
 
 
@@ -210,7 +210,7 @@ async def test_no_policy_does_not_grant_or_import(store, tmp_path):
     installer, _ = _install(tmp_path, MODULE + f"\nPath({str(marker)!r}).touch()\n")
     marker.unlink()  # build 在发布侧 import；安装和声明解析不 import。
     assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
-    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(AGENT_YAML))
+    resolved = assembly.source.resolver().resolve(parse_agent_manifest(AGENT_YAML))
     assert not marker.exists()
     materializer = StartupGrantMaterializer(
         store=store, source=assembly.source, actor=ACTOR, policy=None, workspace_root=str(tmp_path)
@@ -337,7 +337,7 @@ async def test_installed_content_only_package_uses_granted_content_service(store
     installer.install(source)
     shutil.rmtree(source)
     assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
-    resolved = assembly.manifest_resolver().resolve(
+    resolved = assembly.source.resolver().resolve(
         parse_agent_manifest(AGENT_YAML.replace("  - ref: acme.reports.render\n", ""))
     )
     materializer = StartupGrantMaterializer(
@@ -429,7 +429,7 @@ async def test_external_package_cannot_shadow_builtin_alias(store, tmp_path):
     )
     with pytest.raises(StartupGrantError, match="别名冲突"):
         await materializer.materialize(
-            agent=AGENT, resolved=assembly.manifest_resolver().resolve(manifest)
+            agent=AGENT, resolved=assembly.source.resolver().resolve(manifest)
         )
 
 
@@ -462,7 +462,7 @@ async def test_same_member_in_two_packages_routes_by_qualified_name(store, tmp_p
     installer.install(second)
     assembly = AbilityAssembly.select("builtin", install_root=str(installer.root))
     manifest = AGENT_YAML + "  - ref: acme.other.render\nsurface: {mode: progressive}\n"
-    resolved = assembly.manifest_resolver().resolve(parse_agent_manifest(manifest))
+    resolved = assembly.source.resolver().resolve(parse_agent_manifest(manifest))
     resolved.config = replace(resolved.config, agent_id=AGENT, workspace_root=str(tmp_path))
     materializer = StartupGrantMaterializer(
         store=store,

@@ -52,7 +52,6 @@ from ghrah.protocol.types import (
     GetAgentInfoPayload,
     HITLResponsePayload,
     ListAgentsPayload,
-    RegisterAbilityPayload,
     SendMessagePayload,
     SessionActivatePayload,
     SessionArchivePayload,
@@ -61,7 +60,6 @@ from ghrah.protocol.types import (
     SessionListPayload,
     SpawnAgentPayload,
     TerminateAgentPayload,
-    UnregisterAbilityPayload,
     generate_request_id,
 )
 
@@ -80,11 +78,6 @@ from ghrah.ability.surface.config import (
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.core.ability_protocol import AbilityProtocol
-from ghrah.core.config.builders import (
-    build_context_from_dict,
-    build_model_overrides_from_dict,
-    build_window_from_dict,
-)
 from ghrah.core.event_publisher import EventPublisher
 from ghrah.core.events import (
     ActionChainUpdatedEvent,
@@ -173,15 +166,6 @@ class CoreUnitConfig:
             供 manifest_ref spawn 解析 agent manifest。None = standalone
             模式（manifest_ref spawn 明确报错，对齐 ROOM_BRIDGE_UNAVAILABLE
             模式）。Subject 挂载模式下注入其 ManifestStore。
-        ability_source: 能力来源装配模式（``legacy`` / ``builtin``）。
-            ``legacy`` **已废弃**：仅保留旧部署兼容，不在权限治理范围内
-            （有效权限合并、只读、权限位与危险命令白名单等保证只在
-            ``builtin`` 生效），不要把它当作受治理或安全的装配方式。
-            ``builtin`` 是受支持的路径：能力声明、工具实例与 Skill 读取
-            服务同源，解析失败直接报错，不回退旧注册表。
-        default_abilities: spawn 未显式传 abilities 时注入的能力名列表
-            （透传 SupervisorActor.default_abilities——部署方显式声明，
-            非隐式兜底；None = 未配置，spawn(None) raise）。
         max_cluster_members: 集群成员上限（spawn 时超限 raise；
             透传 SupervisorActor.max_cluster_members，<=0 表示不限制）。
         surface_definition_token_ratio: 定义 token 占模型上下文窗口比例的
@@ -216,14 +200,10 @@ class CoreUnitConfig:
     llm_factory: Callable[[Any], Any] | None = None
     # duck-typed ManifestStoreProtocol；None = standalone（manifest_ref spawn 报错）
     manifest_store: Any = None
-    # 能力来源装配模式（legacy = 旧注册表，已废弃且不参与
-    # 权限治理；builtin = 新版 ghrah.ability 受治理路径）。装配点显式选择；
-    # 未选择时保持 legacy 仅为旧部署兼容。
-    ability_source: str = "legacy"
+    ability_source: str = "builtin"
     # 本地包 Provider 的显式安装根；None 不读取安装存储。
     ability_install_root: str | None = None
     ability_filesystem_roots: tuple[str, ...] = ()
-    default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
     # 工具表面阈值：本层只承载配置，表面装配读取；默认值单源在
     # ghrah.ability.surface.config。显式 static 的绝对上限固定 64，不开放配置。
@@ -465,11 +445,6 @@ class UnitEventPublisher(EventPublisher):
             logger.exception(f"Failed to emit core:{event_type} for agent {event.agent_name}")
 
 
-# ----------------------------------------------------------------
-# Ability 实例化（移植自旧 WS 服务器形态的 router::_create_ability_from_def）
-# ----------------------------------------------------------------
-
-
 def _agent_config_to_wire(config: AgentConfig) -> dict[str, Any]:
     """AgentConfig → wire 事件 dict（对齐 AgentConfigPayload 字段，供 AGENT_SPAWNED 事件）。"""
     import dataclasses
@@ -488,107 +463,6 @@ def _agent_config_to_wire(config: AgentConfig) -> dict[str, Any]:
             dataclasses.asdict(config.model_overrides) if config.model_overrides else None
         ),
     }
-
-
-def _create_ability_from_def(
-    ability_def: Any,
-    *,
-    command_runner: Any = None,
-    auto_approve_abilities: tuple[str, ...] = (),
-    require_approval_by_default: bool = True,
-    safe_extra_commands: tuple[str, ...] = (),
-    safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
-) -> AbilityProtocol:
-    """将 AbilityDefinitionPayload 转换为 Ability 实例。
-
-    仅服务于已废弃的 ``ability_source=legacy`` 直传能力入口，不参与本轮
-    权限治理：只按 wire ``params`` 内的原始字段构造检查器，不做有效权限
-    合并、只读约束、权限位与 ``denied_*`` 执行，不能作为权限或安全依据。
-
-    与原 server/router.py 的 ``_create_ability_from_def`` 共享同一套常量与
-    AbilityRegistry.create 工厂：
-    1. 文件系统类（FS_ABILITY_TYPES）：将 require_hitl/allowed_paths/
-       denied_paths/workspace_root 原始字段转换为 FSPermissionChecker。
-    2. execute_command：将 require_approval 标记转换为
-       CommandSafetyChecker + CommandApprovalHook 注入构造函数。
-    3. end_task：统一 mode="toolcall"。
-
-    HITL 运行时覆盖层（语义平移自 subject 侧旧 HITLPolicy）：
-    - ``auto_approve_abilities`` 白名单 → 强制免审批（覆盖 manifest
-      require_hitl=True）；
-    - manifest 未声明审批字段时 → ``require_approval_by_default`` 兜底。
-    决策优先级：auto_approve > manifest 显式声明 > 兜底默认。
-
-    ``command_runner`` 非 None 时注入 execute_command（Subject 挂载模式的
-    SandboxExecutor；None = standalone 直跑 subprocess）。
-    """
-    from ghrah.abilities import (
-        FS_ABILITY_TYPES,
-        AbilityRegistry,
-        AccessApprovalHook,
-        CommandApprovalHook,
-        CommandSafetyChecker,
-        FSPermissionChecker,
-    )
-
-    params = dict(ability_def.params) if ability_def.params else {}
-    ability_type = ability_def.ability_type
-    auto_approved = ability_type in auto_approve_abilities
-
-    _fs_permission_keys = {"require_hitl", "allowed_paths", "denied_paths", "workspace_root"}
-
-    if ability_type in FS_ABILITY_TYPES and _fs_permission_keys & set(params.keys()):
-        fs_params = {k: params.pop(k) for k in _fs_permission_keys if k in params}
-        allowed_paths = fs_params.get("allowed_paths")
-        denied_paths = fs_params.get("denied_paths")
-        workspace_root = fs_params.get("workspace_root")
-        # HITL 覆盖层：auto_approve > manifest require_hitl > 兜底默认
-        if auto_approved:
-            require_approval = False
-        elif "require_hitl" in fs_params and isinstance(fs_params["require_hitl"], bool):
-            require_approval = fs_params["require_hitl"]
-        else:
-            require_approval = require_approval_by_default
-        checker = FSPermissionChecker(
-            allowed_paths=allowed_paths,
-            workspace_root=workspace_root,
-            denied_paths=denied_paths,
-            require_approval=require_approval,
-        )
-        params["permission_checker"] = checker
-        # require_hitl 声明必须经 PRE_EXECUTE Hook 生效：FS ability 内联检查
-        # 只区分允许/拒绝，(True, "pending") 需由此 Hook 转为 HITL 等待，
-        # 否则白名单外访问会被静默放行（审批断链）。require_approval=False
-        # 时不挂——白名单外维持直接拒绝，不产生审批卡。
-        if require_approval:
-            params["hooks"] = [AccessApprovalHook(checker)]
-
-    if ability_type == "execute_command":
-        # HITL 覆盖层：auto_approve > manifest require_approval > 兜底默认
-        manifest_requirement = params.pop("require_approval", None)
-        if auto_approved:
-            require_approval = False
-        elif manifest_requirement is not None:
-            require_approval = bool(manifest_requirement)
-        else:
-            require_approval = require_approval_by_default
-        command_checker = CommandSafetyChecker(require_approval=require_approval)
-        # 部署方 safe 白名单扩展（只增不减，与内置并集）
-        if safe_extra_commands or safe_extra_sub_commands:
-            sub_map = dict(safe_extra_sub_commands) if safe_extra_sub_commands else None
-            command_checker.extend_safe_lists(
-                extra_commands=safe_extra_commands,
-                extra_sub_commands=sub_map,
-            )
-        params["command_checker"] = command_checker
-        params["hooks"] = [CommandApprovalHook(command_checker)]
-        if command_runner is not None:
-            params["command_runner"] = command_runner
-
-    if ability_type == "end_task":
-        params["mode"] = "toolcall"
-
-    return AbilityRegistry.create(ability_type, **params)
 
 
 # ----------------------------------------------------------------
@@ -633,7 +507,7 @@ class CoreUnit:
         self._hitl_promises = HITLPromiseRegistry()
         # 装配模式在 init(ctx) 时确定（需要 manifest_store 等装配期输入）。
         self._assembly: AbilityAssembly | None = None
-        # 授权装配边界（builtin 模式唯一入口）；None = 未接线或 legacy 模式。
+        # 授权装配边界（builtin 模式唯一入口）；None = 未接线。
         self._startup_materializer: Any = None
         self._mcp_deployment: Any = None
 
@@ -676,12 +550,7 @@ class CoreUnit:
 
     @property
     def ability_source(self) -> str:
-        """能力来源装配模式（``legacy`` / ``builtin``）。
-
-        供观察与诊断读取，不参与选择；模式值非法时同样在此报错（不猜测）。
-        """
-        if self._assembly is not None:
-            return self._assembly.mode.value
+        """返回已配置的 v1 能力来源。"""
         return AbilitySourceMode.parse(self._config.ability_source).value
 
     def _require_assembly(self) -> AbilityAssembly:
@@ -744,23 +613,16 @@ class CoreUnit:
 
             if not isinstance(self._config.mcp, McpDeploymentConfig):
                 raise TypeError("mcp 必须是 McpDeploymentConfig 或 None")
-            if not assembly.is_builtin or self._config.ability_store is None:
+            if self._config.ability_store is None:
                 raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
             self._mcp_deployment = McpDeployment(
                 self._config.mcp, self._config.ability_store, self._config.cluster_id
             )
-        if assembly.is_builtin and self._config.default_abilities is not None:
-            logger.warning(
-                "CoreUnit: ability_source=builtin ignores default_abilities=%r — "
-                "spawn an agent through a manifest_ref instead",
-                self._config.default_abilities,
-            )
-
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
         # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
         # （不再回退按模板实例化）。
         startup_materializer: Any = None
-        if assembly.is_builtin and self._config.ability_store is not None:
+        if self._config.ability_store is not None:
             from ghrah.ability.access import build_startup_materializer
 
             startup_materializer = build_startup_materializer(
@@ -787,16 +649,11 @@ class CoreUnit:
             cluster_id=self._config.cluster_id,
             event_publisher=self._publisher,
             room_bridge=room_bridge,
-            default_abilities=(
-                list(self._config.default_abilities)
-                if self._config.default_abilities is not None and not assembly.is_builtin
-                else None
-            ),
             max_cluster_members=self._config.max_cluster_members,
             manifest_store=self._config.manifest_store,
             llm_factory=self._config.llm_factory,
             message_manager=self._config.message_manager,
-            builtin_abilities=assembly.is_builtin,
+            builtin_abilities=True,
             ability_materializer=startup_materializer,
             host_command_port=self._host_command_port,
             host_command_grants=self._config.host_command_grants,
@@ -1000,8 +857,7 @@ class CoreUnit:
     ) -> None:
         """将环境快照写入已实例化的 SessionInfoAbility（duck-typed best-effort）。
 
-        SessionInfoAbility 经 AbilityRegistry 裸实例化（无参），静态部署
-        快照由本方法在 spawn 装配期回填——快照单一真源在
+        SessionInfoAbility 在能力包物化后接收部署快照。快照的来源是
         ``_environment_snapshot``，此处只做单向派生注入。
 
         Args:
@@ -1050,230 +906,83 @@ class CoreUnit:
         from uuid import uuid4
 
         sp = SpawnAgentPayload.model_validate(payload)
-        if self._require_assembly().is_builtin and not sp.config.agent_id:
+        if not sp.config.agent_id:
             config = sp.config.model_copy(update={"agent_id": uuid4().hex})
             sp = sp.model_copy(update={"config": config})
-        if self._require_assembly().is_builtin:
-            from ghrah.ability.access.identity import validate_agent_id
+        from ghrah.ability.access.identity import validate_agent_id
 
-            validate_agent_id(sp.config.agent_id)
+        validate_agent_id(sp.config.agent_id)
         config = AgentConfig(name=sp.config.name, agent_id=sp.config.agent_id)
         supervisor = self._require_supervisor()
         try:
             async with supervisor.spawn_reservation(config):
-                return await self._handle_reserved_spawn(sp.model_dump(), cmd_ctx)
+                return await self._handle_reserved_spawn(sp)
         except RegistryError as error:
             return self._err(str(error))
 
-    async def _handle_reserved_spawn(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
-        """spawn_agent — 接收 SpawnAgentPayload。
-
-        manifest_ref 路径：CoreUnit 内按装配模式解析 manifest 并直接构造工具
-        （对齐独立库 ``examples/agents_manifest/runner`` 范式，不经 wire
-        DTO 往返）；无 manifest_ref 时消费 Observer 直传的
-        ``AbilityDefinitionPayload`` 列表（真跨 WS 路径，wire DTO 合理存在）。
-
-        装配模式为 ``builtin`` 时，直传定义与「不传能力」两条旧入口都显式拒绝：
-        它们只由旧注册表服务，混用会让同一 Agent 的工具实例来自两套来源。
-        """
-        assembly = self._require_assembly()
-
+    async def _handle_reserved_spawn(self, sp: SpawnAgentPayload) -> dict[str, Any]:
+        """在持有预留时解析模板并核定启动授权。"""
+        source = self._require_assembly().source
         supervisor = self._require_supervisor()
-        sp = SpawnAgentPayload.model_validate(payload)
         self._validate_project(sp.project_id)
         if sp.cluster_id and sp.cluster_id != self._config.cluster_id:
             raise ValueError("cluster_id_mismatch")
-        logger.info(f"CoreUnit.spawn_agent: name={sp.config.name}")
-
-        # ── manifest_ref 路径：CoreUnit 内解析 + 直接构造 Ability（不经 wire DTO） ──
-        if sp.manifest_ref:
-            if self._config.manifest_store is None:
-                return self._err("manifest_store not available (standalone)")
-            try:
-                manifest = assembly.load_agent(sp.manifest_ref)
-                resolved = assembly.manifest_resolver().resolve(
-                    manifest, runtime_name=sp.config.name or None
-                )
-            except Exception as e:
-                logger.exception("CoreUnit.spawn_agent: manifest resolve failed: %s", e)
-                return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
-            if sp.validate_model:
-                self._validate_model_config(resolved.config.endpoint_name)
-            resolved.config = replace(resolved.config, agent_id=sp.config.agent_id)
-            supervisor.check_spawn(resolved.config)
-            # builtin：授权装配边界；legacy：旧装配实例化。builtin 未接线关系库
-            # 时抛 StartupGrantError，不再回退按模板实例化。
-            materialization = await self._materialize_builtin_abilities(
-                resolved.config.effective_agent_id, resolved
-            )
-            ability_instances = materialization.abilities if materialization else None
-            tool_table_projector = (
-                self._startup_materializer.tool_table_projector(
-                    resolved.config.effective_agent_id, materialization
-                )
-                if materialization is not None and self._startup_materializer is not None
-                else None
-            )
-            if ability_instances is None:
-                ability_instances = assembly.instantiate(
-                    resolved.abilities,
-                    workspace_root=self._config.workspace_root,
-                    auto_approve_abilities=self._config.auto_approve_abilities,
-                    require_approval_by_default=self._config.require_approval_by_default,
-                    command_runner=self._config.command_runner,
-                    safe_extra_commands=self._config.safe_extra_commands,
-                    safe_extra_sub_commands=self._config.safe_extra_sub_commands,
-                )
-            if not ability_instances:
-                # fail-closed：manifest 全 non-builtin/解析出 0 能力时明确报错，
-                # 不落入 default_abilities 或任何隐式注入（零隐式）。
-                return self._err(
-                    f"manifest '{sp.manifest_ref}' resolved 0 abilities for agent "
-                    f"'{sp.config.name}' — fix the manifest or spawn with explicit "
-                    f"abilities; refusing implicit defaults"
-                )
-            try:
-                resolved_config = replace(
-                    resolved.config,
-                    agent_id=sp.config.agent_id,
-                )
-                if self._config.environment_injection:
-                    resolved_config = replace(
-                        resolved_config,
-                        environment_context_injection=True,
-                        environment_info=self._environment_snapshot(ability_instances),
-                    )
-                    self._inject_session_info_snapshot(ability_instances, resolved_config)
-                agent_name = await supervisor.spawn_agent(
-                    resolved_config,
-                    abilities=ability_instances,
-                    persistence_factory=self._config.persistence_factory,
-                    llm_factory=self._config.llm_factory,
-                    tags=list(manifest.metadata.tags),
-                    tool_table_projector=tool_table_projector,
-                )
-            except RegistryError as e:
-                return self._err(str(e))
-            recovery_mode = supervisor.recovery_mode(agent_name)
-            incarnation_id = supervisor.incarnation_id(agent_name)
-            self._apply_hitl_timeout(agent_name)
-            self._emit_event(
-                EventType.AGENT_SPAWNED.value,
-                {
-                    "name": agent_name,
-                    "agent_id": resolved_config.effective_agent_id,
-                    "config": _agent_config_to_wire(resolved_config),
-                    "recovery_mode": recovery_mode,
-                    "incarnation_id": incarnation_id,
-                },
-            )
-            return self._ok(
-                {
-                    "name": agent_name,
-                    "agent_id": resolved_config.effective_agent_id,
-                    "recovery_mode": recovery_mode,
-                    "incarnation_id": incarnation_id,
-                }
-            )
-
-        # ── 直传 abilities 路径（无 manifest_ref，Observer 直传 wire DTO） ──
-        # None → default_abilities（CoreUnitConfig 显式配置）；未配置 → raise。
-        # 空 abilities 列表在 wire 上不可能出现（AbilityDefinitionPayload
-        # 非 None 即非空），防御性映射为明确报错而非隐式注入。
-        if assembly.is_builtin:
-            # 两条旧入口都只由旧注册表服务：直传定义经 AbilityRegistry 实例化，
-            # 省略 abilities 走 default_abilities（同样经旧注册表）。新模式没有
-            # 等价物，因此显式拒绝，而不是降级或静默补默认。
-            if sp.abilities:
-                assembly.refuse(
-                    "direct-abilities spawn",
-                    "explicit wire ability definitions are instantiated by the legacy "
-                    "registry; declare abilities in a version 2 agent manifest and spawn "
-                    "with manifest_ref",
-                )
-            assembly.refuse(
-                "default-abilities spawn",
-                "spawning without explicit abilities would fall back to the legacy default "
-                "ability set; declare abilities in a version 2 agent manifest and spawn "
-                "with manifest_ref",
-            )
-        core_config = AgentConfig(
-            name=sp.config.name,
-            agent_id=sp.config.agent_id,
-            endpoint_name=sp.config.endpoint_name,
-            description=sp.config.description,
-            system_prompt=sp.config.system_prompt,
-            max_iterations=sp.config.max_iterations,
-            communication_timeout=sp.config.communication_timeout,
-            window=(build_window_from_dict(sp.config.window) if sp.config.window else None),
-            context=(build_context_from_dict(sp.config.context) if sp.config.context else None),
-            model_overrides=(
-                build_model_overrides_from_dict(sp.config.model_overrides)
-                if sp.config.model_overrides
-                else None
-            ),
-            workspace_root=self._config.workspace_root,
-        )
-        # 环境快照在 abilities 实例化后组装（需从 FS checker 收集授权根）；
-        # 注入开关关闭时 session_info 工具同样拿不到快照——快照仅此一处组装。
-
-        if sp.validate_model:
-            self._validate_model_config(core_config.endpoint_name)
-        ability_instances = None
         if sp.abilities:
-            ability_instances = []
-            for ability_def in sp.abilities:
-                try:
-                    ability = _create_ability_from_def(
-                        ability_def,
-                        command_runner=self._config.command_runner,
-                        auto_approve_abilities=self._config.auto_approve_abilities,
-                        require_approval_by_default=(self._config.require_approval_by_default),
-                        safe_extra_commands=self._config.safe_extra_commands,
-                        safe_extra_sub_commands=self._config.safe_extra_sub_commands,
-                    )
-                    ability_instances.append(ability)
-                except KeyError as e:
-                    return self._err(
-                        f"Unknown ability type '{ability_def.ability_type}' "
-                        f"for agent '{sp.config.name}': {e}"
-                    )
-                except (TypeError, ValueError) as e:
-                    return self._err(
-                        f"Invalid params for ability '{ability_def.ability_type}' "
-                        f"for agent '{sp.config.name}': {e}"
-                    )
-        # 直传路径的快照组装晚于 abilities 实例化（checker 授权根可收集），
-        # 与 manifest_ref 路径共用 _inject_session_info_snapshot。
-        if self._config.environment_injection and ability_instances is not None:
-            core_config = replace(
-                core_config,
-                environment_context_injection=True,
-                environment_info=self._environment_snapshot(ability_instances),
+            AbilityAssembly.refuse(
+                "direct-abilities spawn",
+                "wire ability definitions used the legacy registry; use manifest_ref",
             )
-            self._inject_session_info_snapshot(ability_instances, core_config)
-
+        if not sp.manifest_ref:
+            AbilityAssembly.refuse(
+                "default-abilities spawn", "use manifest_ref instead of a default ability set"
+            )
+        if self._config.manifest_store is None:
+            return self._err("manifest_store not available (standalone)")
         try:
+            manifest = source.load_agent(sp.manifest_ref)
+            resolved = source.resolver().resolve(manifest, runtime_name=sp.config.name or None)
+        except Exception as e:
+            logger.exception("CoreUnit.spawn_agent: manifest resolve failed: %s", e)
+            return self._err(f"manifest resolve failed for '{sp.manifest_ref}': {e}")
+        if sp.validate_model:
+            self._validate_model_config(resolved.config.endpoint_name)
+        resolved.config = replace(resolved.config, agent_id=sp.config.agent_id)
+        supervisor.check_spawn(resolved.config)
+        materialization = await self._materialize_builtin_abilities(
+            resolved.config.effective_agent_id, resolved
+        )
+        ability_instances = materialization.abilities
+        tool_table_projector = self._startup_materializer.tool_table_projector(
+            resolved.config.effective_agent_id, materialization
+        )
+        try:
+            resolved_config = resolved.config
+            if self._config.environment_injection:
+                resolved_config = replace(
+                    resolved_config,
+                    environment_context_injection=True,
+                    environment_info=self._environment_snapshot(ability_instances),
+                )
+                self._inject_session_info_snapshot(ability_instances, resolved_config)
             agent_name = await supervisor.spawn_agent(
-                core_config,
+                resolved_config,
                 abilities=ability_instances,
                 persistence_factory=self._config.persistence_factory,
                 llm_factory=self._config.llm_factory,
+                tags=list(manifest.metadata.tags),
+                tool_table_projector=tool_table_projector,
             )
         except RegistryError as e:
             return self._err(str(e))
-
         recovery_mode = supervisor.recovery_mode(agent_name)
         incarnation_id = supervisor.incarnation_id(agent_name)
         self._apply_hitl_timeout(agent_name)
-
-        config_dict = sp.config.model_dump()
         self._emit_event(
             EventType.AGENT_SPAWNED.value,
             {
                 "name": agent_name,
-                "agent_id": core_config.effective_agent_id,
-                "config": config_dict,
+                "agent_id": resolved_config.effective_agent_id,
+                "config": _agent_config_to_wire(resolved_config),
                 "recovery_mode": recovery_mode,
                 "incarnation_id": incarnation_id,
             },
@@ -1281,32 +990,14 @@ class CoreUnit:
         return self._ok(
             {
                 "name": agent_name,
-                "agent_id": core_config.effective_agent_id,
+                "agent_id": resolved_config.effective_agent_id,
                 "recovery_mode": recovery_mode,
                 "incarnation_id": incarnation_id,
             }
         )
 
-    async def _materialize_builtin_abilities(self, agent: str, resolved: Any) -> Any | None:
-        """builtin 模式：经授权装配边界物化工具表。
-
-        边界在 ``init`` 装配期构造一次；未注入启动授权关系库时直接失败，
-        不再保留“按模板实例化工具”的过渡退路。legacy 模式返回 None，由调用
-        方按旧装配实例化。
-
-        Args:
-            agent: 正在启动的稳定 Agent ID。
-            resolved: 已解析的 Agent 模板。
-
-        Returns:
-            启动物化结果（工具表 + 工具绑定）；legacy 模式返回 None。
-
-        Raises:
-            StartupGrantError: builtin 模式未接线授权关系库，或核定失败。
-        """
-        assembly = self._require_assembly()
-        if not assembly.is_builtin:
-            return None
+    async def _materialize_builtin_abilities(self, agent: str, resolved: Any) -> Any:
+        """经授权装配边界物化工具表。"""
         from ghrah.ability.access import StartupGrantError
 
         materializer = self._startup_materializer
@@ -1435,47 +1126,15 @@ class CoreUnit:
     async def _handle_register_ability(
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any]:
-        supervisor = self._require_supervisor()
-        assembly = self._require_assembly()
-        if assembly.is_builtin:
-            # 运行期注册会另立一套可写工具权威：谁被授予、哪些成员进工具表
-            # 由能力关系库决定，而不是由一条命令追加实例。新模式没有等价
-            # 语义，明确拒绝而不是把它接到旧注册表上。
-            assembly.refuse(
-                "register_ability",
-                "a running agent's tool set is projected from the ability access store; "
-                "there is no writable registration authority under the builtin source",
-            )
-        rp = RegisterAbilityPayload.model_validate(payload)
-        self._validate_agent(rp.project_id, rp.agent_id, rp.agent_name)
-        result = await supervisor.register_ability_for_agent(
-            agent_name=rp.agent_name,
-            ability_type=rp.ability.ability_type,
-            ability_params=rp.ability.params,
+        return self._err(
+            "register_ability is retired; configure tool selection in the ability access store"
         )
-        return self._ok({"agent_name": rp.agent_name, "ability": result, "registered": True})
 
     async def _handle_unregister_ability(
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any]:
-        supervisor = self._require_supervisor()
-        assembly = self._require_assembly()
-        if assembly.is_builtin:
-            assembly.refuse(
-                "unregister_ability",
-                "tool removal under the builtin source follows the ability access store "
-                "(revoke / unbind), not a runtime registration command",
-            )
-        up = UnregisterAbilityPayload.model_validate(payload)
-        self._validate_agent(up.project_id, up.agent_id, up.agent_name)
-        agent_handle = await supervisor.get_agent_handle(up.agent_name)
-        await agent_handle.unregister_ability(up.ability_name)
-        return self._ok(
-            {
-                "agent_name": up.agent_name,
-                "ability": up.ability_name,
-                "unregistered": True,
-            }
+        return self._err(
+            "unregister_ability is retired; revoke or unbind in the ability access store"
         )
 
     # ----------------------------------------------------------------
@@ -1575,18 +1234,12 @@ class CoreUnit:
         agent_handle = await supervisor.get_agent_handle(gp.name)
         state = agent_handle.get_state()
         abilities = agent_handle.get_abilities()
-        available_ability_types: list[str] = []
-        if self._require_assembly().is_legacy:
-            from ghrah.abilities.registry import AbilityRegistry
-
-            available_ability_types = sorted(AbilityRegistry.list_types())
-
         return self._ok(
             {
                 "name": gp.name,
                 "state": state,
                 "abilities": abilities,
-                "available_ability_types": available_ability_types,
+                "available_ability_types": [],
                 "context_usage": agent_handle.get_context_usage_snapshot(),
             }
         )

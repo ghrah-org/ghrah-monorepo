@@ -43,11 +43,7 @@ class AgentEntityManager:
 
     def available_ability_types(self) -> list[str]:
         """返回允许通过旧类型接口配置的能力目录。"""
-        if self._projects.ability_source == "builtin":
-            return []
-        from ghrah.abilities.registry import AbilityRegistry
-
-        return sorted(AbilityRegistry.list_types())
+        return []
 
     @staticmethod
     def model_catalog() -> dict[str, Any]:
@@ -339,22 +335,10 @@ class AgentEntityManager:
                 project, agent = await self._save(project, agent, changes)
                 return await self._snapshot(project, agent)
             if kind == "abilities.configure":
-                if self._projects.ability_source == "builtin":
-                    raise StableError(
-                        "abilities_managed_by_access_store",
-                        "Use ability grants and tool selection to configure this Agent",
-                    )
-                if agent.desired_state != "stopped" or runtime["availability"] != "offline":
-                    raise StableError("agent_must_be_stopped")
-                if agent.manifest_ref:
-                    raise StableError("abilities_managed_by_manifest")
-                from ghrah.abilities.registry import AbilityRegistry
-
-                names = op["ability_types"]
-                if len(set(names)) != len(names) or any(not AbilityRegistry.has(n) for n in names):
-                    raise StableError("invalid_ability_types")
-                project, agent = await self._save(project, agent, {"abilities": names})
-                return await self._snapshot(project, agent)
+                raise StableError(
+                    "abilities_managed_by_access_store",
+                    "Use ability grants and tool selection to configure this Agent",
+                )
             if kind == "start":
                 if project.status != ProjectStatus.ACTIVE:
                     raise StableError("project_not_active")
