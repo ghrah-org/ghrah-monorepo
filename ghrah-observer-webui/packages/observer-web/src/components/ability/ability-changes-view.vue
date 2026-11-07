@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import type { AbilityChangeView } from "@ghrah/protocol";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 defineProps<{ changes: AbilityChangeView[]; hasMore: boolean; loading: boolean }>();
 const emit = defineEmits<{ more: [] }>();
@@ -24,15 +25,15 @@ const { t } = useI18n();
         <p>{{ t("assembly.changes.source", { source: change.source }) }}</p>
       </li>
     </ul>
-    <button
+    <UiButton
       v-if="hasMore"
       type="button"
-      class="btn-secondary"
+      variant="secondary"
       :disabled="loading"
       @click="emit('more')"
     >
       {{ t("assembly.changes.more") }}
-    </button>
+    </UiButton>
   </div>
 </template>
 

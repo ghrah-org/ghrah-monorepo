@@ -20,6 +20,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import AgentActionMenu from "@/components/agent-action-menu.vue";
 import AgentUsageRing from "@/components/agent-usage-ring.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -81,9 +82,9 @@ function selectAgent(agent: AgentInfo) {
         <span class="section-eyebrow">{{ t("agents.runtime") }}</span>
         <h3>{{ t("agents.title") }}</h3>
       </div>
-      <button type="button" class="btn-primary" @click="emit('openSettings', 'agents')">
+      <UiButton type="button" variant="primary" @click="emit('openSettings', 'agents')">
         {{ t("agents.spawn") }}
-      </button>
+      </UiButton>
     </div>
 
     <ul v-if="visibleAgents.length > 0" class="flex-1 overflow-y-auto space-y-1">

@@ -10,6 +10,7 @@ import { useI18n } from "vue-i18n";
 import { Document, parseDocument } from "yaml";
 import BaseModal from "@/components/ui/base-modal.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const emit = defineEmits<{ close: []; dirtyChange: [dirty: boolean] }>();
 
@@ -193,24 +194,24 @@ async function handleSubmit(save = true) {
     <!-- Scrollable form body -->
     <form class="manifest-create-form space-y-5" @submit.prevent="handleSubmit(true)">
       <div class="manifest-modes">
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :aria-pressed="mode === 'form'"
           :disabled="loading"
           @click="switchMode('form')"
         >
           {{ t("config.manifest.formMode") }}
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :aria-pressed="mode === 'yaml'"
           :disabled="loading"
           @click="switchMode('yaml')"
         >
           {{ t("config.manifest.yamlMode") }}
-        </button>
+        </UiButton>
       </div>
       <div
         v-if="error"
@@ -429,20 +430,20 @@ async function handleSubmit(save = true) {
         <!-- Actions -->
       </fieldset>
       <div class="flex justify-end gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
-        <button type="button" class="btn-secondary" :disabled="loading" @click="requestClose">
+        <UiButton type="button" variant="secondary" :disabled="loading" @click="requestClose">
           {{ t("common.cancel") }}
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="loading || !canSubmit"
           @click="handleSubmit(false)"
         >
           {{ t("config.agent.validate") }}
-        </button>
-        <button type="submit" class="btn-primary" :disabled="loading || !canSubmit">
+        </UiButton>
+        <UiButton type="submit" variant="primary" :disabled="loading || !canSubmit">
           {{ loading ? t("config.manifest.creating") : t("config.manifest.create") }}
-        </button>
+        </UiButton>
       </div>
     </form>
   </BaseModal>

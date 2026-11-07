@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import type { AgentManifestInfo } from "@ghrah/observer-core";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -55,15 +56,15 @@ defineEmits<{
       </span>
     </div>
     <div class="flex gap-1 mt-2">
-      <button class="btn-primary text-xs px-2 py-0.5" @click.stop="$emit('spawn')">
+      <UiButton class="text-xs px-2 py-0.5" variant="primary" @click.stop="$emit('spawn')">
         {{ t("config.agent.spawn") }}
-      </button>
-      <button class="btn-secondary text-xs px-2 py-0.5" @click.stop="$emit('edit')">
+      </UiButton>
+      <UiButton class="text-xs px-2 py-0.5" variant="secondary" @click.stop="$emit('edit')">
         {{ t("config.agent.editYaml") }}
-      </button>
-      <button class="btn-danger text-xs px-2 py-0.5" @click.stop="$emit('delete')">
+      </UiButton>
+      <UiButton class="text-xs px-2 py-0.5" variant="danger" @click.stop="$emit('delete')">
         {{ t("config.agent.delete") }}
-      </button>
+      </UiButton>
     </div>
   </div>
 </template>

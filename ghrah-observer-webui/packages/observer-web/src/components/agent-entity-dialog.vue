@@ -12,6 +12,7 @@ import { useI18n } from "vue-i18n";
 import { z } from "zod";
 import BaseModal from "./ui/base-modal.vue";
 import { useAgentEntityRequest } from "@/composables/useAgentEntity";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string; agentId?: string }>();
 const emit = defineEmits<{ close: []; changed: []; created: [agentId: string] }>();
@@ -363,12 +364,12 @@ onMounted(() => {
     >
       <div class="entity-body">
         <div class="entity-actions">
-          <button class="btn-secondary" :disabled="busy || !connected" @click="refresh">
+          <UiButton variant="secondary" :disabled="busy || !connected" @click="refresh">
             {{ t("agentEntity.refresh") }}
-          </button>
-          <button v-if="busy" class="btn-secondary" @click="stopWaiting">
+          </UiButton>
+          <UiButton v-if="busy" variant="secondary" @click="stopWaiting">
             {{ t("communication.stopWaiting") }}
-          </button>
+          </UiButton>
           <span v-if="busy" role="status">{{ t("common.loading") }}</span>
         </div>
         <p v-if="!connected" role="status">{{ t("agents.notConnected") }}</p>
@@ -431,38 +432,38 @@ onMounted(() => {
             }}</label
           >
           <p>{{ t("agentEntity.createHint") }}</p>
-          <button class="btn-primary" type="submit" :disabled="!canCreate">
+          <UiButton variant="primary" type="submit" :disabled="!canCreate">
             {{ t("agentEntity.create") }}
-          </button>
+          </UiButton>
         </form>
         <template v-else-if="snapshot">
           <p class="entity-identity">
             {{ snapshot.identity.project_id }} / {{ snapshot.identity.agent_id }}
           </p>
           <nav class="entity-actions" :aria-label="t('agentEntity.sections')">
-            <button
+            <UiButton
               v-for="item in tabs"
               :key="item"
-              class="btn-secondary"
+              variant="secondary"
               :aria-pressed="tab === item"
               :disabled="busy"
               @click="changeTab(item)"
             >
               {{ t(`agentEntity.tabs.${item}`) }}
-            </button>
+            </UiButton>
           </nav>
           <div v-if="confirmation" class="entity-card" role="alert">
             <p>{{ confirmation.label }}</p>
             <div class="entity-actions">
-              <button
-                class="btn-primary"
+              <UiButton
+                variant="primary"
                 :disabled="!writable"
                 @click="mutate(confirmation!.action)"
               >
-                {{ t("agentEntity.confirm") }}</button
-              ><button class="btn-secondary" @click="confirmation = null">
+                {{ t("agentEntity.confirm") }}</UiButton
+              ><UiButton variant="secondary" @click="confirmation = null">
                 {{ t("common.cancel") }}
-              </button>
+              </UiButton>
             </div>
           </div>
           <section v-if="tab === 'overview'" class="entity-stack">
@@ -492,8 +493,8 @@ onMounted(() => {
               {{ t("agentEntity.tabs.mailbox") }}: {{ snapshot.mailbox.error }}
             </p>
             <div class="entity-actions">
-              <button
-                class="btn-primary"
+              <UiButton
+                variant="primary"
                 :disabled="
                   !writable ||
                   !active ||
@@ -503,9 +504,9 @@ onMounted(() => {
                 "
                 @click="startAgent"
               >
-                {{ t("agentEntity.start") }}</button
-              ><button
-                class="btn-secondary"
+                {{ t("agentEntity.start") }}</UiButton
+              ><UiButton
+                variant="secondary"
                 :disabled="
                   !writable ||
                   snapshot.runtime.availability === 'unknown' ||
@@ -515,7 +516,7 @@ onMounted(() => {
                 @click="confirmStop"
               >
                 {{ t("agentEntity.stop") }}
-              </button>
+              </UiButton>
             </div>
             <p>{{ t("agentEntity.lifecycleHint") }}</p>
             <p>{{ t("agentEntity.modelHint") }}</p>
@@ -532,13 +533,13 @@ onMounted(() => {
               </label>
               <p v-if="!modelNames.length">{{ t("agentEntity.noModelConfigs") }}</p>
               <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
-              <button
-                class="btn-secondary"
+              <UiButton
+                variant="secondary"
                 :disabled="!canConfigure || !modelName"
                 @click="saveModel"
               >
                 {{ t("agentEntity.saveModel") }}
-              </button>
+              </UiButton>
             </template>
             <div class="entity-stack entity-card">
               <label>
@@ -547,9 +548,9 @@ onMounted(() => {
               </label>
               <p>{{ t("agentEntity.entityPromptPending") }}</p>
               <div class="entity-actions">
-                <button class="btn-primary" disabled>
+                <UiButton variant="primary" disabled>
                   {{ t("common.save") }}
-                </button>
+                </UiButton>
               </div>
             </div>
           </section>
@@ -576,18 +577,18 @@ onMounted(() => {
                 >
               </div>
             </fieldset>
-            <button
-              class="btn-primary"
+            <UiButton
+              variant="primary"
               :disabled="!canConfigure || !selectedTypes.length"
               @click="saveAbilities"
             >
               {{ t("agentEntity.saveAbilities") }}
-            </button>
+            </UiButton>
           </section>
           <section v-if="tab === 'context'" class="entity-stack">
-            <button class="btn-secondary" :disabled="busy || !connected" @click="loadContext">
+            <UiButton variant="secondary" :disabled="busy || !connected" @click="loadContext">
               {{ t("agentEntity.reloadSessions") }}
-            </button>
+            </UiButton>
             <template v-if="catalog"
               ><p v-if="!catalog.sessions.length">{{ t("agentEntity.noSessions") }}</p>
               <label
@@ -627,19 +628,19 @@ onMounted(() => {
                 </select></label
               >
               <div class="entity-actions">
-                <button
-                  class="btn-secondary"
+                <UiButton
+                  variant="secondary"
                   :disabled="busy || !connected || !branchId"
                   @click="loadHistory"
                 >
-                  {{ t("agentEntity.history") }}</button
-                ><button
-                  class="btn-secondary"
+                  {{ t("agentEntity.history") }}</UiButton
+                ><UiButton
+                  variant="secondary"
                   :disabled="!canContext || !sessionId || sessionId === catalog.active_session_id"
                   @click="activateSession"
                 >
                   {{ t("agentEntity.activate") }}
-                </button>
+                </UiButton>
               </div>
             </template>
             <form class="entity-session-form" @submit.prevent="createSession">
@@ -657,9 +658,9 @@ onMounted(() => {
                 />
               </label>
               <p>{{ t("agentEntity.sessionPromptHint") }}</p>
-              <button class="btn-secondary" type="submit" :disabled="!canContext">
+              <UiButton variant="secondary" type="submit" :disabled="!canContext">
                 {{ t("agentEntity.createSession") }}
-              </button>
+              </UiButton>
             </form>
             <p>{{ t("agentEntity.historyHint") }}</p>
             <p v-if="historyLoaded && !nodes.length">{{ t("agentEntity.noHistory") }}</p>
@@ -691,9 +692,9 @@ onMounted(() => {
                 <option value="outbox">{{ t("agentEntity.outbox") }}</option>
               </select></label
             >
-            <button class="btn-secondary" :disabled="busy || !connected" @click="loadMail()">
+            <UiButton variant="secondary" :disabled="busy || !connected" @click="loadMail()">
               {{ t("agentEntity.reloadMessages") }}
-            </button>
+            </UiButton>
             <p v-if="mail && !mail.items.length">{{ t("agentEntity.noMessages") }}</p>
             <article
               v-for="item in mail?.items ?? []"
@@ -729,9 +730,9 @@ onMounted(() => {
                   "
                   class="entity-actions"
                 >
-                  <button
+                  <UiButton
                     v-if="!delivery.consumed_node_id && !delivery.blocked_reason"
-                    class="btn-secondary"
+                    variant="secondary"
                     :disabled="
                       !writable ||
                       !active ||
@@ -740,10 +741,10 @@ onMounted(() => {
                     "
                     @click="confirmDelivery(delivery.delivery_id, false)"
                   >
-                    {{ t("agentEntity.retry") }}</button
-                  ><button
+                    {{ t("agentEntity.retry") }}</UiButton
+                  ><UiButton
                     v-else
-                    class="btn-secondary"
+                    variant="secondary"
                     :disabled="
                       !writable ||
                       !active ||
@@ -753,18 +754,18 @@ onMounted(() => {
                     @click="confirmDelivery(delivery.delivery_id, true)"
                   >
                     {{ t("agentEntity.resume") }}
-                  </button>
+                  </UiButton>
                 </div>
               </div>
             </article>
-            <button
+            <UiButton
               v-if="mail?.next_before_seq"
-              class="btn-secondary"
+              variant="secondary"
               :disabled="busy || !connected"
               @click="loadMail(true)"
             >
               {{ t("agentEntity.more") }}
-            </button>
+            </UiButton>
           </section>
         </template>
       </div>

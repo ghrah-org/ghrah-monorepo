@@ -12,6 +12,7 @@ import { useI18n } from "vue-i18n";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
+import UiButton from "@/components/ui/button.vue";
 
 type PendingAction =
   | { kind: "archive-project" }
@@ -285,13 +286,13 @@ async function refreshAfterConflict() {
             type="text"
             :disabled="busy !== null"
           />
-          <button
+          <UiButton
             type="submit"
-            class="btn-primary"
+            variant="primary"
             :disabled="!dirty || !nameDraft.trim() || busy !== null"
           >
             {{ busy === "save" ? t("common.loading") : t("common.save") }}
-          </button>
+          </UiButton>
         </form>
       </section>
 
@@ -340,15 +341,15 @@ async function refreshAfterConflict() {
                 t("projectSettings.roomVersion", { version: archivedRoom.version })
               }}</small>
             </div>
-            <button
+            <UiButton
               type="button"
-              class="btn-secondary"
+              variant="secondary"
               :disabled="busy !== null || parentArchived"
               :title="parentArchived ? t('projectSettings.restoreProjectFirst') : undefined"
               @click="pendingAction = { kind: 'restore-room', room: archivedRoom }"
             >
               {{ t("projectSettings.restoreRoom") }}
-            </button>
+            </UiButton>
             <button
               type="button"
               class="archived-danger-toggle"
@@ -364,14 +365,14 @@ async function refreshAfterConflict() {
       <section class="project-settings-section project-lifecycle-section">
         <h3>{{ t("projectSettings.lifecycle") }}</h3>
         <p>{{ t("projectSettings.archiveHint") }}</p>
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="busy !== null"
           @click="pendingAction = { kind: 'archive-project' }"
         >
           {{ t("projectSettings.archive") }}
-        </button>
+        </UiButton>
       </section>
 
       <section class="project-danger-zone">

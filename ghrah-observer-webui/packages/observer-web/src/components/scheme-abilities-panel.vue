@@ -20,6 +20,7 @@ import {
 } from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -175,9 +176,9 @@ watch(
   <section class="scheme-abilities">
     <h3>{{ t("schemeAbilities.title") }}</h3>
     <p>{{ t("schemeAbilities.scope", { agent: agentId }) }}</p>
-    <button type="button" class="btn-secondary" :disabled="loading || saving" @click="refresh">
+    <UiButton type="button" variant="secondary" :disabled="loading || saving" @click="refresh">
       {{ t("schemeAbilities.refresh") }}
-    </button>
+    </UiButton>
     <p v-if="loading" role="status">{{ t("schemeAbilities.loading") }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="view">
@@ -203,9 +204,9 @@ watch(
           {{ t("schemeAbilities.toolName") }}
           <input v-model="toolName" :disabled="saving" />
         </label>
-        <button type="submit" class="btn-primary" :disabled="saving || !request">
+        <UiButton type="submit" variant="primary" :disabled="saving || !request">
           {{ t("schemeAbilities.bind") }}
-        </button>
+        </UiButton>
       </form>
       <h4>{{ t("schemeAbilities.content") }}</h4>
       <ul>
@@ -214,29 +215,29 @@ watch(
           <p>{{ t("schemeAbilities.version", { version: ability.version_digest }) }}</p>
           <template v-if="ability.skill">
             <p>{{ ability.skill.title }} — {{ ability.skill.description }}</p>
-            <button
+            <UiButton
               v-if="ability.skill.body_allowed"
               type="button"
-              class="btn-secondary"
+              variant="secondary"
               :disabled="reading"
               @click="
                 readContent(ability.alias, `skill/${ability.skill.key}`, ability.version_digest)
               "
             >
               {{ t("schemeAbilities.readBody") }}
-            </button>
+            </UiButton>
             <ul v-for="role in ['assets', 'references'] as const" :key="role">
               <li v-for="entry in ability.skill[role]" :key="entry.member">
                 <code>{{ role }}/{{ entry.key }}</code>
                 <span>{{ entry.media_type }} · {{ entry.size }}</span>
-                <button
+                <UiButton
                   type="button"
-                  class="btn-secondary"
+                  variant="secondary"
                   :disabled="reading"
                   @click="readContent(ability.alias, entry.member, ability.version_digest)"
                 >
                   {{ t("schemeAbilities.readContent") }}
-                </button>
+                </UiButton>
               </li>
             </ul>
           </template>
@@ -254,13 +255,13 @@ watch(
         </p>
         <pre v-if="content.encoding === 'utf-8'">{{ content.content }}</pre>
         <p v-else>{{ t("schemeAbilities.binary") }}</p>
-        <button type="button" class="btn-secondary" @click="downloadChunk">
+        <UiButton type="button" variant="secondary" @click="downloadChunk">
           {{ t("schemeAbilities.downloadChunk") }}
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           v-if="content.next_offset !== null && contentTarget"
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="reading"
           @click="
             readContent(
@@ -272,7 +273,7 @@ watch(
           "
         >
           {{ t("schemeAbilities.nextChunk") }}
-        </button>
+        </UiButton>
       </div>
       <h4>{{ t("schemeAbilities.bound") }}</h4>
       <p v-if="!view.bound_tools.length">{{ t("schemeAbilities.noTools") }}</p>
@@ -280,15 +281,15 @@ watch(
         <li v-for="tool in view.bound_tools" :key="tool.name">
           <code>{{ tool.name }}</code>
           <span>{{ tool.alias }}/{{ tool.member }}</span>
-          <button
+          <UiButton
             v-if="!readonly"
             type="button"
-            class="btn-secondary"
+            variant="secondary"
             :disabled="saving"
             @click="change(tool.name)"
           >
             {{ t("schemeAbilities.unbind") }}
-          </button>
+          </UiButton>
         </li>
       </ul>
     </template>

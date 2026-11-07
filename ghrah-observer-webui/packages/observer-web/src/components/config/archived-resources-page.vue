@@ -11,6 +11,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 type PendingAction =
   | { kind: "restore"; project: ProjectInfoPayload }
@@ -142,14 +143,14 @@ onMounted(refreshArchivedProjects);
         <h2>{{ t("config.archived.title") }}</h2>
         <p>{{ t("config.archived.description") }}</p>
       </div>
-      <button
+      <UiButton
         type="button"
-        class="btn-secondary"
+        variant="secondary"
         :disabled="busy !== null"
         @click="refreshArchivedProjects"
       >
         {{ busy === "refresh" ? t("common.loading") : t("config.archived.refresh") }}
-      </button>
+      </UiButton>
     </header>
 
     <div v-if="errorMessage" class="archived-resources-error" role="alert">
@@ -204,14 +205,14 @@ onMounted(refreshArchivedProjects);
               </div>
             </dl>
             <div class="archived-resource-actions">
-              <button
+              <UiButton
                 type="button"
-                class="btn-primary"
+                variant="primary"
                 :disabled="busy !== null"
                 @click="pendingAction = { kind: 'restore', project }"
               >
                 {{ t("config.archived.restore") }}
-              </button>
+              </UiButton>
               <button
                 type="button"
                 class="archived-danger-toggle"

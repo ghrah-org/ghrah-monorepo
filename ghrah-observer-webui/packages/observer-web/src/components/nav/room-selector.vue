@@ -14,6 +14,7 @@ import SidebarList from "@/components/ui/sidebar-list.vue";
 import SidebarRow from "@/components/ui/sidebar-row.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 const rooms = useRoomsStore();
@@ -146,10 +147,11 @@ async function runLifecycle() {
         <span class="section-eyebrow">{{ t("nav.room.workspace") }}</span>
         <h3>{{ t("nav.room.rooms") }}</h3>
       </div>
-      <button
+      <UiButton
         v-if="!creating"
         type="button"
-        class="btn-primary text-xs px-2 py-0.5"
+        class="text-xs px-2 py-0.5"
+        variant="primary"
         :disabled="!projects.activeProjectId"
         :title="t('nav.room.new')"
         @click="
@@ -158,7 +160,7 @@ async function runLifecycle() {
         "
       >
         + {{ t("common.create") }}
-      </button>
+      </UiButton>
     </div>
     <form v-if="creating" class="mb-2 flex gap-1" @submit.prevent="submitCreate">
       <input
@@ -169,14 +171,17 @@ async function runLifecycle() {
         class="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
         @keydown.esc="cancelCreate"
       />
-      <button
+      <UiButton
         type="submit"
-        class="btn-primary text-xs px-2 py-1"
+        class="text-xs px-2 py-1"
+        variant="primary"
         :disabled="busy || !newName.trim()"
       >
         {{ busy ? "…" : t("common.create") }}
-      </button>
-      <button type="button" class="btn-secondary text-xs px-2 py-1" @click="cancelCreate">✕</button>
+      </UiButton>
+      <UiButton type="button" class="text-xs px-2 py-1" variant="secondary" @click="cancelCreate"
+        >✕</UiButton
+      >
     </form>
     <SidebarList v-if="visibleRooms.length > 0" :label="t('nav.room.rooms')">
       <SidebarRow

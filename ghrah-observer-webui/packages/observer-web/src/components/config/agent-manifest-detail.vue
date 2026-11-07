@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import type { AgentManifestInfo } from "@ghrah/observer-core";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -97,15 +98,15 @@ function truncate(text: string, max: number): string {
     </div>
 
     <div class="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-800">
-      <button class="btn-primary text-xs" @click="$emit('spawn')">
+      <UiButton class="text-xs" variant="primary" @click="$emit('spawn')">
         {{ t("config.spawn.title") }}
-      </button>
-      <button class="btn-secondary text-xs" @click="$emit('edit')">
+      </UiButton>
+      <UiButton class="text-xs" variant="secondary" @click="$emit('edit')">
         {{ t("config.agent.editYaml") }}
-      </button>
-      <button class="btn-danger text-xs" @click="$emit('delete')">
+      </UiButton>
+      <UiButton class="text-xs" variant="danger" @click="$emit('delete')">
         {{ t("config.agent.delete") }}
-      </button>
+      </UiButton>
     </div>
   </div>
 </template>

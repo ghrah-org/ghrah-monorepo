@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import BaseModal from "./base-modal.vue";
+import UiButton from "@/components/ui/button.vue";
 
 withDefaults(
   defineProps<{
@@ -26,16 +27,17 @@ const { t } = useI18n();
   <BaseModal :title="title" size="sm" :show-close="false" @request-close="$emit('cancel')">
     <p class="confirm-dialog-message">{{ message }}</p>
     <template #footer>
-      <button type="button" class="btn-secondary" data-autofocus @click="$emit('cancel')">
+      <UiButton type="button" variant="secondary" data-autofocus @click="$emit('cancel')">
         {{ cancelLabel ?? t("common.cancel") }}
-      </button>
-      <button
+      </UiButton>
+      <UiButton
         type="button"
-        :class="danger ? 'btn-primary confirm-dialog-danger' : 'btn-primary'"
+        variant="primary"
+        :class="danger ? 'confirm-dialog-danger' : undefined"
         @click="$emit('confirm')"
       >
         {{ confirmLabel ?? t("common.confirm") }}
-      </button>
+      </UiButton>
     </template>
   </BaseModal>
 </template>

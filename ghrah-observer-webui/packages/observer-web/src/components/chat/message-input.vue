@@ -8,6 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 import type { RoomMember } from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -177,9 +178,14 @@ const placeholder = computed(() =>
           @{{ agent.name }}
         </li>
       </ul>
-      <button type="submit" :disabled="props.disabled || !input.trim()" class="btn-primary text-sm">
+      <UiButton
+        type="submit"
+        :disabled="props.disabled || !input.trim()"
+        class="text-sm"
+        variant="primary"
+      >
         {{ t("chat.input.send") }}
-      </button>
+      </UiButton>
     </div>
 
     <div class="text-xs text-gray-400 dark:text-gray-500">{{ t("chat.input.hint") }}</div>

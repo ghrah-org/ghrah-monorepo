@@ -9,6 +9,7 @@ import type { HitlRequest } from "@ghrah/observer-core";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -103,22 +104,22 @@ async function handleRejectSubmit() {
         :placeholder="t('hitl.reasonPlaceholder')"
       />
       <div class="flex gap-2">
-        <button class="btn-danger" :disabled="loading" @click="handleRejectSubmit">
+        <UiButton variant="danger" :disabled="loading" @click="handleRejectSubmit">
           {{ t("hitl.confirmReject") }}
-        </button>
-        <button class="btn-secondary" @click="showRejectForm = false">
+        </UiButton>
+        <UiButton variant="secondary" @click="showRejectForm = false">
           {{ t("common.cancel") }}
-        </button>
+        </UiButton>
       </div>
     </div>
 
     <div v-else class="flex gap-2 pl-5">
-      <button class="btn-primary" :disabled="loading" @click="handleApprove">
+      <UiButton variant="primary" :disabled="loading" @click="handleApprove">
         {{ t("hitl.approve") }}
-      </button>
-      <button class="btn-danger" :disabled="loading" @click="showRejectForm = true">
+      </UiButton>
+      <UiButton variant="danger" :disabled="loading" @click="showRejectForm = true">
         {{ t("hitl.reject") }}
-      </button>
+      </UiButton>
     </div>
   </li>
 </template>

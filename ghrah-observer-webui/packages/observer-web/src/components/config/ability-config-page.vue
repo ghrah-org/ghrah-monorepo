@@ -8,6 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 import { useAbilityPackagesStore } from "@ghrah/observer-core";
 import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 defineEmits<{ dirtyChange: [dirty: boolean] }>();
 const packages = useAbilityPackagesStore();
@@ -49,9 +50,9 @@ onUnmounted(() => packages.setSettingsVisible(false));
       {{ t("assembly.catalog.installHidden") }}
     </p>
     <p>{{ t("assembly.catalog.empty") }}</p>
-    <button type="button" class="btn-secondary" @click="packages.load()">
+    <UiButton type="button" variant="secondary" @click="packages.load()">
       {{ t("assembly.catalog.refresh") }}
-    </button>
+    </UiButton>
   </section>
 </template>
 

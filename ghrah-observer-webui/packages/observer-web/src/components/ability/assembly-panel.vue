@@ -14,6 +14,7 @@ import {
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AssemblyDetail from "./assembly-detail.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string }>();
 const admin = useAbilityAdminStore();
@@ -112,9 +113,9 @@ onUnmounted(hide);
       <p>{{ t("assembly.headerRunning", { count: runningCount }) }}</p>
       <p v-if="packages.loading">{{ t("assembly.loading") }}</p>
       <p v-if="packages.failed" role="alert">{{ t("assembly.loadFailed") }}</p>
-      <button v-if="packages.failed" type="button" class="btn-secondary" @click="packages.load()">
+      <UiButton v-if="packages.failed" type="button" variant="secondary" @click="packages.load()">
         {{ t("assembly.retry") }}
-      </button>
+      </UiButton>
     </header>
     <div class="assembly-body">
       <div class="assembly-agents">

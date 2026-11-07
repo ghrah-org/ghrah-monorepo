@@ -11,6 +11,7 @@ import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{
   manifest: AgentManifestInfo;
@@ -97,12 +98,12 @@ async function handleSubmit() {
       <div v-if="errorMsg" class="text-red-600 dark:text-red-400 text-sm">{{ errorMsg }}</div>
 
       <div class="flex justify-end gap-2">
-        <button type="button" class="btn-secondary" :disabled="loading" @click="requestClose">
+        <UiButton type="button" variant="secondary" :disabled="loading" @click="requestClose">
           {{ t("common.cancel") }}
-        </button>
-        <button type="submit" class="btn-primary" :disabled="loading || !runtimeName.trim()">
+        </UiButton>
+        <UiButton type="submit" variant="primary" :disabled="loading || !runtimeName.trim()">
           {{ loading ? t("config.spawn.spawning") : t("config.spawn.spawn") }}
-        </button>
+        </UiButton>
       </div>
     </form>
   </BaseModal>

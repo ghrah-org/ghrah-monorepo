@@ -106,7 +106,7 @@ describe("AgentList", () => {
 
   it("opens Agent settings from Spawn", async () => {
     const wrapper = mountAgentList();
-    await wrapper.get(".btn-primary").trigger("click");
+    await wrapper.get(".ui-button-primary").trigger("click");
     expect(wrapper.emitted("openSettings")?.[0]).toEqual(["agents"]);
   });
 

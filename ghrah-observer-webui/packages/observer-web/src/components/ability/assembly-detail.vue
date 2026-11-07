@@ -15,6 +15,7 @@ import AbilityTreeView from "./ability-tree-view.vue";
 import GrantEditor from "./grant-editor.vue";
 import RespawnBanner from "./respawn-banner.vue";
 import ToolSelector from "./tool-selector.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string; agentId: string }>();
 const admin = useAbilityAdminStore();
@@ -92,14 +93,14 @@ onUnmounted(hide);
     <template v-else>
       <p v-if="record?.loading">{{ t("assembly.loading") }}</p>
       <p v-if="record?.failed" role="alert">{{ t("assembly.loadFailed") }}</p>
-      <button
+      <UiButton
         v-if="record?.failed"
         type="button"
-        class="btn-secondary"
+        variant="secondary"
         @click="admin.load(projectId, agentId)"
       >
         {{ t("assembly.retry") }}
-      </button>
+      </UiButton>
       <RespawnBanner
         :requires-respawn="view?.lifecycle.requires_respawn === true"
         :conflict="record?.conflict === true"

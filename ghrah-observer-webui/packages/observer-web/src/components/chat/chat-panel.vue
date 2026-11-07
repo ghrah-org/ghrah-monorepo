@@ -22,6 +22,7 @@ import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 import MessageInput from "./message-input.vue";
 import RoomDetailDrawer, { type DeliveryDiagnostic } from "./room-detail-drawer.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{
   projectId: string;
@@ -267,16 +268,16 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
         <h3 class="room-header-title">{{ room ? room.name : t("chat.name") }}</h3>
         <p v-if="room" class="room-header-meta">{{ roomMeta }}</p>
       </div>
-      <button
+      <UiButton
         v-if="room"
         type="button"
-        class="btn-secondary"
+        variant="secondary"
         :aria-expanded="detailOpen"
         aria-controls="room-detail-drawer"
         @click="detailOpen = !detailOpen"
       >
         {{ t("chat.detail.open") }}
-      </button>
+      </UiButton>
     </header>
 
     <div

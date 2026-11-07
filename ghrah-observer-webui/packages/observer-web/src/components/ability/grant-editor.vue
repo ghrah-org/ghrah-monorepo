@@ -9,6 +9,7 @@ import type { AbilityGrantView, GrantAbilityRequest } from "@ghrah/protocol";
 import { grantOperationKeys, replacementGrant } from "@ghrah/observer-core";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{
   grant: AbilityGrantView;
@@ -134,12 +135,12 @@ function save() {
         </p>
       </div>
     </fieldset>
-    <button type="submit" class="btn-secondary" :disabled="busy || !canSave">
+    <UiButton type="submit" variant="secondary" :disabled="busy || !canSave">
       {{ t("assembly.grants.save") }}
-    </button>
-    <button type="button" class="btn-secondary" :disabled="busy" @click="emit('revoke')">
+    </UiButton>
+    <UiButton type="button" variant="secondary" :disabled="busy" @click="emit('revoke')">
       {{ t("assembly.grants.revoke") }}
-    </button>
+    </UiButton>
   </form>
 </template>
 
