@@ -81,9 +81,15 @@ class FSPermissionChecker:
         require_approval: bool = True,
         deny_all_paths: bool = False,
         read_only: bool = False,
+        sandbox_roots: tuple[str, ...] | None = None,
     ) -> None:
         self._allowed_paths = self._normalize_paths(allowed_paths) if allowed_paths else None
         self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
+        self._sandbox_roots = (
+            self._normalize_paths(list(sandbox_roots))
+            if sandbox_roots is not None
+            else ([self._workspace_root] if self._workspace_root is not None else None)
+        )
         self._denied_paths = self._normalize_paths(denied_paths) if denied_paths else None
         self._require_approval = require_approval
         self._deny_all_paths = deny_all_paths
@@ -107,9 +113,9 @@ class FSPermissionChecker:
 
     def _is_in_workspace(self, resolved: Path) -> bool:
         """检查已解析路径是否在工作路径下（严格前缀匹配）。"""
-        if self._workspace_root is None:
+        if self._sandbox_roots is None:
             return False
-        return is_subpath(resolved, self._workspace_root)
+        return any(is_subpath(resolved, root) for root in self._sandbox_roots)
 
     def _is_in_denied_paths(self, resolved: Path) -> bool:
         """检查已解析路径是否在黑名单中（严格前缀匹配）。黑名单优先于白名单。"""
@@ -155,10 +161,13 @@ class FSPermissionChecker:
         resolved = self._resolve(path)
 
         # 沙盒硬边界：审批只决定“范围外是否问人”，不能放宽沙盒本身。
-        if self._workspace_root is not None and not is_subpath(resolved, self._workspace_root):
+        if self._sandbox_roots is not None and not any(
+            is_subpath(resolved, root) for root in self._sandbox_roots
+        ):
+            sandbox = ", ".join(str(root) for root in self._sandbox_roots)
             return False, (
                 f"Permission denied: {path} is outside workspace sandbox "
-                f"{self._workspace_root}; allowed roots: {self._describe_allowed_roots()}"
+                f"{sandbox}; allowed roots: {self._describe_allowed_roots()}"
             )
 
         if self._is_in_denied_paths(resolved):

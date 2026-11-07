@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ghrah.protocol.ability_tree import (
@@ -115,6 +114,7 @@ async def migrate_agent(
     *,
     grants: Sequence[MigrationGrant],
     workspace_root: str | None,
+    filesystem_roots: tuple[str, ...] = (),
 ) -> MigrationResult:
     """一次性写入已部署 Agent 的初始获授。
 
@@ -163,7 +163,6 @@ async def migrate_agent(
             f"agent '{agent}' 已有获授事实（{sorted(record.alias for record in existing)}）；"
             "迁移只写初始 grant，不覆盖既有授权"
         )
-    roots = (str(Path(workspace_root).resolve()),) if workspace_root else ()
     revision = await store.agent_revision(actor, agent)
     written: list[str] = []
     for entry in entries:
@@ -176,6 +175,7 @@ async def migrate_agent(
                 package=entry.package,
                 members=set(entry.members),
                 workspace_root=workspace_root,
+                filesystem_roots=filesystem_roots,
             )
         except StartupGrantError as error:
             raise MigrationError(str(error)) from error
@@ -183,7 +183,7 @@ async def migrate_agent(
             alias=alias,
             instance_id=registered.instance.instance_id,
             members=list(entry.members),
-            allowed_roots=list(roots),
+            allowed_roots=list(registered.instance.allowed_roots),
             skills=list(entry.skills),
             axes=list(entry.axes),
             expected_revision=revision,

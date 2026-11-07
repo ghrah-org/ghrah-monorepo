@@ -571,3 +571,49 @@ surface:
             assert not rejected["success"]
         finally:
             await registry.stop()
+
+
+async def test_subject_propagates_explicit_filesystem_roots(tmp_path):
+    """生产工厂将文件根传到授权与执行层，模型可读取第二个目录。"""
+    from ast import literal_eval
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    target = repository / "readme.txt"
+    target.write_text("repository content", encoding="utf-8")
+    model = ContentLLM(
+        [[ToolCallBlock(id="read", name="read_file", arguments={"file_path": str(target)})]]
+    )
+
+    class Store:
+        def load_agent(self, _name):
+            return parse_agent_manifest(
+                "manifest: agent\nversion: '2'\n"
+                "metadata: {namespace: content, name: reader}\n"
+                "model: {endpoint_name: default}\nsystem_prompt: Read the repository.\n"
+                "abilities:\n  - type: conversation\n  - ref: ghrah.fs.read_file\n"
+            )
+
+    cfg = config(tmp_path, policy=GrantPolicy())
+    cfg.ability.filesystem_roots = (cfg.workspace_root, str(repository))
+    registry = CoreClusterRegistry(
+        unit_factory=default_core_unit_factory(cfg, Store(), lambda _: model)
+    )
+    async with Context() as context:
+        registry.bind(context)
+        try:
+            cluster = await registry.ensure_cluster(
+                "cluster", project_id="project", project_root_locator=str(tmp_path / "project")
+            )
+            await spawn(cluster._unit)
+            await cluster._unit.supervisor.send("reader", "read repository")
+            results = [
+                block
+                for message in model.calls[-1]
+                for block in getattr(message, "tool_results", [])
+                if block.tool_call_id == "read"
+            ]
+            assert len(results) == 1
+            assert literal_eval(results[0].content)["content"] == "repository content"
+        finally:
+            await registry.stop()

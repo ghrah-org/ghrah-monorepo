@@ -338,7 +338,7 @@
           "revision": 1,
           "skill": null,
           "skills": [],
-          "version_digest": "sha256:a46bb006782c506ae013ab5e8676323efccfacc31f4aa513783f60594ab1ed19"
+          "version_digest": "sha256:b663e821795ffe8f0475766f166278a66a43cb5ba7006b5b691b2b775aca23f3"
         }
       ],
       "agent_id": "alice",
@@ -688,7 +688,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:a46bb006782c506ae013ab5e8676323efccfacc31f4aa513783f60594ab1ed19"
+        "version_digest": "sha256:b663e821795ffe8f0475766f166278a66a43cb5ba7006b5b691b2b775aca23f3"
       }
     ],
     "agent_id": "alice",
@@ -1491,7 +1491,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:a46bb006782c506ae013ab5e8676323efccfacc31f4aa513783f60594ab1ed19"
+        "version_digest": "sha256:b663e821795ffe8f0475766f166278a66a43cb5ba7006b5b691b2b775aca23f3"
       }
     ],
     "agent_id": "alice",
@@ -1850,7 +1850,7 @@
         "revision": 1,
         "skill": null,
         "skills": [],
-        "version_digest": "sha256:a46bb006782c506ae013ab5e8676323efccfacc31f4aa513783f60594ab1ed19"
+        "version_digest": "sha256:b663e821795ffe8f0475766f166278a66a43cb5ba7006b5b691b2b775aca23f3"
       }
     ],
     "agent_id": "alice",

@@ -53,6 +53,7 @@ class EffectivePermission:
         denied_paths: 硬拒绝的绝对路径根。
         allowed_commands: 自动批准的命令；``None`` 表示未声明范围。
         denied_commands: 硬拒绝的命令。
+        sandbox_roots: 部署方指定的文件硬边界，缺省时使用工作区根。
     """
 
     require_hitl: bool = False
@@ -64,6 +65,7 @@ class EffectivePermission:
     denied_paths: tuple[str, ...] = ()
     allowed_commands: tuple[str, ...] | None = None
     denied_commands: tuple[str, ...] = ()
+    sandbox_roots: tuple[str, ...] | None = None
 
     @property
     def unbounded_paths(self) -> bool:

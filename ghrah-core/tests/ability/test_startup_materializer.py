@@ -231,6 +231,66 @@ async def test_projected_ability_executes_read_file(store, tmp_path):
     assert outcome.data["content"] == "w1 content"
 
 
+async def test_filesystem_roots_survive_restore_and_deny_common_parent(store, tmp_path):
+    """两个显式文件根可读，公共父目录与符号链接越界仍由接纳层拒绝。"""
+    primary = tmp_path / "workspace"
+    extra = tmp_path / "repository"
+    primary.mkdir()
+    extra.mkdir()
+    first = primary / "first.txt"
+    second = extra / "second.txt"
+    outside = tmp_path / "private.txt"
+    first.write_text("workspace")
+    second.write_text("repository")
+    outside.write_text("private")
+    roots = (str(primary), str(extra))
+    assembly, resolved = _resolved(AGENT_YAML)
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    from ghrah.ability.access.migration import MigrationGrant, migrate_agent
+
+    await migrate_agent(
+        store,
+        agent,
+        grants=[MigrationGrant(package="ghrah.fs", members=("read_file", "list_directory"))],
+        workspace_root=str(primary),
+        filesystem_roots=roots,
+    )
+    for policy in (None, GrantPolicy(), None):
+        materializer = _materializer(
+            store, assembly, primary, policy=policy, filesystem_roots=roots
+        )
+        try:
+            result = await materializer.materialize(agent=agent, resolved=resolved)
+            read = next(item for item in result.abilities if item.name == "read_file")
+            for path, expected in ((first, "workspace"), (second, "repository")):
+                outcome = await read.execute(
+                    make_call(arguments={"file_path": str(path)}), make_services()
+                )
+                assert outcome.outcome.value == "success", outcome.data
+                assert outcome.data["content"] == expected
+            refused = await read.execute(
+                make_call(arguments={"file_path": str(outside)}), make_services()
+            )
+            assert refused.outcome.value == "failure"
+            record = next(
+                record for record in await store.grants(DEPLOY, agent) if record.alias == "fs"
+            )
+            assert set(record.roots) == set(roots)
+            assert (await store.instance(record.instance_id))["root"] == str(tmp_path)
+        finally:
+            await materializer.close_agent_resources(agent)
+    if hasattr(Path, "symlink_to"):
+        link = extra / "escape"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            return
+        from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+        checker = FSPermissionChecker(workspace_root=str(primary), sandbox_roots=roots)
+        assert checker.check_read_path(str(link))[0] is False
+
+
 async def test_replace_policy_grants_whole_package(store, tmp_path):
     """replace 模式下策略给出完整集合；整包展开带来模板未申请的工具。"""
     assembly, resolved = _resolved(AGENT_YAML)

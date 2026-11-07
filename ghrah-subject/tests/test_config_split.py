@@ -48,6 +48,18 @@ def test_ability_install_root_is_explicit(monkeypatch, tmp_path):
         SubjectConfig(ability=AbilityConfig(install_root=str(tmp_path)))
 
 
+def test_ability_filesystem_roots_from_environment(monkeypatch, tmp_path):
+    import json
+
+    roots = [str(tmp_path / "workspace"), str(tmp_path / "repo")]
+    monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_FILESYSTEM_ROOTS", json.dumps(roots))
+    assert set(SubjectConfig.from_env().ability.filesystem_roots) == set(roots)
+    for invalid in ('"/tmp"', '["relative"]', "[null]"):
+        monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_FILESYSTEM_ROOTS", invalid)
+        with pytest.raises(ValueError, match="绝对路径列表"):
+            SubjectConfig.from_env()
+
+
 class TestFlatFieldCompat:
     """旧 flat 字段保留，旧构造调用零改动。"""
 

@@ -59,6 +59,8 @@ legacy 模式**不在权限治理范围内**：能力声明、工具实例与 Sk
 策略中的 `agent` 都使用稳定 Agent ID，显示名不作为授权键。未提供 ID 的新建入口
 在受信装配处生成 UUID；恢复原主体时需要携带原 ID。
 
+需要文件能力访问多个目录时，可以显式设置 `GHRAH_SUBJECT_ABILITY_FILESYSTEM_ROOTS` 为绝对路径的 JSON 数组。文件检查器与关系授权使用这些根的并集，实例公共父目录仅用于定位路径。默认工作目录和 `{{workspace}}` 仍由原工作区配置提供。
+
 稳定 ID 必须是 32 位小写十六进制 UUID；直接传显示名、空 ID 的程序化装配、策略
 中的名称键和迁移快照中的名称键都会被拒绝。新建顶层/子 Agent 由装配者生成 ID；
 程序化调用需在物化前分配 ID，并在 `supervisor.spawn_reservation(config)` 内完成

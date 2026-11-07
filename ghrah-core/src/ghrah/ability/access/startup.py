@@ -23,6 +23,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from importlib import import_module
+from os.path import commonpath
 from pathlib import Path
 from typing import Any
 
@@ -348,6 +349,7 @@ async def register_package_instance(
     members: set[str],
     workspace_root: str | None,
     source: Any = None,
+    filesystem_roots: tuple[str, ...] = (),
 ) -> RegisteredPackage:
     """捕获包版本并登记实例；启动核定与迁移 bootstrap 共用这一条登记路径。
 
@@ -387,6 +389,16 @@ async def register_package_instance(
         )
     definition = version.definition().model_dump(mode="json")
     file_members = sorted(member for member in members if file_member_paths(definition, member))
+    roots = tuple(sorted({str(Path(p).resolve()) for p in filesystem_roots}))
+    if any(not Path(p).is_absolute() for p in filesystem_roots):
+        raise StartupGrantError("文件沙盒根必须是绝对路径")
+    has_file_members = any(file_member_paths(definition, key) for key in definition["operations"])
+    if not roots or not has_file_members:
+        roots = (str(Path(workspace_root).resolve()),) if workspace_root else ()
+    try:
+        instance_root = Path(commonpath(roots)) if roots else None
+    except ValueError as error:
+        raise StartupGrantError("文件沙盒根必须位于同一文件系统盘符") from error
     if not workspace_root and file_members:
         raise StartupGrantError(
             f"包 {package} 的文件类成员需要显式 workspace_root 才能授予：{file_members}"
@@ -402,7 +414,7 @@ async def register_package_instance(
         actor,
         instance_id,
         version.digest,
-        Path(workspace_root) if workspace_root else None,
+        instance_root,
         expected_revision=expected_revision,
     )
     alias = TypeAdapter(TreeKey).validate_python(container_definition.container_name)
@@ -412,7 +424,7 @@ async def register_package_instance(
         instance_id=instance_id,
         version_digest=version.digest,
         definition=definition,
-        allowed_roots=((str(Path(workspace_root).resolve()),) if workspace_root else ()),
+        allowed_roots=roots,
     )
     return RegisteredPackage(alias=alias, package=package, instance=instance, version=version)
 
@@ -428,6 +440,7 @@ class StartupGrantMaterializer:
         actor: AccessIdentity,
         policy: GrantPolicy | None,
         workspace_root: str | None,
+        filesystem_roots: tuple[str, ...] = (),
         auto_approve_abilities: tuple[str, ...] = (),
         require_approval_by_default: bool = True,
         command_runner: Any = None,
@@ -446,6 +459,7 @@ class StartupGrantMaterializer:
         self._actor = actor
         self._policy = policy
         self._workspace_root = workspace_root
+        self._filesystem_roots = filesystem_roots
         self._auto_approve_abilities = auto_approve_abilities
         self._require_approval_by_default = require_approval_by_default
         self._command_runner = command_runner
@@ -750,6 +764,7 @@ class StartupGrantMaterializer:
             members=members,
             workspace_root=self._workspace_root,
             source=self._source,
+            filesystem_roots=self._filesystem_roots,
         )
         return registered.instance, registered.version
 
@@ -862,6 +877,8 @@ class StartupGrantMaterializer:
                 template.requested_permissions if template is not None else None,
                 workspace_root=self._workspace_root,
             )
+            if file_member_paths(instance.definition, binding.member):
+                scope = replace(scope, sandbox_roots=instance.allowed_roots)
             if resolved.implementation.type == "python":
                 provider = self._source.packages
                 if provider is None:

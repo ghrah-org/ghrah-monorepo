@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import InitVar, dataclass, field
@@ -171,10 +172,19 @@ class AbilityConfig:
     """本地能力包来源配置；未来由独立 AbilityProvider 持有。"""
 
     install_root: str | None = None
+    filesystem_roots: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.install_root is not None and not Path(self.install_root).is_absolute():
             raise ValueError("ability.install_root 必须是绝对路径")
+        if not isinstance(self.filesystem_roots, (tuple, list)) or any(
+            not isinstance(root, str) or not Path(root).is_absolute()
+            for root in self.filesystem_roots
+        ):
+            raise ValueError("ability.filesystem_roots 必须是绝对路径列表")
+        self.filesystem_roots = tuple(
+            sorted({str(Path(p).resolve()) for p in self.filesystem_roots})
+        )
 
 
 @dataclass
@@ -725,7 +735,10 @@ class SubjectConfig:
             enabled_third_party_units=enabled_third_party_units,
             ability_source=os.environ.get("GHRAH_SUBJECT_ABILITY_SOURCE", "legacy"),
             ability=AbilityConfig(
-                install_root=os.environ.get("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT")
+                install_root=os.environ.get("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT"),
+                filesystem_roots=json.loads(
+                    os.environ.get("GHRAH_SUBJECT_ABILITY_FILESYSTEM_ROOTS", "[]")
+                ),
             ),
             project_slice=project_slice,
             recovery_slice=recovery_slice,

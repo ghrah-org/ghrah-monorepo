@@ -91,7 +91,11 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         summary: dict[str, Any] = {}
         for agent, grants in snapshot.items():
             result = await migrate_agent(
-                store, agent, grants=grants, workspace_root=args.workspace_root
+                store,
+                agent,
+                grants=grants,
+                workspace_root=args.workspace_root,
+                filesystem_roots=tuple(args.filesystem_root),
             )
             summary[agent] = {
                 "revision": result.revision,
@@ -108,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", required=True, help="项目数据库文件路径")
     parser.add_argument("--project-id", required=True, help="项目标识")
     parser.add_argument("--workspace-root", required=True, help="Agent 工作区根（文件成员沙盒）")
+    parser.add_argument(
+        "--filesystem-root", action="append", default=[], help="显式文件授权根，可重复指定"
+    )
     parser.add_argument("--snapshot", required=True, help="旧事实快照 JSON 路径")
     args = parser.parse_args(argv)
     try:

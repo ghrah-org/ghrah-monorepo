@@ -229,6 +229,7 @@ class CoreUnitConfig:
     ability_source: str = "legacy"
     # 本地包 Provider 的显式安装根；None 不读取安装存储。
     ability_install_root: str | None = None
+    ability_filesystem_roots: tuple[str, ...] = ()
     default_abilities: tuple[str, ...] | None = None
     max_cluster_members: int = 20
     # 工具表面阈值：本层只承载配置，表面装配读取；默认值单源在
@@ -844,6 +845,7 @@ class CoreUnit:
                 policy=self._config.ability_grant_policy,
                 workspace_root=self._config.workspace_root,
                 auto_approve_abilities=self._config.auto_approve_abilities,
+                filesystem_roots=self._config.ability_filesystem_roots,
                 require_approval_by_default=self._config.require_approval_by_default,
                 command_runner=self._config.command_runner,
                 safe_extra_commands=self._config.safe_extra_commands,

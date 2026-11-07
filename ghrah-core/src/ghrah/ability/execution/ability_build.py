@@ -240,6 +240,7 @@ def _make_fs_permission_checker(
         require_approval=require_approval,
         deny_all_paths=effective.allowed_paths == (),
         read_only=effective.fs_read_only or not effective.fs_write,
+        sandbox_roots=effective.sandbox_roots,
     )
 
 

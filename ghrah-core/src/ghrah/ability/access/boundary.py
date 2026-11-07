@@ -35,6 +35,7 @@ def build_startup_materializer(
     project_id: str,
     policy: Any,
     workspace_root: str | None,
+    filesystem_roots: tuple[str, ...] = (),
     auto_approve_abilities: tuple[str, ...] = (),
     require_approval_by_default: bool = True,
     command_runner: Any = None,
@@ -52,7 +53,8 @@ def build_startup_materializer(
         source: 新版能力来源（``BuiltinAbilitySource``），用成员视图构造工具。
         project_id: 项目标识，写入操作员身份。
         policy: 部署方启动策略；None = 不授予任何能力。
-        workspace_root: 工作区根，文件类成员的唯一沙盒。
+        workspace_root: 默认工作目录与路径变量的展开基准。
+        filesystem_roots: 部署方显式配置的文件硬边界。
         auto_approve_abilities: HITL 运行时覆盖层。
         require_approval_by_default: 未声明审批要求时的兜底策略。
         command_runner: 命令执行器注入（duck-typed）。
@@ -69,6 +71,7 @@ def build_startup_materializer(
         actor=AccessIdentity(project_id, "deployment", "deployment", True, "deployment"),
         policy=policy,
         workspace_root=workspace_root,
+        filesystem_roots=filesystem_roots,
         auto_approve_abilities=auto_approve_abilities,
         require_approval_by_default=require_approval_by_default,
         command_runner=command_runner,

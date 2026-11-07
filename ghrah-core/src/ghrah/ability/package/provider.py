@@ -348,6 +348,7 @@ class PythonOperation(Ability):
                 workspace_root=workspace_root,
                 require_approval=scope.require_hitl,
                 deny_all_paths=scope.allowed_paths == (),
+                sandbox_roots=scope.sandbox_roots,
                 read_only=scope.fs_read_only or not scope.fs_write,
             )
         )
