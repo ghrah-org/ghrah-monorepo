@@ -11,8 +11,15 @@ __all__ = ["AccessError"]
 
 
 class AccessError(ValueError):
-    """可映射为领域结果的明确拒绝。"""
+    """可映射为领域结果的明确拒绝。
 
-    def __init__(self, code: TreeErrorCode) -> None:
+    Args:
+        code: 协议闭集里的错误码；对外只暴露它。
+        reason: 进程内诊断原因（如 ``tool_revoked``、``arguments_out_of_scope``），
+            **不进协议**；只供执行入口翻译成更具体的模型可读文案，不泄露修订号。
+    """
+
+    def __init__(self, code: TreeErrorCode, reason: str | None = None) -> None:
         self.code = code
+        self.reason = reason
         super().__init__(code)

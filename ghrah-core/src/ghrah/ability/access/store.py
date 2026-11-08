@@ -1468,10 +1468,10 @@ class AbilityAccessStore:
     ) -> str:
         instance = await self._row("ability_instances", "id=?", fence.instance_id)
         if instance is None or instance["revision"] != fence.instance_revision:
-            raise AccessError("access_denied")
+            raise AccessError("access_denied", "version_changed")
         version = await self._row("ability_versions", "digest=?", instance["digest"])
         if fence.version_digest and fence.version_digest != instance["digest"]:
-            raise AccessError("access_denied")
+            raise AccessError("access_denied", "version_changed")
         definition = json.loads(version["definition"])
         if not self._version_available(version):
             raise AccessError("unavailable")
@@ -1495,9 +1495,10 @@ class AbilityAccessStore:
             grant = await self._row(
                 "ability_grants", "agent=? AND alias=?", fence.agent_id, fence.alias
             )
+            if grant is None:
+                raise AccessError("access_denied", "grant_revoked")
             if (
-                grant is None
-                or grant["revision"] != fence.grant_revision
+                grant["revision"] != fence.grant_revision
                 or grant["instance"] != fence.instance_id
                 or fence.member
                 not in json.loads(grant["content"] if is_content else grant["members"])
@@ -1515,9 +1516,10 @@ class AbilityAccessStore:
                 tool = await self._row(
                     "ability_tools", "agent=? AND name=?", fence.agent_id, fence.tool_name
                 )
+                if tool is None:
+                    raise AccessError("access_denied", "tool_revoked")
                 if (
-                    tool is None
-                    or tool["revision"] != fence.tool_revision
+                    tool["revision"] != fence.tool_revision
                     or tool["grant_revision"] != fence.grant_revision
                     or tool["alias"] != fence.alias
                     or tool["member"] != fence.member
@@ -1534,7 +1536,12 @@ class AbilityAccessStore:
                     raise AccessError("unavailable")
             if admission.contract == PYTHON_CONTRACT and self._version_availability is None:
                 raise AccessError("unavailable")
-            admission.check(fence.member, arguments, roots, instance["root"])
+            try:
+                admission.check(fence.member, arguments, roots, instance["root"])
+            except AccessError as error:
+                if error.code == "access_denied" and error.reason is None:
+                    raise AccessError("access_denied", "arguments_out_of_scope") from error
+                raise
         return f"{instance['digest']}:{fence.grant_revision}:{fence.tool_revision}"
 
     async def authorize(self, actor: AccessIdentity, fence: MemberFence) -> str:
@@ -1588,7 +1595,7 @@ class AbilityAccessStore:
         async with self._tx():
             tool = await self._row("ability_tools", "agent=? AND name=?", agent, tool_name)
             if tool is None:
-                raise AccessError("access_denied")
+                raise AccessError("access_denied", "tool_revoked")
             if expected_alias is not None and tool["alias"] != expected_alias:
                 raise AccessError("access_denied")
             if expected_member is not None and tool["member"] != expected_member:

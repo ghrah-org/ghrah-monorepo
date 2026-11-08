@@ -1048,9 +1048,9 @@ class StartupGrantMaterializer:
                     expected_member=binding.member,
                 )
             except AccessError as error:
-                return _denial(binding, error.code)
+                return _denial(binding, error.code, getattr(error, "reason", None))
             if version_digest and not basis.startswith(f"{version_digest}:"):
-                return _denial(binding, "access_denied")
+                return _denial(binding, "access_denied", "version_changed")
             return None
 
         return admit
@@ -1067,13 +1067,45 @@ class StartupGrantMaterializer:
         )
 
 
-def _denial(binding: StartupToolBinding, code: str) -> str:
-    """把接纳拒绝翻译成模型可读的错误；不泄露内部修订号。"""
+def _denial(binding: StartupToolBinding, code: str, reason: str | None = None) -> str:
+    """把接纳拒绝翻译成模型可读的错误；不泄露内部修订号。
+
+    ``code`` 是协议闭集里的拒绝码；``reason`` 是进程内诊断原因，用来把
+    「未授予 / 版本已变 / 参数越界」拆成不同文案——此前它们共用一句话，
+    排障时无法区分「权限被撤」与「路径越界」。
+
+    Args:
+        binding: 启动时固定的工具绑定。
+        code: 协议错误码。
+        reason: 进程内诊断原因（可选）。
+
+    Returns:
+        模型可读的拒绝说明。
+    """
     target = f"{binding.alias}/{binding.member}"
+    prefix = f"Access denied for tool '{binding.tool_name}' ({target}): "
+    if reason == "version_changed":
+        return (
+            prefix
+            + "it belongs to an earlier version of its ability package; restart this Agent so "
+            "its tools are rebuilt from the current version"
+        )
+    if reason in {"tool_revoked", "grant_revoked"}:
+        return (
+            prefix
+            + "its ability grant or tool binding was revoked or invalidated (for example by a "
+            "package upgrade); re-grant it or restart this Agent"
+        )
+    if reason == "arguments_out_of_scope":
+        return (
+            prefix
+            + "a path argument is outside its granted roots; the granted roots may be narrower "
+            "than the deployment's filesystem roots"
+        )
     if code == "access_denied":
         return (
-            f"Access denied for tool '{binding.tool_name}' ({target}): the member is not "
-            "currently granted, or the arguments are outside the granted scope"
+            prefix
+            + "the member is not currently granted, or the arguments are outside the granted scope"
         )
     if code == "invalid_change":
         return (
