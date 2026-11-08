@@ -235,7 +235,14 @@ def _build_context_manager(
             config.name,
         )
 
-    window_manager = None
+    # 窗口管理器恒建：预算落定/观测与消息压缩是两个独立职责。
+    # WindowManager 是预算的唯一载体（resolve_budget_from_capabilities 挂在它身上），
+    # 若仅在 config.window 非空时才建，则 agentconf 解析出的 max_context_length
+    # 无处落定，budget_tokens 恒为 0、budget_source 恒为 None——配置链在源头断开。
+    # 未声明 window 时给零策略管理器：只承载预算落定与观测，不改变消息管道
+    # （WindowManager.apply 对空策略返回浅拷贝，逐条消息不被改写）。
+    # 显式声明时行为与既往完全一致（含 strategies 与 compact 参数）。
+    message_factory = ChatMessageFactory()
     compact_kwargs: dict[str, Any] = {}
     if config.window is not None:
         summary_llm_factory = (lambda: llm_factory(config)) if llm_factory is not None else None
@@ -245,6 +252,13 @@ def _build_context_manager(
             "compact_keep_recent": config.window.compact_keep_recent,
             "compact_method": config.window.compact_method,
         }
+    else:
+        window_manager = WindowManager(
+            strategies=[],
+            max_tokens=None,
+            message_factory=message_factory,
+            estimator=estimator,
+        )
 
     context_config = config.context
     persistence = None
@@ -256,8 +270,6 @@ def _build_context_manager(
             context_config,
             agent_name=config.effective_agent_id,
         )
-
-    message_factory = ChatMessageFactory()
 
     return ContextManager(
         # name 是 cluster 内可读地址；action-chain 必须按稳定 UUID 分区，

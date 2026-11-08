@@ -536,13 +536,18 @@ class ActorAgent:
 
             # agentconf 已完成参考数据与模型覆盖的合并；缺少能力接口的
             # 注入客户端保留模型表兼容路径。declared/vendor 不受影响。
+            # 模型名须为 str 才查表：duck-typed/测试替身的 model 可能是非字符串，
+            # 而查表内部用 startswith 做前缀匹配，非字符串会静默命中首个前缀，
+            # 落定一个与真实模型无关的预算。宁可停在 default，不可编造预算。
             wm = self._context_manager.window_manager
             if wm is not None:
                 capabilities = getattr(self._llm, "model_capabilities", None)
                 if isinstance(capabilities, dict):
                     wm.resolve_budget_from_capabilities(capabilities)
                 else:
-                    wm.resolve_budget_from_model(self._llm.model)
+                    model_name = getattr(self._llm, "model", None)
+                    if isinstance(model_name, str):
+                        wm.resolve_budget_from_model(model_name)
 
             self._initialized = True
 
@@ -1016,19 +1021,25 @@ class ActorAgent:
                 # （warning + emergency 标记）。
                 # 窗口回填优先：报文含真实窗口数字时以厂商口径为真值
                 # 校正预算；校正后仍超限（或解析不到数字）回落减半阶梯。
+                # 门控按「是否显式声明窗口」而非「是否有 WindowManager」：
+                # 后者现恒真（预算载体恒建），若沿用会让未配置窗口的 Agent
+                # 从「超限即抛错」变成「静默压缩 + 摘要 LLM 调用」，属未经
+                # 声明的行为变更。本阶梯仍只服务显式要求压缩的 Agent。
+                emergency_wm = cm.window_manager
                 if (
                     _is_context_limit_error(e)
-                    and cm.window_manager is not None
+                    and self.config.window is not None
+                    and emergency_wm is not None
                     and emergency_halvings < _MAX_EMERGENCY_HALVINGS
                 ):
                     vendor_window = parse_vendor_window_tokens(str(e))
-                    if vendor_window is not None and vendor_window != cm.window_manager.max_tokens:
-                        cm.window_manager.correct_budget_from_vendor(vendor_window)
+                    if vendor_window is not None and vendor_window != emergency_wm.max_tokens:
+                        emergency_wm.correct_budget_from_vendor(vendor_window)
                         budget_override = vendor_window
                     elif vendor_window is not None:
                         # 预算已与厂商窗口一致仍超限 → 输出挤压所致，减半
                         emergency_halvings += 1
-                        budget_override = cm.window_manager.max_tokens // 2**emergency_halvings
+                        budget_override = emergency_wm.max_tokens // 2**emergency_halvings
                         logger.warning(
                             "ActorAgent[%s]: vendor context limit exceeded at corrected "
                             "budget — emergency compact (halving %d/4, budget=%d)",
@@ -1038,7 +1049,7 @@ class ActorAgent:
                         )
                     else:
                         emergency_halvings += 1
-                        budget_override = cm.window_manager.max_tokens // 2**emergency_halvings
+                        budget_override = emergency_wm.max_tokens // 2**emergency_halvings
                         logger.warning(
                             "ActorAgent[%s]: vendor context limit exceeded — emergency compact "
                             "(halving %d/4, budget=%d)",
@@ -1367,7 +1378,10 @@ class ActorAgent:
                 accumulated_data.update(hook_result.modified_context)
 
         # 2. 调用 LLM
-        if self.config.window is not None:
+        # pre_call 按「有无预算载体」发而非「有无显式窗口声明」：WindowManager 恒建，
+        # 故全体 Agent 均在此发布锚点相位。锚点可能为 None（首次/head 变更后），
+        # 这是诚实口径，由前端按 basis="anchor" 解读。
+        if cm.window_manager is not None:
             await self._publish_context_usage("pre_call")
         messages = await cm.get_llm_messages()
         if self._tool_surface is not None and self._tool_surface.progressive:
