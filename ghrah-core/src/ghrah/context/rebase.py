@@ -32,7 +32,6 @@ def create_rebased_context(
     inherit_messages: bool = True,
     inherit_state: bool = False,
     state_filter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    snapshot_interval: int | None = None,
     window_manager: WindowManager | None = None,
     *,
     ability_content: Any | None = None,
@@ -50,7 +49,6 @@ def create_rebased_context(
         inherit_messages: 是否继承源 Agent 的对话消息（默认 True）
         inherit_state: 是否继承源 Agent 的状态（默认 False）
         state_filter: 状态过滤函数，选择性继承状态（仅 inherit_state=True 时生效）
-        snapshot_interval: 快照间隔（None 使用源 CM 的设置）
         window_manager: 新 Agent 的窗口管理器（可选，默认 None 不配置）。
             必须传入独立实例——直接共享源 CM 的实例会使摘要策略状态
             与压缩排水记录跨 Agent 互串
@@ -99,7 +97,6 @@ def create_rebased_context(
     child_cm = ContextManager(
         agent_name=agent_name,
         initial_state=initial_state,
-        snapshot_interval=snapshot_interval or source_cm.message_store.snapshot_interval,
         system_prompt=system_prompt,
         window_manager=window_manager,
         persistence=source_cm.persistence,

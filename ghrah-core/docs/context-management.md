@@ -28,7 +28,6 @@ from ghrah.context.manager import ContextManager
 cm = ContextManager(
     agent_name="my-agent",
     initial_state={"key": "value"},  # 初始状态
-    snapshot_interval=5,  # 快照间隔
     system_prompt="你是一个助手",  # 系统提示词
     window_manager=wm,  # 窗口管理器（可选）
     persistence=backend,  # 持久化后端（可选）
@@ -174,12 +173,12 @@ sm.apply_changes({"temp_key": _DELETE})  # 删除 temp_key
 
 ## MessageStore — 消息存储
 
-[`MessageStore`](../src/ghrah/context/message_store.py) 采用 delta + 定期快照策略存储消息：
+[`MessageStore`](../src/ghrah/context/message_store.py) 采用 delta + 边界快照策略存储消息：
 
-- **Delta**：每次迭代只存储新增消息
-- **Snapshot**：每 N 次迭代存储完整快照（由 `snapshot_interval` 控制）
+- **Delta**：每次迭代只存储新增消息；
+- **Snapshot**：只在语义边界（root 与 compact）存储完整快照，作为可独立回放的起点。
 
-这种设计在减少存储开销的同时，支持快速恢复。
+普通提交节点不写快照，因此存储随历史线性增长，不存在「每 N 次迭代快照一次」的周期性机制。这种设计既避免写放大，也保证任一分支都能由「最近的 root/compact 快照 + 后续 delta」重建。
 
 ## WindowManager — 窗口管理
 
@@ -259,7 +258,6 @@ config = AgentConfig(
         persistence_type="json_file",  # 或 "memory"
         persistence_root_dir="/tmp/data",  # JSON 文件存储目录
         persistence_compress=True,  # gzip 压缩
-        snapshot_interval=5,  # 快照间隔
         auto_persist=False,  # 自动持久化
     ),
 )

@@ -37,7 +37,6 @@ def _make_cm(**overrides) -> ContextManager:
     """创建测试用 ContextManager（带 system_prompt）。"""
     defaults = {
         "agent_name": "test-agent",
-        "snapshot_interval": 5,
         "system_prompt": "You are a test agent.",
         "message_factory": ChatMessageFactory(),
     }
@@ -381,17 +380,16 @@ class TestCommitCompactNode:
 
         assert [m.text for m in cm.get_messages()] == [m.text for m in view]
 
-    def test_anchor_invalidated_and_not_snapshot_rhythm(self) -> None:
-        """提交后锚点失效；compact 节点不打乱后续常规快照节奏。"""
-        cm = _make_cm(snapshot_interval=3)
+    def test_anchor_invalidated_after_compact(self) -> None:
+        """提交后锚点失效，后续 commit 正常推进。"""
+        cm = _make_cm()
         _seed_rounds(cm, rounds=3)
         cm.record_window_occupied(999)
         view = [ChatMessage.system("You are a test agent.", source="system:config")]
         node = cm.commit_compact_node(view, {"trigger_source": "threshold"})
 
         assert cm._window_occupied is None
-        # compact 节点之后照常 commit：不因 compact 打乱（interval=3，
-        # 下一轮 iteration 自然推进）
+        # compact 节点之后照常 commit，iteration 自然推进
         _commit_round(cm, "after-1", [ChatMessage.user("a1")])
         history = cm.get_history()
         assert history[-1].ability_names == ["after-1"]

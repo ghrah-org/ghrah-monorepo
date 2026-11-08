@@ -87,7 +87,6 @@ class PersistenceOverrides(BaseModel):
     type: str | None = None
     compress: bool | None = None
     auto_persist: bool | None = None
-    snapshot_interval: int | None = None
 
 
 class ContextOverrides(BaseModel):

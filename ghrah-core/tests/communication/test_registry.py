@@ -194,7 +194,7 @@ class TestAgentInfo:
         config = AgentConfig(
             name="runtime-agent",
             description="has runtime context",
-            context=ContextConfig(snapshot_interval=3, auto_persist=True),
+            context=ContextConfig(auto_persist=True),
         )
 
         info = AgentInfo(
@@ -206,6 +206,5 @@ class TestAgentInfo:
         d = info.to_dict()
         context_dict = d["config"]["context"]
         assert isinstance(context_dict, dict)
-        assert context_dict["snapshot_interval"] == 3
         assert context_dict["auto_persist"] is True
         assert "persistence_agent_name" not in context_dict

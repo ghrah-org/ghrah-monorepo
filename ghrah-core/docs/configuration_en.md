@@ -105,7 +105,6 @@ window_config = WindowConfig(
 from ghrah.core.config import ContextConfig
 
 context_config = ContextConfig(
-    snapshot_interval=5,  # Snapshot interval
     auto_persist=False,  # Auto-persist
     persistence_type="json_file",  # Persistence backend type
     persistence_root_dir="/tmp/data",  # Storage root directory
@@ -118,7 +117,6 @@ context_config = ContextConfig(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `snapshot_interval` | `int` | `5` | Message snapshot interval (full snapshot every N iterations) |
 | `auto_persist` | `bool` | `False` | Whether to auto-persist after each commit/rollback |
 | `persistence_type` | `str \| None` | `None` | Persistence backend type: `"json_file"` / `"memory"` / `"sqlite"` / `"remote"` / `None` |
 | `persistence_root_dir` | `str \| None` | `None` | Persistence storage root directory path (for json_file/sqlite backends) |
@@ -230,7 +228,6 @@ config = AgentConfig(
     ),
     # Context management
     context=ContextConfig(
-        snapshot_interval=10,
         auto_persist=True,
         persistence_type="json_file",
         persistence_root_dir="/tmp/agent_data",

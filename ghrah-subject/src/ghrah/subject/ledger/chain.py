@@ -92,22 +92,26 @@ class ActionChainLedger:
         return runtime.chain.checkout(runtime.get_branch(branch_id).head_node_id)
 
     async def get_chain_meta(self, agent_name: str) -> ChainMeta | None:
-        checkpoint = await self._backend.load_checkpoint(agent_name)
-        if checkpoint is None:
+        catalog = await self._backend.load_chain_meta(agent_name)
+        if catalog is None:
             return None
         return ChainMeta(
             agent_name=agent_name,
-            sessions=[serialize_action_session(item) for item in checkpoint.sessions],
-            branches=[serialize_branch(item) for item in checkpoint.branches],
-            active_session_id=checkpoint.active_session_id,
+            sessions=[serialize_action_session(item) for item in catalog.sessions],
+            branches=[serialize_branch(item) for item in catalog.branches],
+            active_session_id=catalog.active_session_id,
         )
 
     async def traverse_dag(self, agent_names: list[str] | None = None) -> list[DAGEntry]:
         targets = agent_names if agent_names is not None else await self.list_agents()
 
+        checkpoints = {
+            agent_name: await self._backend.load_checkpoint(agent_name, snapshot_payloads="none")
+            for agent_name in targets
+        }
+
         node_index: dict[str, ContextNode] = {}
-        for agent_name in targets:
-            checkpoint = await self._backend.load_checkpoint(agent_name)
+        for checkpoint in checkpoints.values():
             for node in checkpoint.nodes if checkpoint is not None else ():
                 node_index[node.id] = node
 
@@ -118,8 +122,7 @@ class ActionChainLedger:
 
         entries: list[DAGEntry] = []
         seen: set[str] = set()
-        for agent_name in targets:
-            checkpoint = await self._backend.load_checkpoint(agent_name)
+        for checkpoint in checkpoints.values():
             if checkpoint is None:
                 continue
             for session in checkpoint.sessions:
@@ -132,12 +135,11 @@ class ActionChainLedger:
     async def node_count(self) -> int:
         total = 0
         for agent_name in await self.list_agents():
-            checkpoint = await self._backend.load_checkpoint(agent_name)
-            total += len(checkpoint.nodes) if checkpoint is not None else 0
+            total += len(await self._backend.list_node_ids(agent_name))
         return total
 
     async def _build_runtime(self, agent_name: str, session_id: str) -> SessionRuntime | None:
-        checkpoint = await self._backend.load_checkpoint(agent_name)
+        checkpoint = await self._backend.load_checkpoint(agent_name, snapshot_payloads="boundaries")
         if checkpoint is None:
             return None
         session = next(

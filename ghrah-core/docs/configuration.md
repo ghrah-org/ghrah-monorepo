@@ -114,7 +114,6 @@ agentconf 0.2 将模型绑定显式指向能力档案，未声明的字段按模
 from ghrah.core.config import ContextConfig
 
 context_config = ContextConfig(
-    snapshot_interval=5,  # 快照间隔
     auto_persist=False,  # 自动持久化
     persistence_type="json_file",  # 持久化后端类型
     persistence_root_dir="/tmp/data",  # 存储根目录
@@ -127,12 +126,13 @@ context_config = ContextConfig(
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `snapshot_interval` | `int` | `5` | 消息快照间隔（每 N 次迭代存储一次完整快照） |
 | `auto_persist` | `bool` | `False` | 是否在每次 commit/rollback 后自动持久化节点 |
 | `persistence_type` | `str \| None` | `None` | 持久化后端类型：`"json_file"` / `"memory"` / `"sqlite"` / `"remote"` / `None` |
 | `persistence_root_dir` | `str \| None` | `None` | 持久化存储根目录路径（json_file/sqlite 后端使用） |
 | `persistence_compress` | `bool` | `True` | 是否启用 gzip 压缩持久化文件 |
 | `persistence_run_id` | `str \| None` | `None` | 持久化运行 ID，`None` 表示自动生成 |
+
+> **快照不由配置控制。** 快照只在语义边界（root、compact）产生，普通提交节点只写 delta；没有「每 N 轮快照」的配置项。语义与读取投影见 [上下文管理](context-management.md#messagestore--消息存储)。
 
 
 ### 持久化后端类型
@@ -239,7 +239,6 @@ config = AgentConfig(
     ),
     # 上下文管理
     context=ContextConfig(
-        snapshot_interval=10,
         auto_persist=True,
         persistence_type="json_file",
         persistence_root_dir="/tmp/agent_data",

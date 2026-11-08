@@ -19,7 +19,11 @@ from uuid import uuid4
 
 from ghrah.context.persistence.backend import PersistenceBackend
 from ghrah.context.persistence.changes import ContextChanges
-from ghrah.context.persistence.checkpoint import ContextCheckpoint
+from ghrah.context.persistence.checkpoint import (
+    ContextCheckpoint,
+    SnapshotPayloads,
+    project_snapshot_payloads,
+)
 from ghrah.context.persistence.serialization import (
     deserialize_action_session,
     deserialize_branch,
@@ -142,7 +146,12 @@ class JsonFileBackend(PersistenceBackend):
         """追加一条原子增量记录，不读取或改写已有记录。"""
         self._write_json(self._record_path(changes.agent_name), self._serialize_changes(changes))
 
-    async def load_checkpoint(self, agent_name: str) -> ContextCheckpoint | None:
+    async def load_checkpoint(
+        self,
+        agent_name: str,
+        *,
+        snapshot_payloads: SnapshotPayloads = "all",
+    ) -> ContextCheckpoint | None:
         """按顺序重放 Agent 的 v3 变更记录。"""
         changes_dir = self._changes_dir(agent_name)
         if not changes_dir.exists():
@@ -190,13 +199,14 @@ class JsonFileBackend(PersistenceBackend):
             return None
         if active_session_id is None:
             raise RuntimeError("Context checkpoint has no active session")
-        return ContextCheckpoint(
+        checkpoint = ContextCheckpoint(
             agent_name=agent_name,
             active_session_id=active_session_id,
             sessions=tuple(sessions.values()),
             branches=tuple(branches.values()),
             nodes=tuple(nodes.values()),
         )
+        return project_snapshot_payloads(checkpoint, snapshot_payloads)
 
     async def delete_checkpoint(self, agent_name: str) -> None:
         """删除指定 Agent 的全部 JSON 记录。"""

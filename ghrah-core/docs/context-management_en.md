@@ -28,7 +28,6 @@ from ghrah.context.manager import ContextManager
 cm = ContextManager(
     agent_name="my-agent",
     initial_state={"key": "value"},  # Initial state
-    snapshot_interval=5,  # Snapshot interval
     system_prompt="You are an assistant",  # System prompt
     window_manager=wm,  # Window manager (optional)
     persistence=backend,  # Persistence backend (optional)
@@ -154,12 +153,16 @@ sm.apply_changes({"temp_key": _DELETE})  # Delete temp_key
 
 ## MessageStore — Message Storage
 
-[`MessageStore`](../src/ghrah/context/message_store.py) uses a delta + periodic snapshot strategy:
+[`MessageStore`](../src/ghrah/context/message_store.py) is a lightweight container for the
+runtime's complete message list; it no longer produces periodic snapshots.
 
-- **Delta**: Only new messages are stored each iteration
-- **Snapshot**: Full snapshot stored every N iterations (controlled by `snapshot_interval`)
-
-This design reduces storage overhead while supporting fast recovery.
+- **Delta**: Each chain node stores only the messages added in that iteration
+  (`messages_delta`), including on snapshot-boundary nodes.
+- **Snapshot**: A full snapshot is kept only at semantic replay boundaries — the
+  session root and `compact` nodes (compaction discards messages, so its payload
+  cannot be derived from deltas).
+- **Restore**: recovery rebuilds messages from the nearest boundary snapshot plus
+  all following deltas.
 
 ## WindowManager — Window Management
 
@@ -239,7 +242,6 @@ config = AgentConfig(
         persistence_type="json_file",  # Or "memory"
         persistence_root_dir="/tmp/data",  # JSON file storage directory
         persistence_compress=True,  # gzip compression
-        snapshot_interval=5,  # Snapshot interval
         auto_persist=False,  # Auto-persist
     ),
 )

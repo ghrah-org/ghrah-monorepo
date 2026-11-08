@@ -131,7 +131,7 @@ async def create_resources(configuration: dict, run_id: str) -> AgentResources:
         context = ContextManager(
             principal, persistence=backend, auto_persist=False, message_factory=ChatMessageFactory()
         )
-        if await backend.load_checkpoint(principal) is not None:
+        if await backend.has_checkpoint(principal):
             await context.restore(principal)
         model = ScriptedModel(configuration["model"])
         actor = ActorAgent(

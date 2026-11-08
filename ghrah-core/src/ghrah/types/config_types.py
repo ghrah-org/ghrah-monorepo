@@ -89,7 +89,6 @@ class ContextConfig:
     - None: 不启用持久化
 
     Attributes:
-        snapshot_interval: 消息快照间隔（每 N 次迭代存储一次完整快照），默认 5
         auto_persist: 是否在每次 commit/rollback 后自动持久化节点，默认 False
         persistence_type: 持久化后端类型，None 表示不启用持久化
         persistence_root_dir: 持久化存储根目录路径（json_file/sqlite 后端使用）
@@ -97,7 +96,6 @@ class ContextConfig:
         persistence_run_id: 持久化运行 ID，None 表示自动生成（格式：run_{ISO8601}）
     """
 
-    snapshot_interval: int = 5
     auto_persist: bool = False
     persistence_type: str | None = None
     persistence_root_dir: str | None = None

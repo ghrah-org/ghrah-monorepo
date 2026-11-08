@@ -479,7 +479,8 @@ def default_core_unit_factory(
             path = ProjectPaths.from_locator(locator).action_chain_db_path
             if existing is None:
                 async with SqliteBackend(path) as backend:
-                    await backend.load_checkpoint("bootstrap")
+                    # 打开连接即完成 schema 初始化；无需加载任何 checkpoint。
+                    await backend.has_checkpoint("bootstrap")
                 manager = MessageManager(
                     path,
                     project_id=project_id,

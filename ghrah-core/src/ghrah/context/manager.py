@@ -9,7 +9,7 @@
 
 核心职责：
 - 迭代生命周期：begin_iteration → commit_iteration / rollback_iteration
-- 消息+状态协调：commit 时自动计算 delta、定期存储 snapshot、管理 state 事务
+- 消息+状态协调：commit 时写入本轮 delta、管理 state 事务
 - 执行期服务：以 CONTEXT_MANAGER 服务注入能力执行，不再构造上下文对象
 - 子 Agent 继承：fork_for_sub_agent 创建独立但继承的上下文
 - Session 管理：create_session / activate_session / list_sessions
@@ -75,7 +75,6 @@ class ContextManager:
     Args:
         agent_name: 所属 Agent 名称
         initial_state: 初始 Agent 状态
-        snapshot_interval: 消息快照间隔，默认 5
         system_prompt: 系统提示词
         window_manager: 窗口管理器（可选）
         persistence: 持久化后端（可选，None 则不持久化）
@@ -96,7 +95,6 @@ class ContextManager:
         self,
         agent_name: str,
         initial_state: dict[str, Any] | None = None,
-        snapshot_interval: int = 5,
         system_prompt: str = "",
         window_manager: WindowManager | None = None,
         persistence: PersistenceBackend | None = None,
@@ -116,7 +114,7 @@ class ContextManager:
     ) -> None:
         self._agent_name = agent_name
         self._state_manager = StateManager(initial_state)
-        self._message_store = MessageStore(snapshot_interval=snapshot_interval)
+        self._message_store = MessageStore()
         self._system_prompt = system_prompt
         self._window_manager = window_manager
         self._persistence = persistence
@@ -184,8 +182,6 @@ class ContextManager:
         }
         self._active_session_id = root_runtime.session.session_id
 
-        # 建立初始快照基准
-        self._message_store.take_snapshot(0)
         if (
             self._auto_persist
             and self._persistence is not None
@@ -714,9 +710,8 @@ class ContextManager:
         head = runtime.active_head
         messages = self._messages_from_history(runtime.get_history())
         self._state_manager.reset(head.agent_state)
-        self._message_store = MessageStore(snapshot_interval=self._message_store.snapshot_interval)
+        self._message_store = MessageStore()
         self._message_store.extend(messages)
-        self._message_store.take_snapshot(head.iteration)
         self._system_prompt = runtime.session.system_prompt
         self._pending_messages = []
         self._window_occupied = None
@@ -786,8 +781,8 @@ class ContextManager:
         1. 如果有额外的 state_changes，先应用
         2. 提交状态事务
         3. 将 pending_messages 写入 MessageStore
-        4. 计算 delta / 判断是否需要 snapshot
-        5. 创建链式节点
+        4. 以本轮新增消息作为 messages_delta
+        5. 创建链式节点（普通节点不带 messages_snapshot）
 
         Args:
             ability_names: 本轮执行的 ability 名称列表
@@ -824,45 +819,33 @@ class ContextManager:
         # 3. 将 pending_messages 写入 MessageStore
         self._message_store.extend(self._pending_messages)
 
-        # 4. 计算迭代号（基于当前 Branch Head）
-        iteration = self._active_runtime.active_head.iteration + 1
-
-        # 5. delta 为当前轮次新增的消息
+        # 4. delta 为当前轮次新增的消息；普通提交节点不写 messages_snapshot
         delta = list(self._pending_messages)
 
-        # 6. 判断是否需要快照
-        is_snapshot = self._message_store.should_snapshot(iteration)
-        if is_snapshot:
-            snapshot = self._message_store.take_snapshot(iteration)
-        else:
-            snapshot = None
-
-        # 7. 合并 llm_metadata 到节点 metadata
+        # 5. 合并 llm_metadata 到节点 metadata
         node_metadata: dict[str, Any] = {}
         if llm_metadata:
             node_metadata.update(llm_metadata)
 
-        # 7.1 合并窗口压缩事件记录（内部权威，来源为 get_llm_messages 的 stash）
+        # 5.1 合并窗口压缩事件记录（内部权威，来源为 get_llm_messages 的 stash）
         if self._pending_compaction:
             node_metadata["compaction"] = list(self._pending_compaction)
             self._pending_compaction = []
 
-        # 8. 创建链式节点并前移当前 Branch Head
+        # 6. 创建链式节点并前移当前 Branch Head
         node = self._active_runtime.commit_node(
             ability_names=effective_names,
             agent_state=new_state,
             messages_delta=delta,
-            messages_snapshot=snapshot,
-            is_snapshot=is_snapshot,
             action_results=effective_result or [],
             metadata=node_metadata or None,
         )
 
-        # 10. 清理迭代状态
+        # 7. 清理迭代状态
         self._pending_messages = []
         self._in_iteration = False
 
-        # 11. 自动持久化（如果启用）
+        # 8. 自动持久化（如果启用）
         if self._auto_persist and self._persistence is not None:
             self._schedule_persist_node(node)
 
@@ -1233,13 +1216,12 @@ class ContextManager:
         """提交链上 compact 节点。
 
         与 commit_iteration 的关键差异：
-        - 跳过 ``should_snapshot``/活 store 自拍——compact 时活 store 仍是
-          压缩前的旧全量，naive 快照会把旧全量拍进节点，压缩归零；
-          本路径直接注入压缩视图 deepcopy 为 messages_snapshot；
+        - 普通提交节点永远不带 messages_snapshot；compact 节点是语义边界，
+          直接注入压缩视图 deepcopy 作为 messages_snapshot（压缩丢弃了
+          消息，无法由 delta 推导，因此必须保留载荷）；
         - messages_delta 恒空、ability_names=["compact"]；
         - 提交后按 ``_restore_active_context`` 模式重建 store（compact
-          节点 is_snapshot=True，天然成为回放新基准）并置锚点 None；
-        - 不计入 snapshot_interval 节奏（后续常规快照照常）。
+          节点 is_snapshot=True，天然成为回放新基准）并置锚点 None。
 
         Args:
             snapshot_messages: 压缩视图消息（调用方组装，本方法深拷贝注入）
@@ -1352,7 +1334,6 @@ class ContextManager:
         agent_name: str,
         system_prompt: str | None = None,
         state_filter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-        snapshot_interval: int | None = None,
         window_manager: WindowManager | None = None,
     ) -> ContextManager:
         """为子 Agent fork 出独立的上下文。
@@ -1367,7 +1348,6 @@ class ContextManager:
             agent_name: 子 Agent 名称
             system_prompt: 覆盖 system_prompt（可选，None 继承父 Agent 的）
             state_filter: 状态过滤函数，选择性继承状态（可选）
-            snapshot_interval: 快照间隔（可选，默认使用父 CM 的设置）
             window_manager: 子 Agent 的窗口管理器（可选，None 不配置）。
                 必须传入独立实例——共享会使摘要策略状态与压缩排水记录
                 跨 Agent 互串
@@ -1385,7 +1365,6 @@ class ContextManager:
             inherit_messages=True,
             inherit_state=True,
             state_filter=state_filter,
-            snapshot_interval=snapshot_interval,
             window_manager=window_manager,
         )
 
@@ -1548,6 +1527,10 @@ class ContextManager:
 
         async with self._persist_lock:
             runtimes = list(self._session_runtimes.values())
+            # 节点行按 ID 只增不改（sqlite 为 ON CONFLICT DO NOTHING），
+            # 因此只提交尚未落库的节点即可，避免每次显式 persist 重新
+            # 序列化整条链。
+            persisted_ids = await self._persistence.list_node_ids(self._agent_name)
             changes = ContextChanges(
                 agent_name=self._agent_name,
                 active_session_id=self._active_session_id,
@@ -1555,7 +1538,12 @@ class ContextManager:
                 branches=tuple(
                     branch for runtime in runtimes for branch in runtime.branches.values()
                 ),
-                nodes=tuple(node for runtime in runtimes for node in runtime.chain.nodes),
+                nodes=tuple(
+                    node
+                    for runtime in runtimes
+                    for node in runtime.chain.nodes
+                    if node.id not in persisted_ids
+                ),
             )
             await self._persistence.apply_changes(changes)
             logger.debug(
@@ -1579,7 +1567,9 @@ class ContextManager:
         if self._persistence is None:
             raise RuntimeError("No persistence backend configured")
 
-        checkpoint = await self._persistence.load_checkpoint(agent_name)
+        checkpoint = await self._persistence.load_checkpoint(
+            agent_name, snapshot_payloads="boundaries"
+        )
         if checkpoint is None:
             raise ValueError(f"No persisted data found for agent '{agent_name}'")
 

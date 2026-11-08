@@ -845,8 +845,14 @@ class FakePersistenceBackend:
     async def close(self) -> None:
         return None
 
-    async def load_checkpoint(self, agent_name: str) -> Any:
-        return await self._v2.load_checkpoint(agent_name)
+    async def load_checkpoint(self, agent_name: str, *, snapshot_payloads: str = "all") -> Any:
+        return await self._v2.load_checkpoint(agent_name, snapshot_payloads=snapshot_payloads)
+
+    async def has_checkpoint(self, agent_name: str) -> bool:
+        return await self._v2.has_checkpoint(agent_name)
+
+    async def list_node_ids(self, agent_name: str) -> set[str]:
+        return await self._v2.list_node_ids(agent_name)
 
     async def apply_changes(self, changes: Any) -> None:
         await self._v2.apply_changes(changes)

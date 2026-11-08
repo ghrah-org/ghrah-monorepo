@@ -267,7 +267,6 @@ def _build_context_manager(
         system_prompt=system_prompt,
         window_manager=window_manager,
         persistence=persistence,
-        snapshot_interval=context_config.snapshot_interval if context_config else 5,
         auto_persist=(
             context_config.auto_persist
             if context_config is not None

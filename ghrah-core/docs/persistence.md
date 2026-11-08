@@ -155,12 +155,13 @@ config = AgentConfig(
         persistence_root_dir="/tmp/agent_data",  # 存储根目录
         persistence_compress=True,  # gzip 压缩
         persistence_run_id="my_session",  # 会话 ID
-        # 快照和自动持久化
-        snapshot_interval=5,  # 每 5 次迭代存储一次快照
+        # 自动持久化
         auto_persist=False,  # 是否在每次 commit/rollback 后自动持久化
     ),
 )
 ```
+
+> **快照只作为语义边界存在。** root（会话初始消息）与 compact（压缩视图）是「可独立回放起点」，会携带完整消息载荷；普通提交节点只写 delta。不存在「每 N 轮快照一次」的周期性配置。
 
 ### 手动持久化与恢复
 
@@ -361,7 +362,6 @@ config = AgentConfig(
         persistence_type="json_file",
         persistence_root_dir="/tmp/agent_data",
         persistence_compress=True,
-        snapshot_interval=10,
         auto_persist=True,
     ),
 )

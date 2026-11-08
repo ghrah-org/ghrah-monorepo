@@ -55,7 +55,6 @@ def build_context_from_dict(data: dict[str, Any]) -> ContextConfig:
         persistence_root_dir=data.get("persistence_root_dir"),
         persistence_compress=data.get("persistence_compress", True),
         auto_persist=data.get("auto_persist", False),
-        snapshot_interval=data.get("snapshot_interval", 5),
         persistence_run_id=data.get("persistence_run_id"),
     )
 
@@ -112,9 +111,6 @@ def build_context_from_overrides(overrides: Any) -> ContextConfig:
         persistence_type=overrides.type,
         persistence_compress=overrides.compress if overrides.compress is not None else True,
         auto_persist=overrides.auto_persist if overrides.auto_persist is not None else False,
-        snapshot_interval=(
-            overrides.snapshot_interval if overrides.snapshot_interval is not None else 5
-        ),
     )
 
 

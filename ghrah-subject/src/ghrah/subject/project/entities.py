@@ -188,7 +188,9 @@ class AgentEntityManager:
         async with SqliteBackend(path, read_only=True) as backend:
             if operation["type"] == "context.list_sessions":
                 return await backend.load_session_catalog(agent.agent_id)
-            checkpoint = await backend.load_checkpoint(agent.agent_id)
+            checkpoint = await backend.load_checkpoint(
+                agent.agent_id, snapshot_payloads="boundaries"
+            )
         session_id = operation["session_id"]
         session = (
             next((s for s in checkpoint.sessions if s.session_id == session_id), None)

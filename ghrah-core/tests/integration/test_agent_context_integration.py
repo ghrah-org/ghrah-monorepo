@@ -172,16 +172,14 @@ class TestContextManagerCreation:
         """应支持 ContextConfig 中的配置项。"""
         config = AgentConfig(
             name="config-agent",
-            context=ContextConfig(snapshot_interval=10, auto_persist=True),
+            context=ContextConfig(auto_persist=True),
         )
         agent = _create_agent(config)
-        assert agent._context_manager._message_store.snapshot_interval == 10
         assert agent._context_manager._auto_persist is True
 
     def test_context_manager_default_config(self) -> None:
         """没有 ContextConfig 时使用默认值。"""
         agent = _create_agent()
-        assert agent._context_manager._message_store.snapshot_interval == 5
         assert agent._context_manager._auto_persist is False
 
     def test_initial_state_empty(self) -> None:

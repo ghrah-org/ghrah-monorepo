@@ -153,7 +153,6 @@ config = AgentConfig(
         persistence_root_dir="/tmp/agent_data",
         persistence_compress=True,
         persistence_run_id="my_session",
-        snapshot_interval=5,
         auto_persist=False,
     ),
 )
@@ -358,7 +357,6 @@ config = AgentConfig(
         persistence_type="json_file",
         persistence_root_dir="/tmp/agent_data",
         persistence_compress=True,
-        snapshot_interval=10,
         auto_persist=True,
     ),
 )

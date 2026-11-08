@@ -414,8 +414,7 @@ class SupervisorActor:
             return "memory"
         if hasattr(backend, "connect"):
             await backend.connect()
-        checkpoint = await backend.load_checkpoint(name)
-        if checkpoint is not None:
+        if await backend.has_checkpoint(name):
             await cm.restore(name)
             logger.info("Supervisor restored persisted context for agent: %s", name)
             return "restored"

@@ -253,7 +253,6 @@ class TestManifestResolver:
                     type="json_file",
                     compress=False,
                     auto_persist=True,
-                    snapshot_interval=10,
                 )
             )
         )
@@ -263,7 +262,6 @@ class TestManifestResolver:
         assert result.config.context.persistence_type == "json_file"
         assert result.config.context.persistence_compress is False
         assert result.config.context.auto_persist is True
-        assert result.config.context.snapshot_interval == 10
 
     def test_resolve_no_context(self) -> None:
         store = BuiltinAbilitySource()
@@ -387,17 +385,6 @@ class TestWindowConfigZeroValues:
 
         assert result.config.window is not None
         assert result.config.window.tool_call_max_length == 0
-
-    def test_snapshot_interval_zero_uses_override(self) -> None:
-        store = BuiltinAbilitySource()
-        resolver = ManifestResolver(store)
-        manifest = _make_agent_manifest(
-            context=ContextOverrides(persistence=PersistenceOverrides(snapshot_interval=0))
-        )
-        result = resolver.resolve(manifest)
-
-        assert result.config.context is not None
-        assert result.config.context.snapshot_interval == 0
 
     def test_resolve_communication_timeout_default(self) -> None:
         store = BuiltinAbilitySource()

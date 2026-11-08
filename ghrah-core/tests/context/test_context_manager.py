@@ -17,7 +17,6 @@ from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.message import ChatMessage
 from ghrah.context.manager import ContextManager
-from ghrah.context.node import ContextNode
 from ghrah.context.token_estimator import WeightedTokenEstimator
 from ghrah.core.message import AgentMessage as Message
 
@@ -31,7 +30,6 @@ def _make_cm(**overrides) -> ContextManager:
     defaults = {
         "agent_name": "test-agent",
         "initial_state": None,
-        "snapshot_interval": 5,
         "system_prompt": "",
         "message_factory": ChatMessageFactory(),
     }
@@ -166,20 +164,20 @@ class TestContextManagerIteration:
         assert node.iteration == 3
         assert cm.chain.node_count == 4
 
-    def test_commit_iteration_auto_snapshot(self) -> None:
-        """snapshot_interval=5 时，第 5 轮自动创建 snapshot。"""
-        cm = _make_cm(snapshot_interval=5)
+    def test_commit_iteration_has_no_snapshot_payload(self) -> None:
+        """普通提交节点不再写快照载荷（周期性快照机制已删除）。"""
+        cm = _make_cm()
         for i in range(5):
             cm.begin_iteration()
             cm.add_messages([ChatMessage.user(text_or_blocks=f"msg_{i}")])
             node = cm.commit_iteration(ability_names=[f"ability_{i}"])
 
-        assert node.is_snapshot is True
-        assert node.messages_snapshot is not None
+        assert node.is_snapshot is False
+        assert node.messages_snapshot is None
 
     def test_commit_iteration_delta_calculation(self) -> None:
-        """非 snapshot 轮只存 delta。"""
-        cm = _make_cm(snapshot_interval=10)
+        """普通提交节点只存本轮 delta。"""
+        cm = _make_cm()
         cm.begin_iteration()
         cm.add_messages([ChatMessage.user(text_or_blocks="msg_1")])
         node = cm.commit_iteration(ability_names=["ability_1"])
@@ -560,18 +558,6 @@ class TestContextManagerFork:
         assert cm.message_store.count == parent_msg_count
         assert child.message_store.count == parent_msg_count + 1
 
-    def test_fork_preserves_snapshot_interval(self) -> None:
-        """fork 时继承父 CM 的 snapshot_interval。"""
-        cm = _make_cm(snapshot_interval=3)
-        child = cm.fork_for_sub_agent("child-agent")
-        assert child.message_store.snapshot_interval == 3
-
-    def test_fork_with_custom_snapshot_interval(self) -> None:
-        """fork 时指定自定义 snapshot_interval。"""
-        cm = _make_cm(snapshot_interval=5)
-        child = cm.fork_for_sub_agent("child-agent", snapshot_interval=10)
-        assert child.message_store.snapshot_interval == 10
-
     def test_fork_default_no_window_manager(self) -> None:
         """默认不继承 window_manager（子 CM 无 wm，行为与现状一致）。"""
         cm = _make_cm(window_manager=_make_window_manager())
@@ -678,52 +664,6 @@ class TestContextManagerIntegration:
 
         assert success_node.ability_names == ["retry_ability"]
         assert success_node.agent_state == {"retries": 1}
-
-    def test_snapshot_interval_configuration(self) -> None:
-        """快照间隔配置生效。"""
-        cm = _make_cm(snapshot_interval=2)
-
-        nodes: list[ContextNode] = []
-        for i in range(1, 7):
-            cm.begin_iteration()
-            cm.add_messages([ChatMessage.user(text_or_blocks=f"msg_{i}")])
-            node = cm.commit_iteration(ability_names=[f"ability_{i}"])
-            nodes.append(node)
-
-        snapshot_iterations = [n.iteration for n in nodes if n.is_snapshot]
-        assert snapshot_iterations == [2, 4, 6]
-
-        delta_iterations = [n.iteration for n in nodes if not n.is_snapshot]
-        assert delta_iterations == [1, 3, 5]
-
-    def test_full_snapshot_delta_cycle(self) -> None:
-        """多轮 commit 验证 snapshot/delta 交替。"""
-        cm = _make_cm(snapshot_interval=3)
-
-        cm.begin_iteration()
-        cm.add_messages([ChatMessage.user(text_or_blocks="m1")])
-        n1 = cm.commit_iteration(ability_names=["a1"])
-        assert not n1.is_snapshot
-        assert len(n1.messages_delta) == 1
-
-        cm.begin_iteration()
-        cm.add_messages([ChatMessage.user(text_or_blocks="m2")])
-        n2 = cm.commit_iteration(ability_names=["a2"])
-        assert not n2.is_snapshot
-        assert len(n2.messages_delta) == 1
-
-        cm.begin_iteration()
-        cm.add_messages([ChatMessage.user(text_or_blocks="m3")])
-        n3 = cm.commit_iteration(ability_names=["a3"])
-        assert n3.is_snapshot
-        assert n3.messages_snapshot is not None
-        assert len(n3.messages_snapshot) == 3
-
-        cm.begin_iteration()
-        cm.add_messages([ChatMessage.user(text_or_blocks="m4")])
-        n4 = cm.commit_iteration(ability_names=["a4"])
-        assert not n4.is_snapshot
-        assert len(n4.messages_delta) == 1
 
     async def test_rollback_does_not_affect_message_store(self) -> None:
         """回滚不影响已提交的消息。"""

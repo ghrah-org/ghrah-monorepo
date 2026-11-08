@@ -24,9 +24,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ghrah.context.persistence.backend import PersistenceBackend
+from ghrah.context.persistence.backend import PersistenceBackend, SnapshotPayloads
+from ghrah.context.persistence.catalog import ContextChainMeta
 from ghrah.context.persistence.changes import ContextChanges
-from ghrah.context.persistence.checkpoint import ContextCheckpoint
+from ghrah.context.persistence.checkpoint import ContextCheckpoint, project_snapshot_payloads
 from ghrah.context.persistence.json_file import JsonFileBackend
 from ghrah.context.persistence.memory import InMemoryBackend
 from ghrah.context.persistence.serialization import (
@@ -110,7 +111,10 @@ def create_persistence(
 
 __all__ = [
     "PersistenceBackend",
+    "SnapshotPayloads",
+    "ContextChainMeta",
     "ContextCheckpoint",
+    "project_snapshot_payloads",
     "ContextChanges",
     "InMemoryBackend",
     "JsonFileBackend",

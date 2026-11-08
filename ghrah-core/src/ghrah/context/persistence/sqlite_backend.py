@@ -28,8 +28,9 @@ from typing import Any
 import aiosqlite
 
 from ghrah.context.persistence.backend import PersistenceBackend
+from ghrah.context.persistence.catalog import ContextChainMeta
 from ghrah.context.persistence.changes import ContextChanges
-from ghrah.context.persistence.checkpoint import ContextCheckpoint
+from ghrah.context.persistence.checkpoint import ContextCheckpoint, SnapshotPayloads
 from ghrah.context.persistence.serialization import (
     deserialize_action_session,
     deserialize_branch,
@@ -49,6 +50,24 @@ _NODE_COLUMNS = (
     "is_snapshot, ability_names, agent_state, "
     "messages_delta, messages_snapshot, action_results, metadata"
 )
+
+# 按载荷投影策略替换 messages_snapshot 列：root 与 compact 是语义边界，
+# 只有它们能作为独立回放起点；其余节点即使历史上带过周期快照载荷也不加载。
+_SNAPSHOT_BOUNDARY_EXPR = (
+    "CASE WHEN parent_id IS NULL "
+    "OR json_extract(metadata, '$.node_kind') = 'compact' "
+    "THEN messages_snapshot ELSE NULL END AS messages_snapshot"
+)
+_SNAPSHOT_NULL_EXPR = "NULL AS messages_snapshot"
+
+
+def _projected_node_columns(policy: SnapshotPayloads) -> str:
+    """按快照载荷投影策略生成 nodes 查询列清单。"""
+    if policy == "all":
+        return _NODE_COLUMNS
+    replacement = _SNAPSHOT_BOUNDARY_EXPR if policy == "boundaries" else _SNAPSHOT_NULL_EXPR
+    return _NODE_COLUMNS.replace("messages_snapshot", replacement)
+
 
 # 数据库建表 DDL
 _SCHEMA_SQL = """
@@ -521,8 +540,10 @@ class SqliteBackend(PersistenceBackend):
             ],
         }
 
-    async def load_checkpoint(self, agent_name: str) -> ContextCheckpoint | None:
-        """从 SQLite 加载 Agent 的 v3 checkpoint。"""
+    async def _load_catalog_rows(
+        self, agent_name: str
+    ) -> tuple[str, tuple[Any, ...], tuple[Any, ...]] | None:
+        """读取 active_session_id、sessions 与 branches（不碰 nodes）。"""
         db = await self._ensure_db()
         if not self._context_schema_present:
             return None
@@ -563,8 +584,28 @@ class SqliteBackend(PersistenceBackend):
             )
         else:
             branches = ()
+        return str(meta["active_session_id"]), sessions, branches
+
+    async def load_checkpoint(
+        self,
+        agent_name: str,
+        *,
+        snapshot_payloads: SnapshotPayloads = "all",
+    ) -> ContextCheckpoint | None:
+        """从 SQLite 加载 Agent 的 v3 checkpoint。
+
+        Args:
+            agent_name: Agent 名称
+            snapshot_payloads: 快照载荷投影策略（见 PersistenceBackend）。
+        """
+        catalog = await self._load_catalog_rows(agent_name)
+        if catalog is None:
+            return None
+        active_session_id, sessions, branches = catalog
+        db = await self._ensure_db()
+        node_columns = _projected_node_columns(snapshot_payloads)
         node_cursor = await db.execute(
-            f"SELECT {_NODE_COLUMNS} FROM nodes WHERE agent_name = ? "
+            f"SELECT {node_columns} FROM nodes WHERE agent_name = ? "
             "ORDER BY session_id, iteration, timestamp",
             (agent_name,),
         )
@@ -573,11 +614,42 @@ class SqliteBackend(PersistenceBackend):
         )
         return ContextCheckpoint(
             agent_name=agent_name,
-            active_session_id=meta["active_session_id"],
+            active_session_id=active_session_id,
             sessions=sessions,
             branches=branches,
             nodes=nodes,
         )
+
+    async def has_checkpoint(self, agent_name: str) -> bool:
+        """判断 Agent 是否存在 checkpoint（单条索引查询，不加载节点）。"""
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return False
+        cursor = await db.execute(
+            "SELECT 1 FROM chain_meta WHERE agent_name = ? LIMIT 1", (agent_name,)
+        )
+        return await cursor.fetchone() is not None
+
+    async def load_chain_meta(self, agent_name: str) -> ContextChainMeta | None:
+        """只读取 Session/Branch 目录与 active 指针，不加载任何节点。"""
+        catalog = await self._load_catalog_rows(agent_name)
+        if catalog is None:
+            return None
+        active_session_id, sessions, branches = catalog
+        return ContextChainMeta(
+            agent_name=agent_name,
+            active_session_id=active_session_id,
+            sessions=sessions,
+            branches=branches,
+        )
+
+    async def list_node_ids(self, agent_name: str) -> set[str]:
+        """返回 Agent 已持久化的节点 ID 集合。"""
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return set()
+        cursor = await db.execute("SELECT id FROM nodes WHERE agent_name = ?", (agent_name,))
+        return {row["id"] for row in await cursor.fetchall()}
 
     async def delete_checkpoint(self, agent_name: str) -> None:
         """在单个事务中删除指定 Agent 的完整 v2 checkpoint。"""

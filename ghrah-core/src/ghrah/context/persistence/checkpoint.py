@@ -6,14 +6,18 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
+from typing import Literal
 
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.node import ContextNode
 from ghrah.context.session_runtime import SessionRuntime
 
-__all__ = ["ContextCheckpoint"]
+__all__ = ["ContextCheckpoint", "SnapshotPayloads", "project_snapshot_payloads"]
+
+SnapshotPayloads = Literal["all", "boundaries", "none"]
 
 
 @dataclass(frozen=True)
@@ -58,3 +62,31 @@ class ContextCheckpoint:
             raise ValueError("checkpoint contains an orphan branch")
         if any(node.session_id not in known_session_ids for node in self.nodes):
             raise ValueError("checkpoint contains an orphan node")
+
+
+def _is_snapshot_boundary(node: ContextNode) -> bool:
+    """判断节点是否为可独立回放的语义边界（root 或 compact）。"""
+    return node.parent_id is None or node.metadata.get("node_kind") == "compact"
+
+
+def project_snapshot_payloads(
+    checkpoint: ContextCheckpoint, policy: SnapshotPayloads
+) -> ContextCheckpoint:
+    """按策略剥离快照载荷，返回新的 checkpoint（不修改入参）。
+
+    仅用于内存型后端（``memory`` / ``json_file``）；SQLite 后端在 SQL
+    层完成同样的投影，避免反序列化整列数据。
+    """
+    if policy == "all":
+        return checkpoint
+
+    def _project(node: ContextNode) -> ContextNode:
+        if node.messages_snapshot is None:
+            return node
+        keep = policy == "boundaries" and _is_snapshot_boundary(node)
+        return dataclasses.replace(node, messages_snapshot=node.messages_snapshot if keep else None)
+
+    return dataclasses.replace(
+        checkpoint,
+        nodes=tuple(_project(node) for node in checkpoint.nodes),
+    )
