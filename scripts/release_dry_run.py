@@ -19,6 +19,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_PACKAGES = (
+    "ghrah-kernel",
     "ghrah-core",
     "ghrah-plugin",
     "ghrah-protocol",

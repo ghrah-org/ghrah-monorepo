@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.15.1"
 dependencies = [
     "ghrah-core>=0.2.0a0",
+    "ghrah-kernel>=0.1.0a0",
     "ghrah-plugin>=0.1.0a0",
     "ghrah-protocol>=0.2.0a0",
     "ghrah-taskstore>=0.1.0a0",
