@@ -43,7 +43,8 @@ class BuiltinAbilitySource:
     不持有可独立写入的目录，不启动 Agent，不注册运行端点。实例创建仅供受信
     装配者选择后端；生效授权、成员绑定及内容版本固定由后续运行接入负责。
 
-    包来源一律查 :attr:`_origins` 登记表，不按 ``ghrah.*`` 前缀猜测。
+    已登记的包只认 :attr:`_origins`，不按 ``ghrah.*`` 前缀改判。装配之后才装进
+    同一安装根的第三方包不改接已有来源，捕获与读取仍交给安装提供器。
     """
 
     def __init__(
@@ -97,9 +98,15 @@ class BuiltinAbilitySource:
         return definitions
 
     def capture_package(self, package: str) -> AbilityVersion:
-        """按登记表捕获包版本；安装包必须先通过 lock 校验。"""
+        """按登记表捕获包版本；安装包必须先通过 lock 校验。
+
+        登记表没有的第三方包，与 :meth:`load_ability` 一样走已配置的安装提供器。
+        ``ghrah.*`` 不在登记表里时拒绝，避免把后来放进安装根的同名包当成内置来源。
+        """
         origin = self._origins.get(package)
         if origin is None:
+            if self.packages is not None and not package.startswith("ghrah."):
+                return self.packages.capture(package)
             raise ManifestValidationError(f"能力包来源不可用：{package}")
         if origin.kind == "installed":
             if self.packages is None:
@@ -122,11 +129,16 @@ class BuiltinAbilitySource:
         )
 
     def version_available(self, version: AbilityVersion) -> bool:
-        """按登记表判定版本是否仍可用。"""
+        """按登记表判定版本是否仍可用。
+
+        登记表没有的第三方包，按安装提供器里已经捕获的记录判断。
+        """
         name = version.definition().identity.full_name
         origin = self._origins.get(name)
         if origin is None:
-            return False
+            if name.startswith("ghrah.") or self.packages is None:
+                return False
+            return self.packages.available(version)
         if origin.kind == "builtin":
             return True
         return self.packages is not None and self.packages.available(version)

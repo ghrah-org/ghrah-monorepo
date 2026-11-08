@@ -136,26 +136,25 @@ class TestRunnerModeFold:
 
 
 class TestSubprocessModeFold:
-    async def test_subprocess_stdout_folded(self, tmp_path) -> None:
+    async def test_subprocess_stdout_folded(self) -> None:
         ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
-        # 跨平台：Windows 无 echo -e；用 python -c 生成多行
+        # python -c 会被安全检查硬拒绝，到不了子进程。折叠发生在子进程路径上。
+        # 跨平台用 python -c 生成多行：Windows 没有 echo -e。
         script = "import sys; print('\\n'.join(f'line {i}' for i in range(1, 301)))"
-        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
-        result = await ability.execute(call, services)
-        assert result.outcome in (ActionOutcome.SUCCESS, ActionOutcome.FAILURE)
+        result = await ability._execute_subprocess(f'python -c "{script}"', None)
+        assert result.outcome is ActionOutcome.SUCCESS
         stdout = result.data["stdout"]
-        if "lines omitted" in stdout or "lines omitted" in stdout:
-            assert "line 1" in stdout or "line 001" in stdout
-            assert "[... " in stdout and "lines omitted ...]" in stdout
+        assert "line 1" in stdout
+        assert "[... " in stdout and "lines omitted ...]" in stdout
 
-    async def test_subprocess_stderr_full(self, tmp_path) -> None:
+    async def test_subprocess_stderr_full(self) -> None:
         ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
         script = "import sys; print('\\n'.join('err' for _ in range(200)), file=sys.stderr)"
-        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
-        result = await ability.execute(call, services)
+        result = await ability._execute_subprocess(f'python -c "{script}"', None)
+        assert result.outcome is ActionOutcome.SUCCESS
         stderr = result.data["stderr"]
-        assert stderr.count("200") >= 0
-        # stderr 不折叠：300 行 stderr 不应出现省略标记
+        assert stderr.count("err") == 200
+        # stderr 不折叠：完整错误现场里不应出现省略标记
         assert "lines omitted" not in stderr
 
 

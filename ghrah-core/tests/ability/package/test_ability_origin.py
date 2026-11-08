@@ -47,6 +47,23 @@ def test_capture_installed_ghrah_package(tmp_path: Path) -> None:
     assert source.version_available(captured) is True
 
 
+def test_third_party_installed_after_assembly_is_captured(tmp_path: Path) -> None:
+    """装配之后装进同一安装根的第三方包仍可捕获；ghrah.* 不在登记表里则拒绝。"""
+    store = tmp_path / "store" / "ability"
+    source = BuiltinAbilitySource(install_root=store)
+    package = tmp_path / "src" / "reporting"
+    shutil.copytree(FIXTURES / "reporting", package)
+    build(package)
+    AbilityInstaller(store).install(package)
+
+    assert "fixtures.reporting" not in source.origins
+    captured = source.capture_package("fixtures.reporting")
+    assert captured.definition().identity.full_name == "fixtures.reporting"
+    assert source.version_available(captured) is True
+    with pytest.raises(ManifestValidationError, match="来源不可用"):
+        source.capture_package("ghrah.not-installed")
+
+
 def test_builtin_packages_still_origin_builtin(tmp_path: Path) -> None:
     store = tmp_path / "empty-store"
     store.mkdir()
