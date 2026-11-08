@@ -46,7 +46,8 @@ const parentArchived = computed(() => !project.value || project.value.archived_a
 const nameDraft = ref("");
 const descriptionDraft = ref("");
 const manifestDraft = ref("");
-const baseline = ref({ name: "", description: "", manifest: "" });
+const shellCwdDraft = ref("");
+const baseline = ref({ name: "", description: "", manifest: "", shellCwd: "" });
 const deleteName = ref("");
 const cascadeRooms = ref(false);
 const serverHasRooms = ref(false);
@@ -62,7 +63,8 @@ const dirty = computed(
     !!project.value &&
     (nameDraft.value.trim() !== baseline.value.name ||
       descriptionDraft.value.trim() !== baseline.value.description ||
-      manifestDraft.value.trim() !== baseline.value.manifest),
+      manifestDraft.value.trim() !== baseline.value.manifest ||
+      shellCwdDraft.value.trim() !== baseline.value.shellCwd),
 );
 const cascadeRequired = computed(() => roomCount.value > 0 || serverHasRooms.value);
 const deleteReady = computed(
@@ -98,10 +100,12 @@ function resetDraft(current = project.value) {
     name: current?.name ?? "",
     description: current?.description ?? "",
     manifest: current?.manifest_ref ?? "",
+    shellCwd: current?.shell_cwd ?? "",
   };
   nameDraft.value = values.name;
   descriptionDraft.value = values.description;
   manifestDraft.value = values.manifest;
+  shellCwdDraft.value = values.shellCwd;
   baseline.value = values;
 }
 
@@ -141,6 +145,7 @@ async function saveProject() {
       name,
       description: descriptionDraft.value.trim(),
       manifestRef: manifestDraft.value.trim(),
+      shellCwd: shellCwdDraft.value.trim(),
       expectedVersion: current.version,
     };
     const result = await updateProject(current.project_id, values);
@@ -149,6 +154,7 @@ async function saveProject() {
         name: values.name,
         description: values.description,
         manifest: values.manifestRef,
+        shellCwd: values.shellCwd,
       };
     } else setFailure(result, t("projectSettings.saveFailed"));
   } finally {
@@ -213,6 +219,7 @@ async function refreshAfterConflict() {
     name: nameDraft.value,
     description: descriptionDraft.value,
     manifest: manifestDraft.value,
+    shellCwd: shellCwdDraft.value,
   };
   busy.value = "refresh";
   try {
@@ -227,10 +234,12 @@ async function refreshAfterConflict() {
       name: project.value?.name ?? "",
       description: project.value?.description ?? "",
       manifest: project.value?.manifest_ref ?? "",
+      shellCwd: project.value?.shell_cwd ?? "",
     };
     nameDraft.value = preserved.name;
     descriptionDraft.value = preserved.description;
     manifestDraft.value = preserved.manifest;
+    shellCwdDraft.value = preserved.shellCwd;
     clearFailure();
   } finally {
     busy.value = null;
@@ -286,6 +295,15 @@ async function refreshAfterConflict() {
             type="text"
             :disabled="busy !== null"
           />
+          <label for="project-settings-shell-cwd">{{ t("projectSettings.shellCwd") }}</label>
+          <input
+            id="project-settings-shell-cwd"
+            v-model="shellCwdDraft"
+            type="text"
+            :placeholder="t('projectSettings.shellCwdPlaceholder')"
+            :disabled="busy !== null"
+          />
+          <p class="project-create-hint">{{ t("projectSettings.shellCwdHint") }}</p>
           <UiButton
             type="submit"
             variant="primary"

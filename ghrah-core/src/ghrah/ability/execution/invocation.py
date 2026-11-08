@@ -11,7 +11,7 @@
   传来的名字反推实现。
 - **受信身份**由装配者绑定（项目、Agent、run 与显示名）。它不能从工具参数
   读取，否则模型可以用一个字符串改掉自己的身份与作用域。
-- **调用对象**只带成员、参数、``tool_call_id`` 与身份，不提供任何
+- **调用对象**携带成员、参数、``tool_call_id`` 与身份，不提供任何
   ``context.xxx`` 属性代理。参数只有一个来源：``arguments``。
 """
 
@@ -79,6 +79,8 @@ class OperationCall:
     arguments: dict[str, Any] = field(default_factory=dict)
     tool_call_id: str = ""
     identity: InvocationIdentity = field(default_factory=InvocationIdentity)
+    # 执行端已确定本次调用的动态默认参数，包括没有默认值的情况。
+    arguments_prepared: bool = False
 
     def with_member(self, member: MemberReference) -> OperationCall:
         """返回固定为给定成员引用的调用。

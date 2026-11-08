@@ -3,6 +3,7 @@
   "name": "ghrah-demo",
   "description": "Collaborative demo project",
   "project_root_locator": "file:///srv/ghrah/projects/proj-001",
+  "shell_cwd": "",
   "manifest_ref": "ghrah/demo",
   "cluster_ids": ["cluster-1"],
   "workspaces": [

@@ -151,6 +151,8 @@ class CoreUnitConfig:
         command_runner: execute_command 能力的命令执行器注入（per-cluster
             构造期注入，duck-typed ``run_command``；None = standalone 直跑
             subprocess）。Subject 挂载模式下传 SandboxExecutor。
+        shell_cwd_provider: execute_command 省略 working_dir 时读取的 shell
+            初始目录。每次调用重新读取；None 或空字符串表示不覆盖进程 cwd。
         persistence_factory: per-agent 持久化后端工厂
             （``(AgentConfig) -> PersistenceBackend | None``；None = Core
             内建 sqlite）。新 spawn 生效，存量 agent 不受影响。
@@ -191,6 +193,7 @@ class CoreUnitConfig:
     hitl_degraded_timeout: float = 30.0
     environment_injection: bool = False
     command_runner: Any = None
+    shell_cwd_provider: Callable[[], Awaitable[str | None]] | None = None
     persistence_factory: Callable[[Any], Any] | None = None
     # per-cluster LLM 工厂注入（(AgentConfig) -> LLMProtocol；None = Core 内建
     # 默认，即 agentconf 解析）。与 persistence_factory 同范式：部署方显式
@@ -635,6 +638,7 @@ class CoreUnit:
                 filesystem_roots=self._config.ability_filesystem_roots,
                 require_approval_by_default=self._config.require_approval_by_default,
                 command_runner=self._config.command_runner,
+                shell_cwd_provider=self._config.shell_cwd_provider,
                 safe_extra_commands=self._config.safe_extra_commands,
                 safe_extra_sub_commands=self._config.safe_extra_sub_commands,
                 mcp_deployment=self._mcp_deployment,

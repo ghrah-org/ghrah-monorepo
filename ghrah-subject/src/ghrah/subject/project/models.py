@@ -235,6 +235,8 @@ class ProjectRecord(BaseModel):
     name: str
     description: str = ""
     project_root_locator: str = ""
+    # 空字符串表示 execute_command 不覆盖进程 cwd。
+    shell_cwd: str = ""
     manifest_ref: str = ""
     cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMount] = Field(default_factory=list)

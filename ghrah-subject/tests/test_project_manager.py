@@ -185,9 +185,11 @@ def _default_locator(tmp_path: Path) -> str:
 
 
 def _workspace_input(tmp_path: Path) -> list[dict[str, Any]]:
+    path = tmp_path / "default"
+    path.mkdir(parents=True, exist_ok=True)
     return [
         {
-            "locator": _default_locator(tmp_path),
+            "locator": path_to_locator(str(path)),
             "name": "default",
             "default_for_agents": True,
         }
@@ -216,6 +218,7 @@ def _make_manager(
     cluster_transport: _FakeClusterTransport | None = None,
     scoped_resource: _FakeScopedResource | None = None,
     room_store: _FakeRoomStore | None = None,
+    shell_allowed_roots: tuple[str, ...] = (),
 ) -> ProjectManager:
     async def on_event(event_type: str, payload: dict[str, Any]) -> None:
         if events is not None:
@@ -230,6 +233,7 @@ def _make_manager(
         on_event=on_event if events is not None else None,
         bootstrap_workspace_locator=default_locator,
         default_root_locator_template=str(store._db_path.parent / "roots/{project_id}"),
+        shell_allowed_roots=shell_allowed_roots,
     )
     if scoped_resource is not None:
         manager.register_scoped_resource(scoped_resource)
@@ -294,6 +298,7 @@ class TestProjectCreate:
         self, store: ProjectStore, tmp_path: Path
     ) -> None:
         mgr = _make_manager(store, default_locator="")
+        (tmp_path / "output").mkdir()
         result = await mgr.handle_command(
             "project_create",
             {
@@ -405,6 +410,7 @@ class TestProjectCreate:
     ) -> None:
         root = tmp_path / "private"
         workspace = tmp_path / "source"
+        workspace.mkdir()
         mgr = _make_manager(store, default_locator="")
         mgr._cluster_transport.fail_ensure = True  # type: ignore[attr-defined]
         result = await mgr.handle_command(
@@ -419,6 +425,98 @@ class TestProjectCreate:
         assert await store.list() == []
         assert mgr._workspace_mgr.list_records() == []  # type: ignore[attr-defined]
         assert not root.exists()
+
+    async def test_create_derives_shell_cwd_from_default_workspace(
+        self, store: ProjectStore, tmp_path: Path
+    ) -> None:
+        mgr = _make_manager(store, default_locator=_default_locator(tmp_path))
+        result = await mgr.handle_command(
+            "project_create",
+            {"name": "P1", "writable_workspaces": _workspace_input(tmp_path)},
+        )
+        assert result["success"], result.get("error")
+        assert result["data"]["project"]["shell_cwd"] == str((tmp_path / "default").resolve())
+
+    async def test_create_explicit_shell_cwd_overrides_default_workspace(
+        self, store: ProjectStore, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "default"
+        nested = workspace / "pkg"
+        nested.mkdir(parents=True)
+        mgr = _make_manager(store, default_locator="")
+        result = await mgr.handle_command(
+            "project_create",
+            {
+                "name": "P1",
+                "writable_workspaces": _workspace_input(tmp_path),
+                "shell_cwd": str(nested),
+            },
+        )
+        assert result["success"], result.get("error")
+        assert result["data"]["project"]["shell_cwd"] == str(nested.resolve())
+
+    async def test_create_rejects_missing_or_outside_shell_cwd(
+        self, store: ProjectStore, tmp_path: Path
+    ) -> None:
+        mgr = _make_manager(store, default_locator="")
+        missing = await mgr.handle_command(
+            "project_create",
+            {
+                "name": "P1",
+                "writable_workspaces": _workspace_input(tmp_path),
+                "shell_cwd": str(tmp_path / "default" / "missing"),
+            },
+        )
+        assert not missing["success"]
+        assert "existing directory" in (missing["error"] or "")
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        rejected = await mgr.handle_command(
+            "project_create",
+            {
+                "name": "P1",
+                "writable_workspaces": _workspace_input(tmp_path),
+                "shell_cwd": str(outside),
+            },
+        )
+        assert not rejected["success"]
+        assert "outside" in (rejected["error"] or "")
+        assert await store.list() == []
+
+    async def test_update_persists_and_clears_shell_cwd(
+        self, store: ProjectStore, tmp_path: Path
+    ) -> None:
+        mgr = _make_manager(store, default_locator="")
+        created = await mgr.handle_command(
+            "project_create",
+            {"name": "P1", "writable_workspaces": _workspace_input(tmp_path)},
+        )
+        project = created["data"]["project"]
+        nested = tmp_path / "default" / "pkg"
+        nested.mkdir()
+        updated = await mgr.handle_command(
+            "project_update",
+            {
+                "project_id": project["project_id"],
+                "shell_cwd": str(nested),
+                "expected_version": project["version"],
+            },
+        )
+        assert updated["success"], updated.get("error")
+        assert updated["data"]["project"]["shell_cwd"] == str(nested.resolve())
+        cleared = await mgr.handle_command(
+            "project_update",
+            {
+                "project_id": project["project_id"],
+                "shell_cwd": "",
+                "expected_version": updated["data"]["project"]["version"],
+            },
+        )
+        assert cleared["success"], cleared.get("error")
+        assert cleared["data"]["project"]["shell_cwd"] == ""
+        stored = await store.get(project["project_id"])
+        assert stored is not None
+        assert stored.shell_cwd == ""
 
 
 class TestProjectGetList:

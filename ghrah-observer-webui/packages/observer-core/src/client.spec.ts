@@ -701,6 +701,7 @@ describe("ObserverClient", () => {
               defaultForAgents: true,
             },
           ],
+          shellCwd: "/srv/projects/proj",
         }),
       );
       expect(parsed.type).toBe(CommandType.PROJECT_CREATE);
@@ -717,6 +718,7 @@ describe("ObserverClient", () => {
             default_for_agents: true,
           },
         ],
+        shell_cwd: "/srv/projects/proj",
       });
     });
 

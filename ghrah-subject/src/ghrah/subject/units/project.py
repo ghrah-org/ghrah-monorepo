@@ -99,6 +99,10 @@ class ProjectUnit(SubjectUnit):
             on_event=self._emit_event,
             bootstrap_workspace_locator=self._config.project.bootstrap_workspace_locator,
             default_root_locator_template=self._config.project.default_root_locator_template,
+            shell_allowed_roots=(
+                *self._config.ability.filesystem_roots,
+                self._config.sandbox.workspace_root,
+            ),
         )
         self._manager.register_scoped_resource(self._task_store)
         ctx.provide(PROJECT_MANAGER.name, self._manager)

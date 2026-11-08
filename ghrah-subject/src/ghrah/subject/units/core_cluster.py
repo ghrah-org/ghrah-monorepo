@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -32,12 +33,15 @@ from ghrah.subject.runtime.service_keys import (
     ABILITY_ACCESS,
     CORE_CLUSTER_REGISTRY,
     MANIFEST_STORE,
+    PROJECT_STORE,
     SANDBOX_EXECUTOR,
     WORKSPACE_SERVICE,
 )
 from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, UnitMeta
 
 __all__ = ["CoreClusterRegistryUnit"]
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_AGENT_COMMANDS = frozenset(
     {
@@ -212,12 +216,31 @@ class CoreClusterRegistryUnit(SubjectUnit):
             async def resolve_ability_store(project_id: str, locator: str) -> Any:
                 return await registry_holder[0].ability_store(project_id, locator)
 
+            async def shell_cwd_lookup(project_id: str) -> str | None:
+                # Project unit 在本 unit 之后才 provide store；读取发生在命令执行时。
+                try:
+                    project_store = ctx.get(PROJECT_STORE.name)
+                except Exception:
+                    return None
+                if project_store is None:
+                    return None
+                try:
+                    record = await project_store.get(project_id)
+                except Exception:
+                    logger.warning("shell cwd lookup failed for project %s", project_id)
+                    return None
+                if record is None:
+                    return None
+                path = str(getattr(record, "shell_cwd", "") or "").strip()
+                return path or None
+
             self._unit_factory = default_core_unit_factory(
                 self._config,
                 manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
                 ability_store_resolver=resolve_ability_store,
+                shell_cwd_lookup=shell_cwd_lookup,
             )
         registry = CoreClusterRegistry(
             unit_factory=self._unit_factory,

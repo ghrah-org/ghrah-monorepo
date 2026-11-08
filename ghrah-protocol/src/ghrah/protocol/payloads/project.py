@@ -80,6 +80,7 @@ class ProjectInfoPayload(BaseModel):
     name: str
     description: str = ""
     project_root_locator: str = ""
+    shell_cwd: str = ""
     manifest_ref: str = ""
     cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMountSchema] = Field(default_factory=list)
@@ -107,6 +108,8 @@ class ProjectCreatePayload(BaseModel):
     writable_workspaces: list[WritableWorkspaceSpec] = Field(default_factory=list)
     manifest_ref: str = ""
     recovery: str = RecoveryAction.RESUME.value
+    # 空字符串表示不设置；创建时若仍为空且登记了 default workspace，由 Subject 推导。
+    shell_cwd: str = ""
 
 
 class ProjectUpdatePayload(BaseModel):
@@ -119,6 +122,8 @@ class ProjectUpdatePayload(BaseModel):
     description: str | None = None
     manifest_ref: str | None = None
     expected_version: int | None = None
+    # None 表示本次不改；空字符串表示清空，恢复为不覆盖进程 cwd。
+    shell_cwd: str | None = None
 
 
 class ProjectIdPayload(BaseModel):

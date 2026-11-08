@@ -100,6 +100,24 @@ describe("ProjectSelector", () => {
     expect(wrapper.find('input[placeholder="Project name"]').exists()).toBe(false);
   });
 
+  it("sends an explicit shell initial directory", async () => {
+    const wrapper = mount(ProjectSelector);
+    await wrapper.find('button[title="New project"]').trigger("click");
+    await wrapper.find('input[placeholder="Project name"]').setValue("repo-project");
+    await wrapper.get("#new-project-shell-cwd").setValue("/work/ghrah");
+    createProjectMock.mockResolvedValue({
+      success: true,
+      data: { project: { project_id: "p11", name: "repo-project" } },
+    });
+    await wrapper.find("form").trigger("submit.prevent");
+    expect(createProjectMock).toHaveBeenCalledWith("repo-project", {
+      description: "",
+      projectRootLocator: undefined,
+      shellCwd: "/work/ghrah",
+      writableWorkspaces: [],
+    });
+  });
+
   it("shows backend error when creation fails", async () => {
     const wrapper = mount(ProjectSelector);
     await wrapper.find('button[title="New project"]').trigger("click");

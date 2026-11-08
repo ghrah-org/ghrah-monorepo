@@ -11,5 +11,6 @@
     }
   ],
   "manifest_ref": "ghrah/demo",
-  "recovery": "resume"
+  "recovery": "resume",
+  "shell_cwd": ""
 }

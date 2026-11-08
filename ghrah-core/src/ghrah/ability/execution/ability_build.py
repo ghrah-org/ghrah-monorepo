@@ -80,6 +80,7 @@ def instantiate_resolved_abilities(
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
     permission_scopes: Mapping[str, EffectivePermission] | None = None,
+    shell_cwd_provider: Any = None,
 ) -> list[AbilityProtocol]:
     """ResolvedAbility → Ability 实例列表（对齐独立库 runner 范式）。
 
@@ -133,6 +134,7 @@ def instantiate_resolved_abilities(
             command_runner=command_runner,
             safe_extra_commands=safe_extra_commands,
             safe_extra_sub_commands=safe_extra_sub_commands,
+            shell_cwd_provider=shell_cwd_provider,
         )
         required = _REQUIRED_PERMISSION.get(handler)
         if required is not None and not getattr(effective, required):
@@ -157,6 +159,7 @@ def _instantiate_ability(
     command_runner: Any,
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    shell_cwd_provider: Any = None,
 ) -> AbilityProtocol:
     """单个 ResolvedAbility → Ability（对齐 runner._instantiate_ability）。"""
     permissions = ra.permissions
@@ -196,6 +199,8 @@ def _instantiate_ability(
         }
         if command_runner is not None:
             params["command_runner"] = command_runner
+        if shell_cwd_provider is not None:
+            params["shell_cwd_provider"] = shell_cwd_provider
         return create_ability("execute_command", **params)
 
     ability = create_ability(handler)

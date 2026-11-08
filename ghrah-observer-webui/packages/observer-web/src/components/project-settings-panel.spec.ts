@@ -113,6 +113,19 @@ describe("ProjectSettingsPanel", () => {
     ]);
   });
 
+  it("saves a configured shell initial directory", async () => {
+    const wrapper = mountPanel();
+    await wrapper.get("#project-settings-shell-cwd").setValue("/work/repo");
+    await wrapper.get(".project-settings-form").trigger("submit");
+    expect(updateProject).toHaveBeenCalledWith("p1", {
+      name: "Alpha",
+      description: "Original",
+      manifestRef: "demo/project",
+      shellCwd: "/work/repo",
+      expectedVersion: 4,
+    });
+  });
+
   it("updates editable fields with the current optimistic version", async () => {
     const wrapper = mountPanel();
     await wrapper.get("#project-settings-name").setValue("Alpha 2");
@@ -122,6 +135,7 @@ describe("ProjectSettingsPanel", () => {
       name: "Alpha 2",
       description: "Updated",
       manifestRef: "demo/project",
+      shellCwd: "",
       expectedVersion: 4,
     });
   });

@@ -258,6 +258,7 @@ export function useObserver() {
       description?: string | null;
       manifestRef?: string | null;
       expectedVersion?: number | null;
+      shellCwd?: string | null;
     },
   ) {
     return withClient((c) => c.updateProject(projectId, fields));

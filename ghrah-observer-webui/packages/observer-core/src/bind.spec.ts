@@ -1434,6 +1434,7 @@ describe("connectStores", () => {
           description: "",
           project_root_locator: "",
           manifest_ref: "",
+          shell_cwd: "",
           cluster_ids: [],
           workspaces: [],
           agents: [

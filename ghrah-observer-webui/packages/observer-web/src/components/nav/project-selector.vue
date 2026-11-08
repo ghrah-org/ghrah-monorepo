@@ -20,6 +20,7 @@ const creating = ref(false);
 const newName = ref("");
 const newDescription = ref("");
 const newProjectRoot = ref("");
+const newShellCwd = ref("");
 const newWorkspaces = ref<Array<{ locator: string; name: string }>>([]);
 const busy = ref(false);
 const nameInput = ref<HTMLInputElement | null>(null);
@@ -29,6 +30,7 @@ function startCreate() {
   newName.value = "";
   newDescription.value = "";
   newProjectRoot.value = "";
+  newShellCwd.value = "";
   newWorkspaces.value = [];
   void nextTick(() => nameInput.value?.focus());
 }
@@ -38,6 +40,7 @@ function cancelCreate() {
   newName.value = "";
   newDescription.value = "";
   newProjectRoot.value = "";
+  newShellCwd.value = "";
   newWorkspaces.value = [];
 }
 
@@ -58,9 +61,11 @@ async function submitCreate() {
   if (newWorkspaces.value.some((workspace) => !workspace.locator.trim())) return;
   busy.value = true;
   try {
+    const shellCwd = newShellCwd.value.trim();
     const result = await createProject(name, {
       description: newDescription.value.trim(),
       projectRootLocator: newProjectRoot.value.trim() || undefined,
+      ...(shellCwd ? { shellCwd } : {}),
       writableWorkspaces: newWorkspaces.value.map((workspace, index) => ({
         locator: workspace.locator.trim(),
         name: workspace.name.trim() || `workspace-${index + 1}`,
@@ -228,6 +233,18 @@ async function submitCreate() {
           </div>
           <p v-if="newWorkspaces.length > 0" class="project-create-hint">
             {{ t("nav.project.firstWorkspaceHint") }}
+          </p>
+          <label for="new-project-shell-cwd">{{ t("nav.project.shellCwd") }}</label>
+          <input
+            id="new-project-shell-cwd"
+            v-model="newShellCwd"
+            type="text"
+            :placeholder="t('nav.project.shellCwdPlaceholder')"
+            class="project-create-input"
+            @keydown.esc="cancelCreate"
+          />
+          <p class="project-create-hint">
+            {{ t("nav.project.shellCwdHint") }}
           </p>
         </div>
         <div class="project-create-actions">

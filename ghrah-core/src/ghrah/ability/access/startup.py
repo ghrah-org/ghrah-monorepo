@@ -294,6 +294,9 @@ class ProjectedAbility:
         denied = self.check_call(call, services)
         if denied is not None:
             return denied
+        prepare_arguments = getattr(self._inner, "prepare_arguments", None)
+        if callable(prepare_arguments):
+            call = await prepare_arguments(call)
         if self._admission is not None:
             error = await self._admission(call)
             if error is not None:
@@ -446,6 +449,7 @@ class StartupGrantMaterializer:
         command_runner: Any = None,
         safe_extra_commands: tuple[str, ...] = (),
         safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
+        shell_cwd_provider: Any = None,
         mcp_deployment: Any = None,
         surface_thresholds: SurfaceThresholds | None = None,
         surface_search_limit: int = 8,
@@ -463,6 +467,7 @@ class StartupGrantMaterializer:
         self._auto_approve_abilities = auto_approve_abilities
         self._require_approval_by_default = require_approval_by_default
         self._command_runner = command_runner
+        self._shell_cwd_provider = shell_cwd_provider
         self._safe_extra_commands = safe_extra_commands
         self._safe_extra_sub_commands = safe_extra_sub_commands
         self._mcp_deployment = mcp_deployment
@@ -862,6 +867,7 @@ class StartupGrantMaterializer:
             command_runner=self._command_runner,
             safe_extra_commands=self._safe_extra_commands,
             safe_extra_sub_commands=self._safe_extra_sub_commands,
+            shell_cwd_provider=self._shell_cwd_provider,
         )
         for binding in bindings:
             instance = definitions[binding.alias]
@@ -914,6 +920,7 @@ class StartupGrantMaterializer:
                     safe_extra_commands=self._safe_extra_commands,
                     safe_extra_sub_commands=self._safe_extra_sub_commands,
                     permission_scopes={resolved.ability_name: scope},
+                    shell_cwd_provider=self._shell_cwd_provider,
                 )
             if not built:
                 raise StartupGrantError(

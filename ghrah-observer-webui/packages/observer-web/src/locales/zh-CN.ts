@@ -322,6 +322,10 @@ export default {
       removeWorkspaceAria: "移除 workspace {index}",
       firstWorkspaceHint:
         "第一个 workspace 是 Agent 的默认目录。Workspaces 不能与 Project Root 重叠。",
+      shellCwd: "Shell 初始目录",
+      shellCwdPlaceholder: "/absolute/path/to/repo",
+      shellCwdHint:
+        "留空则命令从 Subject 进程目录启动。填写的目录必须已存在，且位于文件授权根或已登记 workspace 之内。未填写时，第一个 workspace 会成为初始目录。",
       createFailed: "创建失败",
       summaryWorkspaces: "{count} 个可写 workspace",
     },
@@ -516,6 +520,10 @@ export default {
     name: "名称",
     description: "描述",
     manifest: "Manifest 引用",
+    shellCwd: "Shell 初始目录",
+    shellCwdPlaceholder: "/absolute/path/to/repo",
+    shellCwdHint:
+      "留空则命令从 Subject 进程目录启动。填写的目录必须已存在，且位于文件授权根或已登记 workspace 之内。",
     saveFailed: "Project 更新失败",
     refresh: "刷新",
     refreshFailed: "Project 刷新失败",

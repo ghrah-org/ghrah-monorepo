@@ -702,6 +702,7 @@ export class MockState {
     description?: string;
     project_root_locator?: string;
     manifest_ref?: string;
+    shell_cwd?: string;
   }): CommandOutcome {
     const project: ProjectInfoPayload = {
       project_id: uuid(),
@@ -709,6 +710,7 @@ export class MockState {
       description: p.description ?? "",
       project_root_locator: p.project_root_locator ?? "",
       manifest_ref: p.manifest_ref ?? "",
+      shell_cwd: p.shell_cwd ?? "",
       cluster_ids: [],
       workspaces: [],
       agents: [],
@@ -738,6 +740,7 @@ export class MockState {
     name?: string | null;
     description?: string | null;
     manifest_ref?: string | null;
+    shell_cwd?: string | null;
     expected_version?: number | null;
   }): CommandOutcome {
     const project = this.projects.get(p.project_id);
@@ -752,6 +755,7 @@ export class MockState {
     if (p.name != null) project.name = p.name;
     if (p.description != null) project.description = p.description;
     if (p.manifest_ref != null) project.manifest_ref = p.manifest_ref;
+    if (p.shell_cwd != null) project.shell_cwd = p.shell_cwd;
     project.version += 1;
     project.updated_at = isoNow();
     this.emit(EventType.PROJECT_UPDATED, { project });

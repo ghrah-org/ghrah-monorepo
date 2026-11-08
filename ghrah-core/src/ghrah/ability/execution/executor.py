@@ -338,6 +338,10 @@ class LocalAbilityExecutor(AbilityExecutor):
             if denied is not None:
                 return denied
 
+        prepare_arguments = getattr(ability, "prepare_arguments", None)
+        if callable(prepare_arguments):
+            call = await prepare_arguments(call)
+
         # PRE_EXECUTE hook（ability 级）
         hook_result = await self._hook_runner.run(HookPoint.PRE_EXECUTE, call, services)
 
@@ -452,7 +456,8 @@ class LocalAbilityExecutor(AbilityExecutor):
         arguments = self._resolve_paths(
             call.arguments, getattr(ability, "member", "") or ability.name
         )
-        return await self.execute_ability(ability, replace(call, arguments=arguments), services)
+        routed = replace(call, arguments=arguments, arguments_prepared=False)
+        return await self.execute_ability(ability, routed, services)
 
     async def execute_tool_calls(
         self,

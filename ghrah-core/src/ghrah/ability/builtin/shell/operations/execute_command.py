@@ -24,7 +24,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -157,11 +158,13 @@ class ExecuteCommandAbility(Ability):
         command_runner: CommandRunner | None = None,
         timeout: float = 300.0,
         fold_stdout_lines: int = 100,
+        shell_cwd_provider: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self._hooks = hooks or []
         self._checker = command_checker or CommandSafetyChecker()
         self._command_runner = command_runner
         self._timeout = timeout
+        self._shell_cwd_provider = shell_cwd_provider
         # 0 = 关闭折叠（保留旧行为：仅字节截断）；stderr 永不折叠
         self._fold_stdout_lines = fold_stdout_lines
 
@@ -193,7 +196,19 @@ class ExecuteCommandAbility(Ability):
     def get_hooks(self) -> list[Hook]:
         return list(self._hooks)
 
+    async def prepare_arguments(self, call: OperationCall) -> OperationCall:
+        """在审批前确定本次调用的工作目录，随后复用同一份参数。"""
+        if call.arguments_prepared or call.arguments.get("working_dir") is not None:
+            return call
+        cwd = await self._default_shell_cwd()
+        return replace(
+            call,
+            arguments={**call.arguments, "working_dir": cwd},
+            arguments_prepared=True,
+        )
+
     async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        call = await self.prepare_arguments(call)
         tool_args = call.arguments
         command = tool_args.get("command", "")
         working_dir = tool_args.get("working_dir")
@@ -214,6 +229,16 @@ class ExecuteCommandAbility(Ability):
         if self._command_runner is not None:
             return await self._execute_via_runner(command, working_dir)
         return await self._execute_subprocess(command, working_dir)
+
+    async def _default_shell_cwd(self) -> str | None:
+        """Project 配置的 shell 初始目录；未配置或读取失败时不覆盖。"""
+        if self._shell_cwd_provider is None:
+            return None
+        value = await self._shell_cwd_provider()
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
 
     async def _execute_via_runner(self, command: str, working_dir: str | None) -> ActionResult:
         try:

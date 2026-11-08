@@ -346,6 +346,10 @@ export default {
       removeWorkspaceAria: "Remove workspace {index}",
       firstWorkspaceHint:
         "The first workspace is the default for agents. Workspaces cannot overlap Project Roots.",
+      shellCwd: "Shell initial directory",
+      shellCwdPlaceholder: "/absolute/path/to/repo",
+      shellCwdHint:
+        "Leave empty to start commands in the Subject process directory. A filled directory must already exist and sit inside a filesystem grant or a registered workspace. When empty, the first workspace becomes the initial directory.",
       createFailed: "Failed to create project",
       summaryWorkspaces: "{count} writable workspace(s)",
     },
@@ -543,6 +547,10 @@ export default {
     name: "Name",
     description: "Description",
     manifest: "Manifest reference",
+    shellCwd: "Shell initial directory",
+    shellCwdPlaceholder: "/absolute/path/to/repo",
+    shellCwdHint:
+      "Leave empty to start commands in the Subject process directory. A filled directory must already exist and sit inside a filesystem grant or a registered workspace.",
     saveFailed: "Failed to update Project",
     refresh: "Refresh",
     refreshFailed: "Failed to refresh Project",

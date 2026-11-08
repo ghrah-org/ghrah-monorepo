@@ -848,3 +848,42 @@ async def test_generic_template_hitl_is_preserved(store, tmp_path):
     )
     tool = next(t for t in table.abilities if t.name == "query_agents")
     assert tool.get_hooks()
+
+
+async def test_project_shell_cwd_is_checked_against_the_tool_grant(store, tmp_path):
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    cwd = outside
+
+    async def project_cwd() -> str:
+        return str(cwd)
+
+    assembly, resolved = _resolved(
+        AGENT_YAML[: AGENT_YAML.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: ghrah.shell.execute_command\n"
+    )
+    materializer = _materializer(store, assembly, workspace, shell_cwd_provider=project_cwd)
+    table = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
+    tool = next(t for t in table.abilities if t.name == "execute_command")
+    executor = LocalAbilityExecutor("shell", hooks=tool.get_hooks())
+    call = make_call(member="execute_command", arguments={"command": "echo test"})
+    services = make_services()
+
+    for execute in (executor.execute_ability, executor.execute_routed):
+        denied = await execute(tool, call, services)
+        assert denied.outcome.value == "failure"
+        assert "denied" in denied.data["error"].lower()
+    direct = await tool.execute(call, services)
+    assert direct.outcome.value == "failure"
+    assert "denied" in direct.data["error"].lower()
+
+    cwd = workspace
+    allowed = await executor.execute_ability(tool, call, services)
+    assert allowed.outcome.value == "success"
+    assert allowed.data["working_dir"] == str(workspace)

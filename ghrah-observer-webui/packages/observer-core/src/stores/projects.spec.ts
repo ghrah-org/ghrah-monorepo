@@ -26,6 +26,7 @@ function makeProject(overrides: Partial<ProjectInfoPayload> = {}): ProjectInfoPa
     archived_at: null,
     deleted_at: null,
     ...overrides,
+    shell_cwd: overrides.shell_cwd ?? "",
     isolation: overrides.isolation ?? {
       agent_path_grants: {},
       agent_private_dir: true,

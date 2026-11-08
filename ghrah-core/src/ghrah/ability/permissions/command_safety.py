@@ -17,7 +17,8 @@
 4. 无位置参数的 ``git branch`` / ``git tag`` 列表 → 自动批准
 5. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
 6. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
-7. 整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
+7. 无法确定写入范围的 cd 组合或 sed 原地编辑 → 审批或硬拒绝；
+   其余整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
 8. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
    LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
 9. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
@@ -29,9 +30,11 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bash_classify import Classification, Risk
@@ -55,6 +58,35 @@ if TYPE_CHECKING:
     from ghrah.types.results import ActionResult
 
 logger = logging.getLogger(__name__)
+
+_SED_INPLACE_SHORT = re.compile(r"^-[^-ef]*i")
+
+
+def _sed_edits_in_place(argv: list[str]) -> bool:
+    """检测原地编辑选项，包括 GNU 长选项缩写与短选项簇。"""
+    for arg in argv[1:]:
+        if arg == "--":
+            break
+        option = arg.partition("=")[0]
+        if (len(option) > 2 and "--in-place".startswith(option)) or _SED_INPLACE_SHORT.match(arg):
+            return True
+    return False
+
+
+def _unverified_write_reason(classification: Classification, segments: list[Any]) -> str | None:
+    for segment in segments:
+        argv = segment.argv
+        if not argv:
+            continue
+        base = Path(argv[0]).name.lower()
+        if base == "cd" and classification is Classification.LOCAL_EFFECTS:
+            # 扁平分类结果无法证明 cd 成功或影响后续命令所在的 shell。
+            return "Cannot verify write paths after cd"
+        if base == "sed" and _sed_edits_in_place(argv):
+            # 脚本和备份选项可以引入额外写入，短选项簇还可能被误判成只读。
+            return "Cannot verify all write paths for in-place sed"
+    return None
+
 
 _VERSION_OR_HELP_FLAGS = frozenset({"--version", "-V", "--help"})
 _GIT_BARE_LIST_SUBS = frozenset({"branch", "tag"})
@@ -421,6 +453,19 @@ class CommandSafetyChecker:
                     sub_command=primary_sub,
                     reason=f"Command in declared scope: {command}",
                 )
+
+        unverified_write = _unverified_write_reason(expression.classification, segments)
+        if unverified_write is not None:
+            return CommandSafetyVerdict(
+                category=(
+                    CommandSafetyCategory.REQUIRE_HITL
+                    if self._require_approval
+                    else CommandSafetyCategory.DANGEROUS
+                ),
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=unverified_write,
+            )
 
         if is_readonly_low(expression):
             return CommandSafetyVerdict(

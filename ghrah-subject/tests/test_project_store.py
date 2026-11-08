@@ -104,6 +104,18 @@ class TestCrudAndRoundtrip:
                 "recovery TEXT NOT NULL DEFAULT 'resume', created_at TEXT NOT NULL, "
                 "updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, deleted_at TEXT)"
             )
+            db.execute(
+                "INSERT INTO subject_projects ("
+                "project_id, name, status, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?)",
+                (
+                    "legacy",
+                    "Legacy",
+                    "active",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
         migrated = ProjectStore(db_path)
         await migrated.start()
         try:
@@ -112,8 +124,17 @@ class TestCrudAndRoundtrip:
                 version = db.execute(
                     "SELECT version FROM subject_schema_versions WHERE component = 'project_store'"
                 ).fetchone()
-            assert {"description", "project_root_locator", "archived_at", "config"} <= columns
-            assert version == (4,)
+            assert {
+                "description",
+                "project_root_locator",
+                "archived_at",
+                "config",
+                "shell_cwd",
+            } <= columns
+            assert version == (5,)
+            legacy = await migrated.get("legacy")
+            assert legacy is not None
+            assert legacy.shell_cwd == ""
         finally:
             await migrated.stop()
 

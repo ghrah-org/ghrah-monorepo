@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -150,6 +151,15 @@ def _locator_dirname(locator: str) -> str:
     return locator_to_path(locator)
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    """path 是否等于 root 或落在 root 之内。"""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 class ProjectManager:
     """Project 命令编排层 + per-project lifecycle lock + bootstrap 方法。
 
@@ -177,6 +187,7 @@ class ProjectManager:
         on_event: OnEvent | None = None,
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
+        shell_allowed_roots: tuple[str, ...] = (),
     ) -> None:
         self._store = store
         self._workspace_mgr = workspace_mgr
@@ -186,11 +197,65 @@ class ProjectManager:
         self._on_event = on_event
         self._bootstrap_workspace_locator = bootstrap_workspace_locator
         self._default_root_locator_template = default_root_locator_template
+        self._shell_allowed_roots = tuple(
+            str(Path(root).expanduser().resolve()) for root in shell_allowed_roots if root
+        )
         self._create_lock = asyncio.Lock()
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self._scoped_resources: list[Any] = []
         self._room_store: Any | None = None
         self.agents = AgentEntityManager(self)
+
+    def _mounted_workspace_paths(self, record: ProjectRecord) -> list[str]:
+        """该 Project 已登记 workspace 的本地路径。"""
+        paths: list[str] = []
+        for mount in record.workspaces:
+            workspace = self._workspace_mgr.get_record(mount.workspace_id)
+            if workspace is None:
+                continue
+            paths.append(workspace.locator)
+        return paths
+
+    def _shell_roots(self, extra_paths: list[str]) -> list[Path]:
+        """shell_cwd 允许落点：部署根，加上本次或已登记的 workspace。"""
+        roots = [Path(root) for root in self._shell_allowed_roots]
+        for raw in extra_paths:
+            text = raw.strip()
+            if not text:
+                continue
+            try:
+                local = locator_to_path(text) if "://" in text else text
+            except ValueError:
+                continue
+            candidate = Path(local).expanduser()
+            if candidate.is_absolute():
+                roots.append(candidate.resolve())
+        return roots
+
+    def _normalize_shell_cwd(self, raw: str, extra_paths: list[str]) -> str:
+        """校验 shell 初始目录。空字符串表示不覆盖。"""
+        text = raw.strip()
+        if not text:
+            return ""
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError("shell_cwd must be an absolute directory")
+        if not path.is_dir():
+            raise ValueError(f"shell_cwd is not an existing directory: {path}")
+        resolved = path.resolve()
+        if not any(_path_within(resolved, root) for root in self._shell_roots(extra_paths)):
+            raise ValueError("shell_cwd is outside the allowed filesystem roots")
+        return str(resolved)
+
+    def _resolve_create_shell_cwd(self, explicit: str, workspaces: list[dict[str, Any]]) -> str:
+        """显式路径优先；未写时用 default_for_agents workspace 的绝对路径。"""
+        extra = [str(item["locator"]) for item in workspaces]
+        if explicit.strip():
+            return self._normalize_shell_cwd(explicit, extra)
+        default = next((item for item in workspaces if item.get("default_for_agents")), None)
+        if default is None:
+            return ""
+        return self._normalize_shell_cwd(locator_to_path(str(default["locator"])), extra)
 
     async def handle_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         handler = _HANDLERS.get(command)
@@ -428,6 +493,7 @@ class ProjectManager:
         await self._check_create_paths(
             root_locator, [str(w["locator"]) for w in normalized_workspaces]
         )
+        shell_cwd = self._resolve_create_shell_cwd(p.shell_cwd, normalized_workspaces)
 
         receipt = None
         registered_ids: list[str] = []
@@ -458,6 +524,7 @@ class ProjectManager:
                     "cluster_ids": [cluster_id],
                     "workspaces": mounts,
                     "recovery": RecoverySpec(on_restart=RecoveryAction(p.recovery)),
+                    "shell_cwd": shell_cwd,
                 }
             )
             await self._store.upsert(record)
@@ -565,6 +632,10 @@ class ProjectManager:
                 updates["description"] = p.description
             if p.manifest_ref is not None:
                 updates["manifest_ref"] = p.manifest_ref
+            if p.shell_cwd is not None:
+                updates["shell_cwd"] = self._normalize_shell_cwd(
+                    p.shell_cwd, self._mounted_workspace_paths(r)
+                )
             return r.model_copy(update=updates)
 
         updated = await self._store.update(p.project_id, expected, mutator)

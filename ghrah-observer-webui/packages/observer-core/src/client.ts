@@ -35,6 +35,7 @@ export interface CreateProjectOptions {
     role?: string | null;
     defaultForAgents?: boolean;
   }>;
+  shellCwd?: string;
 }
 
 export interface RoomLifecycleTarget {
@@ -940,6 +941,7 @@ export class ObserverClient extends ServerClient {
           : {}),
       }));
     }
+    if (options.shellCwd) payload["shell_cwd"] = options.shellCwd;
     const msg: ServerMessage = {
       type: CommandType.PROJECT_CREATE,
       payload,
@@ -980,6 +982,7 @@ export class ObserverClient extends ServerClient {
       description?: string | null;
       manifestRef?: string | null;
       expectedVersion?: number | null;
+      shellCwd?: string | null;
     },
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = { project_id: projectId };
@@ -987,6 +990,7 @@ export class ObserverClient extends ServerClient {
     if (fields.description != null) payload["description"] = fields.description;
     if (fields.manifestRef != null) payload["manifest_ref"] = fields.manifestRef;
     if (fields.expectedVersion != null) payload["expected_version"] = fields.expectedVersion;
+    if (fields.shellCwd != null) payload["shell_cwd"] = fields.shellCwd;
 
     const msg: ServerMessage = {
       type: CommandType.PROJECT_UPDATE,

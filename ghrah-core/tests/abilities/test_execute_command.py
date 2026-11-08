@@ -107,6 +107,50 @@ class TestExecuteSubprocess:
         assert os.path.normcase(str(stdout_dir)) == os.path.normcase(str(tmp_path))
 
     @pytest.mark.asyncio
+    async def test_shell_cwd_provider_used_when_working_dir_omitted(self, tmp_path: Path) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        paths = iter((first, second))
+
+        async def provider() -> str:
+            return str(next(paths))
+
+        ability = ExecuteCommandAbility(shell_cwd_provider=provider)
+        command = "pwd" if os.name == "posix" else "cd"
+        for expected in (first, second):
+            call, services = _make_context(
+                member="execute_command",
+                tool_args={"command": command},
+            )
+            result = await ability.execute(call, services)
+            assert result.outcome == ActionOutcome.SUCCESS
+            stdout_dir = Path(result.data["stdout"].strip().splitlines()[-1])
+            assert os.path.normcase(str(stdout_dir)) == os.path.normcase(str(expected))
+            assert os.path.normcase(result.data["working_dir"]) == os.path.normcase(str(expected))
+
+    @pytest.mark.asyncio
+    async def test_explicit_working_dir_skips_shell_cwd_provider(self, tmp_path: Path) -> None:
+        called = False
+
+        async def provider() -> str:
+            nonlocal called
+            called = True
+            return str(tmp_path / "ignored")
+
+        ability = ExecuteCommandAbility(shell_cwd_provider=provider)
+        command = "pwd" if os.name == "posix" else "cd"
+        call, services = _make_context(
+            member="execute_command",
+            tool_args={"command": command, "working_dir": str(tmp_path)},
+        )
+        result = await ability.execute(call, services)
+        assert result.outcome == ActionOutcome.SUCCESS
+        assert called is False
+        assert os.path.normcase(result.data["working_dir"]) == os.path.normcase(str(tmp_path))
+
+    @pytest.mark.asyncio
     async def test_empty_command_returns_failure(self) -> None:
         ability = ExecuteCommandAbility()
         call, services = _make_context(
@@ -200,6 +244,62 @@ class MockCommandRunner:
             command=cmd_str,
             working_dir=cwd or "",
         )
+
+
+@pytest.mark.parametrize("configured", [True, False])
+async def test_shell_cwd_is_fixed_before_approval(tmp_path, monkeypatch, configured) -> None:
+    from ghrah.ability.execution.executor import HITLWaitResult, LocalAbilityExecutor
+    from ghrah.ability.permissions.command_safety import CommandApprovalHook, CommandSafetyChecker
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+    workspace = tmp_path / "auto"
+    initial_cwd = str(tmp_path / "approval-required") if configured else None
+    project_cwd = initial_cwd
+    lookups = 0
+
+    async def provider() -> str | None:
+        nonlocal lookups
+        lookups += 1
+        return project_cwd
+
+    async def approve(hook_result, call, services):
+        nonlocal project_cwd
+        assert call.arguments["working_dir"] == initial_cwd
+        if initial_cwd is not None:
+            assert initial_cwd in hook_result.message
+        project_cwd = str(workspace)
+        return HITLWaitResult(outcome="approved")
+
+    fs_checker = (
+        FSPermissionChecker(
+            workspace_root=str(workspace),
+            sandbox_roots=(tmp_path,),
+            require_approval=True,
+        )
+        if configured
+        else None
+    )
+    checker = CommandSafetyChecker(
+        workspace_root=str(workspace),
+        fs_checker=fs_checker,
+    )
+    hook = CommandApprovalHook(checker)
+    runner = MockCommandRunner()
+    ability = ExecuteCommandAbility(
+        command_checker=checker, hooks=[hook], command_runner=runner, shell_cwd_provider=provider
+    )
+    executor = LocalAbilityExecutor("shell", hooks=ability.get_hooks())
+    monkeypatch.setattr(executor, "handle_hitl_hook_result", approve)
+    call, services = _make_context(
+        member="execute_command",
+        tool_args={"command": "touch marker.txt", "working_dir": None},
+    )
+
+    result = await executor.execute_ability(ability, call, services)
+
+    assert result.outcome == ActionOutcome.SUCCESS
+    assert lookups == 1
+    assert runner.calls[0]["cwd"] == initial_cwd
 
 
 class TestExecuteViaRunner:

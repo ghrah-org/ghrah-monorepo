@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS subject_projects (
     name                  TEXT NOT NULL,
     description           TEXT NOT NULL DEFAULT '',
     project_root_locator  TEXT NOT NULL DEFAULT '',
+    shell_cwd             TEXT NOT NULL DEFAULT '',
     manifest_ref          TEXT NOT NULL DEFAULT '',
     cluster_ids           TEXT NOT NULL DEFAULT '[]',
     workspaces            TEXT NOT NULL DEFAULT '[]',
@@ -82,6 +83,7 @@ _COLUMNS = (
     "name",
     "description",
     "project_root_locator",
+    "shell_cwd",
     "manifest_ref",
     "cluster_ids",
     "workspaces",
@@ -101,12 +103,13 @@ _COLUMNS = (
 # recovery 不在此列（单值字符串列）。
 _JSON_COLUMNS = ("cluster_ids", "workspaces", "agents", "task_ids", "isolation", "config")
 _SCHEMA_COMPONENT = "project_store"
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _MIGRATION_COLUMNS: dict[int, tuple[str, str]] = {
     1: ("description", "TEXT NOT NULL DEFAULT ''"),
     2: ("project_root_locator", "TEXT NOT NULL DEFAULT ''"),
     3: ("archived_at", "TEXT"),
     4: ("config", "TEXT"),
+    5: ("shell_cwd", "TEXT NOT NULL DEFAULT ''"),
 }
 
 

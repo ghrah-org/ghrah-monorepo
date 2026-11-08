@@ -602,6 +602,61 @@ def test_phase3_relative_path_uses_workspace_root(tmp_path) -> None:
     assert verdict.category is CommandSafetyCategory.SAFE
 
 
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "cd {root} | touch outside.txt",
+        "(cd {root}); touch outside.txt",
+        "cd {root}/missing; touch outside.txt",
+        "cd {root}/missing || touch outside.txt",
+    ],
+)
+def test_workspace_write_with_uncertain_cd_requires_approval(tmp_path, expression) -> None:
+    import shlex
+
+    root = tmp_path / "granted"
+    root.mkdir()
+    verdict = _workspace_checker(root).check_command(
+        expression.format(root=shlex.quote(root.as_posix())), working_dir=str(tmp_path)
+    )
+    assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
+
+
+def test_workspace_write_after_wrapped_cd_requires_approval(tmp_path) -> None:
+    root = tmp_path / "granted"
+    verdict = _workspace_checker(root).check_command(
+        "command cd ..; touch outside.txt", working_dir=str(root)
+    )
+    assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
+
+
+@pytest.mark.parametrize("option", ["-i", "-ni", "-i.bak", "--in-place=.bak"])
+def test_sed_in_place_with_multiple_targets_requires_approval(tmp_path, option) -> None:
+    command = f"sed {option} 's/old/new/' ../outside.txt safe.txt"
+    assert _workspace_checker(tmp_path).check_command(command).category == (
+        CommandSafetyCategory.REQUIRE_HITL
+    )
+    assert CommandSafetyChecker(require_approval=False).check_command(command).category == (
+        CommandSafetyCategory.DANGEROUS
+    )
+
+
+def test_workspace_write_rejects_denied_target_after_pending_target(tmp_path) -> None:
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+    checker = CommandSafetyChecker(
+        workspace_root=str(tmp_path),
+        fs_checker=FSPermissionChecker(
+            allowed_paths=[str(tmp_path / "approved")],
+            sandbox_roots=(tmp_path,),
+            require_approval=True,
+        ),
+    )
+    assert checker.check_command("touch pending.txt ../outside.txt").category == (
+        CommandSafetyCategory.DANGEROUS
+    )
+
+
 def test_node_version_is_safe_via_extends() -> None:
     verdict = CommandSafetyChecker().check_command("node --version")
     assert verdict.category is CommandSafetyCategory.SAFE

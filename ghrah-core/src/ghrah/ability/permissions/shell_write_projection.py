@@ -36,7 +36,7 @@ _ALL_POSITIONALS_WRITE = frozenset({"mkdir", "touch", "tee"})
 
 
 class WriteProjection:
-    """投影结果：``kind`` 为 safe / hitl / dangerous；无法投影时函数返回 None。"""
+    """投影结果为 safe、hitl 或 dangerous。"""
 
     __slots__ = ("kind", "reason")
 
@@ -70,18 +70,12 @@ def try_workspace_write_approval(
     for command in getattr(expression, "commands", ()) or ():
         argv = list(getattr(command, "argv", ()) or ())
         base = Path(argv[0]).name.lower() if argv else ""
-        if base == "cd":
-            target = _cd_target(command, argv)
-            if target is None or _has_glob(target):
-                return None
-            cwd = _resolve(cwd, target)
-            continue
         classification = getattr(command, "classification", None)
         if classification is Classification.READONLY:
             continue
         if classification is not Classification.LOCAL_EFFECTS:
             return None
-        segment_writes, segment_reads, ok = _paths_for_segment(command, argv, base, cwd)
+        segment_writes, segment_reads, ok = _paths_for_segment(command, base, cwd)
         if not ok:
             return None
         writes.extend(segment_writes)
@@ -90,15 +84,15 @@ def try_workspace_write_approval(
     if not writes:
         return None
 
-    for path in reads:
-        merged = _merge_access(*fs_checker.check_access(str(path), "read"), path)
-        if merged is not None:
-            return merged
-    for path in writes:
-        merged = _merge_access(*fs_checker.check_access(str(path), "write"), path)
-        if merged is not None:
-            return merged
-    return WriteProjection("safe", "Workspace write within granted paths")
+    pending = None
+    for operation, paths in (("read", reads), ("write", writes)):
+        for path in paths:
+            verdict = _merge_access(*fs_checker.check_access(str(path), operation), path)
+            if verdict is not None:
+                if verdict.kind == "dangerous":
+                    return verdict
+                pending = pending or verdict
+    return pending or WriteProjection("safe", "Workspace write within granted paths")
 
 
 def _segments_are_local_or_readonly(expression: Any) -> bool:
@@ -116,7 +110,6 @@ def _segments_are_local_or_readonly(expression: Any) -> bool:
 
 def _paths_for_segment(
     command: Any,
-    argv: list[str],
     base: str,
     cwd: Path,
 ) -> tuple[list[Path], list[Path], bool]:
@@ -145,12 +138,6 @@ def _paths_for_segment(
         writes.append(_resolve(cwd, positionals[-1]))
         return writes, reads, True
 
-    if base == "sed" and _sed_inplace(argv):
-        if not positionals:
-            return [], [], False
-        writes.append(_resolve(cwd, positionals[-1]))
-        return writes, reads, True
-
     if rule == "git.add" or rule.startswith("git.add"):
         if positionals:
             writes.extend(_resolve(cwd, item) for item in positionals)
@@ -171,20 +158,6 @@ def _paths_for_segment(
     if writes:
         return writes, reads, True
     return [], [], False
-
-
-def _sed_inplace(argv: list[str]) -> bool:
-    return any(token == "-i" or token.startswith("-i") for token in argv)
-
-
-def _cd_target(command: Any, argv: list[str]) -> str | None:
-    positionals = getattr(command, "positionals", None) or ()
-    if positionals:
-        return str(positionals[-1])
-    for token in argv[1:]:
-        if not token.startswith("-"):
-            return token
-    return None
 
 
 def _has_glob(text: str) -> bool:

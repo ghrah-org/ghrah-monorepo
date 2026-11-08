@@ -59,6 +59,7 @@ export const ProjectInfoPayloadSchema = z.object({
   name: z.string(),
   description: z.string().optional().default(""),
   project_root_locator: z.string().optional().default(""),
+  shell_cwd: z.string().optional().default(""),
   manifest_ref: z.string().optional().default(""),
   cluster_ids: z.array(z.string()).optional().default([]),
   workspaces: z.array(WorkspaceMountSchema).optional().default([]),
@@ -83,6 +84,7 @@ export const ProjectCreatePayloadSchema = z
     writable_workspaces: z.array(WritableWorkspaceSpecSchema).optional().default([]),
     manifest_ref: z.string().optional().default(""),
     recovery: RecoveryActionSchema.optional().default("resume"),
+    shell_cwd: z.string().optional().default(""),
   })
   .strict();
 
@@ -93,6 +95,7 @@ export const ProjectUpdatePayloadSchema = z
     description: z.string().nullable().optional(),
     manifest_ref: z.string().nullable().optional(),
     expected_version: z.number().int().nullable().optional(),
+    shell_cwd: z.string().nullable().optional(),
   })
   .strict();
 

@@ -438,6 +438,7 @@ def default_core_unit_factory(
     llm_factory: Callable[[Any], Any] | None = None,
     room_projector: Callable[[Any], Awaitable[None]] | None = None,
     ability_store_resolver: Callable[[str, str], Awaitable[Any]] | None = None,
+    shell_cwd_lookup: Callable[[str], Awaitable[str | None]] | None = None,
 ) -> Callable[[str, str, str], Any]:
     """生产工厂：(cluster_id, project_id, root_locator) → CoreUnit。
 
@@ -549,6 +550,11 @@ def default_core_unit_factory(
         def persistence_factory(agent_config: Any) -> Any:
             return SqliteBackend(db_path=core_db_path)
 
+        async def shell_cwd_provider() -> str | None:
+            if shell_cwd_lookup is None:
+                return None
+            return await shell_cwd_lookup(project_id)
+
         core_config = CoreUnitConfig(
             cluster_id=cluster_id,
             project_id=project_id,
@@ -565,6 +571,7 @@ def default_core_unit_factory(
             hitl_degraded_timeout=config.hitl_policy.hitl_degraded_timeout,
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
+            shell_cwd_provider=shell_cwd_provider if shell_cwd_lookup is not None else None,
             manifest_store=manifest_store,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_install_root=config.ability.install_root,
