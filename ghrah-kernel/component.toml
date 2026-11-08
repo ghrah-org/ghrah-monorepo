@@ -8,3 +8,26 @@ backend = "uv"
 member = "ghrah-kernel"
 depends_on = []
 outputs = ["dist/*.whl"]
+
+# 内核进程入口：由 ghrah.toml 的 system.kernel 选中本组件后派生进 catalog.kernel。
+# 构建期不写死 ghrah_kernel/_kernel，缺了本节即 E-SYS-KERNEL。
+[kernel]
+module = "ghrah_kernel"
+entry = "_kernel"
+
+# 本批只启用 namespace 一个受管服务。agent provider 等宿主能真正拉起后再声明，
+# 免得 catalog 里出现跑不起来的服务。
+[providers.namespace]
+module = "ghrah_kernel.integration.entry"
+provider = "namespace"
+kind = "namespace"
+order = 10
+restart = "never"
+ready = { type = "handshake", contract = "ghrah.namespace/v0" }
+health = { type = "protocol", contract = "ghrah.namespace/v0" }
+
+# 与 ghrah_kernel.integration.contracts.NAMESPACE_SCHEMES 逐项对应；
+# 这里改了那边没改，服务跑起来会在装载期失配。
+[providers.namespace.schemes.ns]
+contract = "ghrah.namespace/v0"
+actions = ["bind", "unbind", "inspect"]

@@ -9,6 +9,9 @@ version = "0.2.0"
 default_distro = "generic"
 native_locks = ["uv.lock", "pnpm-lock.yaml"]
 
+[components.ghrah-kernel]
+path = "ghrah-kernel"
+
 [components.ghrah-plugin]
 path = "ghrah-plugin"
 
@@ -40,7 +43,7 @@ path = "ghrah-observer-webui/packages/observer-core"
 path = "ghrah-observer-webui/packages/observer-web"
 
 [distro.generic]
-components = ["ghrah-plugin", "ghrah-protocol", "ghrah-scheme", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
+components = ["ghrah-kernel", "ghrah-plugin", "ghrah-protocol", "ghrah-scheme", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
 roots = ["subject/server"]
 gate = "basic"
 
@@ -51,6 +54,37 @@ node = ">=22.12"
 [distro.generic.instances.subject]
 component = "ghrah-subject"
 host = "process"
+# 本批先指既有入口 subject/server，catalog.host.command 因此是
+# ["ghrah-subject-server"]，`ghrah distro start` 全程可用。切到新入口
+# subject/host 属 P1-8b；在此之后由 catalog 决定入口，不再回读本文件。
+host_entry = "subject/server"
+
+# 系统声明：catalog 的 host/kernel/services 三段都由这里选出。
+# 想产出 catalog 的构建必须显式声明本节，缺了就是 E-CAT-SYSTEM。
+[distro.generic.system]
+host_instance = "subject"
+kernel = "ghrah-kernel"
+
+# 每个已启用的 provider 恰有一条绑定记录；id 形如 <组件>:<provider 键>。
+# principal 只能由部署者在此指派，包作者的 component.toml 写不了，也会被拒。
+[[distro.generic.system.providers]]
+id = "ghrah-kernel:namespace"
+principal = '["local","ns"]'
+
+[distro.generic.identity]
+grant_lifetime = { mode = "instance" }
+subjects = [
+    { issuer = "local", subject_id = "admin", kind = "user" },
+    { issuer = "local", subject_id = "ns", kind = "service" },
+]
+groups = []
+namespaces = [{ namespace_id = "main", owner = '["local","admin"]' }]
+scopes = [{
+    scope_id = "main",
+    namespaces = ["main"],
+    subjects = ['["local","admin"]', '["local","ns"]'],
+}]
+access = []
 
 # 当前没有声明已落地的 Ability scheme 服务，避免虚构运行时契约。
 [distro.generic.services]
