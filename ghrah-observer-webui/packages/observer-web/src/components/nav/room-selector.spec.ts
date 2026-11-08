@@ -182,7 +182,7 @@ describe("RoomSelector", () => {
       .findAll(".sidebar-row-menu button")
       .find((button) => button.text() === "Archive room")
       ?.trigger("click");
-    await wrapper.find(".base-modal-footer .btn-primary").trigger("click");
+    await wrapper.find(".base-modal-footer .ui-button-primary").trigger("click");
 
     expect(archiveRoomMock).toHaveBeenCalledWith("r1", 1);
     expect(wrapper.emitted("roomInvalidated")?.[0]).toEqual([{ projectId: "p1", roomId: "r1" }]);

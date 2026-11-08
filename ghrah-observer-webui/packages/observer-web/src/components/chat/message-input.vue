@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 import type { RoomMember } from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import UiButton from "@/components/ui/button.vue";
+import UiTextField from "@/components/ui/text-field.vue";
 
 const { t } = useI18n();
 
@@ -19,13 +21,13 @@ const props = defineProps<{
 const emit = defineEmits<{ send: [targets: string[], content: string] }>();
 
 const input = ref("");
-const inputEl = ref<HTMLTextAreaElement | null>(null);
+const inputEl = ref<{ element: HTMLTextAreaElement | null } | null>(null);
 const selectedTargets = ref<Set<string>>(new Set());
 
 /** autosize：内容变化时高度自适应；CSS max-h-40 封顶后转滚动。
  *  happy-dom 无真实布局（scrollHeight=0），单测中此函数为无害空转。 */
 function autosize() {
-  const el = inputEl.value;
+  const el = inputEl.value?.element;
   if (!el) return;
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
@@ -154,12 +156,13 @@ const placeholder = computed(() =>
     </div>
 
     <div class="relative flex gap-2">
-      <textarea
+      <UiTextField
         ref="inputEl"
         v-model="input"
+        multiline
         rows="1"
         :disabled="props.disabled"
-        class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm dark:text-gray-100 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-y-auto max-h-40"
+        class="flex-1 dark:text-gray-100 dark:placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-y-auto max-h-40"
         :placeholder="placeholder"
         @keydown="onKeydown"
       />
@@ -177,9 +180,9 @@ const placeholder = computed(() =>
           @{{ agent.name }}
         </li>
       </ul>
-      <button type="submit" :disabled="props.disabled || !input.trim()" class="btn-primary text-sm">
+      <UiButton type="submit" :disabled="props.disabled || !input.trim()" variant="primary">
         {{ t("chat.input.send") }}
-      </button>
+      </UiButton>
     </div>
 
     <div class="text-xs text-gray-400 dark:text-gray-500">{{ t("chat.input.hint") }}</div>

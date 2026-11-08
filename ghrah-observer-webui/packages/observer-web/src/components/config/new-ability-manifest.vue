@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { parseDocument } from "yaml";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const emit = defineEmits<{ cancel: []; created: [fullName: string] }>();
 const { t } = useI18n();
@@ -86,15 +87,15 @@ async function submit(save: boolean) {
     <p v-if="status" role="status">{{ status }}</p>
     <p v-if="busy" role="status">{{ t("common.loading") }}</p>
     <div class="new-ability-actions">
-      <button class="btn-secondary" :disabled="busy" @click="submit(false)">
+      <UiButton variant="secondary" :disabled="busy" @click="submit(false)">
         {{ t("config.ability.validate") }}
-      </button>
-      <button class="btn-primary" :disabled="busy" @click="submit(true)">
+      </UiButton>
+      <UiButton variant="primary" :disabled="busy" @click="submit(true)">
         {{ t("config.ability.create") }}
-      </button>
-      <button class="btn-secondary" :disabled="busy" @click="emit('cancel')">
+      </UiButton>
+      <UiButton variant="secondary" :disabled="busy" @click="emit('cancel')">
         {{ t("config.ability.cancel") }}
-      </button>
+      </UiButton>
     </div>
   </section>
 </template>

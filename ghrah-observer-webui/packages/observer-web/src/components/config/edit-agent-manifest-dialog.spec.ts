@@ -69,7 +69,8 @@ describe("Agent YAML editing", () => {
     await wrapper.get("textarea").setValue(updated);
     await wrapper.findAll(".base-modal-footer button")[0].trigger("click");
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(2);
-    await wrapper.get(".confirm-dialog-danger").trigger("click");
+    const dialogs = wrapper.findAll('[role="dialog"]');
+    await dialogs[dialogs.length - 1].get(".ui-button-danger").trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
     expect(api.putAgent).not.toHaveBeenCalled();
     wrapper.unmount();

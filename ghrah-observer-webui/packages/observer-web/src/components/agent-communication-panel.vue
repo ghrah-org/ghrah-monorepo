@@ -9,6 +9,7 @@ import { type AgentTarget, useConnectionStore, useProjectsStore } from "@ghrah/o
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string }>();
 const { t } = useI18n();
@@ -159,22 +160,22 @@ async function run() {
             </option>
           </select>
         </label>
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="links.length === 1"
           @click="links.splice(index, 1)"
         >
           {{ t("communication.remove") }}
-        </button>
+        </UiButton>
       </div>
-      <button
+      <UiButton
         type="button"
-        class="btn-secondary"
+        variant="secondary"
         @click="links.push({ id: nextId++, source: '', target: '' })"
       >
         {{ t("communication.add") }}
-      </button>
+      </UiButton>
       <label class="communication-field"
         >{{ t("communication.content") }}<textarea v-model="content" rows="3" />
       </label>
@@ -193,15 +194,15 @@ async function run() {
             <option value="sequence">{{ t("communication.sequence") }}</option>
           </select></label
         >
-        <button type="button" class="btn-primary" :disabled="!canRun" @click="run">
+        <UiButton type="button" variant="primary" :disabled="!canRun" @click="run">
           {{ t(running ? "communication.running" : "communication.run") }}
-        </button>
+        </UiButton>
       </div>
     </fieldset>
     <p v-if="disabledReason" role="status">{{ disabledReason }}</p>
-    <button v-if="running" type="button" class="btn-secondary" @click="stopWaiting">
+    <UiButton v-if="running" type="button" variant="secondary" @click="stopWaiting">
       {{ t("communication.stopWaiting") }}
-    </button>
+    </UiButton>
     <p>
       {{ t(schedule === "sequence" ? "communication.sequenceHint" : "communication.parallelHint") }}
     </p>

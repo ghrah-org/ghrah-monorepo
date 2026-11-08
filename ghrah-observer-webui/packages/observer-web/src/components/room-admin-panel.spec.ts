@@ -140,7 +140,7 @@ describe("RoomAdminPanel", () => {
     const wrapper = mount(RoomAdminPanel);
 
     await wrapper.find(".room-lifecycle-section > button").trigger("click");
-    await wrapper.find(".base-modal-footer .btn-primary").trigger("click");
+    await wrapper.find(".base-modal-footer .ui-button-primary").trigger("click");
 
     expect(archiveRoomMock).toHaveBeenCalledWith("r1", 7);
     expect(wrapper.emitted("roomInvalidated")?.[0]).toEqual([{ projectId: "p1", roomId: "r1" }]);
@@ -152,7 +152,7 @@ describe("RoomAdminPanel", () => {
     const wrapper = mount(RoomAdminPanel);
 
     await wrapper.find(".room-danger-button").trigger("click");
-    await wrapper.find(".base-modal-footer .btn-primary").trigger("click");
+    await wrapper.find(".base-modal-footer .ui-button-primary").trigger("click");
 
     expect(deleteRoomMock).toHaveBeenCalledWith("r1", 7);
     expect(wrapper.emitted("roomInvalidated")?.[0]).toEqual([{ projectId: "p1", roomId: "r1" }]);

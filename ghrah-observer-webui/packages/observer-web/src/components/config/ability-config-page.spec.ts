@@ -1,143 +1,64 @@
+// SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // @vitest-environment happy-dom
+
+import { setAbilityControlClientFactory } from "@ghrah/observer-core";
+import { AbilityApiStatusSchema } from "@ghrah/protocol";
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AbilityConfigPage from "./ability-config-page.vue";
 
-const api = vi.hoisted(() => ({
-  listManifestAbilities: vi.fn(),
-  getAbility: vi.fn(),
-  putAbility: vi.fn(),
-  deleteAbility: vi.fn(),
-  validateManifest: vi.fn(),
-  manifests: {
-    abilityList: [{ full_name: "demo.read", title: "Read", permissions: {} }],
-  },
-}));
-vi.mock("@/composables/useObserver", () => ({ useObserver: () => api }));
-vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
-
-const manifest = { metadata: { permissions: {} }, implementation: { type: "builtin" } };
-async function openEditor() {
-  const wrapper = mount(AbilityConfigPage);
-  await flushPromises();
-  await wrapper.get(".ability-card").trigger("click");
-  await flushPromises();
-  await wrapper.get(".ability-editor button").trigger("click");
-  return wrapper;
+function status(source: "builtin" | "legacy", tree: boolean) {
+  return AbilityApiStatusSchema.parse({
+    ability_source: source,
+    legacy_deprecated: source === "legacy",
+    features: {
+      tree,
+      grants_write: tree,
+      versions_read: false,
+      versions_write: false,
+      packages_read: false,
+      packages_install: false,
+      surface_write: false,
+    },
+  });
 }
 
-describe("Ability YAML editor", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.listManifestAbilities.mockResolvedValue({ success: true });
-    api.getAbility.mockResolvedValue({ success: true, data: { manifest, source: "original" } });
-    api.validateManifest.mockResolvedValue({ success: true, data: { valid: true, errors: [] } });
-    api.putAbility.mockResolvedValue({ success: true, data: { manifest, source: "updated" } });
-    api.deleteAbility.mockResolvedValue({ success: true });
-  });
+describe("AbilityConfigPage", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => setAbilityControlClientFactory(null));
 
-  it("loads source and discards edits on cancel without saving or closing the card", async () => {
-    const wrapper = await openEditor();
-    expect(wrapper.get("textarea").element.value).toBe("original");
-    await wrapper.get("textarea").setValue("updated");
-    await wrapper.get("textarea").trigger("click");
-    expect(wrapper.find(".ability-detail").exists()).toBe(true);
-    await wrapper.findAll(".ability-editor button")[2].trigger("click");
-    await wrapper.get(".ability-editor button").trigger("click");
-    expect(wrapper.get("textarea").element.value).toBe("original");
-    expect(api.putAbility).not.toHaveBeenCalled();
-    wrapper.unmount();
-  });
-
-  it("shows validation errors and does not save invalid input", async () => {
-    const wrapper = await openEditor();
-    api.validateManifest.mockResolvedValue({
-      success: true,
-      data: { valid: false, errors: ["Invalid YAML"] },
-    });
-    await wrapper.get("textarea").setValue("broken");
-    await wrapper.findAll(".ability-editor button")[1].trigger("click");
-    await flushPromises();
-    expect(wrapper.get('[role="alert"]').text()).toBe("Invalid YAML");
-    expect(wrapper.get("textarea").element.value).toBe("broken");
-    expect(api.putAbility).not.toHaveBeenCalled();
-    wrapper.unmount();
-  });
-
-  it("validates without writing, then saves with overwrite and refreshes the list", async () => {
-    const wrapper = await openEditor();
-    await wrapper.get("textarea").setValue("updated");
-    await wrapper.findAll(".ability-editor button")[0].trigger("click");
-    await flushPromises();
-    expect(api.validateManifest).toHaveBeenCalledWith("updated", "ability");
-    expect(api.putAbility).not.toHaveBeenCalled();
-    await wrapper.findAll(".ability-editor button")[1].trigger("click");
-    await flushPromises();
-    expect(api.putAbility).toHaveBeenCalledWith("demo.read", "updated", true);
-    expect(api.listManifestAbilities).toHaveBeenCalledTimes(2);
-    expect(wrapper.find("textarea").exists()).toBe(false);
-    expect(wrapper.text()).toContain("config.ability.saved");
-    wrapper.unmount();
-  });
-
-  it("keeps the draft when saving fails", async () => {
-    const wrapper = await openEditor();
-    api.putAbility.mockResolvedValue({ success: false, error: "Write failed" });
-    await wrapper.get("textarea").setValue("updated");
-    await wrapper.findAll(".ability-editor button")[1].trigger("click");
-    await flushPromises();
-    expect(wrapper.get('[role="alert"]').text()).toBe("Write failed");
-    expect(wrapper.get("textarea").element.value).toBe("updated");
-    wrapper.unmount();
-  });
-
-  async function requestDelete() {
+  it("shows builtin status and keeps package management closed", async () => {
+    const read = vi.fn(async () => status("builtin", true));
+    setAbilityControlClientFactory(() => ({ status: read }) as never);
     const wrapper = mount(AbilityConfigPage);
     await flushPromises();
-    await wrapper.get(".ability-card").trigger("click");
+    expect(wrapper.text()).toContain("Built-in ability control is available.");
+    expect(wrapper.text()).toContain("The package catalog is not available from this server.");
+    expect(wrapper.text()).toContain("Package install is not available.");
+    expect(wrapper.text()).toContain("No package list is shown.");
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    expect(wrapper.find("form").exists()).toBe(false);
+    await wrapper.get("button").trigger("click");
     await flushPromises();
-    await wrapper.findAll(".ability-editor button")[1].trigger("click");
-    return wrapper;
-  }
-
-  it("requires confirmation and allows cancelling without deleting", async () => {
-    const wrapper = await requestDelete();
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
-    expect(api.deleteAbility).not.toHaveBeenCalled();
-    await wrapper.get('[role="dialog"] .btn-secondary').trigger("click");
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-    expect(wrapper.find(".ability-detail").exists()).toBe(true);
-    expect(api.deleteAbility).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
 
-  it("deletes the confirmed ability, closes details and refreshes the list", async () => {
-    const wrapper = await requestDelete();
-    await wrapper.get('[role="dialog"] .btn-primary').trigger("click");
-    await flushPromises();
-    expect(api.deleteAbility).toHaveBeenCalledExactlyOnceWith("demo.read");
-    expect(api.listManifestAbilities).toHaveBeenCalledTimes(2);
-    expect(wrapper.find(".ability-detail").exists()).toBe(false);
-    expect(wrapper.text()).toContain("config.ability.deleted");
-    wrapper.unmount();
-  });
-
-  it("keeps details visible and prevents repeated deletion while the request is pending", async () => {
-    let finish!: (result: { success: boolean; error: string }) => void;
-    api.deleteAbility.mockReturnValue(
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
+  it("explains a legacy source without offering install", async () => {
+    setAbilityControlClientFactory(
+      () => ({ status: async () => status("legacy", false) }) as never,
     );
-    const wrapper = await requestDelete();
-    await wrapper.get('[role="dialog"] .btn-primary').trigger("click");
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-    expect(wrapper.findAll(".ability-editor button")[1].attributes("disabled")).toBeDefined();
-    finish({ success: false, error: "Delete failed" });
+    const wrapper = mount(AbilityConfigPage);
     await flushPromises();
-    expect(wrapper.find(".ability-detail").exists()).toBe(true);
-    expect(wrapper.get('[role="alert"]').text()).toBe("Delete failed");
-    expect(api.listManifestAbilities).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain("Legacy ability source is outside the new grant controls.");
+    expect(wrapper.text()).toContain(
+      "Package management stays closed while the legacy source is in use.",
+    );
+    expect(wrapper.find("textarea").exists()).toBe(false);
     wrapper.unmount();
   });
 });

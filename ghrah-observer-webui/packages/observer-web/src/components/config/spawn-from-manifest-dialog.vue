@@ -11,6 +11,8 @@ import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
+import UiTextField from "@/components/ui/text-field.vue";
 
 const props = defineProps<{
   manifest: AgentManifestInfo;
@@ -84,12 +86,12 @@ async function handleSubmit() {
         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{
           t("config.spawn.runtimeName")
         }}</label>
-        <input
+        <UiTextField
           v-model="runtimeName"
           data-autofocus
           type="text"
           required
-          class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          class="w-full"
           :placeholder="t('config.spawn.runtimeNamePlaceholder')"
         />
       </div>
@@ -97,12 +99,12 @@ async function handleSubmit() {
       <div v-if="errorMsg" class="text-red-600 dark:text-red-400 text-sm">{{ errorMsg }}</div>
 
       <div class="flex justify-end gap-2">
-        <button type="button" class="btn-secondary" :disabled="loading" @click="requestClose">
+        <UiButton type="button" variant="secondary" :disabled="loading" @click="requestClose">
           {{ t("common.cancel") }}
-        </button>
-        <button type="submit" class="btn-primary" :disabled="loading || !runtimeName.trim()">
+        </UiButton>
+        <UiButton type="submit" variant="primary" :disabled="loading || !runtimeName.trim()">
           {{ loading ? t("config.spawn.spawning") : t("config.spawn.spawn") }}
-        </button>
+        </UiButton>
       </div>
     </form>
   </BaseModal>

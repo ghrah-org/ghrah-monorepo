@@ -10,6 +10,9 @@ import { useI18n } from "vue-i18n";
 import { Document, parseDocument } from "yaml";
 import BaseModal from "@/components/ui/base-modal.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
+import UiSelect from "@/components/ui/select.vue";
+import UiTextField from "@/components/ui/text-field.vue";
 
 const emit = defineEmits<{ close: []; dirtyChange: [dirty: boolean] }>();
 
@@ -193,24 +196,24 @@ async function handleSubmit(save = true) {
     <!-- Scrollable form body -->
     <form class="manifest-create-form space-y-5" @submit.prevent="handleSubmit(true)">
       <div class="manifest-modes">
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :aria-pressed="mode === 'form'"
           :disabled="loading"
           @click="switchMode('form')"
         >
           {{ t("config.manifest.formMode") }}
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :aria-pressed="mode === 'yaml'"
           :disabled="loading"
           @click="switchMode('yaml')"
         >
           {{ t("config.manifest.yamlMode") }}
-        </button>
+        </UiButton>
       </div>
       <div
         v-if="error"
@@ -242,13 +245,13 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.namespace") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.namespace"
                 data-autofocus
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_.]*[a-z0-9]$"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
                 placeholder="e.g. ghrah.examples"
               />
             </div>
@@ -256,12 +259,12 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.name") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.name"
                 type="text"
                 required
                 pattern="^[a-z][a-z0-9_]*$"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
                 placeholder="e.g. designer"
               />
             </div>
@@ -270,10 +273,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.titleField")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.title"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full"
               placeholder="e.g. Designer"
             />
           </div>
@@ -281,10 +284,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.description")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.description"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full"
               :placeholder="t('config.manifest.descriptionPlaceholder')"
             />
           </div>
@@ -292,10 +295,10 @@ async function handleSubmit(save = true) {
             <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
               t("config.manifest.tags")
             }}</label>
-            <input
+            <UiTextField
               v-model="form.tags"
               type="text"
-              class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full"
               :placeholder="t('config.manifest.tagsPlaceholder')"
             />
           </div>
@@ -311,11 +314,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {{ t("config.manifest.endpointName") }}
               </label>
-              <input
+              <UiTextField
                 v-model="form.endpoint_name"
                 type="text"
                 required
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
                 placeholder="e.g. gpt-4o-mini"
               />
             </div>
@@ -323,11 +326,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.maxIterations")
               }}</label>
-              <input
+              <UiTextField
                 v-model.number="form.max_iterations"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
               />
             </div>
           </div>
@@ -336,13 +339,13 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.temperature")
               }}</label>
-              <input
+              <UiTextField
                 v-model="form.temperature"
                 type="number"
                 step="0.1"
                 min="0"
                 max="2"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
                 :placeholder="t('config.manifest.temperaturePlaceholder')"
               />
             </div>
@@ -350,11 +353,11 @@ async function handleSubmit(save = true) {
               <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{
                 t("config.manifest.maxTokens")
               }}</label>
-              <input
+              <UiTextField
                 v-model="form.max_tokens"
                 type="number"
                 min="1"
-                class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full"
                 :placeholder="t('config.manifest.maxTokensPlaceholder')"
               />
             </div>
@@ -366,13 +369,14 @@ async function handleSubmit(save = true) {
           <legend class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
             {{ t("config.manifest.systemPrompt") }}
           </legend>
-          <textarea
+          <UiTextField
             v-model="form.system_prompt"
+            multiline
             required
             rows="4"
-            class="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            class="w-full font-mono"
             placeholder="You are a helpful assistant."
-          ></textarea>
+          />
         </fieldset>
 
         <!-- Abilities Section -->
@@ -389,18 +393,15 @@ async function handleSubmit(save = true) {
               :key="index"
               class="flex items-center gap-2"
             >
-              <select
-                v-model="ability.mode"
-                class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+              <UiSelect v-model="ability.mode">
                 <option value="type">{{ t("config.manifest.typeBuiltIn") }}</option>
                 <option value="ref">{{ t("config.manifest.ref") }}</option>
-              </select>
-              <input
+              </UiSelect>
+              <UiTextField
                 v-model="ability.value"
                 type="text"
                 required
-                class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="flex-1"
                 :placeholder="
                   ability.mode === 'type'
                     ? 'e.g. end_task, conversation'
@@ -429,20 +430,20 @@ async function handleSubmit(save = true) {
         <!-- Actions -->
       </fieldset>
       <div class="flex justify-end gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
-        <button type="button" class="btn-secondary" :disabled="loading" @click="requestClose">
+        <UiButton type="button" variant="secondary" :disabled="loading" @click="requestClose">
           {{ t("common.cancel") }}
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="loading || !canSubmit"
           @click="handleSubmit(false)"
         >
           {{ t("config.agent.validate") }}
-        </button>
-        <button type="submit" class="btn-primary" :disabled="loading || !canSubmit">
+        </UiButton>
+        <UiButton type="submit" variant="primary" :disabled="loading || !canSubmit">
           {{ loading ? t("config.manifest.creating") : t("config.manifest.create") }}
-        </button>
+        </UiButton>
       </div>
     </form>
   </BaseModal>

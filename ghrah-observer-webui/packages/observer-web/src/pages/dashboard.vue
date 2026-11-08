@@ -12,6 +12,7 @@ import {
   type ChainTarget,
   sameAgent,
   sessionKey,
+  useAbilityAdminStore,
   useAgentsStore,
   useBranchesStore,
   useProjectsStore,
@@ -20,6 +21,7 @@ import {
 } from "@ghrah/observer-core";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AssemblyPanel from "@/components/ability/assembly-panel.vue";
 import ActionChainPanel from "@/components/action-chain/action-chain-panel.vue";
 import AgentList from "@/components/agent-list.vue";
 import AgentsOverviewPanel from "@/components/agents-overview-panel.vue";
@@ -31,9 +33,11 @@ import ProjectSelector from "@/components/nav/project-selector.vue";
 import RoomSelector from "@/components/nav/room-selector.vue";
 import ProjectChangesPanel from "@/components/project-changes-panel.vue";
 import ProjectSettingsPanel from "@/components/project-settings-panel.vue";
+import UiIconButton from "@/components/ui/icon-button.vue";
 import SidebarToggle from "@/components/ui/sidebar-toggle.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useSidebarLayout } from "@/composables/useSidebarLayout";
+import { useWorkspaceColumns } from "@/composables/useWorkspaceColumns";
 
 type RoomTab = {
   id: string;
@@ -49,7 +53,7 @@ type AgentTab = {
 };
 type ProjectTab = {
   id: string;
-  kind: "changes" | "project" | "agents";
+  kind: "changes" | "project" | "agents" | "assembly";
   target: { projectId: string };
   fallbackLabel: string;
 };
@@ -59,6 +63,7 @@ type ProjectViewKind = ProjectTab["kind"];
 const emit = defineEmits<{
   openSettings: [section: "general" | "agents" | "abilities"];
 }>();
+const abilityAdmin = useAbilityAdminStore();
 const rooms = useRoomsStore();
 const agents = useAgentsStore();
 const projects = useProjectsStore();
@@ -68,6 +73,8 @@ const { t } = useI18n();
 const { switchRoom, switchProject, selectAgent } = useObserver();
 const { roomSidebarCollapsed, contextSidebarCollapsed, toggleRoomSidebar, toggleContextSidebar } =
   useSidebarLayout();
+const columnMode = useWorkspaceColumns();
+const contextDrawerOpen = ref(false);
 const tabs = ref<WorkspaceTab[]>([]);
 const activeTabId = ref<string | null>(null);
 const roomScroll = ref<HTMLElement | null>(null);
@@ -75,11 +82,17 @@ const contextScroll = ref<HTMLElement | null>(null);
 const roomScrollTop = ref(0);
 const contextScrollTop = ref(0);
 
+const contextUsesDrawer = computed(
+  () => columnMode.value === "rail" || columnMode.value === "exclusive",
+);
+const contextVisuallyCollapsed = computed(() =>
+  contextUsesDrawer.value ? !contextDrawerOpen.value : contextSidebarCollapsed.value,
+);
 const roomToggleLabel = computed(() =>
   roomSidebarCollapsed.value ? t("dashboard.expandRooms") : t("dashboard.collapseRooms"),
 );
 const contextToggleLabel = computed(() =>
-  contextSidebarCollapsed.value ? t("dashboard.expandContext") : t("dashboard.collapseContext"),
+  contextVisuallyCollapsed.value ? t("dashboard.expandContext") : t("dashboard.collapseContext"),
 );
 
 async function onToggleRoomSidebar() {
@@ -92,6 +105,10 @@ async function onToggleRoomSidebar() {
 }
 
 async function onToggleContextSidebar() {
+  if (contextUsesDrawer.value) {
+    contextDrawerOpen.value = !contextDrawerOpen.value;
+    return;
+  }
   if (!contextSidebarCollapsed.value) {
     contextScrollTop.value = contextScroll.value?.scrollTop ?? 0;
   }
@@ -103,6 +120,25 @@ async function onToggleContextSidebar() {
 }
 
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
+
+watch(
+  () => [columnMode.value, activeTab.value?.id ?? "", activeTab.value?.kind ?? ""] as const,
+  ([mode, id, kind], previous) => {
+    if (mode === "wide" || mode === "mid") {
+      contextDrawerOpen.value = false;
+      return;
+    }
+    if (mode === "rail") {
+      if (!previous || previous[0] !== "rail") contextDrawerOpen.value = false;
+      return;
+    }
+    const entered = !previous || previous[0] !== "exclusive";
+    const selectionChanged = !previous || previous[1] !== id || previous[2] !== kind;
+    if (entered || selectionChanged) {
+      contextDrawerOpen.value = kind === "room" || kind === "agent";
+    }
+  },
+);
 
 function projectIdOf(tab: WorkspaceTab): string {
   return tab.kind === "agent" ? tab.target.agent.projectId : tab.target.projectId;
@@ -119,11 +155,17 @@ function tabLabel(tab: WorkspaceTab): string {
   const projectName = projects.projects.get(tab.target.projectId)?.name ?? tab.fallbackLabel;
   if (tab.kind === "changes") return t("dashboard.tabChanges", { project: projectName });
   if (tab.kind === "agents") return t("dashboard.tabAgents", { project: projectName });
+  if (tab.kind === "assembly") return t("dashboard.tabAssembly", { project: projectName });
   return t("dashboard.tabProject", { project: projectName });
 }
 
 function tabIcon(kind: WorkspaceTab["kind"]): string {
-  return { room: "#", agent: "◎", changes: "△", agents: "◆", project: "▣" }[kind];
+  return { room: "#", agent: "◎", changes: "△", agents: "◆", assembly: "◇", project: "▣" }[kind];
+}
+
+function openAssembly(target: { projectId: string; agentId: string }) {
+  abilityAdmin.focusAgent(target.projectId, target.agentId);
+  openProjectView({ kind: "assembly", projectId: target.projectId });
 }
 
 function currentChain(agent: AgentTarget): ChainTarget | null {
@@ -300,7 +342,8 @@ watch(
     class="workspace-shell"
     :class="{
       'room-sidebar-collapsed': roomSidebarCollapsed,
-      'context-sidebar-collapsed': contextSidebarCollapsed,
+      'context-sidebar-collapsed': !contextUsesDrawer && contextSidebarCollapsed,
+      'context-drawer-open': contextUsesDrawer && contextDrawerOpen,
     }"
   >
     <aside class="project-rail workspace-column" :aria-label="t('dashboard.projects')">
@@ -327,27 +370,30 @@ watch(
     <section class="workspace-main" :aria-label="t('dashboard.workspaceTabs')">
       <div class="workspace-tabs" role="tablist" :aria-label="t('dashboard.openViews')">
         <div class="tabs-scroll">
-          <button
+          <div
             v-for="tab in tabs"
             :key="tab.id"
-            type="button"
             :class="['workspace-tab', { active: activeTabId === tab.id }]"
             role="tab"
+            tabindex="0"
             :aria-selected="activeTabId === tab.id"
             @click="activateTab(tab)"
+            @keydown.enter.prevent="activateTab(tab)"
+            @keydown.space.prevent="activateTab(tab)"
           >
-            <span :class="['tab-kind', tab.kind]">{{ tabIcon(tab.kind) }}</span
-            ><span class="tab-label">{{ tabLabel(tab) }}</span>
-            <span
-              class="tab-close"
-              role="button"
-              tabindex="0"
-              :aria-label="t('dashboard.closeTab', { label: tabLabel(tab) })"
+            <span :class="['tab-kind', tab.kind]">{{ tabIcon(tab.kind) }}</span>
+            <span class="tab-label">{{ tabLabel(tab) }}</span>
+            <UiIconButton
+              variant="ghost"
+              size="xs"
+              :label="t('dashboard.closeTab', { label: tabLabel(tab) })"
               @click.stop="void closeTab(tab)"
-              @keydown.enter.stop="void closeTab(tab)"
-              >×</span
+              @keydown.enter.stop
+              @keydown.space.stop
             >
-          </button>
+              ×
+            </UiIconButton>
+          </div>
         </div>
         <span class="tab-count">{{ t("dashboard.openCount", { count: tabs.length }) }}</span>
       </div>
@@ -380,6 +426,12 @@ watch(
             :key="activeTab.id"
             :project-id="activeTab.target.projectId"
             @open-agent="openAgent"
+            @open-assembly="openAssembly"
+          />
+          <AssemblyPanel
+            v-else-if="activeTab?.kind === 'assembly'"
+            :key="activeTab.id"
+            :project-id="activeTab.target.projectId"
           />
         </KeepAlive>
         <div v-if="!activeTab" class="workspace-empty">
@@ -398,14 +450,14 @@ watch(
       <div class="sidebar-head">
         <SidebarToggle
           side="right"
-          :collapsed="contextSidebarCollapsed"
+          :collapsed="contextVisuallyCollapsed"
           controls="context-sidebar-panel"
           :label="contextToggleLabel"
           @toggle="onToggleContextSidebar"
         />
       </div>
       <div
-        v-show="!contextSidebarCollapsed"
+        v-show="!contextVisuallyCollapsed"
         id="context-sidebar-panel"
         ref="contextScroll"
         class="right-sidebar-panel"

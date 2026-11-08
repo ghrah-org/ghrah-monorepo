@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { ref } from "vue";
 
 import { deriveHttpBase } from "../http.js";
 
@@ -21,8 +21,14 @@ export const useConnectionStore = defineStore("ghrah-connection", () => {
       (globalThis as { __GHRAH_SUBJECT_HTTP_API_TOKEN__?: string })
         .__GHRAH_SUBJECT_HTTP_API_TOKEN__,
   );
-  /** 管理面 HTTP base 从 WS 地址派生；宿主可另行覆盖。 */
-  const httpBaseUrl = computed(() => deriveHttpBase(serverUrl.value));
+  const configuredHttpBase = (
+    (import.meta.env?.VITE_GHRAH_SUBJECT_HTTP_URL as string | undefined) ??
+    (globalThis as { __GHRAH_SUBJECT_HTTP_URL__?: string }).__GHRAH_SUBJECT_HTTP_URL__
+  )?.trim();
+  /** 管理面 HTTP base。未单独配置时从 WS 地址派生。 */
+  const httpBaseUrl = ref(
+    configuredHttpBase ? configuredHttpBase.replace(/\/$/, "") : deriveHttpBase(serverUrl.value),
+  );
 
   function setConnected() {
     state.value = "connected";
@@ -42,6 +48,7 @@ export const useConnectionStore = defineStore("ghrah-connection", () => {
 
   function setServerUrl(url: string) {
     serverUrl.value = url;
+    httpBaseUrl.value = deriveHttpBase(url);
   }
 
   function setApiToken(token: string | undefined) {

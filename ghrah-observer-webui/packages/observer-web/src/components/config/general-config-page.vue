@@ -6,6 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import UiSelect from "@/components/ui/select.vue";
 import {
   FONT_SCALE_MAX,
   FONT_SCALE_MIN,
@@ -38,16 +39,11 @@ function onScaleInput(event: Event) {
       <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">
         {{ t("config.general.languageDescription") }}
       </p>
-      <select
-        id="general-locale"
-        class="px-2 py-1 rounded text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600"
-        :value="locale"
-        @change="onLocaleChange"
-      >
+      <UiSelect id="general-locale" :model-value="locale" @change="onLocaleChange">
         <option v-for="option in SUPPORTED_LOCALES" :key="option" :value="option">
           {{ t(`app.languageNames.${option}`) }}
         </option>
-      </select>
+      </UiSelect>
     </section>
 
     <section>

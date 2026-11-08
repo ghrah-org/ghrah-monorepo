@@ -15,6 +15,7 @@ import NewAgentManifestDialog from "@/components/config/new-agent-manifest-dialo
 import SpawnFromManifestDialog from "@/components/config/spawn-from-manifest-dialog.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const { manifests, listManifestAgents, deleteAgent } = useObserver();
 const { t } = useI18n();
@@ -96,9 +97,9 @@ async function confirmDelete() {
   <div class="flex flex-col h-full gap-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold">{{ t("config.agent.title") }}</h2>
-      <button class="btn-primary text-xs" @click="showNewDialog = true">
+      <UiButton variant="primary" @click="showNewDialog = true">
         {{ t("config.agent.newManifest") }}
-      </button>
+      </UiButton>
     </div>
 
     <div v-if="error" class="text-red-600 dark:text-red-400 text-sm">{{ error }}</div>

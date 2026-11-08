@@ -9,6 +9,7 @@ import { useProjectsStore } from "@ghrah/observer-core";
 import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -230,9 +231,9 @@ async function submitCreate() {
           </p>
         </div>
         <div class="project-create-actions">
-          <button
+          <UiButton
             type="submit"
-            class="btn-primary"
+            variant="primary"
             :disabled="
               busy ||
               !newName.trim() ||
@@ -240,7 +241,7 @@ async function submitCreate() {
             "
           >
             {{ busy ? "…" : t("common.create") }}
-          </button>
+          </UiButton>
         </div>
       </form>
     </div>

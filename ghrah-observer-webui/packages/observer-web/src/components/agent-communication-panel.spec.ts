@@ -49,7 +49,7 @@ describe("AgentCommunicationPanel", () => {
   it("runs a cross-cluster fan-out using stable IDs", async () => {
     send.mockResolvedValue({ success: true, data: { message_id: "m1" } });
     const wrapper = await configure();
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".ui-button-primary").trigger("click");
     await flushPromises();
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0]).toEqual([
@@ -70,7 +70,7 @@ describe("AgentCommunicationPanel", () => {
         }),
     );
     const wrapper = await configure("sequence");
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".ui-button-primary").trigger("click");
     expect(send).toHaveBeenCalledTimes(1);
     finish({ success: false, error: "failed" });
     await flushPromises();
@@ -82,7 +82,7 @@ describe("AgentCommunicationPanel", () => {
     send.mockResolvedValue({ success: true, data: { status: "prepared" } });
     const wrapper = await configure();
     await wrapper.findAll("select")[4].setValue("async");
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".ui-button-primary").trigger("click");
     await flushPromises();
     expect(send.mock.calls[0][3]).toBe(true);
     expect(wrapper.text()).toContain("Committed for delivery");
@@ -92,7 +92,7 @@ describe("AgentCommunicationPanel", () => {
   it("does not continue an ordered run when the receipt is unknown", async () => {
     send.mockResolvedValue(null);
     const wrapper = await configure("sequence");
-    await wrapper.find(".btn-primary").trigger("click");
+    await wrapper.find(".ui-button-primary").trigger("click");
     await flushPromises();
     expect(send).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain("Receipt unknown");
@@ -102,11 +102,11 @@ describe("AgentCommunicationPanel", () => {
 it("explains a missing ability and immediately unlocks the form", async () => {
   send.mockResolvedValue({ success: false, error: "source_ability_missing" });
   const wrapper = await configure();
-  await wrapper.find(".btn-primary").trigger("click");
+  await wrapper.find(".ui-button-primary").trigger("click");
   await flushPromises();
   expect(wrapper.text()).toContain("Source agent A has no send_message ability");
   expect(wrapper.find("fieldset").attributes("disabled")).toBeUndefined();
-  expect(wrapper.find(".btn-primary").attributes("disabled")).toBeUndefined();
+  expect(wrapper.find(".ui-button-primary").attributes("disabled")).toBeUndefined();
 });
 
 it("stops waiting, skips unsent links, and ignores late results from an older run", async () => {
@@ -118,7 +118,7 @@ it("stops waiting, skips unsent links, and ignores late results from an older ru
       }),
   );
   const wrapper = await configure("sequence");
-  await wrapper.find(".btn-primary").trigger("click");
+  await wrapper.find(".ui-button-primary").trigger("click");
   expect(wrapper.find("fieldset").attributes("disabled")).toBeDefined();
   const stop = wrapper.findAll("button").find((button) => button.text() === "Stop waiting")!;
   await stop.trigger("click");
@@ -126,7 +126,7 @@ it("stops waiting, skips unsent links, and ignores late results from an older ru
   expect(wrapper.text()).toContain("Stopped waiting locally");
   expect(wrapper.text()).toContain("Skipped");
   send.mockResolvedValue({ success: false, error: "new failure" });
-  await wrapper.find(".btn-primary").trigger("click");
+  await wrapper.find(".ui-button-primary").trigger("click");
   await flushPromises();
   finish({ success: true, data: { response: "late reply" } });
   await flushPromises();
@@ -149,7 +149,7 @@ it("shows an actionable queue blocker instead of only the raw failure", async ()
     error: "message_queue_blocked: blocking_delivery=d1, reason=missing ability",
   });
   const wrapper = await configure();
-  await wrapper.find(".btn-primary").trigger("click");
+  await wrapper.find(".ui-button-primary").trigger("click");
   await flushPromises();
   expect(wrapper.text()).toContain("session queue is blocked");
   expect(wrapper.text()).toContain("blocking_delivery=d1");

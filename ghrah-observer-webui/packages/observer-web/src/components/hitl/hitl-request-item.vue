@@ -9,6 +9,7 @@ import type { HitlRequest } from "@ghrah/observer-core";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -99,26 +100,26 @@ async function handleRejectSubmit() {
       <textarea
         v-model="rejectReason"
         rows="2"
-        class="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs dark:text-gray-100 dark:placeholder-gray-500 bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-red-500 resize-none"
+        class="field-reject min-h-8 w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs dark:text-gray-100 dark:placeholder-gray-500 bg-white dark:bg-gray-800 resize-none"
         :placeholder="t('hitl.reasonPlaceholder')"
       />
       <div class="flex gap-2">
-        <button class="btn-danger" :disabled="loading" @click="handleRejectSubmit">
+        <UiButton variant="danger" :disabled="loading" @click="handleRejectSubmit">
           {{ t("hitl.confirmReject") }}
-        </button>
-        <button class="btn-secondary" @click="showRejectForm = false">
+        </UiButton>
+        <UiButton variant="secondary" @click="showRejectForm = false">
           {{ t("common.cancel") }}
-        </button>
+        </UiButton>
       </div>
     </div>
 
     <div v-else class="flex gap-2 pl-5">
-      <button class="btn-primary" :disabled="loading" @click="handleApprove">
+      <UiButton variant="primary" :disabled="loading" @click="handleApprove">
         {{ t("hitl.approve") }}
-      </button>
-      <button class="btn-danger" :disabled="loading" @click="showRejectForm = true">
+      </UiButton>
+      <UiButton variant="danger" :disabled="loading" @click="showRejectForm = true">
         {{ t("hitl.reject") }}
-      </button>
+      </UiButton>
     </div>
   </li>
 </template>

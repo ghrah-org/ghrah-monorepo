@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import UiIconButton from "@/components/ui/icon-button.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -91,15 +92,15 @@ onUnmounted(() => {
           <h2 :id="titleId">{{ title }}</h2>
           <slot name="subtitle" />
         </div>
-        <button
+        <UiIconButton
           v-if="showClose"
-          type="button"
-          class="base-modal-close"
-          :aria-label="closeLabel ?? t('common.close')"
+          variant="solid"
+          size="md"
+          :label="closeLabel ?? t('common.close')"
           @click="$emit('requestClose')"
         >
           <span aria-hidden="true">×</span>
-        </button>
+        </UiIconButton>
       </header>
       <div class="base-modal-body"><slot /></div>
       <footer v-if="$slots.footer" class="base-modal-footer"><slot name="footer" /></footer>

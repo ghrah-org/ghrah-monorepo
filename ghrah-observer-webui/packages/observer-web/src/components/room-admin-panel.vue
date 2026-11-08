@@ -11,6 +11,8 @@ import { useI18n } from "vue-i18n";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
+import UiButton from "@/components/ui/button.vue";
+import UiSelect from "@/components/ui/select.vue";
 
 const emit = defineEmits<{
   roomInvalidated: [target: { projectId: string; roomId: string }];
@@ -207,9 +209,9 @@ async function refreshRoom() {
               v-model="nameDraft"
               type="text"
               :disabled="busy !== null"
-            /><button type="submit" class="btn-secondary" :disabled="!nameDirty || busy !== null">
+            /><UiButton type="submit" variant="secondary" :disabled="!nameDirty || busy !== null">
               {{ busy === "rename" ? t("common.loading") : t("common.save") }}
-            </button>
+            </UiButton>
           </div>
         </form>
       </section>
@@ -242,8 +244,9 @@ async function refreshRoom() {
           </li>
         </ul>
         <form class="room-member-add" @submit.prevent="addMember">
-          <select
+          <UiSelect
             v-model="selectedAgentId"
+            class="min-w-0 flex-1"
             :aria-label="t('roomAdmin.addAgent')"
             :disabled="busy !== null || candidateAgents.length === 0"
           >
@@ -255,23 +258,23 @@ async function refreshRoom() {
             <option v-for="agent in candidateAgents" :key="agent.agentId" :value="agent.agentId">
               {{ agent.agentName }}
             </option>
-          </select>
-          <button type="submit" class="btn-secondary" :disabled="!selectedAgentId || busy !== null">
+          </UiSelect>
+          <UiButton type="submit" variant="secondary" :disabled="!selectedAgentId || busy !== null">
             {{ t("roomAdmin.add") }}
-          </button>
+          </UiButton>
         </form>
       </section>
       <section class="room-admin-section room-lifecycle-section">
         <h4>{{ t("roomAdmin.lifecycle") }}</h4>
         <p>{{ t("roomAdmin.archiveHint") }}</p>
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :disabled="busy !== null"
           @click="pendingLifecycle = 'archive'"
         >
           {{ t("roomAdmin.archive") }}
-        </button>
+        </UiButton>
       </section>
       <section class="room-danger-zone">
         <strong>{{ t("roomAdmin.dangerZone") }}</strong>

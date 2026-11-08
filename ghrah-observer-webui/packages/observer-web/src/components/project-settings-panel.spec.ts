@@ -163,7 +163,7 @@ describe("ProjectSettingsPanel", () => {
   it("disables Room restore while the parent Project is archived", async () => {
     const wrapper = mountPanel({ archived: true, rooms: true });
     await flushPromises();
-    const restore = wrapper.get<HTMLButtonElement>(".archived-room-list .btn-secondary");
+    const restore = wrapper.get<HTMLButtonElement>(".archived-room-list .ui-button-secondary");
     expect(restore.element.disabled).toBe(true);
     expect(restore.attributes("title")).toContain("Restore the Project");
   });

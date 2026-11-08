@@ -25,6 +25,16 @@ describe("generateRequestId", () => {
     const ids = new Set(Array.from({ length: 100 }, () => generateRequestId()));
     expect(ids.size).toBe(100);
   });
+
+  it("returns hex when randomUUID is unavailable", () => {
+    const original = crypto.randomUUID;
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
+    try {
+      expect(generateRequestId()).toMatch(/^[0-9a-f]{12}$/);
+    } finally {
+      Object.defineProperty(crypto, "randomUUID", { configurable: true, value: original });
+    }
+  });
 });
 
 describe("createCommand", () => {

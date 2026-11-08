@@ -5,6 +5,7 @@ import { parseDocument } from "yaml";
 import BaseModal from "@/components/ui/base-modal.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ fullName: string }>();
 const emit = defineEmits<{ close: []; saved: []; dirtyChange: [dirty: boolean] }>();
@@ -105,20 +106,20 @@ onMounted(load);
       <p v-if="busy" role="status">{{ t("common.loading") }}</p>
       <p v-if="error" class="agent-yaml-message" role="alert">{{ error }}</p>
       <p v-if="status" role="status">{{ status }}</p>
-      <button v-if="!loaded && !busy" class="btn-secondary" @click="load">
+      <UiButton v-if="!loaded && !busy" variant="secondary" @click="load">
         {{ t("config.agent.retry") }}
-      </button>
+      </UiButton>
     </div>
     <template #footer>
-      <button class="btn-secondary" :disabled="busy" @click="requestClose">
+      <UiButton variant="secondary" :disabled="busy" @click="requestClose">
         {{ t("common.cancel") }}
-      </button>
-      <button class="btn-secondary" :disabled="busy || !loaded" @click="submit(false)">
+      </UiButton>
+      <UiButton variant="secondary" :disabled="busy || !loaded" @click="submit(false)">
         {{ t("config.agent.validate") }}
-      </button>
-      <button class="btn-primary" :disabled="busy || !loaded || !dirty" @click="submit(true)">
+      </UiButton>
+      <UiButton variant="primary" :disabled="busy || !loaded || !dirty" @click="submit(true)">
         {{ t("config.agent.save") }}
-      </button>
+      </UiButton>
     </template>
   </BaseModal>
   <ConfirmDialog

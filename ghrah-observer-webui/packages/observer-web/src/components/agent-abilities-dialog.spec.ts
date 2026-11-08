@@ -120,7 +120,7 @@ describe("AgentAbilitiesDialog", () => {
     await flushPromises();
     api.getAgentInfo.mockResolvedValue({ success: false, error: "agent is offline" });
     await wrapper.find("select").setValue("send_message");
-    await wrapper.find(".btn-secondary").trigger("click");
+    await wrapper.find(".ui-button-secondary").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("agent is offline");
     expect(wrapper.findAll("code")).toHaveLength(0);

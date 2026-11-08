@@ -6,6 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 <script setup lang="ts">
 import { computed } from "vue";
+import UiIconButton from "./icon-button.vue";
 
 const props = defineProps<{
   side: "left" | "right";
@@ -22,15 +23,15 @@ const glyph = computed(() => {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="sidebar-toggle"
-    :aria-label="label"
+  <UiIconButton
+    variant="ghost"
+    size="sm"
+    :label="label"
     :aria-expanded="!collapsed"
     :aria-controls="controls"
     :title="label"
     @click="$emit('toggle')"
   >
     <span aria-hidden="true">{{ glyph }}</span>
-  </button>
+  </UiIconButton>
 </template>

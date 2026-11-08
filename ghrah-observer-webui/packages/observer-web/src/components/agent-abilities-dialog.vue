@@ -10,6 +10,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ target: AgentTarget }>();
 const emit = defineEmits<{ close: [] }>();
@@ -132,9 +133,9 @@ onMounted(refresh);
         <p>{{ t("agentAbilities.runtimeHint") }}</p>
         <p v-if="error" role="alert">{{ error }}</p>
         <p v-if="success" role="status">{{ success }}</p>
-        <button type="button" class="btn-secondary" :disabled="loading || saving" @click="refresh">
+        <UiButton type="button" variant="secondary" :disabled="loading || saving" @click="refresh">
           {{ t("agentAbilities.refresh") }}
-        </button>
+        </UiButton>
         <p v-if="loading">{{ t("common.loading") }}</p>
         <template v-else-if="loaded">
           <h3>{{ t(stopped ? "agentAbilities.definitions" : "agentAbilities.registeredList") }}</h3>
@@ -166,9 +167,9 @@ onMounted(refresh);
           <p v-if="params === null" role="alert">{{ t("agentAbilities.invalidParams") }}</p>
           <p>{{ t("agentAbilities.scopeHint") }}</p>
           <p v-if="connection.state !== 'connected'">{{ t("agents.notConnected") }}</p>
-          <button type="submit" class="btn-primary" :disabled="!canRegister">
+          <UiButton type="submit" variant="primary" :disabled="!canRegister">
             {{ t(saving ? "agentAbilities.registering" : "agentAbilities.register") }}
-          </button>
+          </UiButton>
         </form>
       </div>
     </BaseModal>

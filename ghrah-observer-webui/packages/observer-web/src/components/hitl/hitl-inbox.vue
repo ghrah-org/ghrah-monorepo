@@ -10,6 +10,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
 import HitlRequestItem from "./hitl-request-item.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const { t } = useI18n();
 
@@ -63,19 +64,19 @@ async function handleBatchApprove() {
 
     <template v-else>
       <div v-if="batchable" class="flex items-center gap-2 mb-2">
-        <button
-          class="btn-secondary"
+        <UiButton
+          variant="secondary"
           @click="allSelected ? hitl.clearSelection() : hitl.selectAll()"
         >
           {{ allSelected ? t("hitl.deselectAll") : t("hitl.selectAll") }}
-        </button>
-        <button
-          class="btn-primary"
+        </UiButton>
+        <UiButton
+          variant="primary"
           :disabled="selectedIds.length === 0 || batchRunning"
           @click="handleBatchApprove"
         >
           {{ t("hitl.batchApprove") }}{{ selectedIds.length > 0 ? ` (${selectedIds.length})` : "" }}
-        </button>
+        </UiButton>
       </div>
 
       <ul class="space-y-2">

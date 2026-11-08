@@ -8,6 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 import { type AgentTarget, useAgentsStore } from "@ghrah/observer-core";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import UiIconButton from "@/components/ui/icon-button.vue";
 import { useObserver } from "@/composables/useObserver";
 import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
 
@@ -76,15 +77,16 @@ async function handleTerminate() {
 </script>
 
 <template>
-  <div v-if="agents.selectedAgentName" class="relative">
-    <button
-      type="button"
-      class="agent-menu-trigger"
+  <div v-if="agents.selectedAgentName">
+    <UiIconButton
+      variant="ghost"
+      size="sm"
+      :label="t('agents.actions')"
       :title="t('agents.actions')"
       @click="showMenu = !showMenu"
     >
       &#8943;
-    </button>
+    </UiIconButton>
 
     <div v-if="showMenu" class="agent-menu">
       <div class="agent-menu-header">

@@ -64,6 +64,19 @@ describe("useConnectionStore", () => {
     expect(store.state).toBe("reconnecting");
   });
 
+  it("derives the HTTP base from the WS URL until a server URL is chosen", () => {
+    const store = useConnectionStore();
+    expect(store.httpBaseUrl).toBe("http://localhost:4112");
+    store.setServerUrl("ws://other:9999/ws");
+    expect(store.httpBaseUrl).toBe("http://other:9999");
+  });
+
+  it("uses an explicit HTTP base when the host configures one", () => {
+    vi.stubEnv("VITE_GHRAH_SUBJECT_HTTP_URL", "http://localhost:4114/");
+    const store = useConnectionStore();
+    expect(store.httpBaseUrl).toBe("http://localhost:4114");
+  });
+
   it("setServerUrl updates the url", () => {
     const store = useConnectionStore();
     store.setServerUrl("ws://other:9999/ws");

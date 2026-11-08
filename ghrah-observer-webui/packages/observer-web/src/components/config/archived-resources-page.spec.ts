@@ -89,7 +89,7 @@ describe("ArchivedResourcesPage", () => {
   it("restores a Project and refreshes both Project buckets", async () => {
     const wrapper = mountPage();
     await flushPromises();
-    await wrapper.get(".archived-resource-actions .btn-primary").trigger("click");
+    await wrapper.get(".archived-resource-actions .ui-button-primary").trigger("click");
     await confirmButton(wrapper, "Restore Project")!.trigger("click");
     await flushPromises();
     expect(restoreProject).toHaveBeenCalledWith("p1", 4);

@@ -10,6 +10,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import RoomAdminPanel from "@/components/room-admin-panel.vue";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
+import UiButton from "@/components/ui/button.vue";
 
 /** 投递诊断项：展示名已由父组件解析，避免抽屉重复解析成员。 */
 export type DeliveryDiagnostic = {
@@ -86,9 +87,9 @@ watch(
           <span class="room-detail-eyebrow">{{ t("chat.detail.eyebrow") }}</span>
           <h2>{{ room?.name ?? t("chat.detail.title") }}</h2>
         </div>
-        <button type="button" class="btn-secondary" @click="emit('close')">
+        <UiButton type="button" variant="secondary" @click="emit('close')">
           {{ t("chat.detail.close") }}
-        </button>
+        </UiButton>
       </header>
 
       <div class="room-detail-body">
@@ -117,14 +118,14 @@ watch(
             </li>
           </ul>
           <p v-else class="room-detail-note">{{ t("chat.detail.deliveriesEmpty") }}</p>
-          <button
+          <UiButton
             type="button"
-            class="btn-secondary"
+            variant="secondary"
             :disabled="refreshing || !canRefresh"
             @click="emit('refresh')"
           >
             {{ t("agentEntity.deliveryRefresh") }}
-          </button>
+          </UiButton>
           <p class="room-detail-hint">{{ t("agentEntity.deliveryHint") }}</p>
           <p v-if="deliveryError" class="room-detail-error" role="alert">{{ deliveryError }}</p>
         </section>

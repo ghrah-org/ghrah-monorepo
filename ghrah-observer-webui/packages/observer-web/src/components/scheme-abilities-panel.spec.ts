@@ -91,6 +91,21 @@ describe("SchemeAbilitiesPanel", () => {
     );
     expect(wrapper.findAll(".bound-tools li")).toHaveLength(0);
   });
+
+  it("reads the tree without bind or unbind controls when readonly", async () => {
+    const transport = createAbilityTreeFixture(AbilityTreeViewSchema.parse(fixture.selected), []);
+    const wrapper = mount(SchemeAbilitiesPanel, {
+      props: {
+        agentId: "alice",
+        readonly: true,
+        client: createAbilityTreeClient("project", transport),
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find("form").exists()).toBe(false);
+    expect(wrapper.find(".bound-tools button").exists()).toBe(false);
+    expect(wrapper.find(".bound-tools code").text()).toBe("read_report");
+  });
 });
 
 it("reads granted Skill content through the trusted client and shows binary ranges", async () => {

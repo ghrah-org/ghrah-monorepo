@@ -23,6 +23,7 @@ import AgentEntityDialog from "./agent-entity-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 import AgentCommunicationPanel from "./agent-communication-panel.vue";
 import AgentAbilitiesDialog from "./agent-abilities-dialog.vue";
+import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string }>();
 const entityTarget = ref<string | null>(null);
@@ -40,7 +41,10 @@ watch(
     createEntity.value = false;
   },
 );
-const emit = defineEmits<{ openAgent: [target: ChainTarget] }>();
+const emit = defineEmits<{
+  openAgent: [target: ChainTarget];
+  openAssembly: [target: { projectId: string; agentId: string }];
+}>();
 const projects = useProjectsStore();
 const agents = useAgentsStore();
 const sessions = useSessionsStore();
@@ -118,9 +122,9 @@ function openAgent(row: (typeof rows.value)[number]) {
         <h2>{{ t("agentsOverview.title", { project: project?.name ?? projectId }) }}</h2>
       </div>
       <div class="flex items-center gap-2">
-        <button type="button" class="btn-primary" @click="createEntity = true">
+        <UiButton type="button" variant="primary" @click="createEntity = true">
           {{ t("agentEntity.create") }}
-        </button>
+        </UiButton>
         <span class="project-panel-count">{{ rows.length }}</span>
       </div>
     </header>
@@ -194,22 +198,30 @@ function openAgent(row: (typeof rows.value)[number]) {
           >
         </button>
         <div class="flex gap-2 px-3 pb-3">
-          <button
+          <UiButton
             type="button"
-            class="btn-secondary"
+            variant="secondary"
             :disabled="!row.agentId"
             @click="entityTarget = row.agentId"
           >
             {{ t("agentEntity.manage") }}
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             type="button"
-            class="btn-secondary"
+            variant="secondary"
             :disabled="!row.agentId"
             @click="abilitiesTarget = { projectId, agentId: row.agentId, agentName: row.name }"
           >
             {{ t("agentAbilities.manage") }}
-          </button>
+          </UiButton>
+          <UiButton
+            type="button"
+            variant="secondary"
+            :disabled="!row.agentId"
+            @click="emit('openAssembly', { projectId, agentId: row.agentId })"
+          >
+            {{ t("assembly.open") }}
+          </UiButton>
         </div>
         <p v-if="!row.chainTarget" class="agents-overview-chain-hint">
           {{ t("agentsOverview.noActiveChain") }}

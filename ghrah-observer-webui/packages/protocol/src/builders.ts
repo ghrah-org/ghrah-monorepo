@@ -6,7 +6,18 @@ import { ClientType, type CommandType, type EventType, SystemType } from "./enum
 import type { ServerMessage } from "./message.js";
 
 export function generateRequestId(): string {
-  return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  }
+  const bytes = new Uint8Array(6);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function createCommand(

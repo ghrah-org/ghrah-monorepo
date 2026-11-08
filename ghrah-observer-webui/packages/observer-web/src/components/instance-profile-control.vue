@@ -8,6 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
+import UiButton from "@/components/ui/button.vue";
 
 const STORAGE_KEY = "ghrah.instance-profile.display-name";
 const emit = defineEmits<{ openSettings: [] }>();
@@ -17,7 +18,7 @@ const root = ref<HTMLElement | null>(null);
 const nameInput = ref<HTMLInputElement | null>(null);
 const addressButton = ref<HTMLButtonElement | null>(null);
 const connectionPopover = ref<HTMLElement | null>(null);
-const connectionAction = ref<HTMLButtonElement | null>(null);
+const connectionAction = ref<{ focus: () => void; readonly disabled: boolean } | null>(null);
 const displayName = ref(loadDisplayName());
 const draftName = ref(displayName.value);
 const editing = ref(false);
@@ -148,25 +149,27 @@ onUnmounted(() => window.removeEventListener("pointerdown", onWindowPointerDown)
         <strong>{{ t(`app.status.${connection.state}`) }}</strong>
       </div>
       <code :title="connection.serverUrl">{{ connection.serverUrl }}</code>
-      <button
+      <UiButton
         v-if="connection.state === 'connected'"
         ref="connectionAction"
         type="button"
-        class="btn-secondary instance-connection-action"
+        class="instance-connection-action"
+        variant="secondary"
         @click="disconnect"
       >
         {{ t("app.disconnect") }}
-      </button>
-      <button
+      </UiButton>
+      <UiButton
         v-else
         ref="connectionAction"
         type="button"
-        class="btn-primary instance-connection-action"
+        class="instance-connection-action"
+        variant="primary"
         :disabled="connectionBusy"
         @click="autoConnect()"
       >
         {{ t("app.connect") }}
-      </button>
+      </UiButton>
     </div>
 
     <span class="instance-avatar" aria-hidden="true">{{ avatarLabel }}</span>

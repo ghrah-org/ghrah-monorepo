@@ -8,7 +8,7 @@
 // 覆盖四件事：
 // 1. reset 生效：html/body 的计算盒模型是 border-box；
 // 2. 级联层顺序正确，且 utilities 真的能覆盖 components；
-// 3. 两种宽度下页面没有横向溢出；
+// 3. 1440 / 1200 / 1024 / 960 下页面没有横向溢出，窄宽度收起上下文列；
 // 4. 侧边栏收起可用、面板隐藏、状态持久化。
 
 import { expect, test, type Page } from "@playwright/test";
@@ -69,7 +69,10 @@ test.describe("样式护栏", () => {
 
   for (const viewport of [
     { name: "1600×900", width: 1600, height: 900 },
+    { name: "1440×900", width: 1440, height: 900 },
+    { name: "1200×800", width: 1200, height: 800 },
     { name: "1024×800", width: 1024, height: 800 },
+    { name: "960×800", width: 960, height: 800 },
   ]) {
     test(`布局：${viewport.name} 无横向溢出`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -81,6 +84,49 @@ test.describe("样式护栏", () => {
       expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
     });
   }
+
+  test("1024：上下文列是窄轨，主区不少于视口的 60%", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await openProject(page);
+    const metrics = await page.evaluate(() => {
+      const root = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const shell = document.querySelector(".workspace-shell");
+      const main = document.querySelector(".workspace-main");
+      const context = document.querySelector(".right-sidebar");
+      if (!shell || !main || !context) return null;
+      const columns = getComputedStyle(shell)
+        .gridTemplateColumns.split(" ")
+        .map((value) => Number.parseFloat(value));
+      return {
+        rail: 2.25 * root,
+        context: context.getBoundingClientRect().width,
+        column: columns[3] ?? -1,
+        main: main.getBoundingClientRect().width,
+        viewport: window.innerWidth,
+      };
+    });
+    expect(metrics).not.toBeNull();
+    expect(Math.abs((metrics?.context ?? 0) - (metrics?.rail ?? 0))).toBeLessThan(1);
+    expect(Math.abs((metrics?.column ?? 0) - (metrics?.rail ?? 0))).toBeLessThan(1);
+    expect((metrics?.main ?? 0) / (metrics?.viewport ?? 1)).toBeGreaterThanOrEqual(0.6);
+  });
+
+  test("960：房间栏占列，上下文栏不占列", async ({ page }) => {
+    await page.setViewportSize({ width: 960, height: 800 });
+    await openProject(page);
+    const columns = await page.evaluate(() => {
+      const shell = document.querySelector(".workspace-shell");
+      if (!shell) return null;
+      return getComputedStyle(shell)
+        .gridTemplateColumns.split(" ")
+        .map((value) => Number.parseFloat(value));
+    });
+    expect(columns).toHaveLength(4);
+    expect(columns?.[1] ?? 0).toBeGreaterThan(100);
+    expect(columns?.[3] ?? -1).toBe(0);
+    await expect(page.locator("#room-sidebar-panel")).toBeVisible();
+    await expect(page.locator("#context-sidebar-panel")).toBeHidden();
+  });
 });
 
 test.describe("侧边栏护栏", () => {

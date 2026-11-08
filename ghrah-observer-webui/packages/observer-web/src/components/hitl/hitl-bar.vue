@@ -10,6 +10,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
 import HitlInbox from "./hitl-inbox.vue";
+import UiButton from "@/components/ui/button.vue";
 
 /**
  * 待审批摘要条：会话页底部只留一行（谁、什么工具、在等什么），
@@ -67,21 +68,21 @@ async function approveFirst() {
         </span>
       </p>
       <div class="hitl-bar-actions">
-        <button
+        <UiButton
           type="button"
-          class="btn-secondary"
+          variant="secondary"
           :aria-expanded="expanded"
           aria-controls="hitl-bar-panel"
           @click="expanded = !expanded"
         >
           {{ t("hitl.bar.details") }}
-        </button>
-        <button type="button" class="btn-danger" @click="expanded = true">
+        </UiButton>
+        <UiButton type="button" variant="danger" @click="expanded = true">
           {{ t("hitl.bar.reject") }}
-        </button>
-        <button type="button" class="btn-primary" :disabled="approving" @click="approveFirst">
+        </UiButton>
+        <UiButton type="button" variant="primary" :disabled="approving" @click="approveFirst">
           {{ t("hitl.bar.approve") }}
-        </button>
+        </UiButton>
       </div>
     </div>
 

@@ -54,6 +54,8 @@ import {
   type SessionTarget,
   sessionKey,
 } from "./scope.js";
+import { useAbilityAdminStore } from "./stores/ability-admin.js";
+import { useAbilityPackagesStore } from "./stores/ability-packages.js";
 import { useActionChainsStore } from "./stores/action-chains.js";
 import { type AgentListItem, useAgentsStore } from "./stores/agents.js";
 import { useBranchesStore } from "./stores/branches.js";
@@ -105,6 +107,8 @@ export function connectStores(
   const projects = useProjectsStore();
   const tasks = useTasksStore();
   const plugins = usePluginsStore();
+  const abilityAdmin = useAbilityAdminStore();
+  const abilityPackages = useAbilityPackagesStore();
   const batcher = options.batcher ?? createFrameBatcher();
 
   /** 连接级协商 + 归因读通量（A10 连接半边；onConnected/onReconnected 互斥触发）。 */
@@ -138,6 +142,8 @@ export function connectStores(
         .then(() => undefined)
         .catch(() => undefined);
     }
+    void abilityAdmin.reloadVisible();
+    void abilityPackages.reloadIfVisible();
   });
 
   client.on(EventType.AGENT_SPAWNED, (msg: ServerMessage) => {
@@ -145,10 +151,23 @@ export function connectStores(
     const project = projects.projects.get(payload.project_id);
     if (project?.archived_at != null) return;
     agents.onAgentSpawned(payload, project);
+    const agentId = payload.agent_id || payload.config.agent_id;
+    if (agentId) void abilityAdmin.markStale(payload.project_id, agentId);
   });
   client.on(EventType.AGENT_TERMINATED, (msg: ServerMessage) => {
-    const target = agents.onAgentTerminated(msg.payload as AgentTerminatedPayload);
+    const payload = msg.payload as AgentTerminatedPayload;
+    const target = agents.onAgentTerminated(payload);
     if (target) clearAgentDerived(target);
+    if (payload.agent_id) void abilityAdmin.markStale(payload.project_id, payload.agent_id);
+  });
+  client.on(EventType.ABILITY_TREE_CHANGED, (msg: ServerMessage) => {
+    const payload = msg.payload as { project_id?: unknown; agent_id?: unknown };
+    const projectId = stringField(payload.project_id);
+    const agentId = stringField(payload.agent_id);
+    if (projectId && agentId) void abilityAdmin.markStale(projectId, agentId);
+  });
+  client.on(EventType.ABILITY_PACKAGE_CHANGED, () => {
+    void abilityPackages.markStale();
   });
 
   client.on(EventType.ACTION_CHAIN_UPDATED, (msg: ServerMessage) => {
