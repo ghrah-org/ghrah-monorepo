@@ -10,7 +10,7 @@
 - 全部过滤器（node_id/范围含端点/keyword 大小写/role/since_iteration/limit 取尾）
 - max_output_tokens 截断 + truncated 标记
 - 查询边界：兄弟分支界外错误、未知 node_id、context_manager 未接线、非法参数
-- 双注册面（AbilityRegistry + builtin manifest + resolver）
+- 能力包声明与模板解析
 """
 
 from __future__ import annotations
@@ -378,9 +378,10 @@ class TestRegistration:
         assert manifest.metadata.permissions.require_hitl is False
 
     def test_resolver_from_builtin(self) -> None:
+        from ghrah.ability.source import BuiltinAbilitySource
         from ghrah.manifest.resolver import ResolvedAbility
 
-        resolved = ResolvedAbility.from_builtin("recall_context")
+        resolved = ResolvedAbility.from_builtin("recall_context", catalog=BuiltinAbilitySource())
         assert resolved.ability_name == "ghrah.core.recall_context"
 
     def test_manifest_tool_parameters_match_input_model(self) -> None:

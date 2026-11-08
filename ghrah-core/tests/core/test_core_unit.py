@@ -11,16 +11,14 @@ mount_unit 桥契约中 ctx 的 emit/provide/get/on/serial 形状。
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_OID, uuid5
 
 import pytest
 from ghrah.protocol.types import CommandType, EventType
 
-from ghrah.ability.execution.base import Ability
-from ghrah.ability.execution.execution_services import ExecutionServices
-from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
-from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.events import ContextUsageUpdatedEvent, HITLRequestEvent
 from ghrah.core.unit import (
     CoreUnit,
@@ -29,7 +27,6 @@ from ghrah.core.unit import (
     create_core_unit,
 )
 from ghrah.types.config_types import AgentConfig
-from ghrah.types.results import ActionOutcome, ActionResult
 
 # ----------------------------------------------------------------
 # 测试辅助
@@ -66,82 +63,55 @@ class FakeCtx:
         return [name for name, _ in self.events]
 
 
-class MockAbility(Ability):
-    """测试用 Ability — 返回固定成功结果，可携带 hooks。"""
-
-    def __init__(self, name: str = "mock_ability", hooks: list[Hook] | None = None) -> None:
-        self._name = name
-        self._hooks = hooks or []
-        self.execute_count = 0
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
-        self.execute_count += 1
-        return ActionResult(
-            outcome=ActionOutcome.SUCCESS,
-            data={"response": "mock response"},
-        )
-
-    def get_hooks(self) -> list[Hook]:
-        return self._hooks
-
-    def bind_tool(self) -> dict[str, Any] | None:
-        return None
-
-
-class HITLBlockingHook(Hook):
-    """PRE_EXECUTE 拦截并要求 HITL 审批的 Hook。"""
-
-    hook_point = HookPoint.PRE_EXECUTE
-
-    def __init__(self, target_ability: str = "mock_ability") -> None:
-        self._target_ability = target_ability
-
-    async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
-        return call.member.member == self._target_ability
-
-    async def execute(
-        self,
-        call: OperationCall,
-        services: ExecutionServices,
-        result: ActionResult | None = None,
-    ) -> HookResult:
-        return HookResult.hitl(message="Human approval required")
-
-
 @pytest.fixture
 def ctx() -> FakeCtx:
     return FakeCtx()
 
 
 @pytest.fixture
-async def unit(ctx: FakeCtx) -> CoreUnit:
-    u = create_core_unit(
-        CoreUnitConfig(project_id="default", default_abilities=("conversation", "end_task"))
+async def unit(
+    ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+) -> AsyncIterator[CoreUnit]:
+    unit = create_core_unit(
+        ability_core_config(
+            members=(
+                "ghrah.cluster.spawn_agent",
+                "ghrah.fs.read_file",
+                "ghrah.fs.write_file",
+                "ghrah.shell.execute_command",
+            )
+        )
     )
-    await u.init(ctx)
-    return u
+    await unit.init(ctx)
+    try:
+        yield unit
+    finally:
+        await unit.stop()
+
+
+def _agent_id(name: str) -> str:
+    return uuid5(NAMESPACE_OID, name).hex
 
 
 def _spawn_payload(name: str) -> dict[str, Any]:
-    return {
-        "project_id": "default",
-        "config": {"name": name, "system_prompt": "You are a test agent."},
-    }
+    return _spawn_payload_with_id(name, _agent_id(name))
 
 
 def _spawn_payload_with_id(name: str, agent_id: str) -> dict[str, Any]:
     return {
         "project_id": "default",
-        "config": {
-            "name": name,
-            "agent_id": agent_id,
-            "system_prompt": "You are a test agent.",
-        },
+        "manifest_ref": "tests.agent",
+        "config": {"name": name, "agent_id": agent_id},
     }
+
+
+async def _spawn(unit: CoreUnit, name: str) -> None:
+    result = await unit.handle_command("spawn_agent", _spawn_payload(name), None)
+    assert result["success"], result
+
+
+def _child_args(name: str) -> dict[str, str]:
+    return {"manifest_ref": "tests.agent", "name": name}
 
 
 # ----------------------------------------------------------------
@@ -230,7 +200,7 @@ class TestSpawnTerminate:
 
         info = await unit.handle_command(
             "get_agent_info",
-            {"project_id": "default", "agent_id": "agent-1", "name": "agent-1"},
+            {"project_id": "default", "agent_id": _agent_id("agent-1"), "name": "agent-1"},
             None,
         )
         assert info["success"] is True
@@ -256,12 +226,12 @@ class TestSpawnTerminate:
         await unit.handle_command("spawn_agent", _spawn_payload("agent-1"), None)
         result = await unit.handle_command(
             "terminate_agent",
-            {"project_id": "default", "agent_id": "agent-1", "name": "agent-1"},
+            {"project_id": "default", "agent_id": _agent_id("agent-1"), "name": "agent-1"},
             None,
         )
         assert result["success"] is True
         assert result["data"]["name"] == "agent-1"
-        assert result["data"]["agent_id"] == "agent-1"
+        assert result["data"]["agent_id"] == _agent_id("agent-1")
         assert result["data"]["incarnation_id"]
         assert result["data"]["terminated"] is True
         assert f"core:{EventType.AGENT_TERMINATED.value}" in ctx.event_names()
@@ -284,14 +254,14 @@ class TestSpawnTerminate:
 class TestExecuteAbility:
     async def test_execute_ability_emits_ability_result(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         assert unit.supervisor is not None
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[MockAbility()])
+        await _spawn(unit, "agent-1")
 
         result = await unit.handle_command(
             "execute_ability",
             {
                 "request_id": "req-1",
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
+                "ability_name": "session_info",
                 "tool_args": {},
             },
             None,
@@ -305,14 +275,12 @@ class TestExecuteAbility:
         )
         assert payload["request_id"] == "req-1"
         assert payload["agent_name"] == "agent-1"
-        assert payload["ability_name"] == "mock_ability"
+        assert payload["ability_name"] == "session_info"
         assert payload["success"] is True
 
     async def test_execute_ability_unknown_ability(self, unit: CoreUnit) -> None:
         assert unit.supervisor is not None
-        await unit.supervisor.spawn_agent(
-            AgentConfig(name="agent-1"), abilities=[MockAbility(name="placeholder")]
-        )
+        await _spawn(unit, "agent-1")
         result = await unit.handle_command(
             "execute_ability",
             {
@@ -335,8 +303,7 @@ class TestExecuteAbility:
 class TestHITL:
     async def test_hitl_roundtrip(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         task = asyncio.create_task(
             unit.handle_command(
@@ -344,8 +311,8 @@ class TestHITL:
                 {
                     "request_id": "req-hitl",
                     "agent_name": "agent-1",
-                    "ability_name": "mock_ability",
-                    "tool_args": {"call_id": "call-1"},
+                    "ability_name": "spawn_agent",
+                    "tool_args": _child_args("call-1"),
                 },
                 None,
             )
@@ -358,14 +325,14 @@ class TestHITL:
             if store.list_pending():
                 break
             await asyncio.sleep(0.01)
-        assert store.list_pending() == [("agent-1", "mock_ability", "req-hitl")]
+        assert store.list_pending() == [("agent-1", "spawn_agent", "req-hitl")]
 
         # HITL 请求事件已上抛
         name, payload = next(
             e for e in ctx.events if e[0] == f"core:{EventType.HITL_REQUEST.value}"
         )
         assert payload["agent_name"] == "agent-1"
-        assert payload["ability_name"] == "mock_ability"
+        assert payload["ability_name"] == "spawn_agent"
         assert payload["context"]["tool_call_id"] == "req-hitl"
 
         # 审批通过 → resolve 进程内 future
@@ -373,7 +340,7 @@ class TestHITL:
             "hitl_response",
             {
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
+                "ability_name": "spawn_agent",
                 "tool_call_id": "req-hitl",
                 "approved": True,
             },
@@ -385,18 +352,16 @@ class TestHITL:
         result = await asyncio.wait_for(task, timeout=2.0)
         assert result["success"] is True
         assert result["data"]["success"] is True
-        assert ability.execute_count == 1
+        assert unit.supervisor._registry.exists("call-1") is True
 
     async def test_hitl_response_no_pending_future(self, unit: CoreUnit) -> None:
         assert unit.supervisor is not None
-        await unit.supervisor.spawn_agent(
-            AgentConfig(name="agent-1"), abilities=[MockAbility(name="placeholder")]
-        )
+        await _spawn(unit, "agent-1")
         resp = await unit.handle_command(
             "hitl_response",
             {
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
+                "ability_name": "spawn_agent",
                 "tool_call_id": "call-x",
                 "approved": True,
             },
@@ -408,8 +373,7 @@ class TestHITL:
     async def test_hitl_timeout_blocks_execution(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         """HITL 超时路径：future 超时 → ability 不执行 → ability_result(success=False)。"""
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         # 缩短 HITL 等待超时（CoreUnitConfig.hitl_timeout 的 best-effort 应用
         # 仅覆盖 unit 命令面 spawn 路径，直挂 spawn 时直接调 executor 字段）
@@ -421,12 +385,12 @@ class TestHITL:
             {
                 "request_id": "req-timeout",
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
-                "tool_args": {"call_id": "call-t"},
+                "ability_name": "spawn_agent",
+                "tool_args": _child_args("call-t"),
             },
             None,
         )
-        assert ability.execute_count == 0
+        assert unit.supervisor._registry.exists("call-t") is False
         assert result["success"] is True
         assert result["data"]["success"] is False
         name, payload = next(
@@ -438,8 +402,7 @@ class TestHITL:
     async def test_stop_cancels_pending_hitl(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         """stop() 清理路径：cancel_all 取消 pending future，在途 execute_ability 终结。"""
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         task = asyncio.create_task(
             unit.handle_command(
@@ -447,8 +410,8 @@ class TestHITL:
                 {
                     "request_id": "req-stop",
                     "agent_name": "agent-1",
-                    "ability_name": "mock_ability",
-                    "tool_args": {"call_id": "call-s"},
+                    "ability_name": "spawn_agent",
+                    "tool_args": _child_args("call-s"),
                 },
                 None,
             )
@@ -460,7 +423,7 @@ class TestHITL:
             if store.list_pending():
                 break
             await asyncio.sleep(0.01)
-        assert store.list_pending() == [("agent-1", "mock_ability", "req-stop")]
+        assert store.list_pending() == [("agent-1", "spawn_agent", "req-stop")]
 
         await unit.stop()
         assert store.list_pending() == []
@@ -473,7 +436,7 @@ class TestHITL:
             pass
         else:
             assert result["success"] is False or result["data"]["success"] is False
-        assert ability.execute_count == 0
+        assert unit.supervisor._registry.exists("call-s") is False
 
     async def test_hitl_promise_roundtrip(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         """事故场景回归：Observer 只回传 promise_id（WebUI 真实形状）也能 resolve。
@@ -483,8 +446,7 @@ class TestHITL:
         → future resolve → ability 执行成功。
         """
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         task = asyncio.create_task(
             unit.handle_command(
@@ -492,8 +454,8 @@ class TestHITL:
                 {
                     "request_id": "req-promise",
                     "agent_name": "agent-1",
-                    "ability_name": "mock_ability",
-                    "tool_args": {"call_id": "call-p"},
+                    "ability_name": "spawn_agent",
+                    "tool_args": _child_args("call-p"),
                 },
                 None,
             )
@@ -510,7 +472,7 @@ class TestHITL:
             e for e in ctx.events if e[0] == f"core:{EventType.HITL_REQUEST.value}"
         )
         assert payload["promise_id"]
-        assert payload["tool_args"] == {"call_id": "call-p"}
+        assert payload["tool_args"] == _child_args("call-p")
         promise_id = payload["promise_id"]
 
         # WebUI 真实形状：仅 promise_id + approved
@@ -524,7 +486,7 @@ class TestHITL:
 
         result = await asyncio.wait_for(task, timeout=2.0)
         assert result["success"] is True
-        assert ability.execute_count == 1
+        assert unit.supervisor._registry.exists("call-p") is True
 
         # hitl_resolved 事件发布（Observer 据此清除审批卡片）
         resolved = [e for e in ctx.events if e[0] == f"core:{EventType.HITL_RESOLVED.value}"]
@@ -567,8 +529,7 @@ class TestHITL:
     async def test_hitl_timeout_distinct_from_rejection(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         """超时与拒绝语义分离：FAILURE.data 标记 hitl_timeout 而非 hitl_rejected。"""
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         handle = await unit.supervisor.get_agent_handle("agent-1")
         handle._ability_executor._hitl_timeout = 0.05
@@ -578,8 +539,8 @@ class TestHITL:
             {
                 "request_id": "req-tmo",
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
-                "tool_args": {"call_id": "call-tmo"},
+                "ability_name": "spawn_agent",
+                "tool_args": _child_args("call-tmo"),
             },
             None,
         )
@@ -596,13 +557,12 @@ class TestHITL:
             if e[0] == f"core:{EventType.HITL_RESOLVED.value}" and e[1]["status"] == "timeout"
         ]
         assert resolved
-        assert ability.execute_count == 0
+        assert unit.supervisor._registry.exists("call-tmo") is False
 
     async def test_hitl_reject_reason_passed_to_result(self, unit: CoreUnit, ctx: FakeCtx) -> None:
         """拒绝时 UI 收集的 reason 并入 HITLResult.result 透传给 LLM。"""
         assert unit.supervisor is not None
-        ability = MockAbility(hooks=[HITLBlockingHook()])
-        await unit.supervisor.spawn_agent(AgentConfig(name="agent-1"), abilities=[ability])
+        await _spawn(unit, "agent-1")
 
         task = asyncio.create_task(
             unit.handle_command(
@@ -610,8 +570,8 @@ class TestHITL:
                 {
                     "request_id": "req-rej",
                     "agent_name": "agent-1",
-                    "ability_name": "mock_ability",
-                    "tool_args": {"call_id": "call-r"},
+                    "ability_name": "spawn_agent",
+                    "tool_args": _child_args("call-r"),
                 },
                 None,
             )
@@ -628,7 +588,7 @@ class TestHITL:
             {
                 "promise_id": "will-fallback",
                 "agent_name": "agent-1",
-                "ability_name": "mock_ability",
+                "ability_name": "spawn_agent",
                 "tool_call_id": "req-rej",
                 "approved": False,
                 "reason": "不安全的目录",
@@ -688,7 +648,7 @@ class TestAgentCompactContextCommand:
         await unit.handle_command("spawn_agent", _spawn_payload("agent-1"), None)
         result = await unit.handle_command(
             "agent_compact_context",
-            {"project_id": "default", "agent_id": "agent-1", "agent_name": "agent-1"},
+            {"project_id": "default", "agent_id": _agent_id("agent-1"), "agent_name": "agent-1"},
             None,
         )
         assert result["success"] is True
@@ -700,7 +660,7 @@ class TestAgentCompactContextCommand:
         await unit.handle_command("spawn_agent", _spawn_payload("agent-1"), None)
         result = await unit.handle_command(
             "agent_compact_context",
-            {"project_id": "default", "agent_id": "agent-1", "agent_name": "ghost"},
+            {"project_id": "default", "agent_id": _agent_id("agent-1"), "agent_name": "ghost"},
             None,
         )
         assert result["success"] is False
@@ -719,7 +679,9 @@ class TestAgentCompactContextCommand:
     async def test_invalid_payload_receipt(self, unit: CoreUnit) -> None:
         """缺 agent_name → ValidationError 统一回执。"""
         result = await unit.handle_command(
-            "agent_compact_context", {"project_id": "default", "agent_id": "agent-1"}, None
+            "agent_compact_context",
+            {"project_id": "default", "agent_id": _agent_id("agent-1")},
+            None,
         )
         assert result["success"] is False
         assert "error" in result
@@ -827,16 +789,16 @@ class TestStandalone:
         assert payload["basis"] == "real"
         assert payload["occupied_tokens"] == 850
 
-    async def test_unit_without_emit_ctx(self) -> None:
+    async def test_unit_without_emit_ctx(
+        self, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """ctx 无 emit 方法时退化为 Null 行为，不抛异常。"""
 
         class NoEmitCtx:
             pass
 
         no_emit_ctx = NoEmitCtx()
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", default_abilities=("conversation", "end_task"))
-        )
+        unit = create_core_unit(ability_core_config())
         await unit.init(no_emit_ctx)
         result = await unit.handle_command("spawn_agent", _spawn_payload("agent-1"), None)
         assert result["success"] is True
@@ -927,92 +889,41 @@ class FakePersistenceBackend:
         self.messages[agent_name] = list(messages)
 
 
-def _ability_def(ability_type: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {"ability_type": ability_type, "params": params or {}}
-
-
-def _spawn_payload_with_abilities(name: str, abilities: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "project_id": "default",
-        "config": {"name": name, "system_prompt": "You are a test agent."},
-        "abilities": abilities,
-    }
-
-
 def _actor_of(unit: CoreUnit, name: str) -> Any:
     assert unit.supervisor is not None
     return unit.supervisor._registry.get_info(name).actor_handle
 
 
 class TestPerAgentInjection:
-    async def test_sandbox_command_runner_injected_into_execute_command(self, ctx: FakeCtx) -> None:
+    async def test_sandbox_command_runner_injected_into_execute_command(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         runner = FakeCommandRunner()
-        unit = create_core_unit(CoreUnitConfig(project_id="default", command_runner=runner))
-        await unit.init(ctx)
-
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "sandboxed", [_ability_def("execute_command", {"require_approval": False})]
-            ),
-            None,
+        unit = create_core_unit(
+            ability_core_config(members=("ghrah.shell.execute_command",), command_runner=runner)
         )
-        assert result["success"] is True
-
-        actor = _actor_of(unit, "sandboxed")
-        ability = actor._abilities["execute_command"]
-        assert ability._command_runner is runner
+        await unit.init(ctx)
+        await _spawn(unit, "sandboxed")
+        assert _actor_of(unit, "sandboxed")._abilities["execute_command"]._command_runner is runner
+        await unit.stop()
 
     async def test_no_command_runner_keeps_standalone_subprocess_mode(self, unit: CoreUnit) -> None:
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities("plain", [_ability_def("execute_command")]),
-            None,
-        )
-        assert result["success"] is True
+        await _spawn(unit, "plain")
+        assert _actor_of(unit, "plain")._abilities["execute_command"]._command_runner is None
 
-        actor = _actor_of(unit, "plain")
-        ability = actor._abilities["execute_command"]
-        assert ability._command_runner is None
-
-    async def test_fs_require_hitl_mounts_approval_hook(self, unit: CoreUnit) -> None:
-        """断链回归：require_hitl 的 FS ability 经 spawn 装配须带审批 Hook。
-
-        此前 _create_ability_from_def FS 分支只注入 permission_checker，
-        白名单外访问被内联检查当 (True,"pending")→放行，HITL 从未生效。
-        """
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "fs-guarded",
-                [_ability_def("write_file", {"require_hitl": True})],
-            ),
-            None,
-        )
-        assert result["success"] is True
-
+    async def test_fs_approval_is_bound_to_projected_member(self, unit: CoreUnit) -> None:
+        await _spawn(unit, "fs-guarded")
         actor = _actor_of(unit, "fs-guarded")
-        ability = actor._abilities["write_file"]
-        hooks = ability.get_hooks()
-        assert len(hooks) == 1
-        assert type(hooks[0]).__name__ == "AccessApprovalHook"
+        write = actor._abilities["write_file"]
+        read = actor._abilities["read_file"]
+        assert write._checker.require_approval is True
+        assert read._checker.require_approval is False
+        assert write.get_hooks()[0].scope.target_abilities == frozenset({"write_file"})
+        assert read.get_hooks()[0].scope.target_abilities == frozenset({"read_file"})
 
-    async def test_fs_no_require_hitl_no_hook(self, unit: CoreUnit) -> None:
-        """require_hitl 未声明时 FS ability 不挂 hook（白名单外直接拒绝语义不变）。"""
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "fs-open", [_ability_def("write_file", {"require_hitl": False})]
-            ),
-            None,
-        )
-        assert result["success"] is True
-
-        actor = _actor_of(unit, "fs-open")
-        ability = actor._abilities["write_file"]
-        assert ability.get_hooks() == []
-
-    async def test_persistence_factory_reaches_agent_context_manager(self, ctx: FakeCtx) -> None:
+    async def test_persistence_factory_reaches_agent_context_manager(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         backend = FakePersistenceBackend(tag="custom")
         calls: list[str] = []
 
@@ -1021,10 +932,9 @@ class TestPerAgentInjection:
             return backend
 
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 project_id="default",
                 persistence_factory=factory,
-                default_abilities=("conversation", "end_task"),
             )
         )
         await unit.init(ctx)
@@ -1045,75 +955,43 @@ class TestPerAgentInjection:
 
 
 class TestHITLRuntimeOverride:
-    """HITL 运行时覆盖层（语义平移自 subject 侧旧 HITLPolicy）。"""
-
-    async def test_auto_approve_overrides_manifest_require_hitl(self, ctx: FakeCtx) -> None:
+    async def test_auto_approve_overrides_manifest_require_hitl(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         unit = create_core_unit(
-            CoreUnitConfig(project_id="default", auto_approve_abilities=("execute_command",))
+            ability_core_config(
+                members=("ghrah.shell.execute_command",),
+                auto_approve_abilities=("execute_command",),
+            )
         )
         await unit.init(ctx)
-
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "auto", [_ability_def("execute_command", {"require_approval": True})]
-            ),
-            None,
-        )
-        assert result["success"] is True
+        await _spawn(unit, "auto")
         checker = _actor_of(unit, "auto")._abilities["execute_command"]._checker
         assert checker._require_approval is False
+        await unit.stop()
 
-    async def test_manifest_require_hitl_respected_without_override(self, unit: CoreUnit) -> None:
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "strict", [_ability_def("execute_command", {"require_approval": True})]
-            ),
-            None,
+    async def test_manifest_require_hitl_applies_with_fallback_disabled(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
+        unit = create_core_unit(
+            ability_core_config(
+                members=("ghrah.shell.execute_command",),
+                require_approval_by_default=False,
+            )
         )
-        assert result["success"] is True
+        await unit.init(ctx)
+        await _spawn(unit, "strict")
         checker = _actor_of(unit, "strict")._abilities["execute_command"]._checker
         assert checker._require_approval is True
-
-    async def test_fallback_default_when_manifest_silent(self, ctx: FakeCtx) -> None:
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", require_approval_by_default=False)
-        )
-        await unit.init(ctx)
-
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities("loose", [_ability_def("execute_command")]),
-            None,
-        )
-        assert result["success"] is True
-        checker = _actor_of(unit, "loose")._abilities["execute_command"]._checker
-        assert checker._require_approval is False
-
-    async def test_fs_ability_require_hitl_fallback(self, ctx: FakeCtx) -> None:
-        """FS 能力 manifest 未声明 require_hitl → 兜底默认覆盖（旧默认恒 True）。"""
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", require_approval_by_default=False)
-        )
-        await unit.init(ctx)
-
-        result = await unit.handle_command(
-            "spawn_agent",
-            _spawn_payload_with_abilities(
-                "fs-loose", [_ability_def("read_file", {"workspace_root": "/tmp"})]
-            ),
-            None,
-        )
-        assert result["success"] is True
-        checker = _actor_of(unit, "fs-loose")._abilities["read_file"]._checker
-        assert checker._require_approval is False
+        await unit.stop()
 
 
 class TestForkContextContinuity:
     """Fork 场景验证：换实现不丢上下文。"""
 
-    async def test_per_agent_backend_swap_and_rebase_context(self, tmp_path: Any) -> None:
+    async def test_per_agent_backend_swap_and_rebase_context(
+        self, tmp_path: Any, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """换持久化后端 = 新 spawn 注入新 factory；Fork = 上下文继承（正交）。"""
         from ghrah.context.manager import ContextManager
         from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -1146,10 +1024,9 @@ class TestForkContextContinuity:
             return backend_b
 
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 project_id="default",
                 persistence_factory=factory_b,
-                default_abilities=("conversation", "end_task"),
             )
         )
         await unit.init(FakeCtx())
@@ -1175,14 +1052,14 @@ class TestForkContextContinuity:
         assert checkpoint.nodes[0].metadata["origin_agent_name"] == "agent-a"
         await backend_a.close()
 
-    async def test_strategy_swap_via_new_config_keeps_fork_lineage(self, ctx: FakeCtx) -> None:
+    async def test_strategy_swap_via_new_config_keeps_fork_lineage(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """换 HITL 策略 = 新 CoreUnitConfig spawn 新 agent（fork 链可接续）。"""
         from ghrah.context.rebase import create_rebased_context
 
         # 旧策略 agent（严格）
-        unit_strict = create_core_unit(
-            CoreUnitConfig(project_id="default", default_abilities=("conversation", "end_task"))
-        )
+        unit_strict = create_core_unit(ability_core_config())
         await unit_strict.init(ctx)
         await unit_strict.handle_command("spawn_agent", _spawn_payload("old-agent"), None)
         cm_old = _actor_of(unit_strict, "old-agent")._context_manager
@@ -1192,7 +1069,7 @@ class TestForkContextContinuity:
 
         # 新策略 unit（宽松）spawn agent-c，fork 自 old-agent 链头
         unit_loose = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 project_id="default",
                 require_approval_by_default=False,
                 cluster_id="policy-v2",
@@ -1204,7 +1081,7 @@ class TestForkContextContinuity:
         rebased = create_rebased_context(
             source_cm=cm_old, agent_name="new-agent-fork", system_prompt="v2"
         )
-        assert rebased.active_head.metadata["origin_agent_name"] == "old-agent"
+        assert rebased.active_head.metadata["origin_agent_name"] == _agent_id("old-agent")
         # 新策略对新 spawn 生效（旧 unit 不受影响）
         checker_loose = unit_loose._config.require_approval_by_default
         checker_strict = unit_strict._config.require_approval_by_default
@@ -1212,7 +1089,7 @@ class TestForkContextContinuity:
 
 
 async def test_multi_agent_core_restart_restores_independent_snapshots(
-    tmp_path: Path,
+    tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
 ) -> None:
     """整颗 CoreUnit 重建后，多个待命 Agent 各自恢复原链头与状态。"""
     from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -1222,11 +1099,10 @@ async def test_multi_agent_core_restart_restores_independent_snapshots(
     def persistence_factory(config: AgentConfig) -> SqliteBackend:
         return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
-    config = CoreUnitConfig(
+    config = ability_core_config(
         cluster_id="cluster-a",
         project_id="default",
         persistence_factory=persistence_factory,
-        default_abilities=("conversation", "end_task"),
     )
     first = create_core_unit(config)
     await first.init(FakeCtx())
@@ -1269,7 +1145,7 @@ async def test_multi_agent_core_restart_restores_independent_snapshots(
 
 
 async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
-    tmp_path: Path,
+    tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
 ) -> None:
     """共享 Project action DB 时，同名 Agent 也按 UUID 隔离快照。"""
     from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -1284,11 +1160,10 @@ async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
     heads: dict[str, str] = {}
     for cluster_id, agent_id in identities.items():
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 cluster_id=cluster_id,
                 project_id="default",
                 persistence_factory=persistence_factory,
-                default_abilities=("conversation", "end_task"),
             )
         )
         await unit.init(FakeCtx())
@@ -1308,11 +1183,10 @@ async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
 
     for cluster_id, agent_id in identities.items():
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 cluster_id=cluster_id,
                 project_id="default",
                 persistence_factory=persistence_factory,
-                default_abilities=("conversation", "end_task"),
             )
         )
         await unit.init(FakeCtx())
@@ -1339,16 +1213,18 @@ class TestEnvironmentInjection:
         assert info.config.environment_context_injection is False
         assert info.config.environment_info is None
 
-    async def test_snapshot_wired_into_prompt_and_session_info(self, ctx: FakeCtx) -> None:
+    async def test_snapshot_wired_into_prompt_and_session_info(
+        self, ctx: FakeCtx, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """开关开启 → 快照注入 AgentConfig + session_info 工具回填。
 
-        直传 abilities 路径：快照组装在 abilities 实例化后（可从 FS
+        模板装配在能力物化后组装快照（可从 FS
         checker 收集授权根）。
         """
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 project_id="default",
-                workspace_root="/tmp/kilo/env-ws",
+                members=("ghrah.fs.read_file",),
                 environment_injection=True,
             )
         )
@@ -1356,13 +1232,7 @@ class TestEnvironmentInjection:
 
         result = await unit.handle_command(
             "spawn_agent",
-            _spawn_payload_with_abilities(
-                "env-on",
-                [
-                    _ability_def("read_file", {"workspace_root": "/tmp/kilo/env-ws"}),
-                    _ability_def("session_info"),
-                ],
-            ),
+            _spawn_payload("env-on"),
             None,
         )
         assert result["success"] is True
@@ -1371,10 +1241,10 @@ class TestEnvironmentInjection:
         assert info.config.environment_context_injection is True
         snapshot = info.config.environment_info
         assert snapshot is not None
-        assert snapshot["deployment"] == "standalone"
-        assert snapshot["workspace_root"] == "/tmp/kilo/env-ws"
+        assert snapshot["deployment"] == "subject-mounted"
+        assert snapshot["workspace_root"] == unit._config.workspace_root
         # FS checker 的 workspace_root 被收进授权根（快照在实例化后组装）
-        assert "/tmp/kilo/env-ws" in snapshot["allowed_roots"]
+        assert unit._config.workspace_root in snapshot["allowed_roots"]
 
         # session_info 工具回填同一快照（单一真源派生）
         actor = _actor_of(unit, "env-on")
@@ -1385,7 +1255,7 @@ class TestEnvironmentInjection:
         """开关关闭 → session_info 工具保持裸实例（environment=None）。"""
         await unit.handle_command(
             "spawn_agent",
-            _spawn_payload_with_abilities("bare", [_ability_def("session_info")]),
+            _spawn_payload("bare"),
             None,
         )
         actor = _actor_of(unit, "bare")

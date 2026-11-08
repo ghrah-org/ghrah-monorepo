@@ -1,5 +1,7 @@
 # Installation & Quick Start
 
+> Historical note. Some examples in this document depend on the retired `ghrah.abilities` package. For the current integration entry, see [Current Ability integration](README.md#当前-ability-接入).
+
 ## Prerequisites
 
 - Python >= 3.15

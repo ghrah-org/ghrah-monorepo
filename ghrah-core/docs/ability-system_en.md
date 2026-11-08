@@ -1,5 +1,7 @@
 # Ability System
 
+> Historical note. Some examples in this document depend on the retired `ghrah.abilities` package. For the current integration entry, see [Current Ability integration](README.md#当前-ability-接入).
+
 Ability is the core abstraction in ghrah, defining the capability interface contract for Agents. Each Ability is the smallest unit of capability, and Agents gain complete behavior by composing multiple Abilities.
 
 ## Design Philosophy

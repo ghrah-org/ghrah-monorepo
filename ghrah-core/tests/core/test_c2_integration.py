@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from ghrah.protocol.types import EventType
@@ -56,6 +57,7 @@ max_iterations: 5
 abilities:
   - type: conversation
   - type: end_task
+  - ref: ghrah.core.session_info
 """
 
 
@@ -97,10 +99,12 @@ class _FakeCtx:
         self.events.append((name, payload))
 
 
-async def test_manifest_spawn_hitl_gate_full_chain() -> None:
+async def test_manifest_spawn_hitl_gate_full_chain(
+    ability_core_config: Callable[..., CoreUnitConfig],
+) -> None:
     """manifest_ref spawn → HITL 结构性拦截 → 审批 → 集群可见。"""
     unit = create_core_unit(
-        CoreUnitConfig(
+        ability_core_config(
             project_id="default",
             cluster_id="smoke-cluster",
             manifest_store=_CompositeStore(),
@@ -126,7 +130,7 @@ async def test_manifest_spawn_hitl_gate_full_chain() -> None:
     hitl_hooks = [
         h
         for h in handle._abilities["spawn_agent"].get_hooks()
-        if h.hook_point.name == "PRE_EXECUTE"
+        if any(point.name == "PRE_EXECUTE" for point in h.scope.points)
     ]
     assert len(hitl_hooks) == 1
 
@@ -139,7 +143,6 @@ async def test_manifest_spawn_hitl_gate_full_chain() -> None:
                 "agent_name": "orch",
                 "ability_name": "spawn_agent",
                 "tool_args": {
-                    "call_id": "call-1",
                     "manifest_ref": "smoke.worker",
                     "name": "worker-1",
                 },
@@ -172,9 +175,10 @@ async def test_manifest_spawn_hitl_gate_full_chain() -> None:
     assert result["data"]["success"], result
     assert result["data"]["result"]["agent_name"] == "worker-1"
 
-    # 4. 子 agent 能力面由 manifest 冻结（conversation/end_task，无 spawn）
+    # 4. 子 Agent 获得自身模板的工具，不继承父 Agent 的 spawn。
     worker = await unit.supervisor.get_agent_handle("worker-1")
-    assert set(worker._abilities) == {"conversation", "end_task"}
+    assert "session_info" in worker._abilities
+    assert "spawn_agent" not in worker._abilities
 
     # 5. query_agents 可见双方
     listing = await unit.handle_command("list_agents", {"project_id": "default"}, None)

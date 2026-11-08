@@ -1,5 +1,7 @@
 # 双模式架构
 
+> 历史说明。本文部分示例依赖已退役的 `ghrah.abilities`。当前接入入口见 [文档索引](README.md#当前-ability-接入)。
+
 ghrah 支持本地（Local）和分布式（Distributed）两种运行模式。分布式模式下，Core 与 Subject 通过 CommandSender 通信，构成两层架构：core-server + subject-server。
 
 ## 模式对比

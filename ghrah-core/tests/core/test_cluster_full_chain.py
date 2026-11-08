@@ -24,18 +24,17 @@ ScriptedLLM 应答。断言全部落在真实副作用上：
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 from _helpers import ScriptedLLM
 from test_core_unit import FakeCtx
 
-from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.chat.content import ToolCallBlock
 from ghrah.communication import MessageKind, MessageManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
-from ghrah.core.config import AgentConfig
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
 from ghrah.manifest.parser import parse_agent_manifest
 from ghrah.manifest.protocols import ManifestStoreProtocol
@@ -73,6 +72,7 @@ max_iterations: 5
 abilities:
   - type: conversation
   - type: end_task
+  - ref: ghrah.core.session_info
 """
 
 
@@ -105,7 +105,7 @@ def _tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> ToolCallBl
 
 @pytest.mark.parametrize("fire_and_forget", [False, True])
 async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
-    tmp_path, fire_and_forget
+    tmp_path, fire_and_forget, ability_core_config: Callable[..., CoreUnitConfig]
 ) -> None:
     """query_agents → spawn_agent → send_message 全链路（真实能力回路）。"""
     # 父 LLM：三轮 tool_call + 文本收束；子 LLM 预设回复
@@ -148,21 +148,26 @@ async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
             return ScriptedLLM(["received"])
         raise AssertionError(f"unexpected agent spawned: {config.name}")
 
-    async with SqliteBackend(tmp_path / "core.sqlite") as backend:
+    db = tmp_path / "core.sqlite"
+    controller_id = "c" * 32
+    orchestrator_id = "a" * 32
+    async with SqliteBackend(db) as backend:
         await backend.load_checkpoint("bootstrap")  # 先初始化 Core schema。
     async with MessageManager(
-        tmp_path / "core.sqlite",
+        db,
         project_id="default",
-        agent_ids=("controller", "orchestrator", "worker-1"),
+        agent_ids=(),
+        allow_persisted_agents=True,
         session_routing=True,
     ) as mm:
         unit = create_core_unit(
-            CoreUnitConfig(
+            ability_core_config(
                 project_id="default",
                 cluster_id="cluster-e2e",
                 manifest_store=_CompositeStore(),
                 llm_factory=llm_factory,
                 message_manager=mm,
+                persistence_factory=lambda config: SqliteBackend(db),
                 # 部署管理员放行 spawn_agent（manifest require_hitl: true 的
                 # 显式覆盖层；HITL 审批往返由 test_c2_integration 覆盖）
                 auto_approve_abilities=("spawn_agent",),
@@ -176,19 +181,26 @@ async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
             "spawn_agent",
             {
                 "project_id": "default",
-                "config": {"name": "orchestrator"},
+                "config": {"name": "orchestrator", "agent_id": orchestrator_id},
                 "manifest_ref": "cluster.orchestrator",
             },
             None,
         )
         assert spawn["success"], spawn.get("error")
 
-        await unit.supervisor.spawn_agent(
-            AgentConfig(name="controller"), abilities=[ConversationAbility()]
+        spawn = await unit.handle_command(
+            "spawn_agent",
+            {
+                "project_id": "default",
+                "config": {"name": "controller", "agent_id": controller_id},
+                "manifest_ref": "cluster.worker",
+            },
+            None,
         )
+        assert spawn["success"], spawn
         request = await mm.send(
-            sender_id="controller",
-            recipient_ids=("orchestrator",),
+            sender_id=controller_id,
+            recipient_ids=(orchestrator_id,),
             content="启动编排",
             kind=MessageKind.REQUEST,
             idempotency_key="startup",
@@ -212,7 +224,7 @@ async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
         assert worker_handle._message_history, "worker should have received the message"
         received = worker_handle._message_history[0]
         assert received.content == "请报告状态"
-        assert received.sender == "orchestrator"
+        assert received.sender == orchestrator_id
 
         # 持久回复触发父 agent 新回合，其 LLM 输入含 worker 预设回复
         final_call = parent_llm.calls[-1]
@@ -221,7 +233,10 @@ async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
             # 原同步用例的语义：回复在原请求收束前进入工具结果，没有额外回合。
             assert len(parent_llm.calls) == 4
             orchestrator = await unit.supervisor.get_agent_handle("orchestrator")
-            assert not any(m.sender == "worker-1" for m in orchestrator._message_history)
+            assert not any(
+                m.sender == worker_handle.config.effective_agent_id
+                for m in orchestrator._message_history
+            )
 
         await unit.stop()
 

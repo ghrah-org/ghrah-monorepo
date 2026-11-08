@@ -1,5 +1,7 @@
 # Ability 系统
 
+> 历史说明。本文部分示例依赖已退役的 `ghrah.abilities`。当前接入入口见 [文档索引](README.md#当前-ability-接入)。
+
 Ability 是 ghrah 的核心抽象，定义了 Agent 的能力接口契约。每个 Ability 是最小的能力单元，Agent 通过组合多个 Ability 获得完整行为。
 
 ## 设计理念

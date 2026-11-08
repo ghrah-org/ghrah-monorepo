@@ -1,5 +1,7 @@
 # 内置 Ability 参考
 
+> 历史说明。本文部分示例依赖已退役的 `ghrah.abilities`。当前接入入口见 [文档索引](README.md#当前-ability-接入)。
+
 ghrah 提供了一组内置 Ability，覆盖常见的对话、文件系统操作、命令执行和集群通信场景。
 
 ## 总览

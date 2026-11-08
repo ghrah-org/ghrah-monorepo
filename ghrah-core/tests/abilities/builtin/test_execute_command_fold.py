@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
+from unittest.mock import create_autospec
 
 from _helpers import make_call, make_services
 
@@ -18,6 +21,11 @@ from ghrah.ability.builtin.shell.operations.execute_command import (
 from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.permissions.command_safety import (
+    CommandSafetyCategory,
+    CommandSafetyChecker,
+    CommandSafetyVerdict,
+)
 
 
 def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
@@ -102,10 +110,6 @@ class TestFoldTextUnit:
 
 class TestRunnerModeFold:
     async def test_stdout_folded(self) -> None:
-        ability = ExecuteCommandAbility(fold_stdout_lines=100)
-        call, services = _make_context(tool_args={"command": "big"})
-        result = await ability.execute(call, services)
-        # MockBigRunner 未注入——默认路径走 subprocess；改用 runner 注入
         ability = ExecuteCommandAbility(
             command_runner=MockBigRunner(_big_stdout(1000)), fold_stdout_lines=100
         )
@@ -136,27 +140,27 @@ class TestRunnerModeFold:
 
 
 class TestSubprocessModeFold:
-    async def test_subprocess_stdout_folded(self, tmp_path) -> None:
-        ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
-        # 跨平台：Windows 无 echo -e；用 python -c 生成多行
-        script = "import sys; print('\\n'.join(f'line {i}' for i in range(1, 301)))"
-        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
+    async def test_subprocess_folds_only_stdout(self, tmp_path: Path) -> None:
+        script = tmp_path / "output.py"
+        script.write_text(
+            "import sys\n"
+            "print('\\n'.join(f'line {i:04d}' for i in range(1, 301)))\n"
+            "print('\\n'.join('err' for _ in range(200)), file=sys.stderr)\n",
+            encoding="utf-8",
+        )
+        # 只测试已通过检查的子进程输出。命令准入由独立的安全测试覆盖。
+        checker = create_autospec(CommandSafetyChecker, instance=True)
+        checker.check_command.return_value = CommandSafetyVerdict(
+            category=CommandSafetyCategory.SAFE, base_command="python"
+        )
+        ability = ExecuteCommandAbility(command_checker=checker, fold_stdout_lines=10, timeout=30.0)
+        call, services = _make_context(tool_args={"command": f'"{sys.executable}" "{script}"'})
         result = await ability.execute(call, services)
-        assert result.outcome in (ActionOutcome.SUCCESS, ActionOutcome.FAILURE)
+        assert result.outcome == ActionOutcome.SUCCESS, result
         stdout = result.data["stdout"]
-        if "lines omitted" in stdout or "lines omitted" in stdout:
-            assert "line 1" in stdout or "line 001" in stdout
-            assert "[... " in stdout and "lines omitted ...]" in stdout
-
-    async def test_subprocess_stderr_full(self, tmp_path) -> None:
-        ability = ExecuteCommandAbility(fold_stdout_lines=10, timeout=30.0)
-        script = "import sys; print('\\n'.join('err' for _ in range(200)), file=sys.stderr)"
-        call, services = _make_context(tool_args={"command": f'python -c "{script}"'})
-        result = await ability.execute(call, services)
-        stderr = result.data["stderr"]
-        assert stderr.count("200") >= 0
-        # stderr 不折叠：300 行 stderr 不应出现省略标记
-        assert "lines omitted" not in stderr
+        assert "line 0001" in stdout and "line 0300" in stdout
+        assert "lines omitted" in stdout
+        assert result.data["stderr"].splitlines() == ["err"] * 200
 
 
 class TestThresholdBoundaries:

@@ -1,5 +1,7 @@
 # Dual-Mode Architecture
 
+> Historical note. Some examples in this document depend on the retired `ghrah.abilities` package. For the current integration entry, see [Current Ability integration](README.md#当前-ability-接入).
+
 ghrah supports both Local and Distributed runtime modes. In distributed mode, Core communicates with Subject via CommandSender, forming a two-layer architecture: core-server + subject-server.
 
 ## Mode Comparison

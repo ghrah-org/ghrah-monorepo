@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from _helpers import make_call, make_services
 
 from ghrah.ability.builtin.cluster.operations.broadcast_message import BroadcastMessageAbility
@@ -22,6 +21,8 @@ from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.config import AgentConfig
+from ghrah.manifest.agent import AgentManifest
+from ghrah.manifest.parser import parse_agent_manifest
 
 
 def _make_context(
@@ -48,6 +49,7 @@ def _make_supervisor(
     spawn_agent_return: str = "new-agent",
 ) -> MagicMock:
     supervisor = MagicMock()
+    supervisor._builtin_abilities = False
     supervisor.list_agents = AsyncMock(return_value=list_agents_return or [])
     supervisor.send = AsyncMock(return_value=send_return)
     supervisor.broadcast = AsyncMock(
@@ -275,81 +277,30 @@ class TestBroadcastMessageAbility:
 # ── SpawnAgentAbility 测试（manifest_ref 主路径，能力面冻结） ──
 
 
-class _FakeManifest:
-    """最小 agent manifest stub（duck-typed，供 resolver 消费）。"""
-
-    def __init__(self, name: str) -> None:
-        self.metadata = type(
-            "M",
-            (),
-            {"name": name, "description": f"manifest {name}", "tags": ["test"]},
-        )()
-        self.config = {
-            "name": name,
-            "description": f"manifest {name}",
-            "system_prompt": f"You are {name}.",
-        }
-        self.abilities = [
-            type(
-                "A",
-                (),
-                {
-                    "type": "builtin",
-                    "ability_name": "conversation",
-                    "handler": "conversation",
-                    "params": {},
-                    "permissions": None,
-                },
-            )()
-        ]
-
-
 class _FakeStore:
-    """最小 ManifestStore stub：load_agent/list_agents。"""
+    """只存储一个真实 v2 Agent 模板。"""
 
-    def __init__(self, agents: dict[str, _FakeManifest]) -> None:
-        self._agents = agents
-
-    def load_agent(self, ref: str) -> _FakeManifest:
-        if ref not in self._agents:
-            raise KeyError(f"agent manifest not found: {ref}")
-        return self._agents[ref]
-
-    def list_agents(self) -> list[str]:
-        return list(self._agents)
-
-
-def _make_store() -> _FakeStore:
-    return _FakeStore({"ghrah.designer": _FakeManifest("designer")})
-
-
-def _patch_resolver(monkeypatch: Any, store: _FakeStore) -> None:
-    """把 ManifestResolver.resolve 替换为消费 _FakeManifest 的 stub。"""
-
-    from ghrah.manifest import resolver as resolver_mod
-
-    class _ResolvedAbility:
-        def __init__(self, manifest_ref: str) -> None:
-            self.ability_name = manifest_ref
-            self.implementation = type("I", (), {"type": "builtin", "handler": "conversation"})()
-            self.permissions = type("P", (), {"require_hitl": False})()
-
-    class _ResolvedAgent:
-        def __init__(self, config: Any, abilities: list[Any]) -> None:
-            self.config = config
-            self.abilities = abilities
-
-    def fake_resolve(self: Any, manifest: Any, runtime_name: str | None = None) -> Any:
-        return _ResolvedAgent(
-            config=AgentConfig(
-                name=runtime_name or manifest.config["name"],
-                description=manifest.config["description"],
-                system_prompt=manifest.config["system_prompt"],
-            ),
-            abilities=[_ResolvedAbility("conversation")],
+    def load_agent(self, ref: str) -> AgentManifest:
+        if ref != "ghrah.designer":
+            raise KeyError(ref)
+        return parse_agent_manifest(
+            """\
+manifest: agent
+version: "2"
+metadata:
+  namespace: ghrah
+  name: designer
+  tags: [test]
+model:
+  endpoint_name: default
+system_prompt: You are a designer.
+abilities:
+  - type: conversation
+"""
         )
 
-    monkeypatch.setattr(resolver_mod.ManifestResolver, "resolve", fake_resolve)
+    def list_agents(self, namespace: str | None = None) -> list[str]:
+        return ["ghrah.designer"] if namespace in (None, "ghrah") else []
 
 
 class TestSpawnAgentAbility:
@@ -404,10 +355,9 @@ class TestSpawnAgentAbility:
         assert "manifest_store is not wired" in result.data["error"]
         supervisor.spawn_agent.assert_not_awaited()
 
-    async def test_execute_manifest_ref_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_execute_manifest_ref_success(self) -> None:
         supervisor = _make_supervisor(spawn_agent_return="designer")
-        store = _make_store()
-        _patch_resolver(monkeypatch, store)
+        store = _FakeStore()
         call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.designer"},
@@ -426,11 +376,10 @@ class TestSpawnAgentAbility:
         abilities = call_args[1].get("abilities")
         assert abilities is not None and len(abilities) > 0
 
-    async def test_execute_persona_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_execute_persona_override(self) -> None:
         """name/description/system_prompt 覆写经 resolved_config 生效。"""
         supervisor = _make_supervisor(spawn_agent_return="designer-x")
-        store = _make_store()
-        _patch_resolver(monkeypatch, store)
+        store = _FakeStore()
         call, services = _make_context(
             supervisor=supervisor,
             tool_args={
@@ -450,10 +399,9 @@ class TestSpawnAgentAbility:
         assert config.description == "Custom role"
         assert config.system_prompt == "Custom persona."
 
-    async def test_execute_manifest_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_execute_manifest_not_found(self) -> None:
         supervisor = _make_supervisor()
-        store = _make_store()
-        _patch_resolver(monkeypatch, store)
+        store = _FakeStore()
         call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.nonexistent"},
@@ -465,11 +413,10 @@ class TestSpawnAgentAbility:
         assert "ghrah.nonexistent" in result.data["error"]
         supervisor.spawn_agent.assert_not_awaited()
 
-    async def test_execute_spawn_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_execute_spawn_exception(self) -> None:
         supervisor = _make_supervisor()
         supervisor.spawn_agent = AsyncMock(side_effect=RuntimeError("name conflict"))
-        store = _make_store()
-        _patch_resolver(monkeypatch, store)
+        store = _FakeStore()
         call, services = _make_context(
             supervisor=supervisor,
             tool_args={"manifest_ref": "ghrah.designer"},
