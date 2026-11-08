@@ -110,6 +110,52 @@ describe("useContextUsageStore", () => {
     expect(display?.percent).toBeNull();
   });
 
+  it("treats the built-in default budget as a placeholder, not a real window", () => {
+    // budget_source="default" 表示链路无任何真实窗口信息，budget 是
+    // DEFAULT_WINDOW_MAX_TOKENS 兜底值。据它画比例条会给出不存在的精度。
+    const store = useContextUsageStore();
+    store.onContextUsageUpdated(
+      payload({
+        budget_tokens: 1_000_000,
+        budget_source: "default",
+        occupied_tokens: 5000,
+      }),
+      1,
+    );
+    const display = store.usageFor({ projectId: "p1", agentId: "a1" });
+    expect(display?.mode).toBe("cumulative");
+    expect(display?.budgetPlaceholder).toBe(true);
+    expect(display?.percent).toBeNull();
+    expect(display?.budgetTokens).toBe(0);
+  });
+
+  it("renders a ratio bar for a genuinely resolved budget", () => {
+    // agentconf 解析出的窗口是真实预算，应正常出比例条。
+    const store = useContextUsageStore();
+    store.onContextUsageUpdated(
+      payload({
+        budget_tokens: 200_000,
+        budget_source: "agentconf",
+        occupied_tokens: 50_000,
+      }),
+      1,
+    );
+    const display = store.usageFor({ projectId: "p1", agentId: "a1" });
+    expect(display?.mode).toBe("ratio");
+    expect(display?.budgetPlaceholder).toBe(false);
+    expect(display?.percent).toBe(25);
+    expect(display?.budgetTokens).toBe(200_000);
+  });
+
+  it("is not a placeholder when budget is zero and source is default", () => {
+    // 零预算本身已走 cumulative，占位标记只在「有值但不可信」时为真。
+    const store = useContextUsageStore();
+    store.onContextUsageUpdated(payload({ budget_tokens: 0, budget_source: "default" }), 1);
+    const display = store.usageFor({ projectId: "p1", agentId: "a1" });
+    expect(display?.mode).toBe("cumulative");
+    expect(display?.budgetPlaceholder).toBe(false);
+  });
+
   it("rejects payloads without project-scoped identity", () => {
     const store = useContextUsageStore();
     expect(store.onContextUsageUpdated(payload({ project_id: "" }))).toBe(false);

@@ -42,6 +42,15 @@ export interface ContextUsageDisplay {
   occupiedTokens: number | null;
   budgetTokens: number;
   budgetSource: string | null;
+  /**
+   * 预算是否为「内置默认占位值」而非模型真实窗口。
+   *
+   * `default` 来源表示链路上没有任何真实窗口信息（既未显式声明，配置层也
+   * 未解析出能力字段，模型窗口表亦未命中），此时 budget 是
+   * DEFAULT_WINDOW_MAX_TOKENS 这一兜底值。据它渲染比例条会给出并不存在的
+   * 精度，故按「未知预算」呈现，只展示累计用量。
+   */
+  budgetPlaceholder: boolean;
   percent: number | null;
   compactThreshold: number | null;
   /** Latest post_call real usage breakdown (normalized: input includes cache). */
@@ -117,35 +126,15 @@ export const useContextUsageStore = defineStore("ghrah-context-usage", () => {
     if (!entry) return null;
     const source = entry.latestPostCall ?? entry.latest;
     const budget = source.budgetTokens;
-    if (budget > 0) {
-      const percent =
-        source.occupiedTokens != null
-          ? Math.min(100, Math.round((source.occupiedTokens / budget) * 100))
-          : null;
-      return {
-        mode: "ratio",
-        occupiedTokens: source.occupiedTokens,
-        budgetTokens: budget,
-        budgetSource: source.budgetSource,
-        percent,
-        compactThreshold: source.compactThreshold,
-        realInputTokens: source.realInputTokens,
-        realOutputTokens: source.realOutputTokens,
-        realCacheReadTokens: source.realCacheReadTokens,
-        realCacheWriteTokens: source.realCacheWriteTokens,
-        cumulativeInputTokens: entry.cumulativeInputTokens,
-        cumulativeOutputTokens: entry.cumulativeOutputTokens,
-        cumulativeCacheReadTokens: entry.cumulativeCacheReadTokens,
-        basis: source.basis,
-        updatedAt: source.updatedAt,
-      };
-    }
-    return {
-      mode: "cumulative",
+    // "default" 是兜底占位预算（DEFAULT_WINDOW_MAX_TOKENS），不代表模型真实窗口：
+    // 链路上既无显式声明、配置层也无能力字段、模型窗口表亦未命中。据它算比例
+    // 会给出并不存在的精度，故归入「预算未知」呈现。
+    const placeholder = source.budgetSource === "default";
+    const hasRealBudget = budget > 0 && !placeholder;
+    const base = {
       occupiedTokens: source.occupiedTokens,
-      budgetTokens: 0,
       budgetSource: source.budgetSource,
-      percent: null,
+      budgetPlaceholder: placeholder && budget > 0,
       compactThreshold: source.compactThreshold,
       realInputTokens: source.realInputTokens,
       realOutputTokens: source.realOutputTokens,
@@ -156,6 +145,24 @@ export const useContextUsageStore = defineStore("ghrah-context-usage", () => {
       cumulativeCacheReadTokens: entry.cumulativeCacheReadTokens,
       basis: source.basis,
       updatedAt: source.updatedAt,
+    };
+    if (hasRealBudget) {
+      const percent =
+        source.occupiedTokens != null
+          ? Math.min(100, Math.round((source.occupiedTokens / budget) * 100))
+          : null;
+      return {
+        ...base,
+        mode: "ratio",
+        budgetTokens: budget,
+        percent,
+      };
+    }
+    return {
+      ...base,
+      mode: "cumulative",
+      budgetTokens: 0,
+      percent: null,
     };
   }
 

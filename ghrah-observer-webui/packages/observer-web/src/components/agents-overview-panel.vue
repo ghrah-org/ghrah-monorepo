@@ -93,6 +93,8 @@ const rows = computed(() =>
       runtimeError: runtime?.runtimeError ?? spec.runtime_error ?? "",
       roomNames,
       chainTarget,
+      // 窗口的「声明态」直接读 Agent 配置
+      hasDeclaredWindow: runtime?.config?.window != null,
       usage: agentId ? contextUsage.usageFor(target) : null,
     };
   }),
@@ -189,7 +191,12 @@ function openAgent(row: (typeof rows.value)[number]) {
                   })
                 }}</span
               >
-              <span class="agents-overview-usage-tag">{{ t("agentsOverview.usageNoWindow") }}</span>
+              <span v-if="row.hasDeclaredWindow" class="agents-overview-usage-tag">{{
+                t("agentsOverview.usageWindowUnresolved")
+              }}</span>
+              <span v-else class="agents-overview-usage-tag">{{
+                t("agentsOverview.usageNoWindow")
+              }}</span>
             </template>
           </span>
           <span class="agents-overview-runtime"

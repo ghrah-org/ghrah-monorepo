@@ -521,8 +521,10 @@ export default {
     usageSource: "Budget source: {source}",
     usageCumulative: "{tokens} tokens used",
     usageNoWindow: "No window configured",
+    usageWindowUnresolved: "Window budget unresolved",
     budgetSource: {
       declared: "declared",
+      agentconf: "config layer",
       model_table: "model table",
       default: "default",
       vendor: "vendor",

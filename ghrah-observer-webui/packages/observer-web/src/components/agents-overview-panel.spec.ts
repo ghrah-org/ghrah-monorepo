@@ -229,4 +229,63 @@ describe("AgentsOverviewPanel", () => {
     expect(row.text()).toContain("cached 3200");
     expect(row.text()).toContain("vendor");
   });
+
+  it("distinguishes a declared window from one that never resolved a budget", () => {
+    // 声明态读 Agent 配置，预算态读事件。两者此前被混为一谈：
+    // 「未配置窗口」实际是「budget_tokens === 0」的同义语。
+    const agents = useAgentsStore();
+    agents.replaceProjectAgents(
+      "p1",
+      [
+        {
+          project_id: "p1",
+          agent_id: "a1",
+          name: "Coder",
+          runtime_state: "running",
+          // 运营者显式声明了窗口
+          config: { name: "Coder", agent_id: "a1", window: { max_tokens: 8192 } },
+        },
+        {
+          project_id: "p1",
+          agent_id: "a2",
+          name: "Reviewer",
+          runtime_state: "stopped",
+          // 未声明窗口
+          config: { name: "Reviewer", agent_id: "a2" },
+        },
+      ],
+      { status: "active", archived_at: null },
+    );
+
+    const usage = useContextUsageStore();
+    // 两者都处在 cumulative（预算不可用）状态
+    for (const agentId of ["a1", "a2"]) {
+      usage.onContextUsageUpdated(
+        {
+          project_id: "p1",
+          agent_id: agentId,
+          cluster_id: "c1",
+          agent_name: agentId,
+          phase: "post_call",
+          occupied_tokens: null,
+          basis: "real",
+          budget_tokens: 0,
+          budget_source: null,
+          compact_threshold: null,
+          real_input_tokens: 100,
+          real_output_tokens: 10,
+          compaction: null,
+          iteration: 1,
+        },
+        111,
+      );
+    }
+
+    const wrapper = mount(AgentsOverviewPanel, { props: { projectId: "p1" } });
+
+    // 已声明但预算未落定 → 说明「声明了但没算出来」，而非「没配」
+    expect(wrapper.findAll("li")[0].text()).toContain("Window budget unresolved");
+    // 未声明 → 仍是「未配置窗口」
+    expect(wrapper.findAll("li")[1].text()).toContain("No window configured");
+  });
 });
