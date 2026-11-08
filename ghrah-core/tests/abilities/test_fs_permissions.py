@@ -12,9 +12,9 @@ from typing import Any
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
 from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
+from ghrah.ability.permissions.fs_permissions import AccessApprovalHook, FSPermissionChecker
 
 
 def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:

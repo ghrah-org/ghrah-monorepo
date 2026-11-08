@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ class FakeCtx:
 def _spawn_payload_with_id(name: str, agent_id: str) -> dict[str, Any]:
     return {
         "project_id": "default",
+        "manifest_ref": "tests.agent",
         "config": {
             "name": name,
             "agent_id": agent_id,
@@ -66,16 +68,17 @@ def _actor_of(unit: CoreUnit, name: str) -> Any:
     return unit.supervisor._registry.get_info(name).actor_handle
 
 
-def _make_unit(tmp_path: Path, ctx: FakeCtx) -> CoreUnitConfig:
+def _make_unit(
+    tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+) -> CoreUnitConfig:
     db_path = tmp_path / "reset-action.db"
 
     def persistence_factory(config: AgentConfig) -> SqliteBackend:
         return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
-    return CoreUnitConfig(
+    return ability_core_config(
         project_id="default",
         persistence_factory=persistence_factory,
-        default_abilities=("conversation", "end_task"),
     )
 
 
@@ -91,14 +94,16 @@ async def _commit_node(unit: Any, name: str, state_key: str) -> str:
 class TestAgentResetReceipt:
     """回执字段与错误路径。"""
 
-    async def test_reset_receipt_carries_new_session_pointers(self, tmp_path: Path) -> None:
-        config = _make_unit(tmp_path, FakeCtx())
+    async def test_reset_receipt_carries_new_session_pointers(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
         data = result["data"]
@@ -110,8 +115,10 @@ class TestAgentResetReceipt:
         assert session.root_node_id == data["root_node_id"]
         await unit.stop()
 
-    async def test_reset_unknown_agent_replies_error(self, tmp_path: Path) -> None:
-        config = _make_unit(tmp_path, FakeCtx())
+    async def test_reset_unknown_agent_replies_error(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
 
@@ -122,14 +129,16 @@ class TestAgentResetReceipt:
         assert result["error"]
         await unit.stop()
 
-    async def test_reset_project_mismatch_replies_error(self, tmp_path: Path) -> None:
-        config = _make_unit(tmp_path, FakeCtx())
+    async def test_reset_project_mismatch_replies_error(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "other", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "other", "agent_id": "a" * 32}, None
         )
         assert result["success"] is False
         await unit.stop()
@@ -138,24 +147,26 @@ class TestAgentResetReceipt:
 class TestAgentResetSemantics:
     """旧 Session 保留 + 既有事件路径。"""
 
-    async def test_old_sessions_preserved_and_lifecycle_untouched(self, tmp_path: Path) -> None:
+    async def test_old_sessions_preserved_and_lifecycle_untouched(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         ctx = FakeCtx()
-        config = _make_unit(tmp_path, ctx)
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(ctx)
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
         old_active = _actor_of(unit, "writer")._context_manager.active_session_id
         await _commit_node(unit, "writer", "mark")
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
 
         session_list = await unit.handle_command(
             "session_list",
-            {"project_id": "default", "agent_id": "w" * 32, "agent_name": "writer"},
+            {"project_id": "default", "agent_id": "a" * 32, "agent_name": "writer"},
             None,
         )
         sessions = {s["session_id"]: s for s in session_list["data"]["sessions"]}
@@ -167,15 +178,17 @@ class TestAgentResetSemantics:
         assert result["data"]["session_id"] != old_active
         await unit.stop()
 
-    async def test_reset_emits_existing_session_events(self, tmp_path: Path) -> None:
+    async def test_reset_emits_existing_session_events(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         ctx = FakeCtx()
-        config = _make_unit(tmp_path, ctx)
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(ctx)
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
 
@@ -191,25 +204,26 @@ class TestAgentResetSemantics:
 class TestAgentResetPersistence:
     """立即持久化 + 增量不变量 + 重启恢复。"""
 
-    async def test_reset_persisted_before_receipt_returns(self, tmp_path: Path) -> None:
+    async def test_reset_persisted_before_receipt_returns(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """reset 返回时数据已在库（重启口径验证）。"""
         db_path = tmp_path / "reset-action.db"
 
         def persistence_factory(config: AgentConfig) -> SqliteBackend:
             return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
-        config = CoreUnitConfig(
+        config = ability_core_config(
             project_id="default",
             persistence_factory=persistence_factory,
-            default_abilities=("conversation", "end_task"),
         )
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
         await _commit_node(unit, "writer", "mark")
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
         await unit.stop()
@@ -217,7 +231,7 @@ class TestAgentResetPersistence:
         # 不经运行实例，直读 sqlite 验证已落库
         backend = SqliteBackend(db_path=db_path)
         await backend.connect()
-        checkpoint = await backend.load_checkpoint("w" * 32)
+        checkpoint = await backend.load_checkpoint("a" * 32)
         assert checkpoint is not None
         assert checkpoint.active_session_id == result["data"]["session_id"]
         session_ids = {s.session_id for s in checkpoint.sessions}
@@ -228,7 +242,9 @@ class TestAgentResetPersistence:
         assert result["data"]["root_node_id"] in node_ids
         await backend.close()
 
-    async def test_reset_writes_only_new_entities_and_active_pointer(self, tmp_path: Path) -> None:
+    async def test_reset_writes_only_new_entities_and_active_pointer(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
         """增量不变量：旧 Node 零冗余写（rowid 集合在 reset 前后不变）。"""
         import aiosqlite
 
@@ -237,14 +253,13 @@ class TestAgentResetPersistence:
         def persistence_factory(config: AgentConfig) -> SqliteBackend:
             return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
-        config = CoreUnitConfig(
+        config = ability_core_config(
             project_id="default",
             persistence_factory=persistence_factory,
-            default_abilities=("conversation", "end_task"),
         )
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
         old_active = _actor_of(unit, "writer")._context_manager.active_session_id
         await _commit_node(unit, "writer", "mark")
         old_node_id = _actor_of(unit, "writer")._context_manager.active_head.id
@@ -258,7 +273,7 @@ class TestAgentResetPersistence:
         assert len(rowids_before) == 1
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
 
@@ -284,7 +299,7 @@ class TestAgentResetPersistence:
         await unit.stop()
 
     async def test_core_restart_after_reset_restores_new_head_and_old_history(
-        self, tmp_path: Path
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
     ) -> None:
         """reset → stop → 重建：active 指向新 Session，旧 Session 历史可读。"""
         db_path = tmp_path / "reset-action.db"
@@ -292,19 +307,18 @@ class TestAgentResetPersistence:
         def persistence_factory(config: AgentConfig) -> SqliteBackend:
             return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
-        config = CoreUnitConfig(
+        config = ability_core_config(
             project_id="default",
             persistence_factory=persistence_factory,
-            default_abilities=("conversation", "end_task"),
         )
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
         old_active = _actor_of(unit, "writer")._context_manager.active_session_id
         await _commit_node(unit, "writer", "mark")
 
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
         new_session_id = result["data"]["session_id"]
@@ -313,7 +327,7 @@ class TestAgentResetPersistence:
         restarted = create_core_unit(config)
         await restarted.init(FakeCtx())
         spawn = await restarted.handle_command(
-            "spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None
+            "spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None
         )
         assert spawn["data"]["recovery_mode"] == "restored"
 
@@ -337,18 +351,20 @@ class TestAgentResetPersistence:
 class TestAgentResetConcurrency:
     """驱动循环中显式拒绝。"""
 
-    async def test_reset_rejected_while_drive_loop_active(self, tmp_path: Path) -> None:
-        config = _make_unit(tmp_path, FakeCtx())
+    async def test_reset_rejected_while_drive_loop_active(
+        self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+    ) -> None:
+        config = _make_unit(tmp_path, ability_core_config)
         unit = create_core_unit(config)
         await unit.init(FakeCtx())
-        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "w" * 32), None)
+        await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
         actor = _actor_of(unit, "writer")
         active_before = actor._context_manager.active_session_id
         actor._drive_active = True
         try:
             result = await unit.handle_command(
-                "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+                "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
             )
             assert result["success"] is False
             assert "drive loop" in result["error"]
@@ -358,7 +374,7 @@ class TestAgentResetConcurrency:
             actor._drive_active = False
         # 空闲后同一命令成功（拒绝不是永久性）
         result = await unit.handle_command(
-            "agent_reset", {"project_id": "default", "agent_id": "w" * 32}, None
+            "agent_reset", {"project_id": "default", "agent_id": "a" * 32}, None
         )
         assert result["success"] is True
         await unit.stop()

@@ -50,9 +50,7 @@ __all__ = ["SkillAbilityProvider", "default_provider"]
 class SkillAbilityProvider:
     """目录池的持有者——唯一决定「技能包存在哪里」的地方。
 
-    构造时给出池；不想显式给池就用 :func:`default_provider`（默认池：内置能力树
-    + ``~/.ghrah/skill-ability``），或 :meth:`from_root` 由配置驱动的单根池
-    （如 subject 的 ``SkillConfig.root``）。
+    默认池只有内置能力树，外部源目录通过 :meth:`from_root` 或构造参数传入。
 
     三条边界：构造不碰文件系统；每次调用都重新扫盘（无缓存，热插拔自然生效）；
     不做目录监视（后续能力）。

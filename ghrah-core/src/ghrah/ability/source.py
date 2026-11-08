@@ -197,7 +197,7 @@ class BuiltinAbilitySource:
 
     def resolver(self) -> ManifestResolver:
         """创建同时对 ref/type 使用本来源的现行版本 2 解析器。"""
-        return ManifestResolver(self, builtin_catalog=self)
+        return ManifestResolver(self)
 
     def create_operation(self, full_name: str, **params: Any) -> Ability:
         """为受信装配者实例化确定内置成员，不接受模块路径或用户脚本。"""

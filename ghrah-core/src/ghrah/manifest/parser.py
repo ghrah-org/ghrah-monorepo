@@ -11,17 +11,8 @@ import yaml
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
-from ghrah.manifest.ability import AbilityManifest
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestValidationError, ManifestVersionError
-
-
-def parse_ability_manifest(raw: str, format: str = "yaml") -> AbilityManifest:
-    data = _load_raw(raw, format)
-    try:
-        return AbilityManifest.model_validate(data)
-    except (PydanticValidationError, ManifestVersionError) as exc:
-        raise ManifestValidationError(str(exc)) from exc
 
 
 def parse_agent_manifest(raw: str, format: str = "yaml") -> AgentManifest:
@@ -33,18 +24,16 @@ def parse_agent_manifest(raw: str, format: str = "yaml") -> AgentManifest:
 
 
 def validate_manifest(raw: str, format: str = "yaml") -> tuple[bool, list[str]]:
+    """校验 Agent 模板。"""
     try:
         data = _load_raw(raw, format)
     except Exception as exc:
         return False, [f"Parse error: {exc}"]
 
     manifest_type = data.get("manifest", "")
-    if manifest_type == "ability":
-        return _validate_model(data, AbilityManifest)
-    elif manifest_type == "agent":
-        return _validate_model(data, AgentManifest)
-    else:
-        return False, [f"Unknown or missing manifest type: {manifest_type!r}"]
+    if manifest_type != "agent":
+        return False, [f"Expected manifest type 'agent', got {manifest_type!r}"]
+    return _validate_model(data, AgentManifest)
 
 
 def _load_raw(raw: str, format: str) -> dict[str, Any]:

@@ -210,7 +210,6 @@ async def execute(call, services):
         workspace_root=str(tmp_path),
         db_path=str(tmp_path / "subject.db"),
         ability_source="builtin",
-        skill_slice=subject.SkillConfig(root=str(tmp_path / "unused-skills")),
         ability=subject.AbilityConfig(install_root=str(installer.root)),
         ability_grant_policy=GrantPolicy(
             rules=(

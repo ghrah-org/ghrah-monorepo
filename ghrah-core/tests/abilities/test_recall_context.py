@@ -10,7 +10,7 @@
 - 全部过滤器（node_id/范围含端点/keyword 大小写/role/since_iteration/limit 取尾）
 - max_output_tokens 截断 + truncated 标记
 - 查询边界：兄弟分支界外错误、未知 node_id、context_manager 未接线、非法参数
-- 双注册面（AbilityRegistry + builtin manifest + resolver）
+- 能力包声明与模板解析
 """
 
 from __future__ import annotations
@@ -20,7 +20,10 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.builtin.recall_context import RecallContextAbility, RecallContextInput
+from ghrah.ability.builtin.core.operations.recall_context import (
+    RecallContextAbility,
+    RecallContextInput,
+)
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.factory import ChatMessageFactory
@@ -362,28 +365,29 @@ class TestBoundary:
 
 class TestRegistration:
     def test_registry_has_recall_context(self) -> None:
-        from ghrah.abilities import AbilityRegistry
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        assert AbilityRegistry.has("recall_context")
+        assert BuiltinAbilitySource().load_builtin("recall_context")
 
     def test_builtin_manifest_loads(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        manifest = load_builtin_manifest("ghrah.core.recall_context")
+        manifest = BuiltinAbilitySource().load_ability("ghrah.core.recall_context")
         assert manifest.implementation.type == "builtin"
         assert manifest.implementation.handler == "recall_context"
         assert manifest.metadata.permissions.require_hitl is False
 
     def test_resolver_from_builtin(self) -> None:
+        from ghrah.ability.source import BuiltinAbilitySource
         from ghrah.manifest.resolver import ResolvedAbility
 
-        resolved = ResolvedAbility.from_builtin("recall_context")
+        resolved = ResolvedAbility.from_builtin("recall_context", catalog=BuiltinAbilitySource())
         assert resolved.ability_name == "ghrah.core.recall_context"
 
     def test_manifest_tool_parameters_match_input_model(self) -> None:
-        from ghrah.manifest.builtins import load_builtin_manifest
+        from ghrah.ability.source import BuiltinAbilitySource
 
-        manifest = load_builtin_manifest("ghrah.core.recall_context")
+        manifest = BuiltinAbilitySource().load_ability("ghrah.core.recall_context")
         assert manifest.tool is not None
         params = manifest.tool.parameters
         assert set(params) == set(RecallContextInput.model_fields)

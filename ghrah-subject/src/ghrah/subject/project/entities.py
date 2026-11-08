@@ -10,7 +10,6 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from ghrah.abilities.registry import AbilityRegistry
 from ghrah.agents.entity import AgentEntity
 from ghrah.communication.mailbox_reader import MailboxReader
 from ghrah.context.persistence import serialize_node
@@ -42,10 +41,9 @@ class AgentEntityManager:
         """绑定稳定身份；实体是否存在由每次操作验证。"""
         return AgentEntity(AgentIdentity(project_id=project_id, agent_id=agent_id), self)
 
-    @staticmethod
-    def available_ability_types() -> list[str]:
-        """返回当前注册的类型目录，供离线实体配置使用。"""
-        return sorted(AbilityRegistry.list_types())
+    def available_ability_types(self) -> list[str]:
+        """返回允许通过旧类型接口配置的能力目录。"""
+        return []
 
     @staticmethod
     def model_catalog() -> dict[str, Any]:
@@ -163,12 +161,11 @@ class AgentEntityManager:
                 "error": str(exc),
             }
 
-    @staticmethod
-    def _abilities(agent: AgentSpec, runtime: dict[str, Any]) -> dict[str, Any]:
+    def _abilities(self, agent: AgentSpec, runtime: dict[str, Any]) -> dict[str, Any]:
         return {
-            **AgentEntityManager.model_catalog(),
+            **self.model_catalog(),
             "configured_types": agent.abilities,
-            "available_types": AgentEntityManager.available_ability_types(),
+            "available_types": self.available_ability_types(),
             "manifest_ref": agent.manifest_ref,
             "loaded_names": runtime.get("loaded_abilities"),
             "runtime_availability": runtime["availability"],
@@ -338,18 +335,17 @@ class AgentEntityManager:
                 project, agent = await self._save(project, agent, changes)
                 return await self._snapshot(project, agent)
             if kind == "abilities.configure":
-                if agent.desired_state != "stopped" or runtime["availability"] != "offline":
-                    raise StableError("agent_must_be_stopped")
-                if agent.manifest_ref:
-                    raise StableError("abilities_managed_by_manifest")
-                names = op["ability_types"]
-                if len(set(names)) != len(names) or any(not AbilityRegistry.has(n) for n in names):
-                    raise StableError("invalid_ability_types")
-                project, agent = await self._save(project, agent, {"abilities": names})
-                return await self._snapshot(project, agent)
+                raise StableError(
+                    "abilities_managed_by_access_store",
+                    "Use ability grants and tool selection to configure this Agent",
+                )
             if kind == "start":
                 if project.status != ProjectStatus.ACTIVE:
                     raise StableError("project_not_active")
+                if runtime["availability"] == "offline":
+                    error = self._projects._agent_start_error(agent)
+                    if error is not None:
+                        raise error
                 if agent.desired_state != "running":
                     project, agent = await self._save(project, agent, {"desired_state": "running"})
                 if runtime["availability"] == "offline":

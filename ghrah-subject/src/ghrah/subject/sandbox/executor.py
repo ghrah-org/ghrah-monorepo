@@ -8,7 +8,7 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 
-from ghrah.abilities.paths import is_subpath
+from ghrah.ability.paths import is_subpath
 
 __all__ = ["SandboxExecutor", "SandboxExecutorConfig", "CommandResult"]
 

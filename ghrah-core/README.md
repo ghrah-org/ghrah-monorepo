@@ -31,7 +31,7 @@ uv run agentconf
 If you prefer not to use agentconf, you can directly construct a `ChatFormat` and inject it into the Agent:
 
 ```python
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.base import ActorAgent
 from ghrah.chat.format.openai import OpenAIFormat
 from ghrah.core.config import AgentConfig

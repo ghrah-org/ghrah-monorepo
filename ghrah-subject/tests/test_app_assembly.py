@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from ability_testutil import put_agent_template
+from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import ProjectConfig, RecoveryConfig, SubjectConfig
@@ -38,6 +40,7 @@ def _config(
         workspace_root=str(tmp_path / "ws"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
         recovery_slice=RecoveryConfig(
             enabled=recovery_enabled,
             reconcile_on_start=reconcile_on_start,
@@ -109,7 +112,8 @@ class TestAssembleSubject:
                 {
                     "project_id": project["project_id"],
                     "cluster_id": "default",
-                    "config": {"name": "ledger-probe", "system_prompt": "x"},
+                    "config": {"name": "ledger-probe"},
+                    "manifest_ref": put_agent_template(ctx.get("manifest_store")),
                 },
             )
             assert spawn["success"], spawn.get("error")

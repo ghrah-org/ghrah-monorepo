@@ -68,8 +68,6 @@ _PROJECT_AGENT_COMMANDS = frozenset(
 _TARGET_FIELDS = {
     "terminate_agent": "name",
     "send_message": "target",
-    "register_ability": "agent_name",
-    "unregister_ability": "agent_name",
     "get_agent_info": "name",
     "agent_compact_context": "agent_name",
     # agent_reset 以 project_id + agent_id 稳定寻址（AgentResetPayload 无 name
@@ -95,8 +93,6 @@ _RUNTIME_REVIVING_COMMANDS = frozenset(
         "send_message",
         "broadcast_message",
         "delegate",
-        "register_ability",
-        "unregister_ability",
         "agent_compact_context",
         "agent_reset",
         "session_create",
@@ -225,7 +221,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
             )
         registry = CoreClusterRegistry(
             unit_factory=self._unit_factory,
-            ability_source=self._config.ability_source,
             ability_grant_policy=self._config.ability_grant_policy,
         )
         if self._unit_factory is not None and "registry_holder" in locals():
@@ -249,6 +244,13 @@ class CoreClusterRegistryUnit(SubjectUnit):
         payload: dict[str, Any],
         cmd_ctx: CommandContext,
     ) -> dict[str, Any]:
+        if command in {"register_ability", "unregister_ability"}:
+            return {
+                "success": False,
+                "data": None,
+                "error": "legacy_ability_registration_disabled",
+                "error_detail": "Manage grants and tool selection in the ability access store",
+            }
         if command == "send_message" and getattr(cmd_ctx, "request_id", None):
             payload = {
                 **payload,
@@ -384,6 +386,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
         self, manager: Any, project: dict[str, Any], payload: dict[str, Any]
     ) -> dict[str, Any]:
         # ACTIVE 校验已在 _project() 的 _RUNTIME_REVIVING_COMMANDS 守卫统一完成。
+        if payload.get("abilities"):
+            raise StableError(
+                "abilities_managed_by_access_store",
+                "Specify an Agent template and use ability grants and tool selection",
+            )
         from ghrah.protocol.payloads.agent import AgentConfigPayload
 
         config = AgentConfigPayload.model_validate(payload.get("config") or {}).model_dump()
@@ -415,12 +422,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                         "cluster_id": cluster_id,
                         "manifest_ref": str(payload.get("manifest_ref") or ""),
                         "system_prompt": str(config.get("system_prompt") or ""),
-                        "abilities": [
-                            str(item.get("ability_type") or "")
-                            for item in payload.get("abilities") or []
-                            if item.get("ability_type")
-                        ]
-                        or None,
                     },
                 },
             )

@@ -44,14 +44,14 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any
 
-from ghrah.abilities.errors import AbilityNotFoundError
-from ghrah.abilities.hook_runner import HookRunner
-from ghrah.abilities.hook_store import HookListView, HookStore
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.errors import AbilityNotFoundError
 from ghrah.ability.execution.execution_services import (
     ExecutionServices,
     build_execution_services,
 )
+from ghrah.ability.execution.hook_runner import HookRunner
+from ghrah.ability.execution.hook_store import HookListView, HookStore
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import InvocationIdentity, MemberReference, OperationCall
 from ghrah.ability.execution.loop_data import LoopData
 from ghrah.ability.surface.assembly import SurfaceAssemblyError
@@ -1794,7 +1794,6 @@ class ActorAgent:
                 )
             ),
             manifest_store=getattr(self._supervisor, "manifest_store", None),
-            skill_provider=getattr(self._supervisor, "skill_provider", None),
             ability_content=getattr(self._context_manager, "ability_content", None),
             tool_surface=getattr(self, "_tool_surface", None),
             mcp_runtime=getattr(

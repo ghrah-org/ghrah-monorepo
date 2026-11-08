@@ -1,5 +1,7 @@
 # Built-in Ability Reference
 
+> Historical note. Some examples in this document depend on the retired `ghrah.abilities` package. For the current integration entry, see [Current Ability integration](README.md#当前-ability-接入).
+
 ghrah provides a set of built-in Abilities covering common conversation, file system operation, command execution, and cluster communication scenarios.
 
 ## Overview

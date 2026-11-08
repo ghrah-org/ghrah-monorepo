@@ -16,12 +16,11 @@ from ghrah.ability.loading import ability_roots as roots
 
 
 class TestDefaults:
-    def test_default_pool_is_builtin_then_user(self) -> None:
-        """默认池两项：内置树在前，用户目录在后（优先级升序）。"""
+    def test_default_pool_only_scans_builtin(self) -> None:
+        """默认目录池只含内置树。"""
         pool = roots.default_pool()
 
-        assert [root.source for root in pool] == ["builtin", "skill-ability"]
-        assert [root.rank for root in pool] == sorted(root.rank for root in pool)
+        assert [root.source for root in pool] == ["builtin"]
 
     def test_builtin_root_outranks_user_root(self) -> None:
         """内置树 rank 更小，因此用户包无法同名覆盖系统能力。"""
@@ -34,28 +33,12 @@ class TestDefaults:
         assert root.required is True
         assert root.source == "builtin"
 
-    def test_user_root_is_optional(self) -> None:
-        """用户目录缺失不是问题：首次安装还没装任何能力包。"""
-        assert roots.user_root().required is False
-
-    def test_default_user_root_is_the_skill_directory(self) -> None:
-        """用户根就是历史上放技能包的目录（路径只定义一处）。"""
-        assert roots.default_user_root() == Path.home() / ".ghrah" / "skill-ability"
-
     def test_builtin_pool_has_only_builtin(self) -> None:
         """实现面的池只有内置树：外部包没有实现脚本可 import。"""
         pool = roots.builtin_pool()
 
         assert len(pool) == 1
         assert pool[0].source == "builtin"
-
-    def test_user_root_accepts_override(self, tmp_path: Path) -> None:
-        """配置驱动的根路径经 ``user_root`` 进池，rank / source 语义不变。"""
-        root = roots.user_root(tmp_path)
-
-        assert Path(root.locator) == tmp_path
-        assert root.rank == roots.USER_ROOT_RANK
-        assert root.source == roots.USER_ROOT_SOURCE
 
 
 class TestPathRoot:

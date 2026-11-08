@@ -23,12 +23,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from ghrah.abilities.hook_runner import HookRunner
-from ghrah.abilities.hook_store import HookStore
-from ghrah.abilities.paths import ABILITY_PATH_SPECS
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hook_runner import HookRunner
+from ghrah.ability.execution.hook_store import HookStore
 from ghrah.ability.execution.hooks import HookPoint, HookResult
 from ghrah.ability.execution.invocation import MemberReference, OperationCall
+from ghrah.ability.paths import ABILITY_PATH_SPECS
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
@@ -37,7 +37,7 @@ from ghrah.core.hitl import HITLFutureStore, HITLPromiseRegistry, HITLResult
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
-    from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.hooks import Hook
     from ghrah.context.manager import ContextManager
 
 logger = logging.getLogger(__name__)

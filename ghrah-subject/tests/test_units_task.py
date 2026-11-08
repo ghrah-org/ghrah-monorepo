@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ability_testutil import put_agent_template
+from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import ProjectConfig, SubjectConfig
@@ -22,6 +24,7 @@ def _config(tmp_path: Path) -> SubjectConfig:
         workspace_root=str(tmp_path / "workspace"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
         project_slice=ProjectConfig(
             default_root_locator_template=str(tmp_path / "projects/{project_id}")
         ),
@@ -224,7 +227,8 @@ async def test_task_rejects_agent_owned_by_another_project(tmp_path: Path) -> No
                 "spawn_agent",
                 {
                     "project_id": projects[0]["project_id"],
-                    "config": {"name": "owned-by-one", "system_prompt": "test"},
+                    "config": {"name": "owned-by-one"},
+                    "manifest_ref": put_agent_template(ctx.get("manifest_store")),
                 },
             )
         )

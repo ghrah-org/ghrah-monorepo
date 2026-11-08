@@ -30,7 +30,6 @@ from ghrah.protocol.payloads.entity import (
     AgentEntityPayload,
 )
 from ghrah.protocol.types import (
-    AbilityDefinitionPayload,
     AgentConfigPayload,
     ProjectAddAgentPayload,
     ProjectCreatePayload,
@@ -178,9 +177,7 @@ class ProjectManager:
         on_event: OnEvent | None = None,
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
-        ability_source: str = "legacy",
     ) -> None:
-        self._ability_source = ability_source
         self._store = store
         self._workspace_mgr = workspace_mgr
         self._task_mgr = task_mgr
@@ -363,10 +360,9 @@ class ProjectManager:
 
     def _validate_agent(self, agent: AgentSpec, project: ProjectRecord) -> None:
         """agent_id/name 在 Project 内唯一 + cluster 归属/授权校验。"""
-        if self._ability_source == "builtin":
-            from ghrah.ability.access.identity import validate_agent_id
+        from ghrah.ability.access.identity import validate_agent_id
 
-            validate_agent_id(agent.agent_id)
+        validate_agent_id(agent.agent_id)
         if agent.cluster_id not in project.cluster_ids:
             raise ValueError(f"agent {agent.name!r} cluster_id {agent.cluster_id!r} not in project")
         for existing in project.agents:
@@ -381,6 +377,18 @@ class ProjectManager:
                     f"agent {agent.name!r} already exists in project",
                 )
         validate_path_grants_non_overlapping(agent, project.workspaces)
+
+    def _agent_start_error(self, agent: AgentSpec) -> StableError | None:
+        """检查新版装配入口要求的持久启动字段。"""
+        if not agent.agent_id:
+            return StableError(
+                "stable_agent_id_required", "Update the persisted Project spec before restore"
+            )
+        if not agent.manifest_ref:
+            return StableError(
+                "agent_manifest_required", "Specify a version 2 Agent template in manifest_ref"
+            )
+        return None
 
     # ─── 命令 handlers ───
 
@@ -739,6 +747,15 @@ class ProjectManager:
             ],
         )
         self._validate_agent(agent, existing)
+        if agent.abilities:
+            raise StableError(
+                "abilities_managed_by_access_store",
+                "Specify an Agent template and use ability grants and tool selection",
+            )
+        if agent.desired_state == "running":
+            start_error = self._agent_start_error(agent)
+            if start_error is not None:
+                raise start_error
 
         def mutator(r: ProjectRecord) -> ProjectRecord:
             return r.model_copy(update={"agents": [*r.agents, agent]})
@@ -835,16 +852,13 @@ class ProjectManager:
             )
             if agent is None or agent.desired_state != "running":
                 return "skipped", None
+            if not agent.agent_id and (start_error := self._agent_start_error(agent)):
+                return None, str(start_error)
             handle = await self._cluster_transport.ensure_cluster(
                 agent.cluster_id,
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
-            if self._ability_source == "builtin" and not agent.agent_id:
-                return (
-                    None,
-                    "stable_agent_id_required: update the persisted Project spec before restore",
-                )
             existing = await handle.list_agents(project_id)
             if any(
                 (agent.agent_id and a.get("agent_id") == agent.agent_id)
@@ -882,11 +896,8 @@ class ProjectManager:
     async def _spawn_agent_spec(
         self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
     ) -> tuple[str | None, str | None]:
-        if self._ability_source == "builtin" and not agent.agent_id:
-            return (
-                None,
-                "stable_agent_id_required: update the persisted Project spec before restore",
-            )
+        if start_error := self._agent_start_error(agent):
+            return None, str(start_error)
         spawn_payload = SpawnAgentPayload(
             validate_model=validate_model or bool(agent.endpoint_name),
             project_id=project_id,
@@ -897,11 +908,6 @@ class ProjectManager:
                 endpoint_name=agent.endpoint_name,
                 model_overrides=agent.model_overrides,
                 system_prompt=agent.system_prompt or "",
-            ),
-            abilities=(
-                [AbilityDefinitionPayload(ability_type=name, params={}) for name in agent.abilities]
-                if agent.abilities
-                else None
             ),
             manifest_ref=agent.manifest_ref or None,
         )

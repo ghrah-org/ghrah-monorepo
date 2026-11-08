@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ability_testutil import put_agent_template
 from ghrah.protocol.types import AgentConfigPayload, SpawnAgentPayload
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
@@ -462,6 +463,21 @@ class TestProjectRuntimeStateGuards:
             await registry.stop()
             await ctx.__aexit__(None, None, None)
 
+    async def test_retired_registration_does_not_mount_cluster(self, tmp_path: Path) -> None:
+        ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("active"))
+        try:
+            for command in ("register_ability", "unregister_ability"):
+                result = await unit.handle_command(
+                    command, {"project_id": PROJECT_ID}, CommandContext.internal()
+                )
+                assert result["success"] is False
+                assert result["error"] == "legacy_ability_registration_disabled"
+            assert created == []
+            assert not registry.has_cluster("c1")
+        finally:
+            await registry.stop()
+            await ctx.__aexit__(None, None, None)
+
     async def test_stopped_project_reads_and_terminate_without_mount(self, tmp_path: Path) -> None:
         ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("stopped"))
         try:
@@ -886,25 +902,18 @@ class TestRealCoreUnitMultiCluster:
     """
 
     async def test_two_real_core_units_coexist_and_isolate(self, tmp_path: Path) -> None:
-        from ghrah.core.unit import CoreUnitConfig, create_core_unit
-
-        def factory(cluster_id: str, project_id: str, project_root_locator: str) -> Any:
-            return create_core_unit(
-                CoreUnitConfig(
-                    cluster_id=cluster_id,
-                    project_id=project_id,
-                    # fail-closed：无 abilities spawn 须显式声明默认集
-                    default_abilities=("conversation", "end_task"),
-                )
-            )
+        from ghrah.ability.access import GrantPolicy
 
         config = _config(tmp_path)
-        unit = CoreClusterRegistryUnit(config, unit_factory=factory)
+        config.ability_grant_policy = GrantPolicy(mode="merge")
+        unit = CoreClusterRegistryUnit(config)
         workspace = _FakeWorkspaceService(str(tmp_path / "workspace"))
 
         ctx = await Context().__aenter__()
         try:
-            ctx.provide(MANIFEST_STORE.name, _manifest_store(tmp_path))
+            store = _manifest_store(tmp_path)
+            ref = put_agent_template(store)
+            ctx.provide(MANIFEST_STORE.name, store)
             ctx.provide(WORKSPACE_SERVICE.name, workspace)
             ctx.provide(SANDBOX_EXECUTOR.name, SandboxExecutor(str(tmp_path / "workspace")))
 
@@ -914,10 +923,10 @@ class TestRealCoreUnitMultiCluster:
 
             # 两个真实 CoreUnit 实例挂载不冲突（provide 删除前必炸）
             handle_a = await registry.ensure_cluster(
-                "alpha", project_id=PROJECT_ID, project_root_locator=PROJECT_ROOT
+                "alpha", project_id=PROJECT_ID, project_root_locator=str(tmp_path / "project")
             )
             handle_b = await registry.ensure_cluster(
-                "beta", project_id=PROJECT_ID, project_root_locator=PROJECT_ROOT
+                "beta", project_id=PROJECT_ID, project_root_locator=str(tmp_path / "project")
             )
             assert handle_a.is_connected and handle_b.is_connected
 
@@ -925,9 +934,8 @@ class TestRealCoreUnitMultiCluster:
                 SpawnAgentPayload(
                     project_id=PROJECT_ID,
                     cluster_id="alpha",
-                    config=AgentConfigPayload(
-                        name="agent-a", agent_id="agent-a-id", system_prompt="x"
-                    ),
+                    manifest_ref=ref,
+                    config=AgentConfigPayload(name="agent-a", agent_id="a" * 32),
                 )
             )
             assert spawn_a["success"], spawn_a.get("error")
@@ -935,9 +943,8 @@ class TestRealCoreUnitMultiCluster:
                 SpawnAgentPayload(
                     project_id=PROJECT_ID,
                     cluster_id="beta",
-                    config=AgentConfigPayload(
-                        name="agent-b", agent_id="agent-b-id", system_prompt="x"
-                    ),
+                    manifest_ref=ref,
+                    config=AgentConfigPayload(name="agent-b", agent_id="b" * 32),
                 )
             )
             assert spawn_b["success"], spawn_b.get("error")
@@ -979,7 +986,7 @@ class TestDefaultFactoryGrantStoreWiring:
         finally:
             await factory.release("cluster-1")
 
-    async def test_legacy_mode_does_not_open_grant_store(self, tmp_path: Path) -> None:
+    async def test_default_mode_opens_grant_store(self, tmp_path: Path) -> None:
         locator = (tmp_path / "project-root").as_uri()
         root = tmp_path / "project-root"
         root.mkdir()
@@ -989,7 +996,7 @@ class TestDefaultFactoryGrantStoreWiring:
         unit = factory("cluster-1", "project-1", locator)
         try:
             await factory.prepare(unit, "cluster-1", "project-1", locator)
-            assert unit._config.ability_store is None
+            assert unit._config.ability_store is not None
         finally:
             await factory.release("cluster-1")
 

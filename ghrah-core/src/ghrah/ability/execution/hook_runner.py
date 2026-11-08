@@ -13,8 +13,8 @@ Hook 与 Operation 看到同一份调用对象与服务表：
 
 from __future__ import annotations
 
-from ghrah.abilities.hook_store import HookStore
 from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
+from ghrah.ability.execution.hook_store import HookStore
 from ghrah.ability.execution.hooks import HookPoint, HookResult
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.core.exceptions import HookError

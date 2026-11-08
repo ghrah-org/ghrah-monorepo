@@ -15,7 +15,7 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication import DeliveryState, MessageKind, MessageManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -33,7 +33,7 @@ async def test_process_exit_around_completion_recovers_without_reexecuting(tmp_p
     script = """
 import asyncio, os, sys
 from ghrah.agents.builder import AgentBuilder
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.communication import MessageManager, MessageKind
 from ghrah.core.config import AgentConfig

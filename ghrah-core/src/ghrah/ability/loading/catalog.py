@@ -91,7 +91,7 @@ def scan_catalog(*, pool: Sequence[AbilityRoot] | None = None) -> CatalogReport:
     """扫描目录池，返回一份合并报告。
 
     Args:
-        pool: 要扫的目录池；None 取默认池（内置树 + ``~/.ghrah/skill-ability``）。
+        pool: 要扫的目录池；None 只扫描内置树。
             只影响 ``roots`` / ``containers`` / ``skills`` 与问题清单；
             ``abilities`` / ``handlers`` 恒取内置树的实现面读数——实现脚本只能落在
             可 import 的包树里，换根也不会让外部包产出运行时 view。

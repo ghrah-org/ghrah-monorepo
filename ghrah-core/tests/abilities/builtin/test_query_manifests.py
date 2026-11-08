@@ -15,8 +15,8 @@ from typing import Any
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.query_manifests import QueryManifestsAbility
+from ghrah.ability.builtin.cluster.operations.query_manifests import QueryManifestsAbility
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.manifest.agent import AbilityRef, AgentManifest, AgentMetadata, ModelConfig

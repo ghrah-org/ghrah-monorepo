@@ -14,12 +14,12 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.execute_command import (
+from ghrah.ability.builtin.shell.operations.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     ExecuteCommandInput,
 )
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 

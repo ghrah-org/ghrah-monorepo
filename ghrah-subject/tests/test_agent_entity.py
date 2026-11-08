@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from ability_testutil import EchoLLM, put_agent_template
 from ghrah.chat.message import ChatMessage
 from ghrah.protocol.payloads.entity import AgentEntityCreatePayload
 from ouroboros import Context
@@ -20,6 +21,54 @@ from ghrah.subject.errors import StableError
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
+
+
+async def test_builtin_entity_uses_template_and_keeps_legacy_configuration_read_only(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    async with Context() as ctx:
+        await assemble_subject(ctx, config, profile="full")
+        project = _data(await bridge_command(ctx, "project_create", {"name": "builtin"}))["project"]
+        pid, cluster = project["project_id"], project["cluster_ids"][0]
+        spec = {"project_id": pid, "cluster_id": cluster, "name": "entity"}
+
+        for fields, error in (
+            ({"start": True}, "agent_manifest_required"),
+            (
+                {"start": False, "ability_types": ["send_message"]},
+                "abilities_managed_by_access_store",
+            ),
+        ):
+            rejected = await bridge_command(ctx, "agent_entity_create", {**spec, **fields})
+            assert rejected["error"] == error
+        listed = _data(await bridge_command(ctx, "agent_entity_list", {"project_id": pid}))
+        assert listed["items"] == []
+        assert listed["available_ability_types"] == []
+
+        manager = ctx.get("project_manager")
+        draft = await manager.agents.create(AgentEntityCreatePayload(**spec, start=False))
+        before = await draft.snapshot()
+        assert before.abilities["available_types"] == []
+        with pytest.raises(StableError, match="abilities_managed_by_access_store"):
+            await draft.abilities.configure(
+                ["send_message"], expected_revision=before.specification_revision
+            )
+        with pytest.raises(StableError, match="agent_manifest_required"):
+            await draft.start()
+        after = await draft.snapshot()
+        assert after.specification.desired_state == "stopped"
+        assert after.specification_revision == before.specification_revision
+
+        ref = put_agent_template(ctx.get("manifest_store"), endpoint="entity")
+        templated = await manager.agents.create(
+            AgentEntityCreatePayload(**{**spec, "name": "templated"}, manifest_ref=ref, start=True)
+        )
+        running = await templated.snapshot()
+        assert running.runtime.availability == "online"
+        assert running.abilities["available_types"] == []
+        assert "conversation" in running.abilities["loaded_names"]
+        assert "session_info" in running.abilities["loaded_names"]
 
 
 @pytest.fixture(autouse=True)
@@ -60,9 +109,13 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
                 project_id=pid,
                 cluster_id=cluster,
                 name="entity",
-                endpoint_name="entity",
+                manifest_ref=put_agent_template(
+                    ctx.get("manifest_store"),
+                    "entity",
+                    endpoint="entity",
+                    members=("ghrah.cluster.send_message",),
+                ),
                 start=False,
-                ability_types=["send_message"],
             )
         )
         initial = await agent.snapshot()
@@ -70,9 +123,9 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
         assert initial.context["session_count"] == 0
         assert (await agent.context.list_sessions())["sessions"] == []
         assert initial.specification.desired_state == "stopped"
-        assert "send_message" in initial.abilities["available_types"]
+        assert initial.abilities["available_types"] == []
         entity_list = _data(await bridge_command(ctx, "agent_entity_list", {"project_id": pid}))
-        assert "send_message" in entity_list["available_ability_types"]
+        assert entity_list["available_ability_types"] == []
         assert (await manager.agents.list(pid))[0]["identity"] == agent.identity.model_dump()
         started = await agent.start()
         assert started["runtime"]["availability"] == "online", started
@@ -136,9 +189,10 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
                 project_id=pid,
                 cluster_id=cluster,
                 name="second",
-                endpoint_name="second",
+                manifest_ref=put_agent_template(
+                    ctx.get("manifest_store"), "second", endpoint="second"
+                ),
                 start=True,
-                ability_types=["send_message"],
             )
         )
         second_snapshot = await second.snapshot()
@@ -165,7 +219,7 @@ async def test_entity_survives_stop_start_and_subject_restart(tmp_path: Path) ->
         assert (await entity.snapshot()).runtime.availability == "offline"
         assert await entity.context.get_history(sid, bid) == before
         assert (await entity.mailbox.list_inbox())["items"] == inbox["items"]
-        assert (await entity.abilities.list())["configured_types"] == ["send_message"]
+        assert (await entity.abilities.list())["configured_types"] is None
 
 
 async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> None:
@@ -181,9 +235,13 @@ async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> 
                         project_id=project["project_id"],
                         cluster_id=project["cluster_ids"][0],
                         name=name,
-                        endpoint_name=name,
+                        manifest_ref=put_agent_template(
+                            ctx.get("manifest_store"),
+                            name,
+                            endpoint=name,
+                            members=("ghrah.cluster.send_message",),
+                        ),
                         start=True,
-                        ability_types=["send_message"],
                     )
                 )
             )
@@ -194,7 +252,7 @@ async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> 
                 catalog["active_session_id"], catalog["sessions"][0]["active_branch_id"]
             )
         a_snapshot = await a.snapshot()
-        with pytest.raises(StableError, match="agent_must_be_stopped"):
+        with pytest.raises(StableError, match="abilities_managed_by_access_store"):
             await a.abilities.configure(
                 ["send_message"], expected_revision=a_snapshot.specification_revision
             )
@@ -209,10 +267,10 @@ async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> 
         with pytest.raises(StableError, match="agent_specification_conflict"):
             await a.abilities.configure(["send_message"], expected_revision=1)
         snap = await a.snapshot()
-        configured = await a.abilities.configure(
-            ["send_message", "conversation"], expected_revision=snap.specification_revision
-        )
-        assert configured["abilities"]["configured_types"] == ["send_message", "conversation"]
+        with pytest.raises(StableError, match="abilities_managed_by_access_store"):
+            await a.abilities.configure(
+                ["send_message", "conversation"], expected_revision=snap.specification_revision
+            )
         await b.stop()
         mm = ctx.get("core_cluster_registry").get_message_manager(project["project_id"])
         receipt = await mm.send_external(
@@ -224,7 +282,7 @@ async def test_entity_scope_guards_and_stopped_configuration(tmp_path: Path) -> 
         with pytest.raises(ValueError, match="message_not_found"):
             await a.mailbox.get_message(receipt.message_id)
         await a.start()
-        assert set((await a.abilities.list())["loaded_names"]) == {"send_message", "conversation"}
+        assert {"send_message", "conversation"} <= set((await a.abilities.list())["loaded_names"])
         delivery = (await b.mailbox.get_message(receipt.message_id))["deliveries"][0]
         with pytest.raises(StableError, match="delivery_not_found"):
             await a.mailbox.retry(delivery["delivery_id"])
@@ -253,9 +311,8 @@ async def test_failed_stop_preserves_intent_and_serializes_recovery(
                 project_id=pid,
                 cluster_id=cluster,
                 name="worker",
-                endpoint_name="worker",
+                manifest_ref=put_agent_template(ctx.get("manifest_store"), endpoint="worker"),
                 start=True,
-                ability_types=["send_message"],
             )
         )
         handle = ctx.get("core_cluster_registry").get_handle(cluster)
@@ -299,7 +356,7 @@ async def test_failed_stop_preserves_intent_and_serializes_recovery(
         assert snapshot.runtime.incarnation_id == original_snapshot.runtime.incarnation_id
         assert snapshot.runtime.availability == "online"
         # 失败回执没有伪装离线，能力变更仍被拒绝；重试 stop 可完成终止。
-        with pytest.raises(StableError, match="agent_must_be_stopped"):
+        with pytest.raises(StableError, match="abilities_managed_by_access_store"):
             await agent.abilities.configure(
                 ["send_message"], expected_revision=snapshot.specification_revision
             )
@@ -326,9 +383,10 @@ async def test_failed_start_is_queryable_and_can_be_retried(
                     "project_id": pid,
                     "cluster_id": cluster,
                     "name": "worker",
-                    "endpoint_name": "worker",
+                    "manifest_ref": put_agent_template(
+                        ctx.get("manifest_store"), endpoint="worker"
+                    ),
                     "start": False,
-                    "ability_types": ["send_message"],
                 },
             )
         )
@@ -357,7 +415,6 @@ async def test_model_binding_preflight_and_room_reply(
 ) -> None:
     """真实实体和 Room/MM 链路：缺配置拒绝启动，绑定后能生成并投影回复。"""
     from ghrah.agents.builder import LLMFactory
-    from test_project_message_manager import EchoLLM
 
     resolved_names = []
     request_params = []
@@ -372,13 +429,15 @@ async def test_model_binding_preflight_and_room_reply(
         await assemble_subject(ctx, _config(tmp_path), profile="full")
         project = _data(await bridge_command(ctx, "project_create", {"name": "binding"}))["project"]
         pid = project["project_id"]
+        store = ctx.get("manifest_store")
+        ref = put_agent_template(store, endpoint="missing")
         entity = await ctx.get("project_manager").agents.create(
             AgentEntityCreatePayload(
                 project_id=pid,
                 cluster_id=project["cluster_ids"][0],
                 name="display-name",
+                manifest_ref=ref,
                 start=False,
-                ability_types=["conversation"],
             )
         )
         with pytest.raises(StableError, match="model_configuration_invalid"):
@@ -386,12 +445,12 @@ async def test_model_binding_preflight_and_room_reply(
         assert (await entity.snapshot()).runtime.availability == "offline"
         await entity.stop()
         revision = (await entity.snapshot()).specification_revision
-        with pytest.raises(StableError, match="model_configuration_invalid"):
+        with pytest.raises(StableError, match="model_managed_by_manifest"):
             await entity.configure_model("missing", expected_revision=revision)
-        await entity.configure_model(
-            "worker",
-            expected_revision=revision,
-            model_overrides={"temperature": 0, "extra_params": {"vendor_flag": False}},
+        put_agent_template(
+            store,
+            endpoint="worker",
+            model_params={"temperature": 0, "extra_params": {"vendor_flag": False}},
         )
         await entity.start()
         with pytest.raises(StableError, match="agent_must_be_stopped"):
@@ -461,6 +520,6 @@ async def test_model_binding_preflight_and_room_reply(
         await entity.stop()
         await entity.start()
         assert entity.identity == identity
-        final = await entity.snapshot()
-        assert final.specification.endpoint_name == "worker"
-        assert final.specification.model_overrides["temperature"] == 0
+        actor = _actor(ctx, project["cluster_ids"][0], "display-name")
+        assert actor.config.endpoint_name == "worker"
+        assert actor.config.model_overrides.temperature == 0

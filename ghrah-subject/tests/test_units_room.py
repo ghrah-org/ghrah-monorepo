@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ability_testutil import put_agent_template
+from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import SubjectConfig
@@ -25,6 +27,7 @@ def _config(tmp_path: Path) -> SubjectConfig:
         workspace_root=str(tmp_path / "ws"),
         db_path=str(tmp_path / "subject.db"),
         manifest_root=str(tmp_path / "manifests"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
     )
 
 
@@ -49,7 +52,11 @@ async def _add_project_agent(ctx: Context, project_id: str, name: str) -> str:
         "project_add_agent",
         {
             "project_id": project_id,
-            "agent": {"name": name, "cluster_id": project["cluster_ids"][0]},
+            "agent": {
+                "name": name,
+                "cluster_id": project["cluster_ids"][0],
+                "manifest_ref": put_agent_template(ctx.get("manifest_store")),
+            },
         },
     )
     return _data(result)["agent_id"]

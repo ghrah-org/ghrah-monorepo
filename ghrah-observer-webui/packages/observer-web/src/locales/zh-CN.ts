@@ -725,6 +725,7 @@ export default {
       },
       refresh: "刷新",
       listHint: "查看已保存的能力配置及其声明的权限标记。",
+      legacyDisabled: "此部署通过 v1 能力包管理能力。",
       notConnected: "当前未连接，请连接后重试。",
       loadFailed: "能力列表加载失败，请点击刷新重试。",
       empty: "暂无 Ability 配置。",

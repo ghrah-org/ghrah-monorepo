@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +30,7 @@ from ghrah.ability.assembly import (
 )
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
 from ghrah.manifest.ability import AbilityManifest
-from ghrah.manifest.builtins import load_all_builtin_manifests
-from ghrah.manifest.parser import parse_ability_manifest, parse_agent_manifest
+from ghrah.manifest.parser import parse_agent_manifest
 from ghrah.types.results import ActionOutcome
 
 _AGENT_YAML = """\
@@ -82,22 +80,6 @@ abilities:
   - ref: legacy.only.ability
 """
 
-# 旧口径能力清单：只放进 Agent 声明存储的能力库，用来证明 builtin 模式的
-# ref 不会从这里取件（存储里"有"不代表新模式能解析）。
-_POISON_ABILITY_YAML = """\
-manifest: ability
-version: "1"
-metadata:
-  namespace: legacy.only
-  name: ability
-  title: Legacy Only
-  description: Only reachable through the legacy ability library
-  permissions: {}
-implementation:
-  type: builtin
-  handler: conversation
-"""
-
 
 class _Store:
     """最小 ManifestStoreProtocol stub（记录能力库读取，便于断言不回退）。"""
@@ -127,15 +109,12 @@ class _Store:
 
 def _consumer_store() -> _Store:
     """首个消费者的声明存储：Agent 声明 + 旧口径能力库（含一份 store-only 条目）。"""
-    abilities = dict(load_all_builtin_manifests())
-    abilities["legacy.only.ability"] = parse_ability_manifest(_POISON_ABILITY_YAML)
     return _Store(
         agents={
             "w0.consumer": parse_agent_manifest(_AGENT_YAML),
             "w0.fs-consumer": parse_agent_manifest(_AGENT_YAML_FS),
             "w0.legacy-ref": parse_agent_manifest(_AGENT_YAML_LEGACY_REF),
         },
-        abilities=abilities,
     )
 
 
@@ -317,10 +296,10 @@ async def test_installed_package_executes_in_real_agent_loop_and_disappears_afte
 
 
 class TestModeSelection:
-    def test_default_mode_is_legacy(self) -> None:
+    def test_default_mode_is_builtin(self) -> None:
         unit = create_core_unit(CoreUnitConfig(project_id="default"))
 
-        assert unit.ability_source == "legacy"
+        assert unit.ability_source == "builtin"
 
     def test_mode_accepts_case_and_whitespace(self) -> None:
         assert AbilitySourceMode.parse(" BUILTIN ") is AbilitySourceMode.BUILTIN
@@ -339,54 +318,6 @@ class TestModeSelection:
 # ----------------------------------------------------------------
 # 未选择模式：现有运行方式不变
 # ----------------------------------------------------------------
-
-
-class TestLegacyMode:
-    async def test_manifest_ref_spawn_keeps_legacy_instances(self) -> None:
-        store = _consumer_store()
-        unit = create_core_unit(CoreUnitConfig(project_id="default", manifest_store=store))
-
-        receipt = await _spawn(unit, _manifest_payload("fs_consumer", "w0.fs-consumer"))
-
-        assert receipt["success"], receipt.get("error")
-        modules = await _abilities_of(unit, "fs_consumer")
-        assert modules["read_file"].startswith("ghrah.abilities.")
-        assert modules["write_file"].startswith("ghrah.abilities.")
-
-    async def test_ref_is_read_from_the_agent_store(self) -> None:
-        store = _consumer_store()
-        unit = create_core_unit(CoreUnitConfig(project_id="default", manifest_store=store))
-
-        receipt = await _spawn(unit, _manifest_payload("legacy_ref", "w0.legacy-ref"))
-
-        assert receipt["success"], receipt.get("error")
-        assert store.ability_reads == ["legacy.only.ability"]
-
-    async def test_direct_wire_abilities_still_work(self) -> None:
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", default_abilities=("conversation", "end_task"))
-        )
-
-        receipt = await _spawn(
-            unit,
-            {
-                "project_id": "default",
-                "config": {"name": "direct"},
-                "abilities": [{"ability_type": "conversation", "params": {}}],
-            },
-        )
-
-        assert receipt["success"], receipt.get("error")
-
-    async def test_skill_root_wires_the_legacy_reader(self, tmp_path: Path) -> None:
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", skill_root=str(tmp_path / "skill-ability"))
-        )
-
-        await unit.init(FakeCtx())
-
-        assert unit.supervisor is not None
-        assert unit.supervisor.skill_provider is not None
 
 
 # ----------------------------------------------------------------
@@ -499,23 +430,6 @@ class TestBuiltinMode:
         # 拒绝发生在改动之前：工具表保持 manifest 投影（撤销成员不在其中）
         assert "read_file" in await _abilities_of(unit, "consumer")
         await ability_store.close()
-
-    async def test_skill_root_is_not_read(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        root = tmp_path / "skill-ability"
-        unit = create_core_unit(
-            CoreUnitConfig(project_id="default", skill_root=str(root), ability_source="builtin")
-        )
-
-        caplog.set_level(logging.WARNING, logger="ghrah.core.unit")
-        await unit.init(FakeCtx())
-
-        assert unit.supervisor is not None
-        assert unit.supervisor.skill_provider is None
-        assert "ignores skill_root" in caplog.text
-        # 装配不创建旧目录：新模式不读它，就不该让它看起来"已就绪"
-        assert not root.exists()
 
 
 # ----------------------------------------------------------------
@@ -687,7 +601,7 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         await unit.init(FakeCtx())
         assert unit.supervisor is not None
         assembly = unit._require_assembly()
-        resolved = assembly.manifest_resolver().resolve(
+        resolved = assembly.source.resolver().resolve(
             manifest_store.load_agent("w0.fs-consumer"), runtime_name="child"
         )
         services = make_services(supervisor=unit.supervisor)
@@ -741,7 +655,7 @@ async def test_subagent_spawn_without_boundary_fails_closed() -> None:
     )
     await unit.init(FakeCtx())
     assembly = unit._require_assembly()
-    resolved = assembly.manifest_resolver().resolve(
+    resolved = assembly.source.resolver().resolve(
         manifest_store.load_agent("w0.fs-consumer"), runtime_name="child"
     )
 
@@ -767,10 +681,12 @@ async def test_builtin_supervisor_rejects_caller_assembled_tools() -> None:
     )
     await unit.init(FakeCtx())
     assembly = unit._require_assembly()
-    resolved = assembly.manifest_resolver().resolve(
+    resolved = assembly.source.resolver().resolve(
         manifest_store.load_agent("w0.fs-consumer"), runtime_name="direct"
     )
-    plain_list = assembly.instantiate(resolved.abilities, workspace_root=None)
+    from ghrah.ability.execution.ability_build import instantiate_resolved_abilities
+
+    plain_list = instantiate_resolved_abilities(resolved.abilities, workspace_root=None)
 
     from dataclasses import replace
 

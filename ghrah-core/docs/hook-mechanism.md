@@ -1,5 +1,7 @@
 # Hook 机制
 
+> 历史说明。本文部分示例依赖已退役的 `ghrah.abilities`。当前接入入口见 [文档索引](README.md#当前-ability-接入)。
+
 Hook 是 ghrah 中实现控制流的核心机制，在 Agent 执行循环的特定触发点执行，用于条件转移、拦截修改、错误恢复等。
 
 ## 三层 Hook 架构

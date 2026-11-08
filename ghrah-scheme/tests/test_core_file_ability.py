@@ -7,17 +7,17 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from ghrah.abilities.builtin.fs_permissions import AccessApprovalHook, FSPermissionChecker
-from ghrah.abilities.builtin.read_file import ReadFileAbility
-from ghrah.abilities.builtin.write_file import WriteFileAbility
-from ghrah.abilities.executor import LocalAbilityExecutor
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.builtin.fs.operations.write_file import WriteFileAbility
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.executor import LocalAbilityExecutor
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import (
     InvocationIdentity,
     MemberReference,
     OperationCall,
 )
+from ghrah.ability.permissions.fs_permissions import AccessApprovalHook, FSPermissionChecker
 from ghrah.types.results import ActionResult
 from ghrah_scheme_support import ALICE, BOB, Policy
 from pydantic import Field

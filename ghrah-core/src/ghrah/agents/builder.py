@@ -19,7 +19,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ghrah.abilities.executor import AbilityExecutor, LocalAbilityExecutor
+from ghrah.ability.execution.executor import AbilityExecutor, LocalAbilityExecutor
 from ghrah.agents.base import ActorAgent
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence import create_persistence
@@ -275,9 +275,6 @@ def _build_context_manager(
         ),
         message_factory=message_factory,
         estimator=estimator,
-        # skill-ability：provider 由 supervisor 装配期注入（None = 不接线，
-        # 上下文不注入技能目录摘要）
-        skill_provider=getattr(supervisor, "skill_provider", None),
         ability_content=ability_content,
         **compact_kwargs,
     )

@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import pytest
@@ -36,7 +35,7 @@ from ghrah.subject.config import (
 
 
 def test_ability_install_root_is_explicit(monkeypatch, tmp_path):
-    """安装根默认关闭，由部署环境显式指定，旧模式与相对路径直接拒绝。"""
+    """安装根默认关闭，由部署显式指定，拒绝相对路径。"""
     monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_INSTALL_ROOT", raising=False)
     assert SubjectConfig.from_env().ability.install_root is None
     monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_SOURCE", "builtin")
@@ -44,8 +43,9 @@ def test_ability_install_root_is_explicit(monkeypatch, tmp_path):
     assert SubjectConfig.from_env().ability.install_root == str(tmp_path)
     with pytest.raises(ValueError, match="绝对路径"):
         AbilityConfig(install_root="relative")
-    with pytest.raises(ValueError, match="builtin"):
-        SubjectConfig(ability=AbilityConfig(install_root=str(tmp_path)))
+    assert SubjectConfig(
+        ability=AbilityConfig(install_root=str(tmp_path))
+    ).ability.install_root == str(tmp_path)
 
 
 def test_ability_filesystem_roots_from_environment(monkeypatch, tmp_path):
@@ -435,33 +435,28 @@ class TestFromEnv:
         config = SubjectConfig.from_env()
         assert config.taskstore.enabled is True
 
-    def test_skill_defaults(self) -> None:
-        """skill slice：默认根目录是 skill-ability（测试期由 conftest 隔离为临时目录）。"""
-        config = SubjectConfig()
-        assert config.skill.root.endswith("skill-ability")
-
-    def test_from_env_skill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_from_env_reports_retired_skill_root(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         monkeypatch.setenv("GHRAH_SUBJECT_SKILL_ROOT", "/srv/ghrah/skill-ability")
-        assert SubjectConfig.from_env().skill.root == "/srv/ghrah/skill-ability"
-
-    def test_from_env_skill_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """delenv 后断言生产默认值（from_env 显式传字面量，不受 conftest 覆写影响）。"""
-        monkeypatch.delenv("GHRAH_SUBJECT_SKILL_ROOT", raising=False)
-        assert SubjectConfig.from_env().skill.root == os.path.expanduser("~/.ghrah/skill-ability")
+        SubjectConfig.from_env()
+        assert "GHRAH_SUBJECT_SKILL_ROOT has been retired" in caplog.text
 
     def test_ability_source_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """未选择时保持现有运行方式（legacy）。"""
+        """默认使用 v1 能力来源。"""
         monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_SOURCE", raising=False)
-        assert SubjectConfig.from_env().ability_source == "legacy"
+        assert SubjectConfig.from_env().ability_source == "builtin"
 
     def test_from_env_ability_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_SOURCE", "BUILTIN")
         assert SubjectConfig.from_env().ability_source == "builtin"
 
     def test_invalid_ability_source_rejected(self) -> None:
-        """拼错的模式在装配前报错，不悄悄跑回 legacy。"""
+        """未知值和已退役来源在装配前报错。"""
         with pytest.raises(ValueError, match="unknown ability source mode"):
             SubjectConfig(ability_source="new")
+        with pytest.raises(ValueError, match="only builtin"):
+            SubjectConfig(ability_source="legacy")
 
 
 class TestAbilityGrantPolicy:

@@ -150,7 +150,7 @@ onMounted(refresh);
           </ul>
           <p v-else>{{ t("agentAbilities.empty") }}</p>
         </template>
-        <form @submit.prevent="register">
+        <form v-if="!loaded || stopped || availableTypes.length" @submit.prevent="register">
           <h3>{{ t("agentAbilities.registerTitle") }}</h3>
           <label
             >{{ t("agentAbilities.type")

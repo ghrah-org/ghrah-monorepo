@@ -9,10 +9,10 @@ from __future__ import annotations
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.hook_runner import HookRunner
-from ghrah.abilities.hook_store import HookStore
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult, HookScope
 from ghrah.ability.execution.execution_services import LOOP, ExecutionServices
+from ghrah.ability.execution.hook_runner import HookRunner
+from ghrah.ability.execution.hook_store import HookStore
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult, HookScope
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.types.results import ActionResult
 

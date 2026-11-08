@@ -40,21 +40,19 @@ ghrah-subject
 | `GHRAH_SUBJECT_DB_PATH` | SQLite 数据库路径 | `~/.ghrah/subject.db` |
 | `GHRAH_SUBJECT_LOG_LEVEL` | 日志级别 | `INFO` |
 
-## legacy 装配模式（已废弃）
+## 能力装配与授权
 
-`GHRAH_SUBJECT_ABILITY_SOURCE=legacy` 已废弃，仅保留旧部署兼容，用于尚未迁移到
-`builtin` 的存量环境；默认值仍为 `legacy` 只是为了避免旧部署启动失败，不代表
-推荐使用。
+Subject 使用 `ghrah.ability` 提供能力声明、工具和 Skill。能力来源的默认值是
+`builtin`，现有显式配置也可沿用这个值。升级前请移除
+`GHRAH_SUBJECT_ABILITY_SOURCE=legacy`，为旧 Project 的 Agent 配置 v2 模板
+`manifest_ref`，并使用授权库授予模板需要的成员。
 
-legacy 模式**不在权限治理范围内**：能力声明、工具实例与 Skill 读取仍走旧注册表
-和旧物化路径，不计算有效权限，不执行只读约束、`fs_write`/`net_access`/
-`shell_access` 权限位检查，命令检查器也不消费 `allowed_commands`/
-`denied_commands`。因此不要把它当作受治理或安全的装配方式；新部署应显式设置
-`GHRAH_SUBJECT_ABILITY_SOURCE=builtin` 并按下一节配置授权策略。
+原 `manifest/abilities/` 中的独立 Ability YAML 已退役。Agent 模板仍保存在
+`manifest/agents/`。仍需使用的自定义工具和 Skill 可以作为 v1 能力包安装，
+再通过授权库向目标 Agent 授予成员。已退役的 `command_proxy` 自动注册桥可迁移为
+可授权的 v1 Operation。
 
-## builtin 能力的授权与旧库处理
-
-设置 `GHRAH_SUBJECT_ABILITY_SOURCE=builtin` 后，Agent 模板只表达申请；授权由
+Agent 模板只表达申请，授权由
 `GHRAH_SUBJECT_ABILITY_GRANT_POLICY` 的显式策略核定并写入项目关系库。授权主体与
 策略中的 `agent` 都使用稳定 Agent ID，显示名不作为授权键。未提供 ID 的新建入口
 在受信装配处生成 UUID；恢复原主体时需要携带原 ID。

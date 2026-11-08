@@ -758,6 +758,7 @@ export default {
       },
       refresh: "Refresh",
       listHint: "Browse saved ability manifests and their declared permission flags.",
+      legacyDisabled: "This deployment manages capabilities through v1 Ability packages.",
       notConnected: "Not connected. Reconnect and try again.",
       loadFailed: "Unable to load abilities. Try refreshing.",
       empty: "No ability manifests found.",

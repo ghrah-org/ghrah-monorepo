@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from ghrah.abilities.base import ActionOutcome, ActionResult
+from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.context import IterationState
 
 

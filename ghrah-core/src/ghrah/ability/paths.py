@@ -2,13 +2,84 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Operation 的真实路径约束与受信装配时的权限路径解析。"""
+"""Ability 路径参数规格、路径安全检查与受信装配时的权限路径解析。"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True)
+class AbilityPathSpec:
+    """Ability 的路径参数规格，用于路径提取和权限检查。
+
+    Attributes:
+        path_keys: 文件/目录路径参数名（有序），
+                    如 ("file_path",) 或 ("source_path", "destination_path")
+        working_dir_keys: 工作目录参数名，如 ("working_dir",)
+        alt_keys: 主参数名到备选参数名的映射，如 {"source_path": "file_path"}
+                    表示先找 source_path，找不到则找 file_path
+    """
+
+    path_keys: tuple[str, ...] = ()
+    working_dir_keys: tuple[str, ...] = ()
+    alt_keys: dict[str, str] | None = None
+
+
+ABILITY_PATH_SPECS: dict[str, AbilityPathSpec] = {
+    "read_file": AbilityPathSpec(path_keys=("file_path",)),
+    "write_file": AbilityPathSpec(path_keys=("file_path",)),
+    "edit_file": AbilityPathSpec(path_keys=("file_path",)),
+    "delete_file": AbilityPathSpec(path_keys=("file_path",)),
+    "list_directory": AbilityPathSpec(path_keys=("dir_path",)),
+    "move_file": AbilityPathSpec(
+        path_keys=("source_path", "destination_path"),
+        alt_keys={"source_path": "file_path"},
+    ),
+    "search_files": AbilityPathSpec(path_keys=("path",)),
+    "execute_command": AbilityPathSpec(working_dir_keys=("working_dir",)),
+}
+
+_FALLBACK_PATH_KEYS = ("file_path", "dir_path", "working_dir")
+
+
+def extract_paths(ability_name: str, tool_args: dict[str, Any]) -> list[str]:
+    """从 tool_args 中提取 Ability 涉及的所有路径（文件路径 + 工作目录路径）。
+
+    已知 Ability 使用 ABILITY_PATH_SPECS 注册表提取；
+    未知 Ability 回退到常见路径参数名（file_path, dir_path, working_dir）。
+
+    Args:
+        ability_name: Ability 名称
+        tool_args: 工具调用参数
+
+    Returns:
+        提取到的路径列表（不含空值）
+    """
+    spec = ABILITY_PATH_SPECS.get(ability_name)
+    if spec is not None:
+        paths: list[str] = []
+        alt_keys = spec.alt_keys or {}
+        for key in spec.path_keys:
+            value = tool_args.get(key) or tool_args.get(alt_keys.get(key, ""))
+            if value and isinstance(value, str):
+                paths.append(value)
+        for key in spec.working_dir_keys:
+            value = tool_args.get(key)
+            if value and isinstance(value, str):
+                paths.append(value)
+        return paths
+    paths = []
+    for key in _FALLBACK_PATH_KEYS:
+        value = tool_args.get(key)
+        if value and isinstance(value, str):
+            paths.append(value)
+            break
+    return paths
 
 
 def is_subpath(path: str | Path, parent: str | Path) -> bool:
@@ -73,4 +144,29 @@ def _expand(raw: str, template_vars: Mapping[str, str]) -> str:
     return result
 
 
-__all__ = ["is_subpath", "resolve_fs_permission_paths"]
+def resolve_relative_path(workspace: str, value: str) -> str:
+    """统一相对路径解析入口：相对路径（含 ``.``）解析到 workspace 根，绝不泄漏 $PWD。
+
+    - 绝对路径（``os.path.isabs`` 判定，含 POSIX ``/`` 与 Windows 盘符/UNC）
+      原样返回（裁决归 Foxtrail/sandbox cwd 限制）；
+    - ``"."`` → workspace 根（避免 os.path.join(ws, ".") 产生 ws/. 残留）；
+    - 其他相对路径 → ``os.path.join(workspace, value)``。
+
+    供 Subject AbilityRunner._resolve_paths 与 ghrah-core FS 能力共享路径解析归一，
+    使相对路径永不解析到进程 $PWD。
+    """
+    if os.path.isabs(value):
+        return value
+    if value == ".":
+        return workspace
+    return os.path.join(workspace, value)
+
+
+__all__ = [
+    "is_subpath",
+    "AbilityPathSpec",
+    "ABILITY_PATH_SPECS",
+    "extract_paths",
+    "resolve_fs_permission_paths",
+    "resolve_relative_path",
+]

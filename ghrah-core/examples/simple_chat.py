@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.types.config_types import AgentConfig
 

@@ -5,10 +5,8 @@
 """SpawnAgentAbility：以 manifest 实例化的方式动态创建新的平级 Agent。
 
 能力面治理：LLM 工具面不提供自由 ``abilities`` 参数——新 Agent
-的能力集由 manifest 完全冻结，不继承也不由 spawner 现场拼装。builtin
-模式下子 Agent 与顶层 spawn 走同一条授权装配边界（关系库 + 启动策略 +
-执行接纳）；``supervisor.spawn_agent(config, abilities=[...])`` 只对
-legacy 模式保留，builtin 模式调用方自拼工具表会被拒绝。
+的能力申请由 manifest 声明。CoreUnit 的子 Agent 与顶层 spawn 共用授权装配，
+由关系库和启动策略核定实际工具。独立 SDK 的调用方可显式提供受信工具实例。
 """
 
 from __future__ import annotations
@@ -97,11 +95,10 @@ async def _assemble_child_abilities(
     manifest_ref: str,
     resolved: Any,
 ) -> Any:
-    """按装配模式产出子 Agent 的工具表。
+    """为子 Agent 生成工具表。
 
-    builtin 模式必须经授权装配边界（与顶层 spawn 同一入口）：从 Supervisor
-    取启动核定器，按子 Agent 模板写关系库并实例化；未接线或核定失败直接
-    FAILURE，不回退按模板实例化。legacy 模式保持旧装配路径。
+    CoreUnit 路径从 Supervisor 取得启动核定器，按子 Agent 模板写关系库并物化。
+    授权装配未接线或核定失败时返回 FAILURE。独立 SDK 从 v1 声明构造本地工具。
 
     Args:
         services: 执行服务表（含 supervisor）。

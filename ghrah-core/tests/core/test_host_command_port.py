@@ -73,7 +73,6 @@ class _FakeSupervisor:
         self.host_command_port = port
         self.host_command_grants = grants
         self.manifest_store = None
-        self.skill_provider = None
 
 
 def _agent_with_grants(

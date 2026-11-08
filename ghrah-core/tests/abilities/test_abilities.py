@@ -11,9 +11,9 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.hooks import Hook, HookPoint, HookResult
+from ghrah.ability.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import OperationCall
 
 # ── 辅助：用于测试的具体 Ability 子类 ──

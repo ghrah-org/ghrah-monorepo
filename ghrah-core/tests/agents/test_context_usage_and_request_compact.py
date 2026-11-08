@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
+from ghrah.ability.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import TextBlock

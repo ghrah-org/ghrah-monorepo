@@ -10,12 +10,12 @@ from typing import Any
 
 from _helpers import make_call, make_services
 
-from ghrah.abilities.base import ActionOutcome
-from ghrah.abilities.builtin.execute_command import (
+from ghrah.ability.builtin.shell.operations.execute_command import (
     CommandResult,
     ExecuteCommandAbility,
     _fold_text,
 )
+from ghrah.ability.execution.base import ActionOutcome
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 
@@ -84,7 +84,7 @@ class TestFoldTextUnit:
         assert "[... 920 lines omitted ...]" in folded
 
     def test_head_and_tail_sizes(self) -> None:
-        from ghrah.abilities.builtin.execute_command import (
+        from ghrah.ability.builtin.shell.operations.execute_command import (
             _FOLD_HEAD_LINES,
             _FOLD_TAIL_LINES,
         )
@@ -102,10 +102,6 @@ class TestFoldTextUnit:
 
 class TestRunnerModeFold:
     async def test_stdout_folded(self) -> None:
-        ability = ExecuteCommandAbility(fold_stdout_lines=100)
-        call, services = _make_context(tool_args={"command": "big"})
-        result = await ability.execute(call, services)
-        # MockBigRunner 未注入——默认路径走 subprocess；改用 runner 注入
         ability = ExecuteCommandAbility(
             command_runner=MockBigRunner(_big_stdout(1000)), fold_stdout_lines=100
         )
@@ -144,7 +140,7 @@ class TestSubprocessModeFold:
         result = await ability._execute_subprocess(f'python -c "{script}"', None)
         assert result.outcome is ActionOutcome.SUCCESS
         stdout = result.data["stdout"]
-        assert "line 1" in stdout
+        assert "line 1" in stdout and "line 300" in stdout
         assert "[... " in stdout and "lines omitted ...]" in stdout
 
     async def test_subprocess_stderr_full(self) -> None:
@@ -153,8 +149,7 @@ class TestSubprocessModeFold:
         result = await ability._execute_subprocess(f'python -c "{script}"', None)
         assert result.outcome is ActionOutcome.SUCCESS
         stderr = result.data["stderr"]
-        assert stderr.count("err") == 200
-        # stderr 不折叠：完整错误现场里不应出现省略标记
+        assert stderr.splitlines() == ["err"] * 200
         assert "lines omitted" not in stderr
 
 

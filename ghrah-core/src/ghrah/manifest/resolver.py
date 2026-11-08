@@ -6,7 +6,7 @@
 
 核心逻辑：
 1. AgentManifest.model → ModelOverrides（覆盖 agentconf 解析的 LLM 配置）
-2. AgentManifest.abilities → ResolvedAbility 列表（ref 从 store 加载，type 从 builtin 加载）
+2. AgentManifest.abilities → ResolvedAbility 列表（ref 和 type 均由显式能力目录解析）
 3. AgentManifest.context → WindowConfig / ContextConfig
 4. 权限合并：AbilityManifest.permissions.merge(AbilityRef.permissions) → 最终权限
 """
@@ -16,7 +16,6 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
-from ghrah.core.ability_protocol import RegistryProtocol
 from ghrah.core.config.builders import (
     build_context_from_overrides,
     build_model_overrides_from_config,
@@ -27,9 +26,8 @@ from ghrah.manifest.agent import (
     AbilityRef,
     AgentManifest,
 )
-from ghrah.manifest.builtins import load_all_builtin_manifests
-from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
-from ghrah.manifest.protocols import AbilityCatalogPort, ManifestStoreProtocol
+from ghrah.manifest.errors import ManifestValidationError
+from ghrah.manifest.protocols import AbilityCatalogPort
 from ghrah.manifest.types import ImplementationDef, PermissionFlags, SurfaceConfig, ToolSchema
 from ghrah.types.config_types import AgentConfig, ContextConfig, WindowConfig
 
@@ -60,52 +58,9 @@ class ResolvedAbility:
     """原始包声明；执行物化与原始模板约束共同计算有效权限。"""
 
     @classmethod
-    def from_builtin(
-        cls,
-        ability_type: str,
-        registry: RegistryProtocol | None = None,
-        *,
-        catalog: AbilityCatalogPort | None = None,
-    ) -> ResolvedAbility:
-        """从 builtin 类型名构建 ResolvedAbility。
-
-        1. 验证 ability_type 在 AbilityRegistry 中已注册
-        2. 从 builtins 包加载对应的 AbilityManifest
-        3. 构建 ResolvedAbility（权限来自 manifest，hooks 来自 manifest）
-
-        Args:
-            ability_type: builtin 能力类型名
-            registry: 可选的 RegistryProtocol 实现，None 则 fallback 到 AbilityRegistry
-            catalog: 显式能力来源；提供时不访问旧 registry，且不能同时指定 registry
-
-        Raises:
-            ManifestValidationError: ability_type 未在 registry 中注册
-            ManifestNotFoundError: builtin manifest 不存在
-        """
-        if catalog is not None:
-            if registry is not None:
-                raise ValueError("registry and catalog cannot both select the builtin source")
-            manifest = catalog.load_builtin(ability_type)
-        else:
-            if registry is None:
-                from ghrah.abilities.registry import AbilityRegistry
-
-                registry = AbilityRegistry
-
-            if not registry.has(ability_type):
-                raise ManifestValidationError(
-                    f"Unknown builtin ability type: '{ability_type}'. "
-                    f"Available types: {registry.list_types()}"
-                )
-
-            builtins = load_all_builtin_manifests()
-            manifest = next(
-                (m for m in builtins.values() if m.implementation.handler == ability_type), None
-            )
-            if manifest is None:
-                raise ManifestNotFoundError(
-                    f"No builtin manifest found for ability type: '{ability_type}'"
-                )
+    def from_builtin(cls, ability_type: str, *, catalog: AbilityCatalogPort) -> ResolvedAbility:
+        """从显式 v1 来源读取内置成员。"""
+        manifest = catalog.load_builtin(ability_type)
 
         return cls(
             ability_name=manifest.full_name,
@@ -126,21 +81,10 @@ class ResolvedAgent:
 
 
 class ManifestResolver:
-    """Agent Manifest 解析器。
+    """用同一个 v1 目录解析 Agent 模板中的 type 和 ref。"""
 
-    将 AgentManifest 解析为 ResolvedAgent，包含 AgentConfig 和
-    解析后的 ResolvedAbility 列表。builtin_catalog 缺省保持既有来源，显式提供后
-    由该来源负责 builtin 查找；来源拒绝不会触发旧注册表回退。
-    """
-
-    def __init__(
-        self,
-        ability_store: ManifestStoreProtocol,
-        *,
-        builtin_catalog: AbilityCatalogPort | None = None,
-    ) -> None:
-        self._store = ability_store
-        self._builtin_catalog = builtin_catalog
+    def __init__(self, catalog: AbilityCatalogPort) -> None:
+        self._catalog = catalog
 
     def resolve(self, manifest: AgentManifest, runtime_name: str | None = None) -> ResolvedAgent:
         """将 AgentManifest 解析为 ResolvedAgent。
@@ -154,7 +98,7 @@ class ManifestResolver:
 
         Raises:
             ManifestNotFoundError: ref 引用的能力不存在
-            ManifestValidationError: type 引用的能力未注册
+            ManifestValidationError: type 引用的内置成员不存在
         """
         config = self._build_config(manifest, runtime_name)
         abilities = self._resolve_abilities(manifest.abilities)
@@ -200,7 +144,7 @@ class ManifestResolver:
         resolved: list[ResolvedAbility] = []
         for ref in ability_refs:
             if ref.ref:
-                ability_manifest = self._store.load_ability(ref.ref)
+                ability_manifest = self._catalog.load_ability(ref.ref)
                 permissions = ability_manifest.metadata.permissions.merge(ref.permissions)
                 r = ResolvedAbility(
                     ability_name=ability_manifest.full_name,
@@ -212,7 +156,7 @@ class ManifestResolver:
                     requested_permissions=ref.permissions,
                 )
             elif ref.type:
-                r = ResolvedAbility.from_builtin(ref.type, catalog=self._builtin_catalog)
+                r = ResolvedAbility.from_builtin(ref.type, catalog=self._catalog)
                 if ref.permissions:
                     r = dataclasses.replace(
                         r,

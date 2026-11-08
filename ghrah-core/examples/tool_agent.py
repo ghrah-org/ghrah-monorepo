@@ -28,10 +28,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ghrah.abilities.base import Ability, ActionOutcome, ActionResult
-from ghrah.abilities.builtin.conversation import ConversationAbility
-from ghrah.abilities.builtin.end_task import EndTaskAbility
-from ghrah.abilities.builtin.read_file import ReadFileAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.end_task import EndTaskAbility
+from ghrah.ability.builtin.fs.operations.read_file import ReadFileAbility
+from ghrah.ability.execution.base import Ability, ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import ExecutionServices
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.agents.builder import AgentBuilder

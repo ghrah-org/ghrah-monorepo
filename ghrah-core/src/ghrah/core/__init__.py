@@ -8,7 +8,6 @@ from ghrah.core._base_error import ActorAgentError
 from ghrah.core.ability_protocol import (
     AbilityProtocol,
     ExecutorProtocol,
-    RegistryProtocol,
 )
 from ghrah.core.config import AgentConfig, ContextConfig, ModelOverrides, WindowConfig
 from ghrah.core.event_publisher import (
@@ -51,7 +50,6 @@ __all__ = [
     # 协议
     "AbilityProtocol",
     "ExecutorProtocol",
-    "RegistryProtocol",
     # Supervisor 协议
     "SupervisorProtocol",
     # 窗口协议
@@ -113,8 +111,8 @@ def __getattr__(name: str) -> type:
         import importlib
 
         _domain_map = {
-            "AbilityError": "ghrah.abilities.errors",
-            "AbilityNotFoundError": "ghrah.abilities.errors",
+            "AbilityError": "ghrah.ability.execution.errors",
+            "AbilityNotFoundError": "ghrah.ability.execution.errors",
             "AgentNotFoundError": "ghrah.communication.errors",
             "LLMError": "ghrah.llm.errors",
             "RegistryError": "ghrah.communication.errors",

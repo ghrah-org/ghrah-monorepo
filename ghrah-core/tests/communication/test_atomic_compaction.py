@@ -16,7 +16,7 @@ import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.message import ChatMessage
 from ghrah.communication import DeliveryState, MessageKind, MessageManager

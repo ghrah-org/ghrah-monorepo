@@ -19,20 +19,16 @@ class AbilityCatalogPort(Protocol):
         """按受支持类型读取能力；缺失或不支持时明确拒绝。"""
         ...
 
-
-class ManifestStoreProtocol(Protocol):
-    """Manifest 存储能力接口（Core 侧不关心具体实现）。"""
-
     def load_ability(self, full_name: str) -> AbilityManifest:
         """根据 full_name 加载 AbilityManifest。"""
         ...
 
+
+class ManifestStoreProtocol(Protocol):
+    """Agent 模板存储接口。"""
+
     def load_agent(self, full_name: str) -> AgentManifest:
         """根据 full_name 加载 AgentManifest。"""
-        ...
-
-    def list_abilities(self, namespace: str | None = None) -> list[str]:
-        """列出所有能力 full_name，可选按 namespace 过滤。"""
         ...
 
     def list_agents(self, namespace: str | None = None) -> list[str]:

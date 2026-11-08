@@ -11,7 +11,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from ghrah.abilities.builtin.conversation import ConversationAbility
+from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.base import ActorAgent
 from ghrah.agents.builder import AgentBuilder
 from ghrah.chat.content import TextBlock

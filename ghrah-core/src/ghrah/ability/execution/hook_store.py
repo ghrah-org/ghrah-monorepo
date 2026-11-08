@@ -11,10 +11,10 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ghrah.abilities.hooks import HookPoint
+from ghrah.ability.execution.hooks import HookPoint
 
 if TYPE_CHECKING:
-    from ghrah.abilities.hooks import Hook
+    from ghrah.ability.execution.hooks import Hook
 
 __all__ = ["HookListView", "HookStore"]
 

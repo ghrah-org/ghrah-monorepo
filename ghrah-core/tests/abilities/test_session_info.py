@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from _helpers import make_call, make_services
 
-from ghrah.abilities.builtin.session_info import SessionInfoAbility
+from ghrah.ability.builtin.core.operations.session_info import SessionInfoAbility
 from ghrah.types.results import ActionOutcome
 
 

@@ -1,5 +1,7 @@
 # Hook Mechanism
 
+> Historical note. Some examples in this document depend on the retired `ghrah.abilities` package. For the current integration entry, see [Current Ability integration](README.md#当前-ability-接入).
+
 Hooks are the core control flow mechanism in ghrah, executed at specific trigger points during the Agent execution loop for conditional routing, interception, error recovery, and more.
 
 ## Three-Layer Hook Architecture

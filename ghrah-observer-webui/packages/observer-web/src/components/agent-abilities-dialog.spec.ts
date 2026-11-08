@@ -151,3 +151,15 @@ it("does not fall back to a hardcoded type list if discovery is unavailable", as
   expect(wrapper.find("select").attributes("disabled")).toBeDefined();
   expect(wrapper.find('[type="submit"]').attributes("disabled")).toBeDefined();
 });
+
+it("shows loaded abilities without a registration form when the server offers no types", async () => {
+  api.getAgentInfo.mockResolvedValue({
+    success: true,
+    data: { abilities: ["read_file"], available_ability_types: [] },
+  });
+  const wrapper = createDialog();
+  await flushPromises();
+  expect(wrapper.find("code").text()).toBe("read_file");
+  expect(wrapper.find("form").exists()).toBe(false);
+  wrapper.unmount();
+});

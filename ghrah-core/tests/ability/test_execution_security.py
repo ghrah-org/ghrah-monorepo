@@ -17,9 +17,9 @@ from _helpers import make_call, make_services
 from ghrah.protocol.ability_tree import RevokeAbilityRequest
 from test_startup_materializer import AGENT_YAML, DEPLOY, _resolved
 
-from ghrah.abilities.executor import LocalAbilityExecutor
 from ghrah.ability.access import AbilityAccessStore, GrantPolicy, StartupGrantMaterializer
 from ghrah.ability.execution.execution_services import LOOP
+from ghrah.ability.execution.executor import LocalAbilityExecutor
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.surface.naming import META_TOOL_NAMES
 from ghrah.agents.base import ActorAgent
