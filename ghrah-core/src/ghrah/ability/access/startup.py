@@ -353,6 +353,7 @@ async def register_package_instance(
     workspace_root: str | None,
     source: Any = None,
     filesystem_roots: tuple[str, ...] = (),
+    invalidate_grants: bool = True,
 ) -> RegisteredPackage:
     """捕获包版本并登记实例；启动核定与迁移 bootstrap 共用这一条登记路径。
 
@@ -366,6 +367,9 @@ async def register_package_instance(
         package: 包身份全名（``ghrah.fs``）。
         members: 本次需要的成员键集合，用于校验路径资源成员需要授予根。
         workspace_root: 工作区根；未配置 ``filesystem_roots`` 时作为授予根。
+        invalidate_grants: 实例版本/根变化时是否撤销其它 Agent 的既有授予。
+            迁移与「无策略存量模式」必须传 False：它们唯一的重建源就是既有
+            关系行，撤销后无从重建。
 
     Returns:
         已登记实例与版本。
@@ -420,6 +424,7 @@ async def register_package_instance(
         version.digest,
         instance_root,
         expected_revision=expected_revision,
+        invalidate_grants=invalidate_grants,
     )
     alias = TypeAdapter(TreeKey).validate_python(container_definition.container_name)
     instance = GrantInstance(
@@ -570,8 +575,14 @@ class StartupGrantMaterializer:
                 "循环控制成员启动；请在 manifest 中声明能力包 ref"
             )
         registered: dict[str, tuple[GrantInstance, AbilityVersion, dict[str, ResolvedAbility]]] = {}
+        # 无策略存量模式没有模板可重算，既有关系行就是唯一重建源：实例版本/
+        # 根变化时不能撤销其它 Agent 的授予，否则它们既无法继续使用，也无法
+        # 在下次启动时重建（登记发生在读存量事实之前）。
+        invalidate_grants = self._policy is not None
         for package, members in sorted(containers.items()):
-            instance, version = await self._register(catalog, package, set(members))
+            instance, version = await self._register(
+                catalog, package, set(members), invalidate_grants=invalidate_grants
+            )
             if instance.alias in registered:
                 raise StartupGrantError(f"能力包局部别名冲突：{instance.alias}")
             registered[instance.alias] = (instance, version, members)
@@ -596,7 +607,9 @@ class StartupGrantMaterializer:
         # 系统元工具只在普通授权已成立之后加入；不能让空策略靠元工具启动。
         core = next((item for item in registered.values() if item[0].package == "ghrah.core"), None)
         if core is None:
-            instance, version = await self._register(catalog, "ghrah.core", set())
+            instance, version = await self._register(
+                catalog, "ghrah.core", set(), invalidate_grants=invalidate_grants
+            )
             if instance.alias in registered:
                 raise StartupGrantError("内置 core 系统包与已有能力包局部别名冲突")
             registered[instance.alias] = (instance, version, {})
@@ -754,13 +767,25 @@ class StartupGrantMaterializer:
         raise StartupGrantError(f"成员 {item.ability_name} 不属于任何已解析能力包")
 
     async def _register(
-        self, catalog: Any, package: str, members: set[str]
+        self,
+        catalog: Any,
+        package: str,
+        members: set[str],
+        *,
+        invalidate_grants: bool = True,
     ) -> tuple[GrantInstance, AbilityVersion]:
         """捕获并登记包实例，返回启动核定所需的实例事实。
 
         模板只提供身份；版本、内容与成员定义以捕获结果为准，之后核定只读
         这些已提交事实。同一版本重复提交是幂等的。登记路径与迁移 bootstrap
         共用 :func:`register_package_instance`，不存在第二条写版本/实例的路。
+
+        Args:
+            catalog: 能力定义目录面。
+            package: 包身份全名。
+            members: 本次需要的成员键集合。
+            invalidate_grants: 版本/根变化时是否撤销其它 Agent 的既有授予；
+                无启动策略的存量模式必须传 False（否则唯一重建源会被删）。
         """
         registered = await register_package_instance(
             store=self._store,
@@ -771,6 +796,7 @@ class StartupGrantMaterializer:
             workspace_root=self._workspace_root,
             source=self._source,
             filesystem_roots=self._filesystem_roots,
+            invalidate_grants=invalidate_grants,
         )
         return registered.instance, registered.version
 
@@ -799,15 +825,31 @@ class StartupGrantMaterializer:
         迁移 bootstrap 与管理员写入写进关系库的获授，是这些 Agent 继续启动的
         依据；本次启动只把它作为目标事实原样保留（撤销后不会复活：事实已不在
         库里）。不在本次模板包集合里的 alias 不进入目标，由核定按陈旧关系撤销。
+
+        Args:
+            agent: Agent 标识。
+            instances: 本次登记的实例事实（含新版本定义）。
+
+        Returns:
+            按 alias 排序的目标授予事实。
+
+        Note:
+            版本升级可能删除成员：存量事实里的成员先按**本次登记的实例定义**
+            过滤，避免把已不存在的成员写回关系库（``write_grant`` 判
+            ``invalid_change``）或在物化时取不到成员定义。
         """
         await self._store.ensure_agent(self._actor, agent)
         records = {record.alias: record for record in await self._store.grants(self._actor, agent)}
         catalog = {instance.alias for instance in instances}
+        available = {
+            instance.alias: set(instance.definition["operations"]) for instance in instances
+        }
         desired: dict[str, GrantFacts] = {}
         for alias, record in records.items():
             if alias not in catalog:
                 continue
-            facts = stored_facts(list(record.members), list(record.content), record.axes)
+            members = [member for member in record.members if member in available[alias]]
+            facts = stored_facts(members, list(record.content), record.axes)
             if not facts.empty:
                 desired[alias] = facts
         return dict(sorted(desired.items()))

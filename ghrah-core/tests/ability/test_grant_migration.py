@@ -207,3 +207,42 @@ async def test_migration_refuses_display_name_before_writing(store, tmp_path):
             workspace_root=_workspace(tmp_path),
         )
     assert await store._row("ability_agents", "id=?", "coder") is None
+
+
+async def test_migration_does_not_revoke_other_agents_on_instance_change(
+    store: AbilityAccessStore, tmp_path: Path
+) -> None:
+    """迁移是给无事实 Agent 补初始授予的 bootstrap，不替全项目失效旧许可。
+
+    第二个 Agent 的迁移若触发实例根变化，旁观 Agent 的既有授予必须保留；
+    撤销它们会让无策略部署失去唯一重建源。
+    """
+    first = Path(_workspace(tmp_path))
+    other = tmp_path / "another"
+    other.mkdir()
+    agent_a = "a" * 32
+    agent_b = "b" * 32
+
+    await migrate_agent(
+        store,
+        agent_b,
+        grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
+        workspace_root=str(first),
+    )
+    changes = await store.changes(MIGRATE)
+    before_seq = changes[-1]["seq"] if changes else 0
+
+    await migrate_agent(
+        store,
+        agent_a,
+        grants=[MigrationGrant(package="ghrah.fs", members=("read_file",))],
+        workspace_root=str(other),
+    )
+
+    records_b = await store.grants(MIGRATE, agent_b)
+    assert [record.alias for record in records_b] == ["fs"]
+    assert records_b[0].roots == (str(first),)
+    new_changes = await store.changes(MIGRATE, after_seq=before_seq)
+    assert not any(
+        item["agent"] == agent_b and item["reason"] == "instance_changed" for item in new_changes
+    )

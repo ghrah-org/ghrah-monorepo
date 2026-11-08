@@ -176,6 +176,9 @@ async def migrate_agent(
                 members=set(entry.members),
                 workspace_root=workspace_root,
                 filesystem_roots=filesystem_roots,
+                # 迁移只给无事实的新 Agent 补初始授予，不是「替全项目失效旧许可」
+                # 的权威动作；跨 Agent 撤销只会伤及旁观者（无策略部署尤其如此）。
+                invalidate_grants=False,
             )
         except StartupGrantError as error:
             raise MigrationError(str(error)) from error

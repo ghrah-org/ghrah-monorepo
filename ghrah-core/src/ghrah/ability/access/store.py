@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -50,6 +51,8 @@ from ghrah.ability.versions import AbilityVersion
 
 if TYPE_CHECKING:
     from ghrah.ability.surface.catalog import SurfaceCatalog
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=5));
@@ -751,8 +754,27 @@ class AbilityAccessStore:
         root: Path | None = None,
         *,
         expected_revision: int = 0,
+        invalidate_grants: bool = True,
     ) -> int:
-        """显式切换实例版本；实际变化撤去旧获授关联，禁止旧许可自动扩大。"""
+        """切换实例版本；实际变化可撤去旧获授关联，禁止旧许可自动扩大。
+
+        Args:
+            actor: 操作员身份。
+            instance: 实例标识（同一项目内所有 Agent 共享）。
+            digest: 目标版本摘要。
+            root: 实例根；None 表示不写根。
+            expected_revision: CAS 期望修订。
+            invalidate_grants: 是否在版本/根变化时撤销该项目下该实例的既有
+                授予。默认 True（立即失效）。**无启动策略的存量模式必须传
+                False**：该模式唯一的重建源就是关系库里的授予，撤销它会让
+                其它 Agent 既无法继续使用、也无法在下次启动时重建。
+
+        Returns:
+            实例修订号。
+
+        Raises:
+            AccessError: 调用方不是操作员、版本不存在或 CAS 冲突。
+        """
         self._require_operator(actor)
         TypeAdapter(TreeId).validate_python(instance)
         resolved = str(root.resolve()) if root is not None else ""
@@ -772,15 +794,27 @@ class AbilityAccessStore:
                 "INSERT OR REPLACE INTO ability_instances VALUES(?,?,?,?,?)",
                 (self.project_id, instance, digest, resolved, revision),
             )
-            async with self._db.execute(
-                "SELECT agent,alias FROM ability_grants WHERE project=? AND instance=?",
-                (self.project_id, instance),
-            ) as cursor:
-                affected = await cursor.fetchall()
-            for grant in affected:
-                row = await self._row("ability_agents", "id=?", grant["agent"])
-                await self._bump(actor, grant["agent"], row["revision"], "instance_changed", digest)
-                await self._remove_grant(grant["agent"], grant["alias"])
+            if invalidate_grants:
+                async with self._db.execute(
+                    "SELECT agent,alias FROM ability_grants WHERE project=? AND instance=?",
+                    (self.project_id, instance),
+                ) as cursor:
+                    affected = await cursor.fetchall()
+                for grant in affected:
+                    row = await self._row("ability_agents", "id=?", grant["agent"])
+                    await self._bump(
+                        actor, grant["agent"], row["revision"], "instance_changed", digest
+                    )
+                    await self._remove_grant(grant["agent"], grant["alias"])
+                if affected:
+                    logger.warning(
+                        "实例 %s 切换版本（%s）后撤销了 %d 个 Agent 的授予：%s；"
+                        "这些 Agent 需重新物化才能恢复工具",
+                        instance,
+                        digest,
+                        len(affected),
+                        sorted({grant["agent"] for grant in affected}),
+                    )
             return revision
 
     async def instance(self, instance: str) -> dict[str, Any]:

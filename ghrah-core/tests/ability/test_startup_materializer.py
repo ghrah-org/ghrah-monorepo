@@ -21,10 +21,13 @@ from ghrah.protocol.ability_tree import (
 from ghrah.ability.access import (
     AbilityAccessStore,
     AccessIdentity,
+    GrantInstance,
     GrantPolicy,
     GrantRule,
+    MigrationGrant,
     StartupGrantError,
     StartupGrantMaterializer,
+    migrate_agent,
 )
 from ghrah.ability.assembly import AbilityAssembly
 from ghrah.ability.surface.naming import META_TOOL_NAMES
@@ -955,3 +958,162 @@ async def test_shell_grants_use_filesystem_roots_without_workspace_root(store, t
     record = next(record for record in await store.grants(DEPLOY, agent) if record.alias == "shell")
     assert set(record.roots) == {str(repo)}
     assert (await store.instance(record.instance_id))["root"] == str(repo)
+
+
+def _shell_manifest():
+    """只申请 conversation + shell 的最小 Agent 声明。"""
+    return _resolved(
+        AGENT_YAML[: AGENT_YAML.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: ghrah.shell.execute_command\n"
+    )
+
+
+async def test_no_policy_instance_root_change_keeps_other_agents_facts(store, tmp_path):
+    """无策略存量模式：实例根变化不撤销其它 Agent 的事实，各自由下次物化重建。
+
+    无策略模式唯一的重建源就是关系库里的既有授予，而登记（可能触发实例切换
+    撤销）发生在读取存量事实之前；撤销会让其它 Agent 既无法继续使用、也无从
+    重建。这里锁定「惰性失效 + 各自重建」的语义。
+    """
+    agent_a = "a" * 32
+    agent_b = "b" * 32
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    repo.mkdir()
+    old_roots = (str(workspace),)
+    new_roots = (str(workspace), str(repo))
+    assembly, resolved = _shell_manifest()
+
+    for agent in (agent_a, agent_b):
+        await migrate_agent(
+            store,
+            agent,
+            grants=[MigrationGrant(package="ghrah.shell", members=("execute_command",))],
+            workspace_root=str(workspace),
+            filesystem_roots=old_roots,
+        )
+        await _materializer(
+            store, assembly, workspace, policy=None, filesystem_roots=old_roots
+        ).materialize(agent=agent, resolved=resolved)
+
+    changes = await store.changes(DEPLOY)
+    before_seq = changes[-1]["seq"] if changes else 0
+
+    # 实例根变化：workspace → commonpath(workspace, repo)
+    table_a = await _materializer(
+        store, assembly, workspace, policy=None, filesystem_roots=new_roots
+    ).materialize(agent=agent_a, resolved=resolved)
+    assert any(item.name == "execute_command" for item in table_a.abilities)
+
+    new_changes = await store.changes(DEPLOY, after_seq=before_seq)
+    assert not any(
+        item["agent"] == agent_b and item["reason"] == "instance_changed" for item in new_changes
+    )
+    record_b = next(
+        record for record in await store.grants(DEPLOY, agent_b) if record.alias == "shell"
+    )
+    assert set(record_b.roots) == set(old_roots)
+    assert "execute_command" in await store.tool_names(DEPLOY, agent_b)
+
+    # 另一个 Agent 下次物化时从保留事实重建，并按新实例根重写授予根
+    table_b = await _materializer(
+        store, assembly, workspace, policy=None, filesystem_roots=new_roots
+    ).materialize(agent=agent_b, resolved=resolved)
+    assert any(item.name == "execute_command" for item in table_b.abilities)
+    record_b = next(
+        record for record in await store.grants(DEPLOY, agent_b) if record.alias == "shell"
+    )
+    assert set(record_b.roots) == set(new_roots)
+
+
+async def test_no_policy_single_package_spawn_survives_instance_change(store, tmp_path):
+    """无策略 + 唯一能力包：实例根变化后再次物化不再启动失败（C1 形状）。"""
+    agent = "c" * 32
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    repo.mkdir()
+    assembly, resolved = _shell_manifest()
+
+    await migrate_agent(
+        store,
+        agent,
+        grants=[MigrationGrant(package="ghrah.shell", members=("execute_command",))],
+        workspace_root=str(workspace),
+        filesystem_roots=(str(workspace),),
+    )
+    await _materializer(
+        store, assembly, workspace, policy=None, filesystem_roots=(str(workspace),)
+    ).materialize(agent=agent, resolved=resolved)
+
+    table = await _materializer(
+        store, assembly, workspace, policy=None, filesystem_roots=(str(workspace), str(repo))
+    ).materialize(agent=agent, resolved=resolved)
+    assert any(item.name == "execute_command" for item in table.abilities)
+
+
+async def test_policy_mode_instance_change_still_revokes_and_rebuilds(store, tmp_path):
+    """有策略模式保持「跨 Agent 撤销 + 各自按模板重建」的原有语义。"""
+    agent_a = "a" * 32
+    agent_b = "b" * 32
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    repo.mkdir()
+    old_roots = (str(workspace),)
+    new_roots = (str(workspace), str(repo))
+    assembly, resolved = _shell_manifest()
+
+    for agent in (agent_a, agent_b):
+        await _materializer(store, assembly, workspace, filesystem_roots=old_roots).materialize(
+            agent=agent, resolved=resolved
+        )
+
+    changes = await store.changes(DEPLOY)
+    before_seq = changes[-1]["seq"] if changes else 0
+
+    await _materializer(store, assembly, workspace, filesystem_roots=new_roots).materialize(
+        agent=agent_a, resolved=resolved
+    )
+
+    new_changes = await store.changes(DEPLOY, after_seq=before_seq)
+    revoked_agents = {item["agent"] for item in new_changes if item["reason"] == "instance_changed"}
+    assert {agent_a, agent_b} <= revoked_agents
+    assert not any(record.alias == "shell" for record in await store.grants(DEPLOY, agent_b))
+
+    table_b = await _materializer(
+        store, assembly, workspace, filesystem_roots=new_roots
+    ).materialize(agent=agent_b, resolved=resolved)
+    assert any(item.name == "execute_command" for item in table_b.abilities)
+    record_b = next(
+        record for record in await store.grants(DEPLOY, agent_b) if record.alias == "shell"
+    )
+    assert set(record_b.roots) == set(new_roots)
+
+
+async def test_no_policy_rebuild_filters_members_removed_in_new_version(store, tmp_path):
+    """新版本删除成员时，存量事实按新定义过滤，不把不存在的成员写回关系库。"""
+    agent = "d" * 32
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assembly, resolved = _shell_manifest()
+    await migrate_agent(
+        store,
+        agent,
+        grants=[MigrationGrant(package="ghrah.shell", members=("execute_command",))],
+        workspace_root=str(workspace),
+        filesystem_roots=(str(workspace),),
+    )
+    materializer = _materializer(store, assembly, workspace, policy=None)
+    # 构造「新版本已删除该成员」的实例事实：operations 为空。
+    new_version = GrantInstance(
+        alias="shell",
+        package="ghrah.shell",
+        instance_id="ghrah-shell",
+        version_digest="sha256:new-version",
+        definition={"operations": {}},
+        allowed_roots=(str(workspace),),
+    )
+    desired = await materializer._existing_desired(agent, [new_version])
+    assert desired == {}
