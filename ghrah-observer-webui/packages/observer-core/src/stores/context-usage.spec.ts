@@ -110,9 +110,10 @@ describe("useContextUsageStore", () => {
     expect(display?.percent).toBeNull();
   });
 
-  it("treats the built-in default budget as a placeholder, not a real window", () => {
+  it("treats the built-in default budget as unknown, not as a real window", () => {
     // budget_source="default" 表示链路无任何真实窗口信息，budget 是
-    // DEFAULT_WINDOW_MAX_TOKENS 兜底值。据它画比例条会给出不存在的精度。
+    // DEFAULT_WINDOW_MAX_TOKENS 兜底值。据它画比例条会给出不存在的精度，
+    // 故落 cumulative（只报累计用量）。
     const store = useContextUsageStore();
     store.onContextUsageUpdated(
       payload({
@@ -124,7 +125,6 @@ describe("useContextUsageStore", () => {
     );
     const display = store.usageFor({ projectId: "p1", agentId: "a1" });
     expect(display?.mode).toBe("cumulative");
-    expect(display?.budgetPlaceholder).toBe(true);
     expect(display?.percent).toBeNull();
     expect(display?.budgetTokens).toBe(0);
   });
@@ -142,18 +142,17 @@ describe("useContextUsageStore", () => {
     );
     const display = store.usageFor({ projectId: "p1", agentId: "a1" });
     expect(display?.mode).toBe("ratio");
-    expect(display?.budgetPlaceholder).toBe(false);
     expect(display?.percent).toBe(25);
     expect(display?.budgetTokens).toBe(200_000);
   });
 
-  it("is not a placeholder when budget is zero and source is default", () => {
-    // 零预算本身已走 cumulative，占位标记只在「有值但不可信」时为真。
+  it("stays cumulative when budget is zero regardless of source", () => {
+    // 零预算本身已走 cumulative。
     const store = useContextUsageStore();
     store.onContextUsageUpdated(payload({ budget_tokens: 0, budget_source: "default" }), 1);
     const display = store.usageFor({ projectId: "p1", agentId: "a1" });
     expect(display?.mode).toBe("cumulative");
-    expect(display?.budgetPlaceholder).toBe(false);
+    expect(display?.percent).toBeNull();
   });
 
   it("rejects payloads without project-scoped identity", () => {

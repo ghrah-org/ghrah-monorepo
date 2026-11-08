@@ -1363,6 +1363,20 @@ class ContextManager:
         这与 rebase 的默认语义（不继承 system_prompt）不同。
         为保持向后兼容，当 system_prompt=None 时使用父 Agent 的 system_prompt。
 
+        **预算载体不随 fork 继承（显式约定的不对称）**：AgentBuilder 恒建
+        WindowManager（预算落定与观测的载体），但 fork 默认 **不** 继承父
+        Agent 的实例。原因有二——其一，窗口管理器的摘要策略内部状态与压缩
+        排水记录不可跨 Agent 共享（见下 window_manager 参数说明）；其二，
+        无显式声明时父侧本来就是零策略观测实例，继承它并不会给子 Agent
+        带来预算，反而会掩盖「子 Agent 未配预算」这一事实。
+
+        代价是：fork 出的子 Agent 其 ``get_window_status()`` 返回
+        ``budget_tokens=0``、``budget_source=None``，且不发布 ``pre_call``
+        相位（``_action`` 的门控按载体存在性判定）。若子 Agent 需要预算
+        观测，**必须**由调用方显式构造独立 ``WindowManager`` 并传入。
+        这一行为由 ``test_fork_default_no_window_manager`` 与
+        ``test_fork_propagated_threshold_without_wm_not_armed`` 锁定。
+
         Args:
             agent_name: 子 Agent 名称
             system_prompt: 覆盖 system_prompt（可选，None 继承父 Agent 的）

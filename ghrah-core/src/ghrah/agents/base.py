@@ -1302,7 +1302,9 @@ class ActorAgent:
     async def _publish_context_usage(self, phase: str, real_usage: Any | None = None) -> None:
         """发布上下文占用状态事件（fire-and-forget，失败不阻断主循环）。
 
-        pre_call：占用锚点口径（可能为 None），仅配置 window 的 agent 发布；
+        pre_call：占用锚点口径（可能为 None）。发布条件是「持有预算载体」，
+        而 AgentBuilder 恒建 WindowManager，故全体 Agent 均发布；锚点缺失
+        （首次调用/head 变更后）即 occupied_tokens=None，属诚实口径。
         post_call：真实 usage 唯一权威口径（occupied_tokens = 本次真实
         input_tokens），所有 agent 发布。
 
