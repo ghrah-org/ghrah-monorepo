@@ -364,14 +364,14 @@ async def register_package_instance(
         actor: 操作员身份（启动核定用 deployment，迁移用 migration）。
         catalog: ``load_ability_definitions()`` 的目录面。
         package: 包身份全名（``ghrah.fs``）。
-        members: 本次需要的成员键集合，用于校验文件类成员需要工作区。
-        workspace_root: 工作区根；文件类成员必须显式给出。
+        members: 本次需要的成员键集合，用于校验路径资源成员需要授予根。
+        workspace_root: 工作区根；未配置 ``filesystem_roots`` 时作为授予根。
 
     Returns:
         已登记实例与版本。
 
     Raises:
-        StartupGrantError: 包未找到、内置树不可读、文件类成员缺工作区。
+        StartupGrantError: 包未找到、内置树不可读、路径资源成员缺授予根。
     """
     entry = next(
         ((key, item) for key, item in catalog.items() if item.identity.full_name == package),
@@ -391,20 +391,21 @@ async def register_package_instance(
             (package_root / "ability.yaml").read_text(encoding="utf-8"), root=package_root
         )
     definition = version.definition().model_dump(mode="json")
-    file_members = sorted(member for member in members if file_member_paths(definition, member))
+    path_members = sorted(member for member in members if file_member_paths(definition, member))
     roots = tuple(sorted({str(Path(p).resolve()) for p in filesystem_roots}))
     if any(not Path(p).is_absolute() for p in filesystem_roots):
         raise StartupGrantError("文件沙盒根必须是绝对路径")
-    has_file_members = any(file_member_paths(definition, key) for key in definition["operations"])
-    if not roots or not has_file_members:
+    has_path_members = any(file_member_paths(definition, key) for key in definition["operations"])
+    if not roots or not has_path_members:
         roots = (str(Path(workspace_root).resolve()),) if workspace_root else ()
     try:
         instance_root = Path(commonpath(roots)) if roots else None
     except ValueError as error:
         raise StartupGrantError("文件沙盒根必须位于同一文件系统盘符") from error
-    if not workspace_root and file_members:
+    if not roots and path_members:
         raise StartupGrantError(
-            f"包 {package} 的文件类成员需要显式 workspace_root 才能授予：{file_members}"
+            f"包 {package} 的路径资源成员需要显式 workspace_root 或 filesystem_roots "
+            f"才能授予：{path_members}"
         )
     await store.commit_version(actor, version)
     instance_id = _instance_id(package)

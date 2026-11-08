@@ -887,3 +887,71 @@ async def test_project_shell_cwd_is_checked_against_the_tool_grant(store, tmp_pa
     allowed = await executor.execute_ability(tool, call, services)
     assert allowed.outcome.value == "success"
     assert allowed.data["working_dir"] == str(workspace)
+
+
+async def test_project_shell_cwd_inside_filesystem_roots_is_admitted(store, tmp_path):
+    """项目 shell 目录落在部署文件根内时，shell 授予根必须覆盖它（事故回归）。
+
+    多根形状是生产实际配置（工作区 + 项目仓库）；shell 的 ``working_dir`` 若
+    未登记为路径资源，授予根会退化成只有工作区根，注入的项目目录必然越界。
+    """
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
+
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    for path in (workspace, repo, outside):
+        path.mkdir()
+    roots = (str(workspace), str(repo))
+    cwd = repo
+
+    async def project_cwd() -> str:
+        return str(cwd)
+
+    assembly, resolved = _resolved(
+        AGENT_YAML[: AGENT_YAML.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: ghrah.shell.execute_command\n"
+    )
+    materializer = _materializer(
+        store,
+        assembly,
+        workspace,
+        filesystem_roots=roots,
+        shell_cwd_provider=project_cwd,
+    )
+    table = await materializer.materialize(agent=agent, resolved=resolved)
+    tool = next(t for t in table.abilities if t.name == "execute_command")
+    executor = LocalAbilityExecutor("shell", hooks=tool.get_hooks())
+    call = make_call(member="execute_command", arguments={"command": "echo test"})
+    services = make_services()
+
+    record = next(record for record in await store.grants(DEPLOY, agent) if record.alias == "shell")
+    assert set(record.roots) == set(roots)
+    assert (await store.instance(record.instance_id))["root"] == str(tmp_path)
+
+    allowed = await executor.execute_ability(tool, call, services)
+    assert allowed.outcome.value == "success", allowed.data
+    assert allowed.data["working_dir"] == str(repo)
+
+    cwd = outside
+    denied = await executor.execute_ability(tool, call, services)
+    assert denied.outcome.value == "failure"
+    assert "denied" in denied.data["error"].lower()
+
+
+async def test_shell_grants_use_filesystem_roots_without_workspace_root(store, tmp_path):
+    """只配置 filesystem_roots 时，路径资源成员按显式文件根授予而不是启动失败。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assembly, resolved = _resolved(
+        AGENT_YAML[: AGENT_YAML.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: ghrah.shell.execute_command\n"
+    )
+    materializer = _materializer(store, assembly, None, filesystem_roots=(str(repo),))
+    table = await materializer.materialize(agent=agent, resolved=resolved)
+    assert any(t.name == "execute_command" for t in table.abilities)
+    record = next(record for record in await store.grants(DEPLOY, agent) if record.alias == "shell")
+    assert set(record.roots) == {str(repo)}
+    assert (await store.instance(record.instance_id))["root"] == str(repo)

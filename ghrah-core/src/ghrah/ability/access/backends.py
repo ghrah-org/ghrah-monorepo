@@ -47,7 +47,8 @@ class BackendAdmission:
     Attributes:
         contract: 提供者槽契约（如 ``ghrah.fs.v1``）。
         path_arguments: 该成员声明为路径资源的参数名（供装配期判断是否需要
-            工作区并登记授予根）；命令/集群/MCP 成员为空。
+            授予根及其范围）；shell 的 ``working_dir`` 属路径资源，
+            集群/MCP 成员为空。
         check: 接纳函数；参数不合法时抛 :class:`AccessError`。
     """
 
@@ -230,7 +231,7 @@ def _register(contract: str, member: str, paths: tuple[str, ...], check: Admissi
 
 for _member, _args in _FS_PATH_ARGUMENTS.items():
     _register(FS_CONTRACT, _member, _args, _fs_check)
-_register(SHELL_CONTRACT, "execute_command", (), _shell_check)
+_register(SHELL_CONTRACT, "execute_command", ("working_dir",), _shell_check)
 for _member in (*_CLUSTER_REQUIRED, *_CLUSTER_OPTIONAL):
     _register(CLUSTER_CONTRACT, _member, (), _cluster_check)
 _register(MCP_CONTRACT, "mcp_call", (), _mcp_check)
@@ -314,8 +315,17 @@ def admission_for(definition: Mapping[str, Any], member: str) -> BackendAdmissio
 
 
 def file_member_paths(definition: Mapping[str, Any], member: str) -> tuple[str, ...]:
-    """成员是否为文件类资源；是则返回路径参数名，否则空元组。"""
+    """成员是否声明了路径资源；是则返回参数名，否则空元组。
+
+    文件成员（``file_path`` 等）与 shell 成员（``working_dir``）都算路径资源；
+    装配期据此决定授予根：有路径资源的包必须按部署声明的文件根登记，不能
+    退化成只取工作区根。
+    """
     admission = admission_for(definition, member)
-    if admission is None or admission.contract not in {FS_CONTRACT, PYTHON_CONTRACT}:
+    if admission is None or admission.contract not in {
+        FS_CONTRACT,
+        PYTHON_CONTRACT,
+        SHELL_CONTRACT,
+    }:
         return ()
     return admission.path_arguments

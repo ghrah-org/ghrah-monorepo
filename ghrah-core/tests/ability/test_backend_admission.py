@@ -38,6 +38,45 @@ def test_fs_member_paths_come_from_contract(tmp_path: Path) -> None:
     assert file_member_paths(definition, "execute_command") == ()
 
 
+def test_shell_working_dir_is_registered_as_path_resource(tmp_path: Path) -> None:
+    """shell 的 ``working_dir`` 是路径资源，与文件成员一样决定授予根范围。
+
+    漏登记会让 shell 包的 roots 退化成只有工作区根，项目 shell 目录因此被拒；
+    这里把登记表本身锁住。
+    """
+    definition = _definition("shell")
+    assert file_member_paths(definition, "execute_command") == ("working_dir",)
+    admission = admission_for(definition, "execute_command")
+    assert admission is not None
+    assert admission.path_arguments == ("working_dir",)
+
+
+def test_shell_working_dir_accepts_any_granted_root(tmp_path: Path) -> None:
+    """工作目录落在任一个授予根内都接纳；公共父目录内但根外仍拒绝。"""
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    workspace.mkdir()
+    repo.mkdir()
+    roots = (str(workspace), str(repo))
+    instance_root = str(tmp_path)
+    _admit(
+        "shell",
+        "execute_command",
+        {"command": "pwd", "working_dir": str(repo)},
+        roots,
+        instance_root,
+    )
+    with pytest.raises(AccessError) as denied:
+        _admit(
+            "shell",
+            "execute_command",
+            {"command": "pwd", "working_dir": str(tmp_path / "private")},
+            roots,
+            instance_root,
+        )
+    assert denied.value.code == "access_denied"
+
+
 def test_unknown_contract_is_not_admitted(tmp_path: Path) -> None:
     """契约不匹配或未登记时返回 None，调用方按不可用拒绝。
 
