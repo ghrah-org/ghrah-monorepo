@@ -243,7 +243,14 @@ describe("AgentsOverviewPanel", () => {
           name: "Coder",
           runtime_state: "running",
           // 运营者显式声明了窗口
-          config: { name: "Coder", agent_id: "a1", window: { max_tokens: 8192 } },
+          config: {
+            name: "Coder",
+            agent_id: "a1",
+            description: "",
+            system_prompt: "",
+            max_iterations: 10,
+            window: { max_tokens: 8192 },
+          },
         },
         {
           project_id: "p1",
@@ -251,7 +258,13 @@ describe("AgentsOverviewPanel", () => {
           name: "Reviewer",
           runtime_state: "stopped",
           // 未声明窗口
-          config: { name: "Reviewer", agent_id: "a2" },
+          config: {
+            name: "Reviewer",
+            agent_id: "a2",
+            description: "",
+            system_prompt: "",
+            max_iterations: 10,
+          },
         },
       ],
       { status: "active", archived_at: null },
