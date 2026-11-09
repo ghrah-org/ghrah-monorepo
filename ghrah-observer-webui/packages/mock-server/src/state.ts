@@ -733,10 +733,7 @@ export class MockState {
    * 之所以不重发 ``ROOM_LOG_APPENDED``：前端 ``onRoomLogAppended`` 按 entry.id 去重，
    * 同 id 重发会被静默丢弃，达不到刷新目的。
    */
-  private _startDeliverySimulation(
-    room: RoomInfoPayload,
-    entry: RoomLogEntryPayload,
-  ): void {
+  private _startDeliverySimulation(room: RoomInfoPayload, entry: RoomLogEntryPayload): void {
     if (!this._simulateDeliveries) return;
     const declared = entry.data?.targets;
     const recipients =
