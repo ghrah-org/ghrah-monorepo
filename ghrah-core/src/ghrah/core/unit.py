@@ -916,6 +916,19 @@ class CoreUnit:
         from ghrah.ability.access.identity import validate_agent_id
 
         validate_agent_id(sp.config.agent_id)
+        # window/context 是 manifest context 段的语义。本命令用 resolver 从
+        # manifest 构建配置，wire 侧这两个字段历来不参与装配——此前静默丢弃，
+        # 调用方传了会以为生效（context.window 尤其危险：它决定预算载体能否
+        # 落定，传了不生效正是「配置链在源头断开」的成因之一）。改为 fail-closed
+        # 显式拒绝，与 direct-abilities spawn 同一姿态：不再静默吞掉。
+        # 注意 endpoint_name/model_overrides/system_prompt 不在此列——生产路径
+        # （subject project manager）确实会传，且 manifest 是它们唯一的权威来源，
+        # 拒绝会打断恢复；它们的「传了不生效」由 manifest 权威语义解释。
+        if sp.config.window is not None or sp.config.context is not None:
+            raise ValueError(
+                "wire_context_unsupported: spawn_agent builds config from manifest_ref; "
+                "declare context.window / context.persistence in the Agent manifest"
+            )
         config = AgentConfig(name=sp.config.name, agent_id=sp.config.agent_id)
         supervisor = self._require_supervisor()
         try:

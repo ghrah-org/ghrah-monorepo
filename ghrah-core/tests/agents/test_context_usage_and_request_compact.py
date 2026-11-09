@@ -5,8 +5,10 @@
 """上下文占用事件与手动 compact 命令入口测试。
 
 覆盖：
-- pre_call/post_call 双相位事件（有 window agent 双发、无 window agent
-  仅 post_call；post_call 真实值口径、pre_call 锚点口径可 None）
+- pre_call/post_call 双相位事件（WindowManager 恒建后全体 Agent 双发；
+  post_call 真实值口径、pre_call 锚点口径可 None）
+- 预算载体恒在：未声明 window 的 Agent 亦持有预算（default 1M 或 agentconf
+  解析值），但零策略，消息管道不被改写
 - 事件字段组装（budget/threshold/compaction/iteration）
 - 发布失败不阻断主循环
 - request_compact() 双态：驱动中置标志回 scheduled（连续请求合并）、
@@ -162,15 +164,20 @@ class TestContextUsageEvents:
         await agent._action({})
 
         events = _usage_events(publisher)
-        assert len(events) == 1
-        post = events[0]
+        assert [e.phase for e in events] == ["pre_call", "post_call"]
+        post = events[1]
         assert post.real_input_tokens == 2400
         assert post.real_cache_read_tokens == 2000
         assert post.real_cache_write_tokens == 300
 
     @pytest.mark.asyncio
-    async def test_plain_agent_publishes_only_post_call(self) -> None:
-        """无 window 配置的 agent：仅发布 post_call（真实值）。"""
+    async def test_plain_agent_publishes_both_phases_with_default_budget(self) -> None:
+        """无 window 声明的 agent：双相位照发，预算落定为内置默认值。
+
+        WindowManager 恒建后，未声明窗口的 Agent 也持有预算载体：
+        budget 为 DEFAULT_WINDOW_MAX_TOKENS（1M）、source="default"。
+        但零策略且 threshold 未配置，故不压缩、无决策记录。
+        """
         agent = _create_agent(_plain_config())
         agent._llm = _llm_with_usage(input_tokens=300)
         publisher = MagicMock()
@@ -180,14 +187,18 @@ class TestContextUsageEvents:
         await agent._action({})
 
         events = _usage_events(publisher)
-        assert len(events) == 1
-        post = events[0]
+        assert [e.phase for e in events] == ["pre_call", "post_call"]
+        pre, post = events
+        assert pre.basis == "anchor"
+        assert pre.compact_threshold is None  # 未声明 compact_threshold
         assert post.phase == "post_call"
         assert post.basis == "real"
         assert post.occupied_tokens == 300
-        assert post.budget_tokens == 0
+        # 预算载体存在 → 不再是 0；来源为内置默认（无 agentconf 能力信息）
+        assert post.budget_tokens == 1_000_000
+        assert post.budget_source == "default"
         assert post.compact_threshold is None
-        assert post.compaction is None  # 未配置窗口无决策记录
+        assert post.compaction is None  # 未配置阈值无决策记录
 
     @pytest.mark.asyncio
     async def test_pre_call_uses_existing_anchor(self) -> None:
@@ -250,8 +261,8 @@ class TestContextUsageEvents:
         await agent._action({})
 
         events = _usage_events(publisher)
-        assert len(events) == 1
-        post = events[0]
+        assert [e.phase for e in events] == ["pre_call", "post_call"]
+        post = events[1]
         assert post.occupied_tokens is None
         assert post.real_input_tokens is None
 

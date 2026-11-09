@@ -498,8 +498,10 @@ export default {
     usageSource: "预算来源：{source}",
     usageCumulative: "已消耗 {tokens} tokens",
     usageNoWindow: "未配置窗口",
+    usageWindowUnresolved: "窗口预算未落定",
     budgetSource: {
       declared: "声明",
+      agentconf: "配置层",
       model_table: "模型表",
       default: "默认",
       vendor: "厂商回填",

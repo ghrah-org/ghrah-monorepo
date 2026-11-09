@@ -392,6 +392,54 @@ class TestBuiltinMode:
         assert receipt["success"] is False
         assert "default ability set" in receipt["error"]
 
+    async def test_wire_window_and_context_are_refused(self) -> None:
+        """wire 侧 window/context 不再静默丢弃，改为显式拒绝。
+
+        这两个字段是 manifest context 段的语义。spawn_agent 用 resolver 从
+        manifest 构建配置，wire 侧历来不参与装配——静默丢弃会让调用方以为
+        生效（context.window 尤其危险：它决定预算载体能否落定）。
+        """
+        unit = create_core_unit(CoreUnitConfig(project_id="default", ability_source="builtin"))
+
+        for field, value in (
+            ("window", {"max_tokens": 8192}),
+            ("context", {"persistence_type": "memory"}),
+        ):
+            receipt = await _spawn(
+                unit,
+                {
+                    "project_id": "default",
+                    "config": {"name": f"wire-{field}", field: value},
+                    "manifest_ref": "w0.consumer",
+                },
+            )
+
+            assert receipt["success"] is False, field
+            assert "wire_context_unsupported" in receipt["error"], field
+            assert "manifest" in receipt["error"], field
+
+    async def test_wire_null_window_and_context_are_accepted(self, tmp_path: Path) -> None:
+        """显式传 null 等同未传：不得因「字段存在」而误拒。"""
+        store = _consumer_store()
+        unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)
+        try:
+            receipt = await _spawn(
+                unit,
+                {
+                    "project_id": "default",
+                    "config": {
+                        "name": "null-ctx",
+                        "window": None,
+                        "context": None,
+                    },
+                    "manifest_ref": "w0.consumer",
+                },
+            )
+
+            assert receipt["success"], receipt.get("error")
+        finally:
+            await ability_store.close()
+
     async def test_register_and_unregister_are_refused(self, tmp_path: Path) -> None:
         store = _consumer_store()
         unit, ability_store = await _authorized_builtin_unit(tmp_path, manifest_store=store)

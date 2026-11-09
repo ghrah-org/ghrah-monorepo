@@ -294,6 +294,8 @@ class WindowManager:
 
         预算短路：先估算总 token，未超预算时跳过 skip_when_under_budget=True
         的策略，其余策略照常执行。
+        零策略时直接返回浅拷贝，不做 token 估算——预算载体恒建后每个 Agent
+        每轮都会经过此路径，为「只观测预算」的 Agent 付全量估算代价不值得。
 
         Args:
             messages: 输入消息列表
@@ -302,6 +304,10 @@ class WindowManager:
         Returns:
             压缩后的消息列表
         """
+        if not self._strategies:
+            # 仅承载预算落定与观测的管理器：不改写消息，也不付估算开销。
+            return list(messages)
+
         budget = max_tokens if max_tokens is not None else self._max_tokens
 
         if self._estimator.estimate_messages(messages) <= budget:

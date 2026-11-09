@@ -264,5 +264,18 @@ export const demoScenario: Scenario = {
         }
       },
     ],
+    // ── 回复退场与统计回执：frontend 的正式回复同时广播 agent_response ──
+    // 供活动行验证「回复落账即退场」与「留下 N 步 · Xs 回执」两件事。
+    [
+      15000,
+      ({ state }) => {
+        state.emitAgentResponse(
+          AGENT_IDS.frontend,
+          roomId(state, "frontend"),
+          "联调完成：活动行退场后应留下「N 步 · Xs」回执。",
+          3,
+        );
+      },
+    ],
   ],
 };

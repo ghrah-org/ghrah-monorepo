@@ -77,6 +77,27 @@ export interface MockStateOptions {
   chainIntervalMs?: number;
   /** 是否模拟 agent 认知轨迹（周期性 ACTION_CHAIN_UPDATED）。默认 false。 */
   simulateChains?: boolean;
+  /** 是否模拟消息投递状态推进（pending → processing → completed）。默认 false。 */
+  simulateDeliveries?: boolean;
+  /** 投递状态每拍推进间隔（ms）。默认 1200。 */
+  deliveryIntervalMs?: number;
+}
+
+/**
+ * 单条消息对一个 agent 的投递记录。
+ *
+ * 形状严格对齐 Core 侧 ``get_room_log`` 的读通口径
+ * （``ghrah-subject`` 的 room manager 在注入 ``data.deliveries`` 时逐字段给出
+ * delivery_id / recipient_id / state / error / blocked_reason）。
+ */
+export interface MockDeliveryRecord {
+  delivery_id: string;
+  /** 接收方 agent 的稳定 ID（room 成员的 subject 已归一为 agentId）。 */
+  recipient_id: string;
+  /** pending | processing | completed；blocked 由 blocked_reason 派生，不在此写。 */
+  state: string;
+  error: string | null;
+  blocked_reason: string | null;
 }
 
 interface AgentRecord {
@@ -148,8 +169,13 @@ export class MockState {
   private readonly _hitlTimeoutMs: number;
   private readonly _chainIntervalMs: number;
   private readonly _simulateChains: boolean;
+  private readonly _deliveryIntervalMs: number;
+  private readonly _simulateDeliveries: boolean;
   private readonly _chainTimers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly _chainIterations = new Map<string, number>();
+  /** room log entry.id → 该条消息对各 agent 的投递记录（读通时注入 data.deliveries）。 */
+  private readonly _deliveries = new Map<string, MockDeliveryRecord[]>();
+  private readonly _deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // 累计用量模拟（成本口径）：post_call 模拟时累加，链模拟停止后保留供 get_agent_info 恢复
   private readonly _cumulativeUsage = new Map<
     string,
@@ -161,12 +187,16 @@ export class MockState {
     this._hitlTimeoutMs = options.hitlTimeoutMs ?? 30_000;
     this._chainIntervalMs = options.chainIntervalMs ?? 2_000;
     this._simulateChains = options.simulateChains ?? false;
+    this._deliveryIntervalMs = options.deliveryIntervalMs ?? 1_200;
+    this._simulateDeliveries = options.simulateDeliveries ?? false;
   }
 
-  /** 清理所有定时器（chain 模拟 + HITL 超时）。 */
+  /** 清理所有定时器（chain 模拟 + 投递推进 + HITL 超时）。 */
   dispose(): void {
     for (const timer of this._chainTimers.values()) clearInterval(timer);
     this._chainTimers.clear();
+    for (const timer of this._deliveryTimers.values()) clearTimeout(timer);
+    this._deliveryTimers.clear();
     for (const timer of this._hitlTimers.values()) clearTimeout(timer);
     this._hitlTimers.clear();
   }
@@ -621,7 +651,20 @@ export class MockState {
     if (p.since_seq != null) entries = entries.filter((e) => e.seq > p.since_seq!);
     const limit = p.limit ?? 100;
     entries = entries.slice(-limit);
-    return ok({ room_id: p.room_id, entries, count: entries.length });
+    // 读通注入投递态：与真实 Core 一致，deliveries 只在 room_get_log 的返回里出现，
+    // 不经 ROOM_LOG_APPENDED 事件下发。
+    const projected = entries.map((entry) => {
+      const records = this._deliveries.get(entry.id);
+      if (!records) return entry;
+      return {
+        ...entry,
+        data: {
+          ...entry.data,
+          deliveries: records.map((record) => ({ ...record })),
+        },
+      };
+    });
+    return ok({ room_id: p.room_id, entries: projected, count: projected.length });
   }
 
   /** room_send：room 内 seq 单点分配 + 追加 RoomLog + 广播 ROOM_LOG_APPENDED；同步返回 {entry}。 */
@@ -677,7 +720,104 @@ export class MockState {
     };
     this.roomLogs.get(room.room_id)!.push(entry);
     this.emit(EventType.ROOM_LOG_APPENDED, { entry });
+    this._startDeliverySimulation(room, entry);
     return ok({ entry });
+  }
+
+  /**
+   * 为一条刚落账的 room 消息建投递记录并起推进定时器。
+   *
+   * 只在 ``simulateDeliveries`` 开启时动作（默认关闭，不扰动既有用例）。
+   * 记录**不经事件**下发：真实 Core 也只在 ``room_get_log`` 读通时注入
+   * ``data.deliveries``，前端靠轮询 ``room_get_log`` 取得推进结果。
+   * 之所以不重发 ``ROOM_LOG_APPENDED``：前端 ``onRoomLogAppended`` 按 entry.id 去重，
+   * 同 id 重发会被静默丢弃，达不到刷新目的。
+   */
+  private _startDeliverySimulation(
+    room: RoomInfoPayload,
+    entry: RoomLogEntryPayload,
+  ): void {
+    if (!this._simulateDeliveries) return;
+    const declared = entry.data?.targets;
+    const recipients =
+      Array.isArray(declared) && declared.length > 0
+        ? (declared as string[])
+        : room.members
+            .filter((member) => member.subject_type === "agent")
+            .map((member) => member.subject);
+    if (recipients.length === 0) return;
+    this._deliveries.set(
+      entry.id,
+      recipients.map((recipient) => ({
+        delivery_id: uuid(),
+        recipient_id: recipient,
+        state: "pending",
+        error: null,
+        blocked_reason: null,
+      })),
+    );
+    const advance = (next: string, delay: number) => {
+      const timer = setTimeout(() => {
+        const records = this._deliveries.get(entry.id);
+        if (!records) return;
+        for (const record of records) {
+          if (record.state === "pending" || record.state === "processing") {
+            record.state = next;
+          }
+        }
+        this._deliveryTimers.delete(`${entry.id}:${next}`);
+      }, delay);
+      this._deliveryTimers.set(`${entry.id}:${next}`, timer);
+    };
+    // 两拍推进：先 processing 表示已接手，再 completed 表示接收回调返回。
+    advance("processing", this._deliveryIntervalMs);
+    advance("completed", this._deliveryIntervalMs * 2);
+  }
+
+  /**
+   * 模拟一次 Agent 回复落账并广播 ``agent_response``。
+   *
+   * 供活动行退场与统计回执联调：先走 room_send 把回复写进 room log，
+   * 再发 agent_response（前端以它为「本轮结束」的兜底信号）。
+   *
+   * @param agentId 回复的 agent 稳定 ID（须已是该 room 的 agent 成员）
+   * @param roomId 目标 room
+   * @param content 回复正文
+   * @param iteration 本轮步数，写入 metadata 供回执读取
+   * @returns 落账结果；失败时 success=false 且不广播事件
+   */
+  emitAgentResponse(
+    agentId: string,
+    roomId: string,
+    content: string,
+    iteration = 1,
+  ): CommandOutcome {
+    const room = this.rooms.get(roomId);
+    if (!room) return fail(`room not found: ${roomId}`);
+    const agent = [...this.agents.values()].find(
+      (candidate) => candidate.agentId === agentId && candidate.projectId === room.project_id,
+    );
+    if (!agent) return fail(`agent not in room project: ${agentId}`);
+    const sent = this._roomSend({
+      room_id: roomId,
+      author: agentId,
+      author_type: "agent",
+      data: { message: content },
+    });
+    if (!sent.success) return sent;
+    this.emit(EventType.AGENT_RESPONSE, {
+      project_id: agent.projectId,
+      agent_id: agent.agentId,
+      cluster_id: agent.clusterId,
+      agent_name: agent.name,
+      sender: agent.name,
+      recipient: "room",
+      content,
+      content_blocks: null,
+      message_type: "result",
+      metadata: { iteration, room_id: roomId },
+    });
+    return ok({ entry: (sent.data as { entry?: RoomLogEntryPayload })?.entry });
   }
 
   private _activeRoomGuard(room: RoomInfoPayload): CommandOutcome | null {
