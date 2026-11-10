@@ -297,7 +297,7 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
     <div
       v-else
       ref="messageContainer"
-      class="flex-1 overflow-y-auto p-3 space-y-2"
+      class="chat-conversation flex-1 overflow-y-auto px-3 py-4 space-y-3"
       @scroll.passive="handleScroll"
     >
       <div
@@ -420,31 +420,26 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 }
 
 .chat-entry {
-  padding: 0.375rem 0.75rem;
-  border-radius: 0.5rem;
-  max-width: 85%;
+  font-size: var(--font-ui-body);
+  line-height: var(--leading-body);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  max-width: 95%;
   word-break: break-word;
 }
 
 .entry-human {
-  background: #d1fae5;
-  color: #065f46;
+  background: var(--color-chat-human);
+  color: var(--color-chat-human-text);
+  max-width: 90%;
   align-self: flex-end;
   margin-left: auto;
 }
-:root.dark .entry-human {
-  background: #064e3b;
-  color: #a7f3d0;
-}
 
 .entry-conversation {
-  background: #e8f0fe;
-  color: #1a3a5c;
+  background: var(--color-chat-agent);
+  color: var(--color-chat-agent-text);
   align-self: flex-start;
-}
-:root.dark .entry-conversation {
-  background: #1e3a5f;
-  color: #b8d4f0;
 }
 
 .entry-send {

@@ -30,12 +30,12 @@ function autosize() {
   const el = inputEl.value?.element;
   if (!el) return;
   el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
+  const style = getComputedStyle(el);
+  const borderHeight = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+  el.style.height = `${el.scrollHeight + borderHeight}px`;
 }
 
-watch(input, () => {
-  autosize();
-});
+watch(input, autosize, { flush: "post" });
 
 /** 键位接管：textarea 的 Enter 不再触发 form submit（HTML 规范仅单行输入隐式提交）。
  *  Enter（无 Shift、非 IME 组合期）→ 发送；Shift+Enter → 默认插入换行；
@@ -133,48 +133,38 @@ const placeholder = computed(() =>
 </script>
 
 <template>
-  <form
-    class="flex flex-col gap-2 p-2 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-    @submit.prevent="handleSubmit"
-  >
+  <form class="chat-composer flex flex-col gap-2 p-3" @submit.prevent="handleSubmit">
     <!-- room 成员多选 target chips（空选 = 广播） -->
     <div v-if="memberAgents.length > 0" class="flex flex-wrap gap-2">
       <button
         v-for="agent in memberAgents"
         :key="agent.id"
         type="button"
-        :class="[
-          'px-2 py-0.5 rounded-full text-xs border transition-colors',
-          selectedTargets.has(agent.id)
-            ? 'bg-blue-100 dark:bg-blue-900 border-blue-400 text-blue-900 dark:text-blue-100'
-            : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-blue-400',
-        ]"
+        :class="[selectedTargets.has(agent.id) ? 'chat-target-chip-active' : 'chat-target-chip']"
         @click="toggleTarget(agent.id)"
       >
         @{{ agent.name }}
       </button>
     </div>
 
-    <div class="relative flex gap-2">
+    <div class="relative flex items-center gap-3">
       <UiTextField
         ref="inputEl"
         v-model="input"
         multiline
+        variant="chat"
         rows="1"
         :disabled="props.disabled"
-        class="flex-1 dark:text-gray-100 dark:placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed resize-none overflow-y-auto max-h-40"
+        class="flex-1"
         :placeholder="placeholder"
         @keydown="onKeydown"
       />
       <!-- @-补全下拉 -->
-      <ul
-        v-if="mentionCandidates.length > 0"
-        class="absolute bottom-full mb-1 left-0 right-0 max-h-40 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded shadow-lg z-10"
-      >
+      <ul v-if="mentionCandidates.length > 0" class="chat-mention-list">
         <li
           v-for="agent in mentionCandidates"
           :key="agent.id"
-          class="px-3 py-1.5 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900 text-gray-700 dark:text-gray-200"
+          class="chat-mention-item"
           @mousedown.prevent="pickMention(agent.id)"
         >
           @{{ agent.name }}
@@ -185,6 +175,6 @@ const placeholder = computed(() =>
       </UiButton>
     </div>
 
-    <div class="text-xs text-gray-400 dark:text-gray-500">{{ t("chat.input.hint") }}</div>
+    <div class="chat-hint">{{ t("chat.input.hint") }}</div>
   </form>
 </template>
