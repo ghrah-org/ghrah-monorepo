@@ -4,6 +4,7 @@
 
 import asyncio
 import os
+import sys
 import time
 from types import SimpleNamespace
 
@@ -425,7 +426,9 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
             meta = {"op": "wait", "targets": [{"kind": kind, "reference": node.handle_id}]}
         else:
             writer = kernel.derived(session, obj, source, {"write"})
-            read_fd, write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            read_fd, write_fd = (
+                os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC) if sys.platform == "linux" else (-1, -1)
+            )
             kernel.streams.records[obj.object_id] = Stream(
                 obj.object_id,
                 "local-test",
@@ -434,8 +437,10 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
                 read_fd,
                 write_fd,
                 4096,
+                buffer=None if sys.platform == "linux" else bytearray(b"secret"),
             )
-            os.write(write_fd, b"secret")
+            if write_fd >= 0:
+                os.write(write_fd, b"secret")
             meta = {"op": "read", "handle": node.handle_id, "max_bytes": 16}
         entered, released = asyncio.Event(), asyncio.Event()
         replies = []
@@ -575,7 +580,8 @@ def test_expected_stop_with_active_stream_and_subscription_keeps_stopped_state()
             pending = asyncio.create_task(client.read(channel["handle_id"]))
             await until(lambda: io_waiting(host))
             status = await host.control.kill(host.services["tools"]["domain_id"])
-            assert status["state"] == "stopped" and status["reaped"] and status["exit_code"] == -15
+            assert status["state"] == "stopped" and status["reaped"]
+            assert status["exit_code"] == (1 if os.name == "nt" else -15)
             await denied(pending, "CHANNEL_CLOSED")
         assert_clean(host)
         assert all(domain["state"] == "stopped" for domain in host.final_report["domains"])

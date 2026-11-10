@@ -44,7 +44,7 @@ path = "ghrah-observer-webui/packages/observer-web"
 
 [distro.generic]
 components = ["ghrah-kernel", "ghrah-plugin", "ghrah-protocol", "ghrah-scheme", "ghrah-core", "ghrah-taskstore", "ghrah-subject", "web-protocol", "web-plugin-registry", "web-observer-core", "web-observer-web"]
-roots = ["subject/server"]
+roots = ["subject/host"]
 gate = "basic"
 
 [distro.generic.runtime]
@@ -54,10 +54,8 @@ node = ">=22.12"
 [distro.generic.instances.subject]
 component = "ghrah-subject"
 host = "process"
-# 本批先指既有入口 subject/server，catalog.host.command 因此是
-# ["ghrah-subject-server"]，`ghrah distro start` 全程可用。切到新入口
-# subject/host 属 P1-8b；在此之后由 catalog 决定入口，不再回读本文件。
-host_entry = "subject/server"
+# 宿主入口由此声明并写入代内 catalog，运行时只读取代内产物。
+host_entry = "subject/host"
 
 # 系统声明：catalog 的 host/kernel/services 三段都由这里选出。
 # 想产出 catalog 的构建必须显式声明本节，缺了就是 E-CAT-SYSTEM。

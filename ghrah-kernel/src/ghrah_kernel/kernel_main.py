@@ -36,4 +36,6 @@ async def run_kernel(
         await kernel.stop.wait()
     finally:
         await kernel.aclose()
-        Path(report_path).write_text(json.dumps(kernel.report(), ensure_ascii=False, indent=2))
+        Path(report_path).write_text(
+            json.dumps(kernel.report(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )

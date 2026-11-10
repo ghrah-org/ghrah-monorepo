@@ -30,6 +30,27 @@ uv sync
 ghrah-subject
 ```
 
+### 系统宿主入口
+
+`ghrah-subject-host` 启动独立微内核与代内声明的系统服务。产品清单中的
+`subject/host` 指向这个入口；工具链负责构建、安装和启动，工作目录必须是
+同时包含 `catalog.json` 与 `GENERATION.toml` 的代目录。
+
+宿主先核对 catalog 文件摘要，再创建三个固定消息连接、启动内核及全部必需
+服务。自检通过前 `/health` 返回 503，完成后返回 200；WebSocket 也受同一
+就绪门控。内核或必需服务无法恢复时，宿主退出非零，不重建内核。
+
+正常停止先关闭业务接入，再逆序关闭服务资源、排空调用并回收内核。POSIX
+支持 SIGINT/SIGTERM；Windows 支持 Ctrl+C/Ctrl+Break。工具链的后台停止还
+使用私有停止文件，因此无控制台的 Windows 实例也能执行相同收尾流程。
+
+配置中的 `${DATA_ROOT}`、`${DISTRO_ROOT}`、`${GENERATION_ID}` 仅从工具链
+注入的 `GHRAH_DATA_ROOT`、`GHRAH_DISTRO_ROOT`、`GHRAH_GENERATION_ID` 展开。
+未识别的占位符、缺失变量、身份目录不一致或非法启动策略会在创建内核前拒绝。
+可显式设置 `GHRAH_BOOT_REPORT_PATH` 保存本轮结果；未设置时不写宿主报告文件。
+
+旧 `ghrah-subject-server` 入口仍保留，可供显式选择旧装配路径的发行版使用。
+
 ## 配置
 
 通过环境变量配置，前缀为 `GHRAH_SUBJECT_`。主要配置项：

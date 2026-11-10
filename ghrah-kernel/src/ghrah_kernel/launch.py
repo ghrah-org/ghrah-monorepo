@@ -8,6 +8,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 
 from .context import CallerBinding
@@ -34,7 +35,7 @@ class LaunchRecord:
             r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*", self.module
         ):
             raise ValueError("启动入口必须是固定 Python 模块名")
-        if not isinstance(self.executable, str) or not self.executable.startswith("/"):
+        if not isinstance(self.executable, str) or not Path(self.executable).is_absolute():
             raise ValueError("启动解释器必须为绝对路径")
         if not isinstance(self.binding, CallerBinding):
             raise ValueError("启动记录缺少受信连接绑定")

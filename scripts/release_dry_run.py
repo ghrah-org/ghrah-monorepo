@@ -96,7 +96,7 @@ def _audit_wheel(path: Path) -> None:
             raise RuntimeError(f"{path.name} 缺少 entry_points 或许可证")
         with zipfile.ZipFile(path) as archive:
             content = archive.read(entry_points[0]).decode()
-        for script in ("ghrah-subject", "ghrah-subject-server"):
+        for script in ("ghrah-subject", "ghrah-subject-server", "ghrah-subject-host"):
             if script not in content:
                 raise RuntimeError(f"{path.name} 缺少 console script：{script}")
 

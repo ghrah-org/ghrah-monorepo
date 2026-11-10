@@ -10,14 +10,14 @@ import platform
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from multiprocessing import Pipe
 from time import perf_counter
 
 from _mechanism.bootstrap import ENTRY_ENV
 from ghrah_kernel.client import RpcClient
 from ghrah_kernel.endpoint import AsyncEndpoint
 from ghrah_kernel.protocol import PROFILE
-from ghrah_kernel.wire import MessageConnection
+from ghrah_kernel.subprocesses import start_process
+from ghrah_kernel.wire import MessageConnection, message_pipe
 
 
 @dataclass(frozen=True)
@@ -28,17 +28,17 @@ class AddArguments:
 
 @asynccontextmanager
 async def open_message_provider():
-    parent, child = Pipe(duplex=True)
+    parent, child = message_pipe()
     process = None
     client = None
     try:
-        process = await asyncio.create_subprocess_exec(
+        process = await start_process(
             sys.executable,
             "-m",
             "_mechanism.provider_main",
             "--fd",
             str(child.fileno()),
-            pass_fds=(child.fileno(),),
+            connections=(child,),
             env=ENTRY_ENV,
         )
         child.close()

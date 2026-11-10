@@ -2,16 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""内核私有非阻塞 OS pipe；不把 FD 交给客户端。"""
+"""内核私有有界流：Linux 用非阻塞 pipe，其余平台用有界缓冲；不向客户端交 FD。"""
 
 import asyncio
-import fcntl
 import math
 import os
+import sys
 from dataclasses import dataclass, field, replace
 
 from ..protocol import ErrorRecord
 from .tables import KernelFault, ObjectRecord
+
+if sys.platform == "linux":
+    import fcntl
 
 
 @dataclass
@@ -29,6 +32,7 @@ class Stream:
     writing: bool = False
     watchers: dict = field(default_factory=dict)
     expiry: asyncio.TimerHandle | None = None
+    buffer: bytearray | None = None
 
 
 class Streams:
@@ -88,12 +92,17 @@ class Streams:
             accepted = result["effective_quota"]
             if type(accepted) is not int or not 4096 <= accepted <= quota:
                 raise KernelFault("PROTOCOL_ERROR", "提供者返回无效容量")
-            fds = list(os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC))
-            try:
-                fcntl.fcntl(fds[1], fcntl.F_SETPIPE_SZ, accepted)
-            except PermissionError:
-                pass
-            capacity = fcntl.fcntl(fds[1], fcntl.F_GETPIPE_SZ)
+            if sys.platform == "linux":
+                fds = list(os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC))
+                try:
+                    fcntl.fcntl(fds[1], fcntl.F_SETPIPE_SZ, accepted)
+                except PermissionError:
+                    pass
+                capacity = fcntl.fcntl(fds[1], fcntl.F_GETPIPE_SZ)
+            else:
+                # Windows Proactor 没有 add_reader；用同样有界的内核私有缓冲。
+                # 缓冲不跨进程共享，客户端仍只通过既有 read/write 消息访问。
+                capacity = accepted
             if capacity > quota:
                 raise KernelFault("NOT_SUPPORTED", "宿主无法提供请求范围内的 pipe 容量")
             obj = ObjectRecord(
@@ -118,9 +127,10 @@ class Streams:
                 domain.domain_id,
                 reader.handle_id,
                 writer.handle_id,
-                fds[0],
-                fds[1],
+                fds[0] if fds else -1,
+                fds[1] if fds else -1,
                 capacity,
+                buffer=None if fds else bytearray(),
             )
             self.records[obj.object_id] = stream
             fds = []
@@ -153,7 +163,8 @@ class Streams:
     def wake(self, stream):
         loop = asyncio.get_running_loop()
         for fd, (writing, future) in list(stream.watchers.items()):
-            (loop.remove_writer if writing else loop.remove_reader)(fd)
+            if stream.buffer is None:
+                (loop.remove_writer if writing else loop.remove_reader)(fd)
             if not future.done():
                 future.set_result(None)
         stream.watchers.clear()
@@ -228,15 +239,19 @@ class Streams:
             if not future.done():
                 future.set_result(None)
 
+        if stream.buffer is not None:
+            fd = int(writing)
         stream.watchers[fd] = (writing, future)
-        (loop.add_writer if writing else loop.add_reader)(fd, notify)
+        if stream.buffer is None:
+            (loop.add_writer if writing else loop.add_reader)(fd, notify)
         try:
             await asyncio.wait_for(future, max(0, deadline - loop.time()))
         except TimeoutError:
             raise KernelFault("TIMED_OUT", "流零进度等待到期") from None
         finally:
             if stream.watchers.get(fd, (None, None))[1] is future:
-                (loop.remove_writer if writing else loop.remove_reader)(fd)
+                if stream.buffer is None:
+                    (loop.remove_writer if writing else loop.remove_reader)(fd)
                 stream.watchers.pop(fd, None)
 
     async def io(self, session, request):
@@ -271,6 +286,20 @@ class Streams:
                 if deadline <= asyncio.get_running_loop().time():
                     raise KernelFault("TIMED_OUT", "流请求到期且无进度")
                 try:
+                    if stream.buffer is not None:
+                        if operation == "read":
+                            if not stream.buffer and stream.writer not in stream.closed:
+                                raise BlockingIOError
+                            chunk = bytes(stream.buffer[:size])
+                            del stream.buffer[:size]
+                            self.wake(stream)
+                            return {"eof": chunk == b"", "stream_handle": node.handle_id}, chunk
+                        accepted = min(len(data), stream.capacity - len(stream.buffer))
+                        if not accepted:
+                            raise BlockingIOError
+                        stream.buffer.extend(data[:accepted])
+                        self.wake(stream)
+                        return {"accepted_bytes": accepted}, None
                     if operation == "read":
                         chunk = os.read(stream.read_fd, size)
                         return {"eof": chunk == b"", "stream_handle": node.handle_id}, chunk

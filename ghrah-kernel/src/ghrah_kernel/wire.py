@@ -5,11 +5,18 @@
 """标准库完整消息 API 的薄适配，不实现分帧。"""
 
 import errno
-import os
 import socket
 from multiprocessing.connection import Connection
 
 MAX_MESSAGE_BYTES = 64 * 1024
+
+
+def message_pipe() -> tuple[Connection, Connection]:
+    """创建可继承的完整消息连接；Windows 也使用 socket，而非命名管道句柄。"""
+    left, right = socket.socketpair()
+    left.setblocking(True)
+    right.setblocking(True)
+    return Connection(left.detach()), Connection(right.detach())
 
 
 class MessageTooLarge(ValueError):  # noqa: N818
@@ -30,21 +37,18 @@ class MessageConnection:
         return self.connection.recv_bytes(maxlength=self.max_bytes)
 
     def shutdown(self) -> None:
-        """本实验只接受 Linux 本地双工 Pipe 的 socket 端点。"""
+        """唤醒 socket 上阻塞的收发；描述符始终由 Connection 唯一持有。"""
         if self.connection.closed:
             return
-        duplicate = os.dup(self.connection.fileno())
+        wake = socket.socket(fileno=self.connection.fileno())
         try:
-            wake = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, fileno=duplicate)
-        except OSError:
-            os.close(duplicate)
-            raise
-        with wake:
             try:
                 wake.shutdown(socket.SHUT_RDWR)
             except OSError as exc:
                 if exc.errno != errno.ENOTCONN:
                     raise
+        finally:
+            wake.detach()
 
     def close(self) -> None:
         self.connection.close()

@@ -12,13 +12,13 @@ import sys
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from multiprocessing import Pipe
 from pathlib import Path
 
 from ghrah_kernel.client import RpcClient
 from ghrah_kernel.endpoint import AsyncEndpoint
 from ghrah_kernel.kernel_client import KernelClient
-from ghrah_kernel.wire import MessageConnection
+from ghrah_kernel.subprocesses import start_process
+from ghrah_kernel.wire import MessageConnection, message_pipe
 
 from .contracts import (
     BOOTSTRAP,
@@ -78,9 +78,9 @@ class ExperimentHost:
 
 @asynccontextmanager
 async def open_service_chain(*, observer_accepts=False, peer_accepts=False, assemble=True):
-    control, kernel_control = Pipe(duplex=True)
-    observer, kernel_observer = Pipe(duplex=True)
-    peer, kernel_peer = Pipe(duplex=True)
+    control, kernel_control = message_pipe()
+    observer, kernel_observer = message_pipe()
+    peer, kernel_peer = message_pipe()
     control_token, observer_token = secrets.token_hex(16), secrets.token_hex(16)
     peer_token = secrets.token_hex(16)
     process = None
@@ -109,7 +109,7 @@ async def open_service_chain(*, observer_accepts=False, peer_accepts=False, asse
             )
         )
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await start_process(
                 sys.executable,
                 "-m",
                 "ghrah_kernel",
@@ -130,7 +130,7 @@ async def open_service_chain(*, observer_accepts=False, peer_accepts=False, asse
                 str(report_path),
                 "--config",
                 str(config_path),
-                pass_fds=(kernel_control.fileno(), kernel_observer.fileno(), kernel_peer.fileno()),
+                connections=(kernel_control, kernel_observer, kernel_peer),
                 env=ENTRY_ENV,
             )
             kernel_control.close()

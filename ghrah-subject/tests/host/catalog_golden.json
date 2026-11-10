@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "workspace": {"name": "example", "version": "0.2.0"},
+  "distro": "demo",
+  "host": {
+    "instance": "subject",
+    "component": "kernel",
+    "entry": "subject/host",
+    "command": ["ghrah-subject-host"]
+  },
+  "kernel": {"component": "kernel", "module": "ghrah_kernel", "entry": "_kernel"},
+  "services": [
+    {
+      "id": "kernel:namespace",
+      "component": "kernel",
+      "module": "ghrah_kernel.integration.entry",
+      "provider": "namespace",
+      "kind": "namespace",
+      "order": 10,
+      "restart": "never",
+      "schemes": [
+        {"name": "ns", "contract": "ghrah.namespace/v0", "actions": ["bind", "unbind", "inspect"]}
+      ],
+      "bindings": [],
+      "binding": {"principal": "[\"local\",\"ns\"]", "resolution_scope": null, "diagnostics": false},
+      "configuration": {}
+    }
+  ],
+  "identity": {
+    "grant_lifetime": {"mode": "instance"},
+    "subjects": [
+      {"issuer": "local", "subject_id": "admin", "kind": "user"},
+      {"issuer": "local", "subject_id": "ns", "kind": "service"}
+    ],
+    "groups": [],
+    "namespaces": [{"namespace_id": "main", "owner": "[\"local\",\"admin\"]"}],
+    "scopes": [
+      {
+        "scope_id": "main",
+        "namespaces": ["main"],
+        "subjects": ["[\"local\",\"admin\"]", "[\"local\",\"ns\"]"]
+      }
+    ],
+    "access": []
+  },
+  "callers": {
+    "control": {"principal": "[\"local\",\"admin\"]", "resolution_scope": "main", "diagnostics": true},
+    "observer": {"principal": "[\"local\",\"admin\"]", "resolution_scope": "main", "diagnostics": false},
+    "peer": {"principal": "[\"local\",\"admin\"]", "resolution_scope": "main", "diagnostics": false}
+  },
+  "digest": "sha256:1170faed4d2416fa64d32593d8e8bce3067b3c70503e1e1160560a89da11aafe"
+}

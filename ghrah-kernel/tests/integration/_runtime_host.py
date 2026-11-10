@@ -12,7 +12,6 @@ import sys
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
-from multiprocessing import Pipe
 from pathlib import Path
 
 from _integration_probe import SCHEMES
@@ -31,7 +30,8 @@ from ghrah_kernel.integration.identity import (
 )
 from ghrah_kernel.kernel_client import KernelClient
 from ghrah_kernel.launch import LaunchRecord
-from ghrah_kernel.wire import MessageConnection
+from ghrah_kernel.subprocesses import start_process
+from ghrah_kernel.wire import MessageConnection, message_pipe
 
 U1 = Subject("local", "u1", "user")
 U2 = Subject("local", "u2", "user")
@@ -142,7 +142,7 @@ async def open_runtime(
         "peer": directory.bind(U2.ref, "s2"),
     }
     records.extend(extra_launches)
-    pairs = [Pipe(duplex=True) for _ in range(3)]
+    pairs = [message_pipe() for _ in range(3)]
     tokens = [secrets.token_hex(16) for _ in pairs]
     clients = [KernelClient(RpcClient(AsyncEndpoint(MessageConnection(pair[0])))) for pair in pairs]
     process = None
@@ -160,7 +160,7 @@ async def open_runtime(
             )
         )
         try:
-            process = await asyncio.create_subprocess_exec(
+            process = await start_process(
                 sys.executable,
                 "-m",
                 "ghrah_kernel",
@@ -181,7 +181,7 @@ async def open_runtime(
                 str(config_path),
                 "--report",
                 str(report_path),
-                pass_fds=tuple(pair[1].fileno() for pair in pairs),
+                connections=tuple(pair[1] for pair in pairs),
                 env={**os.environ, "PYTHONPATH": str(Path(__file__).parent)},
             )
             for _, child in pairs:
