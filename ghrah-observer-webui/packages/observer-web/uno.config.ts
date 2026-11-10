@@ -52,6 +52,22 @@ export default defineConfig({
       "box-border rounded border border-[color:var(--color-border-strong)] bg-[var(--color-surface-2)] text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--color-selected-line)]",
     "field-input": "field h-8 w-full px-2",
     "field-multiline": "field min-h-8 w-full px-2",
+    "field-multiline-chat":
+      "box-border rounded-md border border-solid border-chat-input-border bg-chat-input text-chat-body text-chat-font font-inherit w-full px-3 py-2 resize-none placeholder:text-chat-subtle focus:outline-none focus:ring-2 focus:ring-chat-focus min-w-0 min-h-chat-input max-h-40 overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed",
+    "chat-conversation": "box-border mx-auto w-full max-w-conversation min-w-0",
+    "chat-composer":
+      "chat-conversation shrink-0 my-4 rounded-chat-card bg-[var(--color-surface)] shadow-[var(--shadow-chat-composer)]",
+    "chat-target-chip-base":
+      "px-2 py-0.5 rounded-full text-xs leading-meta border border-solid transition-colors",
+    "chat-target-chip":
+      "chat-target-chip-base bg-[var(--color-surface)] border-[color:var(--color-border-strong)] text-[color:var(--color-text-muted)] hover:border-[color:var(--color-selected-line)]",
+    "chat-target-chip-active":
+      "chat-target-chip-base bg-[var(--color-selected)] border-[color:var(--color-selected-line)] text-[color:var(--color-text)]",
+    "chat-hint": "text-xs leading-meta text-[color:var(--color-text-subtle)]",
+    "chat-mention-list":
+      "absolute bottom-full mb-1 left-0 right-0 max-h-40 overflow-y-auto rounded-md border border-solid border-[color:var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--ui-panel-shadow)] z-10",
+    "chat-mention-item":
+      "px-3 py-1.5 text-chat-font cursor-pointer hover:bg-[var(--color-surface-3)] text-[color:var(--color-text)]",
     "field-select": "field h-8 w-full appearance-none pl-2 pr-8",
     "field-select-wrap": "relative block min-w-0",
     "field-chevron":
@@ -64,10 +80,26 @@ export default defineConfig({
     "ui-badge-accent": "ui-badge bg-[var(--color-surface-3)] text-[color:var(--color-text)]",
   },
   theme: {
+    borderRadius: { md: "var(--radius-md)", "chat-card": "var(--radius-chat-card)" },
+    minHeight: { "chat-input": "var(--height-chat-input-min)" },
+    lineHeight: {
+      tight: "var(--leading-tight)",
+      meta: "var(--leading-meta)",
+      note: "var(--leading-note)",
+      body: "var(--leading-body)",
+    },
+    maxWidth: { conversation: "var(--width-conversation)" },
+    fontFamily: { inherit: "inherit" },
     colors: {
+      "chat-input": "var(--color-chat-input)",
+      "chat-input-border": "var(--color-chat-input-border)",
+      "chat-body": "var(--color-text)",
+      "chat-subtle": "var(--color-text-subtle)",
+      "chat-focus": "var(--color-selected-line)",
       primary: "#0066cc",
     },
     fontSize: {
+      "chat-font": ["var(--font-ui-body)", "var(--leading-body)"],
       xs: "0.8125rem",
       sm: "0.9375rem",
       base: "1rem",

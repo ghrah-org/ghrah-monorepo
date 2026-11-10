@@ -13,6 +13,7 @@ const props = defineProps<{
   modelValue?: string | number;
   modelModifiers?: { number?: boolean };
   multiline?: boolean;
+  variant?: "default" | "chat";
 }>();
 
 const emit = defineEmits<{
@@ -45,7 +46,7 @@ defineExpose({
     v-if="multiline"
     ref="root"
     v-bind="$attrs"
-    class="ui-text-field field-multiline"
+    :class="variant === 'chat' ? 'field-multiline-chat' : 'field-multiline'"
     :value="modelValue ?? ''"
     @input="onInput"
   />
@@ -53,7 +54,7 @@ defineExpose({
     v-else
     ref="root"
     v-bind="$attrs"
-    class="ui-text-field field-input"
+    class="field-input"
     :value="modelValue ?? ''"
     @input="onInput"
   />

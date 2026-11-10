@@ -166,3 +166,78 @@ test.describe("侧边栏护栏", () => {
     await expect(page.locator("#room-sidebar-panel")).toBeVisible();
   });
 });
+
+for (const width of [1600, 1024]) {
+  for (const scale of [1, 1.1]) {
+    test(`聊天输入框：${width} / ${scale} 排版、列宽与自动增高`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((value) => {
+        localStorage.setItem("ghrah-font-scale", String(value));
+      }, scale);
+      await openProject(page);
+      await page.locator(".room-list-row", { hasText: "architecture" }).click();
+      const input = page.locator("textarea.field-multiline-chat");
+      await expect(input).toBeVisible();
+      for (const lines of [1, 2, 6, 12, 1]) {
+        await input.fill(Array(lines).fill("聊天输入测试 mixed text 😀").join("\n"));
+        await expect
+          .poll(() =>
+            input.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return (
+                element.scrollHeight <= element.clientHeight + 1 ||
+                element.getBoundingClientRect().height >= parseFloat(style.maxHeight) - 1
+              );
+            }),
+          )
+          .toBe(true);
+      }
+      const metrics = await input.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const columns = [...document.querySelectorAll(".chat-conversation, .chat-composer")].map(
+          (column) => {
+            const rect = column.getBoundingClientRect();
+            const parent = column.parentElement!.getBoundingClientRect();
+            return {
+              width: rect.width,
+              center: Math.abs(rect.left + rect.right - (parent.left + parent.right)),
+            };
+          },
+        );
+        return {
+          ratio: parseFloat(style.lineHeight) / parseFloat(style.fontSize),
+          font: style.fontFamily,
+          padding: parseFloat(style.paddingTop),
+          root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+          columns,
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      expect(metrics.ratio).toBeCloseTo(1.6, 1);
+      expect(metrics.font).not.toContain("monospace");
+      expect(metrics.padding).toBeGreaterThanOrEqual(8);
+      expect(metrics.columns).toHaveLength(2);
+      expect(Math.abs(metrics.columns[0].width - metrics.columns[1].width)).toBeLessThan(2);
+      for (const column of metrics.columns) {
+        expect(column.width).toBeLessThanOrEqual(46 * metrics.root + 1);
+        expect(column.center).toBeLessThan(2);
+      }
+      expect(metrics.overflow).toBeLessThanOrEqual(0);
+      for (const dark of [false, true]) {
+        await page.evaluate(
+          (enabled) => document.documentElement.classList.toggle("dark", enabled),
+          dark,
+        );
+        const colors = await input.evaluate((element) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--color-text)";
+          document.body.append(probe);
+          const expected = getComputedStyle(probe).color;
+          probe.remove();
+          return { actual: getComputedStyle(element).color, expected };
+        });
+        expect(colors.actual).toBe(colors.expected);
+      }
+    });
+  }
+}
