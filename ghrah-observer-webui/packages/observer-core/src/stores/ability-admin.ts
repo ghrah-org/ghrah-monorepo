@@ -36,6 +36,8 @@ export interface AbilityAdminRecord {
   failed: boolean;
   conflict: boolean;
   errorMessage: string | null;
+  /** 缓存只含管理面快照（列表预取），尚未读 tree/changes；打开详情时要补读。 */
+  partial: boolean;
   loadedAt: number | null;
 }
 
@@ -45,6 +47,10 @@ export interface AbilityFocus {
 }
 
 const PAGE_LIMIT = 50;
+/** 列表预取一次最多覆盖的 Agent 数；超出部分等用户点开再读。 */
+const PREFETCH_LIMIT = 20;
+/** 预取的并发上限，避免一次打开面板打满管理面。 */
+const PREFETCH_CONCURRENCY = 3;
 
 function blank(projectId: string, agentId: string): AbilityAdminRecord {
   return {
@@ -61,6 +67,7 @@ function blank(projectId: string, agentId: string): AbilityAdminRecord {
     failed: false,
     conflict: false,
     errorMessage: null,
+    partial: false,
     loadedAt: null,
   };
 }
@@ -145,6 +152,8 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
   const inflight = new Map<string, Promise<void>>();
   const queued = new Set<string>();
   const generation = new Map<string, number>();
+  /** 预取批次串行队列，保证跨批次的全局并发上限。 */
+  let prefetchChain: Promise<void> = Promise.resolve();
 
   function record(projectId: string, agentId: string): AbilityAdminRecord | null {
     return records.value.get(abilityAdminKey(projectId, agentId)) ?? null;
@@ -179,7 +188,8 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
     visible.value = next;
     if (!shown) return undefined;
     const entry = records.value.get(key);
-    if (!entry || entry.stale || entry.loadedAt === null) return load(projectId, agentId);
+    if (!entry || entry.stale || entry.loadedAt === null || entry.partial)
+      return load(projectId, agentId);
     return undefined;
   }
 
@@ -199,6 +209,97 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
       await task;
     } finally {
       if (inflight.get(key) === task) inflight.delete(key);
+    }
+  }
+
+  /**
+   * 预取列表可见 Agent 的管理面视图。
+   *
+   * - 去重保序，只取前 {@link PREFETCH_LIMIT} 个；
+   * - 跳过已加载（`loadedAt !== null`）与正在读取/写入（`loading`/`inflight`/排队）的记录；
+   * - 只读 `admin`，不读 tree/changes，避免把列表预取变成整棵能力树的重读；
+   * - 与 {@link load} 共用 `inflight`/`generation`：单飞，且在途结果作废规则一致；
+   * - 批次之间串行、批内 {@link PREFETCH_CONCURRENCY} 个 worker，全局并发不超过该值。
+   */
+  function prefetch(projectId: string, agentIds: readonly string[]): Promise<void> {
+    const run = prefetchChain.then(() => prefetchBatch(projectId, agentIds));
+    prefetchChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async function prefetchBatch(projectId: string, agentIds: readonly string[]): Promise<void> {
+    const seen = new Set<string>();
+    const batch: string[] = [];
+    for (const agentId of agentIds) {
+      if (!agentId || seen.has(agentId)) continue;
+      seen.add(agentId);
+      batch.push(agentId);
+      if (batch.length === PREFETCH_LIMIT) break;
+    }
+    const targets = batch.filter((agentId) => {
+      const key = abilityAdminKey(projectId, agentId);
+      if (inflight.has(key) || queued.has(key)) return false;
+      const entry = records.value.get(key);
+      return !entry || (entry.loadedAt === null && !entry.loading);
+    });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < targets.length) {
+        const agentId = targets[cursor];
+        cursor += 1;
+        if (agentId) await prefetchOne(projectId, agentId);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PREFETCH_CONCURRENCY, targets.length) }, worker),
+    );
+  }
+
+  async function prefetchOne(projectId: string, agentId: string): Promise<void> {
+    const key = abilityAdminKey(projectId, agentId);
+    if (inflight.has(key) || queued.has(key)) return;
+    const existing = records.value.get(key);
+    if (existing && (existing.loadedAt !== null || existing.loading)) return;
+    const current = (generation.get(key) ?? 0) + 1;
+    generation.set(key, current);
+    const task = readAdminOnly(projectId, agentId, key, current);
+    inflight.set(key, task);
+    try {
+      await task;
+    } finally {
+      if (inflight.get(key) === task) inflight.delete(key);
+    }
+  }
+
+  async function readAdminOnly(
+    projectId: string,
+    agentId: string,
+    key: string,
+    current: number,
+  ): Promise<void> {
+    const entry = ensure(projectId, agentId);
+    entry.loading = true;
+    entry.failed = false;
+    entry.errorMessage = null;
+    publish();
+    try {
+      const view = await abilityControlClient(projectId).admin(agentId);
+      if (generation.get(key) !== current) return;
+      entry.admin = view;
+      entry.revision = view.revision;
+      entry.stale = false;
+      entry.partial = true;
+      entry.loadedAt = Date.now();
+    } catch (error) {
+      if (generation.get(key) !== current) return;
+      entry.failed = true;
+      entry.errorMessage = errorText(error);
+    } finally {
+      if (generation.get(key) === current) entry.loading = false;
+      publish();
     }
   }
 
@@ -242,6 +343,7 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
       }
       entry.stale = false;
       entry.conflict = false;
+      entry.partial = false;
       entry.loadedAt = Date.now();
     } catch (error) {
       if (generation.get(key) !== current) return;
@@ -373,6 +475,20 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
     );
   }
 
+  /** 丢掉一个 Agent 的缓存；递增代际让在途读取结果作废。 */
+  function clearAgent(projectId: string, agentId: string) {
+    const key = abilityAdminKey(projectId, agentId);
+    generation.set(key, (generation.get(key) ?? 0) + 1);
+    records.value.delete(key);
+    if (visible.value.has(key)) {
+      visible.value = new Set([...visible.value].filter((item) => item !== key));
+    }
+    if (focus.value?.projectId === projectId && focus.value.agentId === agentId) {
+      focus.value = null;
+    }
+    publish();
+  }
+
   function clearProject(projectId: string) {
     for (const [key, entry] of records.value) {
       if (entry.projectId !== projectId) continue;
@@ -391,6 +507,7 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
     focusAgent,
     setVisible,
     load,
+    prefetch,
     loadMore,
     replaceGrant,
     revokeGrant,
@@ -398,6 +515,7 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
     unbindTool,
     markStale,
     reloadVisible,
+    clearAgent,
     clearProject,
   };
 });

@@ -221,6 +221,183 @@ describe("useAbilityAdminStore", () => {
     expect(store.record("p1", "a1")?.failed).toBe(false);
   });
 
+  it("prefetches admin only, never the tree or the audit", async () => {
+    const adminRead = vi.fn(async () => admin);
+    const treeRead = vi.fn(async () => tree);
+    const changesRead = vi.fn(async () => changes);
+    setAbilityControlClientFactory(() =>
+      client({ admin: adminRead, tree: treeRead, changes: changesRead }),
+    );
+    const store = useAbilityAdminStore();
+    await store.prefetch("p1", ["a1"]);
+    expect(adminRead).toHaveBeenCalledTimes(1);
+    expect(adminRead).toHaveBeenCalledWith("a1");
+    expect(treeRead).not.toHaveBeenCalled();
+    expect(changesRead).not.toHaveBeenCalled();
+    const record = store.record("p1", "a1");
+    expect(record?.admin?.revision).toBe(4);
+    expect(record?.revision).toBe(4);
+    expect(record?.tree).toBeNull();
+    expect(record?.stale).toBe(false);
+    expect(record?.loading).toBe(false);
+    expect(record?.failed).toBe(false);
+    expect(record?.partial).toBe(true);
+    expect(record?.loadedAt).not.toBeNull();
+  });
+
+  it("fills the tree and audit when a prefetched agent becomes visible", async () => {
+    const adminRead = vi.fn(async () => admin);
+    const treeRead = vi.fn(async () => tree);
+    setAbilityControlClientFactory(() => client({ admin: adminRead, tree: treeRead }));
+    const store = useAbilityAdminStore();
+    await store.prefetch("p1", ["a1"]);
+    expect(adminRead).toHaveBeenCalledTimes(1);
+    expect(treeRead).not.toHaveBeenCalled();
+
+    await store.setVisible("p1", "a1", true);
+    expect(treeRead).toHaveBeenCalledTimes(1);
+    const record = store.record("p1", "a1");
+    expect(record?.tree?.run_id).toBe("run-1");
+    expect(record?.partial).toBe(false);
+    expect(record?.loadedAt).not.toBeNull();
+  });
+
+  it("prefetches a deduplicated batch of at most twenty agents in order", async () => {
+    const adminRead = vi.fn(async (_agentId: string) => admin);
+    setAbilityControlClientFactory(() => client({ admin: adminRead }));
+    const store = useAbilityAdminStore();
+    const ids = Array.from({ length: 25 }, (_, index) => `a${index + 1}`);
+    await store.prefetch("p1", ids);
+    expect(adminRead.mock.calls.map(([agentId]) => agentId)).toEqual(ids.slice(0, 20));
+
+    adminRead.mockClear();
+    await store.prefetch("p1", ["b1", "b1", "b2", "b2", "b1"]);
+    expect(adminRead.mock.calls.map(([agentId]) => agentId)).toEqual(["b1", "b2"]);
+  });
+
+  it("skips agents that are already loaded or in flight", async () => {
+    const adminRead = vi.fn(async (_agentId: string) => admin);
+    setAbilityControlClientFactory(() => client({ admin: adminRead }));
+    const store = useAbilityAdminStore();
+    await store.load("p1", "a1");
+    expect(adminRead).toHaveBeenCalledTimes(1);
+    adminRead.mockClear();
+
+    const prefetched = store.prefetch("p1", ["a1", "a2"]);
+    await store.prefetch("p1", ["a1", "a2"]);
+    await prefetched;
+    expect(adminRead).toHaveBeenCalledTimes(1);
+    expect(adminRead).toHaveBeenCalledWith("a2");
+  });
+
+  it("keeps prefetch concurrency at three", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const resolvers: Array<() => void> = [];
+    const adminRead = vi.fn(
+      () =>
+        new Promise<typeof admin>((resolve) => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          resolvers.push(() => {
+            active -= 1;
+            resolve(admin);
+          });
+        }),
+    );
+    setAbilityControlClientFactory(() => client({ admin: adminRead }));
+    const store = useAbilityAdminStore();
+    const ids = Array.from({ length: 6 }, (_, index) => `a${index + 1}`);
+    const done = store.prefetch("p1", ids);
+
+    await vi.waitFor(() => expect(resolvers).toHaveLength(3));
+    expect(adminRead).toHaveBeenCalledTimes(3);
+    expect(maxActive).toBe(3);
+
+    resolvers.splice(0).forEach((resolve) => resolve());
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(6));
+    expect(maxActive).toBe(3);
+
+    resolvers.splice(0).forEach((resolve) => resolve());
+    await done;
+    expect(store.record("p1", "a6")?.loadedAt).not.toBeNull();
+  });
+
+  it("records a prefetch failure without pretending the agent is loaded", async () => {
+    setAbilityControlClientFactory(() =>
+      client({ admin: vi.fn(async () => Promise.reject(new Error("admin down"))) }),
+    );
+    const store = useAbilityAdminStore();
+    await store.prefetch("p1", ["a1"]);
+    const record = store.record("p1", "a1");
+    expect(record?.failed).toBe(true);
+    expect(record?.errorMessage).toBe("admin down");
+    expect(record?.loadedAt).toBeNull();
+    expect(record?.loading).toBe(false);
+    expect(record?.admin).toBeNull();
+  });
+
+  it("does not let a prefetch in flight replace the full load that follows it", async () => {
+    const pendingAdmin: Array<(value: typeof admin) => void> = [];
+    const adminRead = vi.fn(
+      () =>
+        new Promise<typeof admin>((resolve) => {
+          pendingAdmin.push(resolve);
+        }),
+    );
+    setAbilityControlClientFactory(() => client({ admin: adminRead }));
+    const store = useAbilityAdminStore();
+    const prefetching = store.prefetch("p1", ["a1"]);
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(1));
+
+    const loading = store.load("p1", "a1");
+    pendingAdmin.splice(0).forEach((resolve) => resolve(admin));
+    await prefetching;
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(2));
+    pendingAdmin.splice(0).forEach((resolve) => resolve(admin));
+    await loading;
+
+    const record = store.record("p1", "a1");
+    expect(record?.tree?.run_id).toBe("run-1");
+    expect(record?.changes.map((change) => change.seq)).toEqual([1]);
+    expect(record?.loadedAt).not.toBeNull();
+  });
+
+  it("clears one agent's record, visible entry, and focus", async () => {
+    setAbilityControlClientFactory(() => client());
+    const store = useAbilityAdminStore();
+    await store.prefetch("p1", ["a1"]);
+    await store.setVisible("p1", "a1", true);
+    store.focusAgent("p1", "a1");
+    expect(store.record("p1", "a1")).not.toBeNull();
+    expect(store.visible.has("p1:a1")).toBe(true);
+    expect(store.focus).toEqual({ projectId: "p1", agentId: "a1" });
+
+    store.clearAgent("p1", "a1");
+    expect(store.record("p1", "a1")).toBeNull();
+    expect(store.visible.has("p1:a1")).toBe(false);
+    expect(store.focus).toBeNull();
+  });
+
+  it("invalidates an in-flight prefetch when the agent is cleared", async () => {
+    const pendingAdmin: Array<(value: typeof admin) => void> = [];
+    const adminRead = vi.fn(
+      () =>
+        new Promise<typeof admin>((resolve) => {
+          pendingAdmin.push(resolve);
+        }),
+    );
+    setAbilityControlClientFactory(() => client({ admin: adminRead }));
+    const store = useAbilityAdminStore();
+    const prefetching = store.prefetch("p1", ["a1"]);
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(1));
+
+    store.clearAgent("p1", "a1");
+    pendingAdmin.splice(0).forEach((resolve) => resolve(admin));
+    await prefetching;
+    expect(store.record("p1", "a1")).toBeNull();
+  });
+
   it("keeps skill content when replacing an operation grant", () => {
     const request = replacementGrant(
       {

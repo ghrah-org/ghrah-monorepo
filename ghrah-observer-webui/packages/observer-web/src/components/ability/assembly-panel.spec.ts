@@ -4,7 +4,11 @@
 
 // @vitest-environment happy-dom
 
-import { setAbilityControlClientFactory, useProjectsStore } from "@ghrah/observer-core";
+import {
+  setAbilityControlClientFactory,
+  useAbilityAdminStore,
+  useProjectsStore,
+} from "@ghrah/observer-core";
 import {
   AbilityAdminViewSchema,
   AbilityApiStatusSchema,
@@ -66,6 +70,11 @@ const admin = AbilityAdminViewSchema.parse({
   surface: { current_runtime: null, pending_respawn: { added: ["write_file"], removed: [] } },
 });
 
+const restartAdmin = AbilityAdminViewSchema.parse({
+  ...admin,
+  surface: { current_runtime: [], pending_respawn: { added: ["write_file"], removed: [] } },
+});
+
 const tree = AbilityTreeViewSchema.parse({
   project_id: "p1",
   agent_id: "a1",
@@ -94,17 +103,33 @@ const tree = AbilityTreeViewSchema.parse({
   bound_tools: [],
 });
 
+function setProjectAgents(agents: Array<{ name: string; agent_id: string }>) {
+  useProjectsStore().setProjectsFromList([
+    {
+      project_id: "p1",
+      name: "Project One",
+      archived_at: null,
+      agents: agents.map((agent) => ({ runtime_status: "running", ...agent })),
+    } as never,
+  ]);
+}
+
+function clientFactory(overrides: Record<string, unknown> = {}) {
+  return () =>
+    ({
+      status: async () => builtin,
+      admin: async () => admin,
+      tree: async () => tree,
+      changes: async () =>
+        AbilityChangesPageSchema.parse({ changes: [], next_after_seq: 0, has_more: false }),
+      ...overrides,
+    }) as never;
+}
+
 describe("AssemblyPanel", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    useProjectsStore().setProjectsFromList([
-      {
-        project_id: "p1",
-        name: "Project One",
-        archived_at: null,
-        agents: [{ name: "Coder", agent_id: "a1", runtime_status: "running" }],
-      } as never,
-    ]);
+    setProjectAgents([{ name: "Coder", agent_id: "a1" }]);
   });
   afterEach(() => setAbilityControlClientFactory(null));
 
@@ -128,7 +153,7 @@ describe("AssemblyPanel", () => {
     await wrapper.get("li button").trigger("click");
     await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
     expect(adminRead).toHaveBeenCalledWith("a1");
-    expect(wrapper.text()).toContain("Needs restart");
+    expect(wrapper.text()).not.toContain("Needs restart");
     expect(wrapper.find("form").exists()).toBe(false);
     wrapper.unmount();
   });
@@ -157,7 +182,6 @@ describe("AssemblyPanel", () => {
     await flushPromises();
     await wrapper.get("li button").trigger("click");
     await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
-    expect(wrapper.text()).toContain("These changes apply the next time this agent starts.");
     await wrapper
       .findAll('[role="tab"]')
       .find((item) => item.text() === "Grants")!
@@ -337,6 +361,160 @@ describe("AssemblyPanel", () => {
     expect(wrapper.text()).toContain("Legacy ability source is outside the new grant controls.");
     expect(adminRead).not.toHaveBeenCalled();
     expect(wrapper.find("form").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("reads the list on open and never shows zero before an agent is loaded", async () => {
+    const pending: Array<(value: typeof admin) => void> = [];
+    const adminRead = vi.fn(
+      () =>
+        new Promise<typeof admin>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    const treeRead = vi.fn(async () => tree);
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead, tree: treeRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledWith("a1"));
+    expect(treeRead).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Reading…");
+    expect(wrapper.text()).not.toContain("0 grants");
+
+    pending.splice(0).forEach((resolve) => resolve(admin));
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    expect(wrapper.text()).toContain("0 tools");
+    expect(wrapper.text()).not.toContain("Reading…");
+    wrapper.unmount();
+  });
+
+  it("shows a reading row before the panel has requested anything", async () => {
+    const adminRead = vi.fn(async () => admin);
+    setAbilityControlClientFactory(
+      () =>
+        ({
+          status: () => new Promise(() => undefined),
+          admin: adminRead,
+          tree: async () => tree,
+          changes: async () =>
+            AbilityChangesPageSchema.parse({ changes: [], next_after_seq: 0, has_more: false }),
+        }) as never,
+    );
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Coder");
+    expect(wrapper.text()).toContain("Reading…");
+    expect(wrapper.text()).not.toContain("0 grants");
+    expect(wrapper.text()).not.toContain("—");
+    expect(adminRead).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("shows an unavailable row and retries it in place", async () => {
+    const adminRead = vi.fn(async () => Promise.reject(new Error("admin down")));
+    const treeRead = vi.fn(async () => Promise.reject(new Error("no run")));
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead, tree: treeRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Retry"));
+    expect(wrapper.text()).toContain("—");
+    expect(wrapper.text()).not.toContain("0 grants");
+    expect(adminRead).toHaveBeenCalledTimes(1);
+
+    await wrapper.get(".assembly-agent-retry").trigger("click");
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(2));
+    expect(wrapper.find(".assembly-agent-retry").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not show a restart badge when the runtime surface is unobserved", async () => {
+    setAbilityControlClientFactory(clientFactory());
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    expect(wrapper.text()).not.toContain("Needs restart");
+    wrapper.unmount();
+  });
+
+  it("shows the restart badge when the tool surface needs a restart", async () => {
+    setAbilityControlClientFactory(clientFactory({ admin: async () => restartAdmin }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Needs restart"));
+    wrapper.unmount();
+  });
+
+  it("keeps the out-of-date badge off rows that are still loading", async () => {
+    const pending: Array<(value: typeof admin) => void> = [];
+    const adminRead = vi.fn(
+      () =>
+        new Promise<typeof admin>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(1));
+
+    void useAbilityAdminStore().markStale("p1", "a1");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reading…");
+    expect(wrapper.text()).not.toContain("Out of date");
+
+    pending.splice(0).forEach((resolve) => resolve(admin));
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    expect(wrapper.text()).not.toContain("Out of date");
+    wrapper.unmount();
+  });
+
+  it("shows the out-of-date badge on a loaded row after it is marked stale", async () => {
+    setAbilityControlClientFactory(clientFactory());
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    expect(wrapper.text()).not.toContain("Out of date");
+
+    void useAbilityAdminStore().markStale("p1", "a1");
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Out of date"));
+    wrapper.unmount();
+  });
+
+  it("prefetches at most the first twenty agents when the panel opens", async () => {
+    const ids = Array.from({ length: 25 }, (_, index) => `a${index + 1}`);
+    setProjectAgents(
+      ids.map((agentId, index) => ({ name: `Agent ${index + 1}`, agent_id: agentId })),
+    );
+    const adminRead = vi.fn(async (_agentId: string) => admin);
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(20));
+    expect(adminRead.mock.calls.map(([agentId]) => agentId)).toEqual(ids.slice(0, 20));
+    expect(wrapper.text()).toContain("Showing the first 20 of 25 agents.");
+    wrapper.unmount();
+  });
+
+  it("prefetches agents added to the visible list while the panel is open", async () => {
+    const adminRead = vi.fn(async (_agentId: string) => admin);
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledWith("a1"));
+
+    adminRead.mockClear();
+    setProjectAgents([
+      { name: "Coder", agent_id: "a1" },
+      { name: "Runner", agent_id: "a2" },
+    ]);
+    await flushPromises();
+    await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(1));
+    expect(adminRead).toHaveBeenCalledWith("a2");
+    expect(wrapper.text()).toContain("Runner");
     wrapper.unmount();
   });
 });

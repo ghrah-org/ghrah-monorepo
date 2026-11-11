@@ -5,15 +5,36 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import type { SurfaceStatus } from "./surface-status";
 
-defineProps<{ requiresRespawn: boolean; conflict: boolean; revision: number | null }>();
+const props = defineProps<{
+  status: SurfaceStatus | null;
+  pendingAdded?: readonly string[];
+  pendingRemoved?: readonly string[];
+  conflict: boolean;
+  revision: number | null;
+}>();
 const { t } = useI18n();
+
+const addedText = computed(() => (props.pendingAdded ?? []).join(", "));
+const removedText = computed(() => (props.pendingRemoved ?? []).join(", "));
 </script>
 
 <template>
   <div class="respawn-banner">
-    <p v-if="requiresRespawn" class="respawn-note" role="status">{{ t("assembly.respawn") }}</p>
+    <p v-if="status === 'unobserved'" class="respawn-note" role="status">
+      {{ t("assembly.state.unobserved") }}
+    </p>
+    <p v-else-if="status === 'unmaterialized'" class="respawn-note" role="status">
+      {{ t("assembly.state.runtimeUnobserved") }}
+    </p>
+    <div v-else-if="status === 'restart'" class="respawn-note" role="status">
+      <p>{{ t("assembly.state.restartRequired") }}</p>
+      <p v-if="addedText">{{ t("assembly.state.pendingAdded", { tools: addedText }) }}</p>
+      <p v-if="removedText">{{ t("assembly.state.pendingRemoved", { tools: removedText }) }}</p>
+    </div>
     <p v-if="conflict" class="respawn-alert" role="alert">
       {{ t("assembly.conflict", { revision: revision ?? 0 }) }}
     </p>
@@ -40,8 +61,16 @@ const { t } = useI18n();
 }
 
 .respawn-note {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
   background: var(--color-surface-2);
   color: var(--color-text-muted);
+}
+
+.respawn-note p {
+  margin: 0;
 }
 
 .respawn-alert {

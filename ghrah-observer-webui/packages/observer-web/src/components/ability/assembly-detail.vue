@@ -19,6 +19,7 @@ import AbilityChangesView from "./ability-changes-view.vue";
 import AbilityTreeView from "./ability-tree-view.vue";
 import GrantEditor from "./grant-editor.vue";
 import RespawnBanner from "./respawn-banner.vue";
+import { type SurfaceStatus, surfaceStatus } from "./surface-status";
 import ToolSelector from "./tool-selector.vue";
 import UiButton from "@/components/ui/button.vue";
 
@@ -50,6 +51,9 @@ const record = computed(() => {
 });
 const treeEnabled = computed(() => packages.status?.features.tree === true);
 const view = computed(() => record.value?.admin ?? null);
+const surface = computed<SurfaceStatus | null>(() =>
+  view.value ? surfaceStatus(view.value) : null,
+);
 const packagesReadable = computed(() => packages.status?.features.packages_read === true);
 
 function originText(origin: "builtin" | "installed" | null): string {
@@ -167,7 +171,9 @@ onUnmounted(hide);
         {{ t("assembly.retry") }}
       </UiButton>
       <RespawnBanner
-        :requires-respawn="view?.lifecycle.requires_respawn === true"
+        :status="surface"
+        :pending-added="view?.surface.pending_respawn.added ?? []"
+        :pending-removed="view?.surface.pending_respawn.removed ?? []"
         :conflict="record?.conflict === true"
         :revision="record?.revision ?? view?.revision ?? null"
       />
@@ -242,11 +248,14 @@ onUnmounted(hide);
               {{ t("assembly.surface.effective") }}
               {{ view.surface.effective.map((entry) => entry.tool_name).join(", ") }}
             </p>
-            <p v-if="view.surface.current_runtime">
-              {{ t("assembly.surface.runtime") }}
-              {{ view.surface.current_runtime.join(", ") }}
+            <p v-if="surface === 'unmaterialized'">{{ t("assembly.state.runtimeUnobserved") }}</p>
+            <p v-else-if="surface === 'unobserved'">
+              {{ t("assembly.surface.runtimeMissing") }}
             </p>
-            <p v-else>{{ t("assembly.surface.runtimeMissing") }}</p>
+            <p v-else>
+              {{ t("assembly.surface.runtime") }}
+              {{ (view.surface.current_runtime ?? []).join(", ") }}
+            </p>
             <p v-if="view.surface.effective.some((entry) => !entry.available)">
               {{ t("assembly.surface.visibleNotExecutable") }}
             </p>

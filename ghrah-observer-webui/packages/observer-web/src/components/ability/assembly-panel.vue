@@ -14,8 +14,12 @@ import {
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AssemblyDetail from "./assembly-detail.vue";
+import { surfaceStatus } from "./surface-status";
 import UiBadge from "@/components/ui/badge.vue";
 import UiButton from "@/components/ui/button.vue";
+
+/** 列表一次预取的 Agent 上限；其余行点开时再读。 */
+const PREFETCH_LIMIT = 20;
 
 const props = defineProps<{ projectId: string }>();
 const admin = useAbilityAdminStore();
@@ -46,19 +50,33 @@ const rows = computed(() => {
     const live = agents.getAgent({ projectId: props.projectId, agentId: row.agentId });
     const runtime = live?.runtimeStatus || row.runtime;
     const record = admin.record(props.projectId, row.agentId);
+    const loaded = (record?.loadedAt ?? null) !== null;
+    const view = record?.admin ?? null;
+    // 未加载且未失败（含「预取还没落」与「从未请求过」）一律按读取中展示，不当作 0。
+    const failed = !loaded && record?.failed === true;
     return {
       agentId: row.agentId,
       name: live?.agentName || row.name,
       runtime,
       running: runtime === "running" || runtime === "active",
-      grantCount: record?.admin?.grants.length ?? 0,
-      toolCount: record?.admin?.surface.effective.length ?? 0,
-      needsRestart: Boolean(record?.admin?.lifecycle.requires_respawn),
-      stale: Boolean(record?.stale),
+      loaded,
+      loading: !loaded && !failed,
+      unavailable: failed,
+      failed,
+      grantCount: view?.grants.length ?? 0,
+      toolCount: view?.surface.effective.length ?? 0,
+      needsRestart: loaded && view !== null && surfaceStatus(view) === "restart",
+      stale: loaded && record?.stale === true,
     };
   });
 });
 const runningCount = computed(() => rows.value.filter((row) => row.running).length);
+const rowAgentIds = computed(() => rows.value.map((row) => row.agentId));
+const prefetchSignature = computed(() => rowAgentIds.value.join("\u0000"));
+const treeEnabled = computed(() => packages.status?.features.tree === true);
+const prefetchLimited = computed(
+  () => treeEnabled.value && rowAgentIds.value.length > PREFETCH_LIMIT,
+);
 const statusKey = computed(() => {
   const status = packages.status;
   if (!status) return "assembly.statusUnavailable";
@@ -68,10 +86,21 @@ const statusKey = computed(() => {
   return "assembly.statusUnavailable";
 });
 
+/** 面板可见且服务端支持能力树时，预取列表行；预取自身会跳过已加载项。 */
+function prefetchRows() {
+  if (!shown || !treeEnabled.value) return;
+  void admin.prefetch(props.projectId, rowAgentIds.value);
+}
+
+function retry(agentId: string) {
+  void admin.load(props.projectId, agentId);
+}
+
 function show() {
   if (shown) return;
   shown = true;
   packages.setAssemblyVisible(true);
+  prefetchRows();
 }
 
 function hide() {
@@ -79,6 +108,9 @@ function hide() {
   shown = false;
   packages.setAssemblyVisible(false);
 }
+
+watch(prefetchSignature, prefetchRows);
+watch(treeEnabled, prefetchRows);
 
 watch(
   () => admin.focus,
@@ -125,25 +157,51 @@ onUnmounted(hide);
     <div class="assembly-body">
       <div class="assembly-agents">
         <h2>{{ t("assembly.agents") }}</h2>
+        <p v-if="prefetchLimited" class="assembly-note">
+          {{
+            t("assembly.list.prefetchLimited", {
+              shown: PREFETCH_LIMIT,
+              total: rowAgentIds.length,
+            })
+          }}
+        </p>
         <p v-if="rows.length === 0" class="assembly-state assembly-state-empty">
           {{ t("assembly.emptyAgents") }}
         </p>
         <ul v-else class="assembly-agent-list">
           <li v-for="row in rows" :key="row.agentId">
-            <button
-              type="button"
+            <div
               class="assembly-agent"
               :class="{ 'assembly-agent-selected': selectedId === row.agentId }"
-              :aria-pressed="selectedId === row.agentId"
-              @click="selectedId = row.agentId"
             >
-              <strong>{{ row.name }}</strong>
-              <span>{{ row.runtime }}</span>
-              <span>{{ t("assembly.grantCount", { count: row.grantCount }) }}</span>
-              <span>{{ t("assembly.toolCount", { count: row.toolCount }) }}</span>
-              <UiBadge v-if="row.needsRestart">{{ t("assembly.needsRestart") }}</UiBadge>
-              <UiBadge v-if="row.stale" variant="accent">{{ t("assembly.unread") }}</UiBadge>
-            </button>
+              <button
+                type="button"
+                class="assembly-agent-select"
+                :aria-pressed="selectedId === row.agentId"
+                @click="selectedId = row.agentId"
+              >
+                <strong>{{ row.name }}</strong>
+                <span>{{ row.runtime }}</span>
+                <span v-if="row.loading">{{ t("assembly.list.loading") }}</span>
+                <span v-else-if="row.unavailable">{{ t("assembly.list.unavailable") }}</span>
+                <template v-else>
+                  <span>{{ t("assembly.grantCount", { count: row.grantCount }) }}</span>
+                  <span>{{ t("assembly.toolCount", { count: row.toolCount }) }}</span>
+                </template>
+                <UiBadge v-if="row.needsRestart">{{ t("assembly.needsRestart") }}</UiBadge>
+                <UiBadge v-if="row.stale" variant="accent">{{ t("assembly.unread") }}</UiBadge>
+              </button>
+              <UiButton
+                v-if="row.failed"
+                type="button"
+                variant="secondary"
+                size="xs"
+                class="assembly-agent-retry"
+                @click="retry(row.agentId)"
+              >
+                {{ t("assembly.list.retry") }}
+              </UiButton>
+            </div>
           </li>
         </ul>
       </div>
@@ -273,7 +331,6 @@ onUnmounted(hide);
   display: flex;
   width: 100%;
   min-width: 0;
-  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem 0.75rem;
   padding: 0.75rem;
@@ -281,8 +338,25 @@ onUnmounted(hide);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   color: var(--color-text);
+}
+
+.assembly-agent-select {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: start;
   cursor: pointer;
+}
+
+.assembly-agent-retry {
+  flex: none;
 }
 
 .assembly-agent:hover {
