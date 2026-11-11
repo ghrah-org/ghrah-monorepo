@@ -62,9 +62,33 @@ function toggle(alias: string, member: string, toolName: string | undefined, eve
 
 <style scoped>
 .tool-selector {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
   overflow-wrap: anywhere;
-  border: 1px solid var(--ui-panel-border);
   font-size: var(--font-ui-note);
+}
+
+.tool-selector legend {
+  color: var(--color-text-muted);
+}
+
+.tool-selector label {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.tool-selector code {
+  font-size: var(--font-ui-code);
 }
 </style>

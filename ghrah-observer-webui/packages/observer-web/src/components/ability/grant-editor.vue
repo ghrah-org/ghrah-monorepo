@@ -146,13 +146,45 @@ function save() {
 
 <style scoped>
 .grant-editor {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
   overflow-wrap: anywhere;
   font-size: var(--font-ui-note);
 }
 
+.grant-editor p,
+.grant-editor legend {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
 .grant-editor fieldset {
+  display: flex;
   min-width: 0;
-  border: 1px solid var(--ui-panel-border);
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.grant-editor label {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.grant-editor code {
+  font-size: var(--font-ui-code);
 }
 </style>

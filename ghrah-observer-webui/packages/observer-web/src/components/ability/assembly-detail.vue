@@ -146,7 +146,7 @@ onUnmounted(hide);
 
 <template>
   <section class="assembly-detail">
-    <p v-if="!treeEnabled">
+    <p v-if="!treeEnabled" class="assembly-state">
       {{
         packages.status?.legacy_deprecated || packages.status?.ability_source === "legacy"
           ? t("assembly.statusLegacy")
@@ -154,8 +154,10 @@ onUnmounted(hide);
       }}
     </p>
     <template v-else>
-      <p v-if="record?.loading">{{ t("assembly.loading") }}</p>
-      <p v-if="record?.failed" role="alert">{{ t("assembly.loadFailed") }}</p>
+      <p v-if="record?.loading" class="assembly-state">{{ t("assembly.loading") }}</p>
+      <p v-if="record?.failed" class="assembly-state assembly-state-alert" role="alert">
+        {{ t("assembly.loadFailed") }}
+      </p>
       <UiButton
         v-if="record?.failed"
         type="button"
@@ -174,6 +176,8 @@ onUnmounted(hide);
           v-for="name in tabs"
           :key="name"
           type="button"
+          class="assembly-tab"
+          :class="{ 'assembly-tab-selected': tab === name }"
           role="tab"
           :aria-selected="tab === name"
           @click="tab = name"
@@ -181,7 +185,7 @@ onUnmounted(hide);
           {{ t(`assembly.tabs.${name}`) }}
         </button>
       </div>
-      <div v-if="tab === 'overview' && view" class="assembly-detail-body">
+      <div v-if="tab === 'overview' && view" class="assembly-detail-body assembly-facts">
         <p>{{ t("assembly.overview.lifecycle", { state: view.lifecycle.state }) }}</p>
         <p>{{ t("assembly.overview.revision", { revision: view.revision }) }}</p>
         <p v-if="view.run_id">{{ t("assembly.overview.run", { run: view.run_id }) }}</p>
@@ -213,14 +217,16 @@ onUnmounted(hide);
             @save="admin.replaceGrant(projectId, agentId, $event)"
             @revoke="admin.revokeGrant(projectId, agentId, grant.alias)"
           />
-          <p v-if="view.grants.length === 0">{{ t("assembly.grants.empty") }}</p>
+          <p v-if="view.grants.length === 0" class="assembly-state assembly-state-empty">
+            {{ t("assembly.grants.empty") }}
+          </p>
         </template>
         <AbilityAdminView v-else :admin="view" />
       </div>
       <div v-else-if="tab === 'tools'" class="assembly-detail-body">
         <template v-if="view">
-          <p v-if="canWrite">{{ t("assembly.surface.selection") }}</p>
-          <p v-else>{{ t("assembly.surface.readonly") }}</p>
+          <p v-if="canWrite" class="assembly-note">{{ t("assembly.surface.selection") }}</p>
+          <p v-else class="assembly-note">{{ t("assembly.surface.readonly") }}</p>
           <ToolSelector
             v-if="canWrite"
             :grants="view.grants"
@@ -230,44 +236,52 @@ onUnmounted(hide);
             @bind="admin.bindTool(projectId, agentId, $event)"
             @unbind="admin.unbindTool(projectId, agentId, $event)"
           />
-          <p>{{ t("assembly.surface.mode", { mode: view.surface.mode }) }}</p>
-          <p>
-            {{ t("assembly.surface.effective") }}
-            {{ view.surface.effective.map((entry) => entry.tool_name).join(", ") }}
-          </p>
-          <p v-if="view.surface.current_runtime">
-            {{ t("assembly.surface.runtime") }}
-            {{ view.surface.current_runtime.join(", ") }}
-          </p>
-          <p v-else>{{ t("assembly.surface.runtimeMissing") }}</p>
-          <p v-if="view.surface.effective.some((entry) => !entry.available)">
-            {{ t("assembly.surface.visibleNotExecutable") }}
-          </p>
-          <p>
-            {{
-              t("assembly.surface.pendingAdded", {
-                tools: view.surface.pending_respawn.added.join(", "),
-              })
-            }}
-          </p>
-          <p>
-            {{
-              t("assembly.surface.pendingRemoved", {
-                tools: view.surface.pending_respawn.removed.join(", "),
-              })
-            }}
-          </p>
+          <div class="assembly-facts">
+            <p>{{ t("assembly.surface.mode", { mode: view.surface.mode }) }}</p>
+            <p>
+              {{ t("assembly.surface.effective") }}
+              {{ view.surface.effective.map((entry) => entry.tool_name).join(", ") }}
+            </p>
+            <p v-if="view.surface.current_runtime">
+              {{ t("assembly.surface.runtime") }}
+              {{ view.surface.current_runtime.join(", ") }}
+            </p>
+            <p v-else>{{ t("assembly.surface.runtimeMissing") }}</p>
+            <p v-if="view.surface.effective.some((entry) => !entry.available)">
+              {{ t("assembly.surface.visibleNotExecutable") }}
+            </p>
+            <p>
+              {{
+                t("assembly.surface.pendingAdded", {
+                  tools: view.surface.pending_respawn.added.join(", "),
+                })
+              }}
+            </p>
+            <p>
+              {{
+                t("assembly.surface.pendingRemoved", {
+                  tools: view.surface.pending_respawn.removed.join(", "),
+                })
+              }}
+            </p>
+          </div>
           <AbilityTreeView :tree="record?.tree ?? null" />
         </template>
         <SchemeAbilitiesPanel readonly :project-id="projectId" :agent-id="agentId" />
       </div>
       <div v-else-if="tab === 'versions'" class="assembly-detail-body">
-        <p v-if="groupsLoading || (packages.loading && !packages.status)">
+        <p v-if="groupsLoading || (packages.loading && !packages.status)" class="assembly-state">
           {{ t("assembly.loading") }}
         </p>
-        <p v-else-if="!packagesReadable">{{ t("assembly.catalog.packagesHidden") }}</p>
-        <p v-else-if="groupsFailed" role="alert">{{ t("assembly.versions.groupsFailed") }}</p>
-        <p v-else-if="!agentGroups?.groups.length">{{ t("assembly.catalog.empty") }}</p>
+        <p v-else-if="!packagesReadable" class="assembly-state">
+          {{ t("assembly.catalog.packagesHidden") }}
+        </p>
+        <p v-else-if="groupsFailed" class="assembly-state assembly-state-alert" role="alert">
+          {{ t("assembly.versions.groupsFailed") }}
+        </p>
+        <p v-else-if="!agentGroups?.groups.length" class="assembly-state assembly-state-empty">
+          {{ t("assembly.catalog.empty") }}
+        </p>
         <ul v-else class="assembly-groups">
           <li v-for="group in agentGroups.groups" :key="groupKey(group)" class="assembly-group">
             <h3>{{ group.title || group.full_name || t("assembly.versions.unreadable") }}</h3>
@@ -313,11 +327,15 @@ onUnmounted(hide);
 <style scoped>
 .assembly-detail,
 .assembly-detail-body {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
   overflow-wrap: anywhere;
 }
 
 .assembly-detail {
+  color: var(--color-text);
   font-size: var(--font-ui-body);
 }
 
@@ -325,6 +343,71 @@ onUnmounted(hide);
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.assembly-tab {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  cursor: pointer;
+}
+
+.assembly-tab-selected {
+  border-color: var(--color-selected-line);
+  background: var(--color-selected);
+  color: var(--color-text);
+}
+
+.assembly-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.assembly-facts p,
+.assembly-note,
+.assembly-state {
+  margin: 0;
+}
+
+.assembly-note {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.assembly-facts p {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.assembly-state {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.assembly-state-alert {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
+  color: var(--color-danger);
+}
+
+.assembly-state-empty {
+  background: var(--color-surface);
+  text-align: center;
 }
 
 .assembly-groups,

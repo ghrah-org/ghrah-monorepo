@@ -175,17 +175,21 @@ watch(
 <template>
   <section class="scheme-abilities">
     <h3>{{ t("schemeAbilities.title") }}</h3>
-    <p>{{ t("schemeAbilities.scope", { agent: agentId }) }}</p>
+    <p class="scheme-note">{{ t("schemeAbilities.scope", { agent: agentId }) }}</p>
     <UiButton type="button" variant="secondary" :disabled="loading || saving" @click="refresh">
       {{ t("schemeAbilities.refresh") }}
     </UiButton>
-    <p v-if="loading" role="status">{{ t("schemeAbilities.loading") }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="loading" class="scheme-state" role="status">{{ t("schemeAbilities.loading") }}</p>
+    <p v-if="error" class="scheme-alert" role="alert">{{ error }}</p>
     <template v-if="view">
-      <p>{{ t("schemeAbilities.revision", { revision: view.revision, run: view.run_id }) }}</p>
-      <p v-if="!choices.length">{{ t("schemeAbilities.empty") }}</p>
-      <p v-if="choices.some((item) => !item.available)">{{ t("schemeAbilities.unavailable") }}</p>
-      <form v-if="!readonly" @submit.prevent="change()">
+      <p class="scheme-note">
+        {{ t("schemeAbilities.revision", { revision: view.revision, run: view.run_id }) }}
+      </p>
+      <p v-if="!choices.length" class="scheme-state">{{ t("schemeAbilities.empty") }}</p>
+      <p v-if="choices.some((item) => !item.available)" class="scheme-state">
+        {{ t("schemeAbilities.unavailable") }}
+      </p>
+      <form v-if="!readonly" class="scheme-form" @submit.prevent="change()">
         <label>
           {{ t("schemeAbilities.operation") }}
           <select v-model="selected" :disabled="saving">
@@ -209,8 +213,8 @@ watch(
         </UiButton>
       </form>
       <h4>{{ t("schemeAbilities.content") }}</h4>
-      <ul>
-        <li v-for="ability in view.abilities" :key="ability.alias">
+      <ul class="scheme-cards">
+        <li v-for="ability in view.abilities" :key="ability.alias" class="scheme-card">
           <code>{{ ability.alias }}</code>
           <p>{{ t("schemeAbilities.version", { version: ability.version_digest }) }}</p>
           <template v-if="ability.skill">
@@ -226,7 +230,7 @@ watch(
             >
               {{ t("schemeAbilities.readBody") }}
             </UiButton>
-            <ul v-for="role in ['assets', 'references'] as const" :key="role">
+            <ul v-for="role in ['assets', 'references'] as const" :key="role" class="scheme-files">
               <li v-for="entry in ability.skill[role]" :key="entry.member">
                 <code>{{ role }}/{{ entry.key }}</code>
                 <span>{{ entry.media_type }} · {{ entry.size }}</span>
@@ -243,7 +247,7 @@ watch(
           </template>
         </li>
       </ul>
-      <div v-if="content">
+      <div v-if="content" class="scheme-content">
         <p>
           {{
             t("schemeAbilities.range", {
@@ -276,9 +280,9 @@ watch(
         </UiButton>
       </div>
       <h4>{{ t("schemeAbilities.bound") }}</h4>
-      <p v-if="!view.bound_tools.length">{{ t("schemeAbilities.noTools") }}</p>
-      <ul class="bound-tools">
-        <li v-for="tool in view.bound_tools" :key="tool.name">
+      <p v-if="!view.bound_tools.length" class="scheme-state">{{ t("schemeAbilities.noTools") }}</p>
+      <ul v-else class="scheme-cards bound-tools">
+        <li v-for="tool in view.bound_tools" :key="tool.name" class="scheme-card">
           <code>{{ tool.name }}</code>
           <span>{{ tool.alias }}/{{ tool.member }}</span>
           <UiButton
@@ -298,8 +302,137 @@ watch(
 
 <style scoped>
 .scheme-abilities {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  color: var(--color-text);
   overflow-wrap: anywhere;
   font-size: var(--font-ui-body);
+}
+
+.scheme-abilities h3,
+.scheme-abilities h4,
+.scheme-note,
+.scheme-state,
+.scheme-alert {
+  margin: 0;
+}
+
+.scheme-abilities h3,
+.scheme-abilities h4 {
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+}
+
+.scheme-note,
+.scheme-state,
+.scheme-alert {
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.scheme-note {
+  color: var(--color-text-muted);
+}
+
+.scheme-state,
+.scheme-alert {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.scheme-state {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+}
+
+.scheme-alert {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
+  color: var(--color-danger);
+}
+
+.scheme-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.scheme-form label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.scheme-form select,
+.scheme-form input {
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.scheme-cards,
+.scheme-files {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scheme-card,
+.scheme-content {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.scheme-card p,
+.scheme-content p {
+  margin: 0.25rem 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.scheme-card code,
+.scheme-content pre {
+  font-size: var(--font-ui-code);
+}
+
+.scheme-files li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.scheme-content pre {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
 }
 </style>

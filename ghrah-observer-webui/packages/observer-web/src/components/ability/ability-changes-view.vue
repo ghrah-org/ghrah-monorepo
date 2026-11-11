@@ -16,9 +16,11 @@ const { t } = useI18n();
 
 <template>
   <div class="ability-changes-view">
-    <p v-if="changes.length === 0 && !loading">{{ t("assembly.changes.empty") }}</p>
-    <ul v-else>
-      <li v-for="change in changes" :key="change.seq">
+    <p v-if="changes.length === 0 && !loading" class="ability-state">
+      {{ t("assembly.changes.empty") }}
+    </p>
+    <ul v-else class="ability-cards">
+      <li v-for="change in changes" :key="change.seq" class="ability-card">
         <p>{{ t("assembly.changes.seq", { seq: change.seq }) }}</p>
         <p>{{ t("assembly.changes.reason", { reason: change.reason }) }}</p>
         <p>{{ t("assembly.changes.revision", { revision: change.revision }) }}</p>
@@ -39,8 +41,45 @@ const { t } = useI18n();
 
 <style scoped>
 .ability-changes-view {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
   overflow-wrap: anywhere;
+  color: var(--color-text);
   font-size: var(--font-ui-note);
+}
+
+.ability-cards {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ability-card {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ability-card p,
+.ability-state {
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.ability-state {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: center;
 }
 </style>
