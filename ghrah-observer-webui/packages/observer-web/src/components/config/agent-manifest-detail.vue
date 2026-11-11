@@ -28,70 +28,55 @@ function truncate(text: string, max: number): string {
 </script>
 
 <template>
-  <div v-if="!manifest" class="text-gray-400 dark:text-gray-600 text-sm italic py-8 text-center">
+  <p v-if="!manifest" class="manifest-detail-empty">
     {{ t("config.agent.selectManifest") }}
-  </div>
-  <div
-    v-else
-    class="border border-gray-200 dark:border-gray-700 rounded p-4 bg-white dark:bg-gray-900 space-y-3"
-  >
-    <div class="flex items-center justify-between">
-      <h3 class="font-semibold">{{ manifest.title || manifest.name }}</h3>
+  </p>
+  <article v-else class="manifest-detail">
+    <header class="manifest-detail-heading">
+      <h3>{{ manifest.title || manifest.name }}</h3>
       <UiBadge>{{ manifest.namespace }}</UiBadge>
-    </div>
+    </header>
 
-    <div v-if="manifest.description" class="text-sm text-gray-600 dark:text-gray-400">
+    <p v-if="manifest.description" class="manifest-detail-description">
       {{ manifest.description }}
-    </div>
+    </p>
 
-    <div class="grid grid-cols-2 gap-2 text-sm">
+    <dl class="manifest-detail-facts">
       <div>
-        <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.name") }}</span>
-        <span class="ml-1 font-mono">{{ manifest.name }}</span>
+        <dt>{{ t("config.agent.name") }}</dt>
+        <dd>{{ manifest.name }}</dd>
       </div>
       <div>
-        <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.config") }}</span>
-        <span class="ml-1 font-mono">{{ manifest.endpoint_name || "—" }}</span>
+        <dt>{{ t("config.agent.config") }}</dt>
+        <dd>{{ manifest.endpoint_name || "—" }}</dd>
       </div>
       <div>
-        <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.temperature") }}</span>
-        <span class="ml-1">—</span>
+        <dt>{{ t("config.agent.temperature") }}</dt>
+        <dd>—</dd>
       </div>
       <div>
-        <span class="text-gray-500 dark:text-gray-400">{{ t("config.agent.maxIterations") }}</span>
-        <span class="ml-1">{{ manifest.max_iterations }}</span>
+        <dt>{{ t("config.agent.maxIterations") }}</dt>
+        <dd>{{ manifest.max_iterations }}</dd>
       </div>
-    </div>
+    </dl>
 
-    <div v-if="manifest.tags.length > 0" class="flex flex-wrap gap-1">
+    <div v-if="manifest.tags.length > 0" class="manifest-detail-tags">
       <UiBadge v-for="tag in manifest.tags" :key="tag">{{ tag }}</UiBadge>
     </div>
 
-    <div v-if="manifest.system_prompt" class="space-y-1">
-      <div class="text-xs text-gray-500 dark:text-gray-400 font-medium">
-        {{ t("config.agent.systemPrompt") }}
-      </div>
-      <pre
-        class="text-xs bg-gray-50 dark:bg-gray-800 p-2 rounded overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto"
-        >{{ truncate(manifest.system_prompt, 500) }}</pre>
-    </div>
+    <section v-if="manifest.system_prompt" class="manifest-detail-block">
+      <h4>{{ t("config.agent.systemPrompt") }}</h4>
+      <pre>{{ truncate(manifest.system_prompt, 500) }}</pre>
+    </section>
 
-    <div v-if="manifest.ability_refs.length > 0" class="space-y-1">
-      <div class="text-xs text-gray-500 dark:text-gray-400 font-medium">
-        {{ t("config.agent.abilities", { count: manifest.ability_refs.length }) }}
-      </div>
-      <ul class="text-xs space-y-0.5">
-        <li
-          v-for="ref in manifest.ability_refs"
-          :key="ref"
-          class="font-mono text-gray-700 dark:text-gray-300"
-        >
-          {{ ref }}
-        </li>
+    <section v-if="manifest.ability_refs.length > 0" class="manifest-detail-block">
+      <h4>{{ t("config.agent.abilities", { count: manifest.ability_refs.length }) }}</h4>
+      <ul>
+        <li v-for="ref in manifest.ability_refs" :key="ref">{{ ref }}</li>
       </ul>
-    </div>
+    </section>
 
-    <div class="flex gap-2 pt-2 border-t border-gray-100 dark:border-gray-800">
+    <div class="manifest-detail-actions">
       <UiButton variant="primary" @click="$emit('spawn')">
         {{ t("config.spawn.title") }}
       </UiButton>
@@ -102,5 +87,131 @@ function truncate(text: string, max: number): string {
         {{ t("config.agent.delete") }}
       </UiButton>
     </div>
-  </div>
+  </article>
 </template>
+
+<style scoped>
+.manifest-detail-empty,
+.manifest-detail {
+  margin: 0;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--font-ui-body);
+  overflow-wrap: anywhere;
+}
+
+.manifest-detail-empty {
+  padding: 1.5rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  text-align: center;
+}
+
+.manifest-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.manifest-detail-heading,
+.manifest-detail-tags,
+.manifest-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.manifest-detail-heading {
+  justify-content: space-between;
+}
+
+.manifest-detail-heading h3,
+.manifest-detail-description,
+.manifest-detail-block h4,
+.manifest-detail-facts {
+  margin: 0;
+}
+
+.manifest-detail-heading h3 {
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+}
+
+.manifest-detail-description {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.manifest-detail-facts {
+  display: grid;
+  gap: 0.75rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.manifest-detail-facts div {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.manifest-detail-facts dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.manifest-detail-facts dd,
+.manifest-detail-block li {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-ui-code);
+}
+
+.manifest-detail-block {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.manifest-detail-block h4 {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  font-weight: 600;
+}
+
+.manifest-detail-block pre,
+.manifest-detail-block ul {
+  margin: 0;
+}
+
+.manifest-detail-block pre {
+  max-height: 8rem;
+  padding: 0.5rem;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  font-size: var(--font-ui-code);
+  white-space: pre-wrap;
+}
+
+.manifest-detail-block ul {
+  padding: 0;
+  list-style: none;
+}
+
+.manifest-detail-block li + li {
+  margin-top: 0.125rem;
+}
+
+.manifest-detail-actions {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+</style>
