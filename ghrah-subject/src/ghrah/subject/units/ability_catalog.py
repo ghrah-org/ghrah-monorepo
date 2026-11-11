@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,13 +90,33 @@ def _builtin_rows() -> dict[tuple[str, str], AbilityPackageVersionRow]:
     return rows
 
 
+def _install_root_available(root: Path) -> bool:
+    """安装根是否真实可用：不是链接、是目录、且能枚举。
+
+    只判断「能不能读」，不判断里面有没有包：空目录也算可用。
+    符号链接与不可读目录按不可用处理，与 ``InstalledStore`` 的枚举口径一致，
+    避免 ``installed_available=true`` 却一个已安装包都列不出来。
+    """
+    if root.is_symlink() or not root.is_dir():
+        return False
+    try:
+        with os.scandir(root) as entries:
+            next(entries, None)
+    except OSError:
+        return False
+    return True
+
+
 def _installed_rows(
     root: str | None,
 ) -> tuple[bool, dict[tuple[str, str], AbilityPackageVersionRow]]:
     """返回安装侧是否可用，以及按全名和版本索引的行。"""
     if not root:
         return False, {}
-    installer = AbilityInstaller(Path(root))
+    root_path = Path(root)
+    if not _install_root_available(root_path):
+        return False, {}
+    installer = AbilityInstaller(root_path)
     rows: dict[tuple[str, str], AbilityPackageVersionRow] = {}
     grouped: dict[str, list[Any]] = {}
     for record in installer.list():

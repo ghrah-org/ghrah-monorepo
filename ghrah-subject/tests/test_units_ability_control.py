@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,7 +33,7 @@ from ghrah.subject.runtime.service_keys import (
     OBSERVER_EVENT_BUS,
     PROJECT_STORE,
 )
-from ghrah.subject.units.ability_catalog import build_package_groups
+from ghrah.subject.units.ability_catalog import build_package_catalog, build_package_groups
 from ghrah.subject.units.ability_control import (
     AbilityControlUnit,
     _authorized,
@@ -744,3 +746,42 @@ async def test_package_groups_align_definition_and_relation() -> None:
         for group in distribution.groups
         for row in group.versions
     )
+
+
+def test_installed_available_reflects_the_real_install_root(tmp_path: Any) -> None:
+    """安装根缺失、不是目录或指向链接时，目录不得声称安装侧可用。"""
+    assert build_package_catalog(None).installed_available is False
+    assert build_package_catalog(str(tmp_path / "missing")).installed_available is False
+
+    readable = tmp_path / "ability"
+    readable.mkdir()
+    catalog = build_package_catalog(str(readable))
+    assert catalog.installed_available is True
+    assert all(row.origin == "builtin" for row in catalog.packages)
+
+    as_file = tmp_path / "ability-file"
+    as_file.write_text("not a directory", encoding="utf-8")
+    assert build_package_catalog(str(as_file)).installed_available is False
+
+    as_link = tmp_path / "ability-link"
+    as_link.symlink_to(readable, target_is_directory=True)
+    assert build_package_catalog(str(as_link)).installed_available is False
+
+
+def test_installed_available_is_false_when_the_install_root_cannot_be_read(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """安装根存在但不可枚举时不可用，且不把整个目录读变成 500/503。"""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    real_scandir = os.scandir
+
+    def deny_scandir(path: Any) -> Any:
+        if Path(path) == locked:
+            raise PermissionError(13, "permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", deny_scandir)
+    catalog = build_package_catalog(str(locked))
+    assert catalog.installed_available is False
+    assert all(row.origin == "builtin" for row in catalog.packages)
