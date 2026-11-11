@@ -17,8 +17,13 @@ from pydantic import Field
 from ghrah.protocol.ability_tree import TreeModel
 
 __all__ = [
+    "AgentconfCapabilityConflictView",
+    "AgentconfCapabilityDetailView",
     "AgentconfCapabilityListView",
     "AgentconfCapabilitySummary",
+    "AgentconfCapabilityUpdatePreviewView",
+    "AgentconfCapabilityUpdateRequest",
+    "AgentconfCapabilityUpdateResultView",
     "AgentconfDeletedView",
     "AgentconfEndpointCreateRequest",
     "AgentconfEndpointListView",
@@ -374,6 +379,19 @@ class AgentconfCapabilitySummary(TreeModel):
     origin: str
 
 
+class AgentconfCapabilityDetailView(TreeModel):
+    """一份能力档案里已经声明的模型能力。未声明的字段不出现。"""
+
+    format: Literal["ghrah.agentconf-control.capability.v1"] = (
+        "ghrah.agentconf-control.capability.v1"
+    )
+    model_key: str
+    display_name: str
+    model_type: str
+    origin: str
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentconfCapabilityListView(TreeModel):
     """能力目录检索结果。"""
 
@@ -381,3 +399,45 @@ class AgentconfCapabilityListView(TreeModel):
         "ghrah.agentconf-control.capabilities.v1"
     )
     capabilities: list[AgentconfCapabilitySummary] = Field(default_factory=list)
+
+
+class AgentconfCapabilityConflictView(TreeModel):
+    """上游更新预览里不能自动覆盖的一条档案。"""
+
+    key: str
+    reason: str
+
+
+class AgentconfCapabilityUpdatePreviewView(TreeModel):
+    """上游更新预览。只给计数和冲突原因，不回传快照。"""
+
+    format: Literal["ghrah.agentconf-control.capability-update-preview.v1"] = (
+        "ghrah.agentconf-control.capability-update-preview.v1"
+    )
+    source: str
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    added_count: int = Field(ge=0)
+    updatable_count: int = Field(ge=0)
+    protected_count: int = Field(ge=0)
+    conflict_count: int = Field(ge=0)
+    missing_count: int = Field(ge=0)
+    conflicts: list[AgentconfCapabilityConflictView] = Field(default_factory=list)
+
+
+class AgentconfCapabilityUpdateRequest(TreeModel):
+    """应用先前预览到的那一版上游目录。"""
+
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class AgentconfCapabilityUpdateResultView(TreeModel):
+    """上游更新的应用结果。受保护和冲突项不会被写入。"""
+
+    format: Literal["ghrah.agentconf-control.capability-update-result.v1"] = (
+        "ghrah.agentconf-control.capability-update-result.v1"
+    )
+    added_count: int = Field(ge=0)
+    updated_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    protected_count: int = Field(ge=0)
+    conflict_count: int = Field(ge=0)

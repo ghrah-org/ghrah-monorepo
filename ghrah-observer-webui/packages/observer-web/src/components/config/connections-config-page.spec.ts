@@ -206,4 +206,199 @@ describe("ConnectionsConfigPage", () => {
     expect(wrapper.text()).not.toContain("资源已存在或违反引用约束");
     wrapper.unmount();
   });
+
+  it("uses a known API format list and filters capability profiles locally", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path.endsWith("/status")) {
+          return json({ format: "ghrah.agentconf-control.status.v1", schema_version: 6 });
+        }
+        if (path.endsWith("/capabilities")) {
+          return json({
+            format: "ghrah.agentconf-control.capabilities.v1",
+            capabilities: [
+              {
+                model_key: "openai/gpt",
+                display_name: "GPT",
+                model_type: "llm",
+                origin: "upstream",
+              },
+              {
+                model_key: "other/embed",
+                display_name: "Embed",
+                model_type: "llm",
+                origin: "upstream",
+              },
+            ],
+          });
+        }
+        if (path.endsWith("/providers")) {
+          return json({ format: "ghrah.agentconf-control.providers.v1", providers: [provider] });
+        }
+        return json({ format: "ghrah.agentconf-control.endpoints.v1", endpoints: [] });
+      }),
+    );
+    const wrapper = mount(ConnectionsConfigPage);
+    await flushPromises();
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "Model endpoints")!
+      .trigger("click");
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "New")!
+      .trigger("click");
+    await flushPromises();
+    const format = wrapper
+      .findAll("select")
+      .find((select) => select.text().includes("openai.chat_completions"));
+    expect(format).toBeTruthy();
+    expect(wrapper.get("form").attributes("role")).toBe("dialog");
+    expect(wrapper.get("[data-testid=connection-list]").isVisible()).toBe(true);
+    await format!.setValue("custom");
+    expect(wrapper.get("form").text()).toContain("Custom");
+    expect(wrapper.findAll("button").some((button) => button.text() === "Capability profile")).toBe(
+      false,
+    );
+    expect(wrapper.text()).toContain("GPT");
+    const fields = wrapper.findAll("input");
+    await fields[fields.length - 1]!.setValue("embed");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Embed");
+    expect(wrapper.text()).not.toContain("GPT");
+    wrapper.unmount();
+  });
+
+  it("previews an upstream catalog update and does not apply it when cancelled", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        const path = new URL(url).pathname;
+        calls.push(`${init?.method ?? "GET"} ${path}`);
+        if (path.endsWith("/status")) {
+          return json({ format: "ghrah.agentconf-control.status.v1", schema_version: 6 });
+        }
+        if (path.endsWith("/updates/preview")) {
+          return json({
+            format: "ghrah.agentconf-control.capability-update-preview.v1",
+            source: "models.dev",
+            source_sha256: "a".repeat(64),
+            added_count: 2,
+            updatable_count: 1,
+            protected_count: 4,
+            conflict_count: 0,
+            missing_count: 3,
+            conflicts: [],
+          });
+        }
+        if (path.endsWith("/capabilities")) {
+          return json({ format: "ghrah.agentconf-control.capabilities.v1", capabilities: [] });
+        }
+        return json({ format: "ghrah.agentconf-control.providers.v1", providers: [] });
+      }),
+    );
+    const wrapper = mount(ConnectionsConfigPage);
+    await flushPromises();
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "Capability catalog")!
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Nothing here yet.");
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Update from upstream")!
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("leave 4 protected");
+    expect(wrapper.text()).not.toContain("资源");
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Cancel")!
+      .trigger("click");
+    expect(calls.some((call) => call.startsWith("POST") && call.endsWith("/updates"))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("shows declared model capabilities in a catalog dialog and on the endpoint", async () => {
+    const profile = {
+      format: "ghrah.agentconf-control.capability.v1",
+      model_key: "openai/gpt",
+      display_name: "GPT",
+      model_type: "llm",
+      origin: "upstream",
+      capabilities: {
+        supports_vision: true,
+        max_context_length: 128000,
+        input_modalities: ["text", "image"],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path.endsWith("/profile")) return json(profile);
+        if (path.endsWith("/status")) {
+          return json({ format: "ghrah.agentconf-control.status.v1", schema_version: 6 });
+        }
+        if (path.endsWith("/capabilities")) {
+          return json({
+            format: "ghrah.agentconf-control.capabilities.v1",
+            capabilities: [
+              {
+                model_key: "openai/gpt",
+                display_name: "GPT",
+                model_type: "llm",
+                origin: "upstream",
+              },
+            ],
+          });
+        }
+        if (path.endsWith("/providers")) {
+          return json({ format: "ghrah.agentconf-control.providers.v1", providers: [provider] });
+        }
+        return json({ format: "ghrah.agentconf-control.endpoints.v1", endpoints: [] });
+      }),
+    );
+    const wrapper = mount(ConnectionsConfigPage);
+    await flushPromises();
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "Capability catalog")!
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Vision");
+    await wrapper.get("[data-testid=connection-list] button").trigger("click");
+    await flushPromises();
+    const dialog = wrapper.get("[role=dialog]");
+    expect(dialog.text()).toContain("GPT");
+    expect(dialog.text()).toContain("Vision");
+    expect(dialog.text()).toContain("Yes");
+    expect(dialog.text()).toContain("128000");
+    expect(dialog.text()).toContain("text, image");
+    await dialog.get("button").trigger("click");
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "Model endpoints")!
+      .trigger("click");
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "New")!
+      .trigger("click");
+    await flushPromises();
+    const select = wrapper.findAll("select").find((item) => item.text().includes("GPT"));
+    expect(select).toBeTruthy();
+    await select!.setValue("openai/gpt");
+    await flushPromises();
+    const shown = wrapper.get("[data-testid=endpoint-capabilities]");
+    expect(shown.text()).toContain("Model capabilities");
+    expect(shown.text()).toContain("Vision");
+    expect(shown.text()).toContain("Max context");
+    wrapper.unmount();
+  });
 });

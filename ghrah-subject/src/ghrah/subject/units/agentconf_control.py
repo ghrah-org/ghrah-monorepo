@@ -16,10 +16,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 from agentconf import AgentsConfig
+from agentconf.catalog import ModelsDevSource
 from agentconf.exceptions import (
     AgentsConfigError,
     CapabilityNotFoundError,
     CapabilityTypeMismatchError,
+    CatalogImportError,
     EndpointNotFoundError,
     MCPProviderNotFoundError,
     MCPServerNotFoundError,
@@ -40,8 +42,13 @@ from agentconf.models.secure import MASK, contains_mask, reveal
 from agentconf.storage.database import SCHEMA_VERSION
 from fastapi import APIRouter, Query, Request, Response
 from ghrah.protocol.agentconf_control import (
+    AgentconfCapabilityConflictView,
+    AgentconfCapabilityDetailView,
     AgentconfCapabilityListView,
     AgentconfCapabilitySummary,
+    AgentconfCapabilityUpdatePreviewView,
+    AgentconfCapabilityUpdateRequest,
+    AgentconfCapabilityUpdateResultView,
     AgentconfDeletedView,
     AgentconfEndpointCreateRequest,
     AgentconfEndpointListView,
@@ -242,6 +249,12 @@ def _raise_mapped(exc: Exception) -> None:
         raise AbilityApiError("not_found", str(exc), status=404) from exc
     if isinstance(exc, (ValidationError, ValueError, CapabilityTypeMismatchError)):
         raise AbilityApiError("invalid_request", str(exc), status=400) from exc
+    if isinstance(exc, CatalogImportError):
+        raise AbilityApiError(
+            "catalog_unavailable",
+            "能力目录暂时无法从上游更新",
+            status=503,
+        ) from exc
     if isinstance(exc, sqlite3.Error):
         raise AbilityApiError("unavailable", "配置库暂时不可用", status=503) from exc
     if isinstance(exc, AgentsConfigError):
@@ -928,6 +941,19 @@ def _resolve_server(config: SubjectConfig, resource_id: str) -> AgentconfMcpServ
         )
 
 
+def _capability_detail(config: SubjectConfig, model_key: str) -> AgentconfCapabilityDetailView:
+    """返回档案里明确声明的能力，不把未声明字段补成默认值。"""
+    with _open(config) as cfg:
+        profile = cfg.catalog_get(model_key)
+    return AgentconfCapabilityDetailView(
+        model_key=profile.model_key,
+        display_name=profile.display_name,
+        model_type=profile.model_type,
+        origin=str(profile.origin),
+        capabilities=profile.declaration(),
+    )
+
+
 def _capabilities(
     config: SubjectConfig, *, model_type: str | None, query: str | None
 ) -> AgentconfCapabilityListView:
@@ -947,6 +973,49 @@ def _capabilities(
             or needle in item.display_name.casefold()
         ]
         return AgentconfCapabilityListView(capabilities=matched)
+
+
+def _capability_update_preview(config: SubjectConfig) -> AgentconfCapabilityUpdatePreviewView:
+    """下载上游目录并只返回计数。快照留在服务端这一次调用里。"""
+    snapshot = ModelsDevSource().fetch()
+    with _open(config) as cfg:
+        plan = cfg.catalog_update_preview(snapshot)
+    return AgentconfCapabilityUpdatePreviewView(
+        source=snapshot.source,
+        source_sha256=snapshot.source_sha256,
+        added_count=len(plan.added),
+        updatable_count=len(plan.updatable),
+        protected_count=len(plan.protected),
+        conflict_count=len(plan.conflicts),
+        missing_count=len(plan.missing),
+        conflicts=[
+            AgentconfCapabilityConflictView(key=key, reason=reason)
+            for key, reason in sorted(plan.conflicts.items())
+        ],
+    )
+
+
+def _capability_update_apply(
+    config: SubjectConfig, body: AgentconfCapabilityUpdateRequest
+) -> AgentconfCapabilityUpdateResultView:
+    """再次下载。指纹与预览一致才写入新增项和可更新项。"""
+    snapshot = ModelsDevSource().fetch()
+    if snapshot.source_sha256 != body.source_sha256:
+        raise AbilityApiError(
+            "catalog_source_changed",
+            "上游目录已变化，请重新预览",
+            status=409,
+        )
+    with _open(config) as cfg:
+        plan = cfg.catalog_update_preview(snapshot)
+        result = cfg.catalog_update_apply(plan)
+    return AgentconfCapabilityUpdateResultView(
+        added_count=len(result["added"]),
+        updated_count=len(result["updated"]),
+        skipped_count=len(result["skipped"]),
+        protected_count=len(result["protected"]),
+        conflict_count=len(result["conflicts"]),
+    )
 
 
 def _blank(value: str | None) -> str | None:
@@ -1162,6 +1231,13 @@ def build_agentconf_control_router(*, config: SubjectConfig) -> APIRouter:
         await _guard(request)
         return await _run(lambda: _resolve_server(config, resource_id))
 
+    @router.get("/capabilities/profile", response_model=AgentconfCapabilityDetailView)
+    async def capability_profile(
+        request: Request, model_key: str = Query(min_length=1)
+    ) -> AgentconfCapabilityDetailView:
+        await _guard(request)
+        return await _run(lambda: _capability_detail(config, model_key))
+
     @router.get("/capabilities", response_model=AgentconfCapabilityListView)
     async def capabilities(
         request: Request,
@@ -1172,6 +1248,26 @@ def build_agentconf_control_router(*, config: SubjectConfig) -> APIRouter:
         return await _run(
             lambda: _capabilities(config, model_type=_blank(model_type), query=_blank(q))
         )
+
+    @router.post(
+        "/capabilities/updates/preview",
+        response_model=AgentconfCapabilityUpdatePreviewView,
+    )
+    async def preview_capability_update(
+        request: Request,
+    ) -> AgentconfCapabilityUpdatePreviewView:
+        await _guard(request)
+        return await _run(lambda: _capability_update_preview(config))
+
+    @router.post(
+        "/capabilities/updates",
+        response_model=AgentconfCapabilityUpdateResultView,
+    )
+    async def apply_capability_update(
+        body: AgentconfCapabilityUpdateRequest, request: Request
+    ) -> AgentconfCapabilityUpdateResultView:
+        await _guard(request)
+        return await _run(lambda: _capability_update_apply(config, body))
 
     return router
 

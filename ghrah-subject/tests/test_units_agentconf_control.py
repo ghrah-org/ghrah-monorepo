@@ -5,13 +5,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from agentconf import AgentsConfig
+from agentconf.catalog import ModelsDevSource
+from agentconf.exceptions import CapabilityNotFoundError, CatalogImportError
+from agentconf.models.capability_profile import CapabilityProfile
 from agentconf.models.secure import reveal
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import ghrah.subject.units.agentconf_control as agentconf_control
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.units.ability_control import register_ability_control_error_handlers
 from ghrah.subject.units.agentconf_control import build_agentconf_control_router
@@ -310,3 +316,117 @@ def test_top_level_api_key_mask_is_rejected(tmp_path: Path) -> None:
     with AgentsConfig(tmp_path / "config.db") as cfg:
         assert reveal(cfg.get_mcp_provider("vendor/work").api_key) == "mcp-secret"
         assert cfg.get_mcp_provider("vendor/work").revision == mcp["revision"]
+
+
+def _install_source(monkeypatch: pytest.MonkeyPatch, snapshots: list[object]) -> None:
+    queue = list(snapshots)
+
+    class Source:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def fetch(self) -> object:
+            if len(queue) == 1:
+                return queue[0]
+            return queue.pop(0)
+
+    monkeypatch.setattr(agentconf_control, "ModelsDevSource", Source)
+
+
+def _catalog_snapshot(rows: dict[str, str]) -> object:
+    payload = {key: {"id": key, "name": name} for key, name in rows.items()}
+    return ModelsDevSource.parse(json.dumps(payload).encode())
+
+
+def test_capability_update_preview_and_apply_keep_local_profiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.db"
+    with AgentsConfig(path) as cfg:
+        cfg.catalog_create(
+            CapabilityProfile(model_key="ghrah/held", display_name="Held", origin="local")
+        )
+    snapshot = _catalog_snapshot({"ghrah/held": "Upstream", "ghrah/fresh": "Fresh"})
+    _install_source(monkeypatch, [snapshot])
+    client = _client(path)
+    preview = client.post("/api/v1/agentconf/capabilities/updates/preview")
+    assert preview.status_code == 200
+    body = preview.json()
+    assert "snapshot" not in body
+    assert body["source_sha256"] == snapshot.source_sha256
+    assert body["added_count"] >= 1
+    assert any(item["key"] == "ghrah/held" for item in body["conflicts"])
+    with AgentsConfig(path) as cfg:
+        with pytest.raises(CapabilityNotFoundError):
+            cfg.catalog_get("ghrah/fresh")
+    applied = client.post(
+        "/api/v1/agentconf/capabilities/updates",
+        json={"source_sha256": body["source_sha256"]},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["added_count"] >= 1
+    with AgentsConfig(path) as cfg:
+        assert cfg.catalog_get("ghrah/fresh").display_name == "Fresh"
+        held = cfg.catalog_get("ghrah/held")
+        assert held.display_name == "Held"
+        assert held.origin == "local"
+
+
+def test_capability_update_rejects_a_changed_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _catalog_snapshot({"ghrah/layout-a": "A"})
+    second = _catalog_snapshot({"ghrah/layout-b": "B"})
+    _install_source(monkeypatch, [first, second])
+    client = _client(tmp_path / "config.db")
+    preview = client.post("/api/v1/agentconf/capabilities/updates/preview")
+    assert preview.status_code == 200
+    applied = client.post(
+        "/api/v1/agentconf/capabilities/updates",
+        json={"source_sha256": preview.json()["source_sha256"]},
+    )
+    assert applied.status_code == 409
+    assert applied.json()["error"]["code"] == "catalog_source_changed"
+    with AgentsConfig(tmp_path / "config.db") as cfg:
+        with pytest.raises(CapabilityNotFoundError):
+            cfg.catalog_get("ghrah/layout-a")
+        with pytest.raises(CapabilityNotFoundError):
+            cfg.catalog_get("ghrah/layout-b")
+
+
+def test_capability_update_reports_upstream_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Source:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def fetch(self) -> object:
+            raise CatalogImportError("models.dev 导入失败: offline")
+
+    monkeypatch.setattr(agentconf_control, "ModelsDevSource", Source)
+    client = _client(tmp_path / "config.db")
+    response = client.post("/api/v1/agentconf/capabilities/updates/preview")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "catalog_unavailable"
+    assert "offline" not in response.json()["error"]["message"]
+
+
+def test_capability_profile_returns_only_declared_fields(tmp_path: Path) -> None:
+    client = _client(tmp_path / "config.db")
+    found = client.get(
+        "/api/v1/agentconf/capabilities/profile", params={"model_key": "example-VLA"}
+    )
+    assert found.status_code == 200
+    body = found.json()
+    assert body["format"] == "ghrah.agentconf-control.capability.v1"
+    assert body["model_type"] == "llm"
+    assert body["capabilities"]["supports_vision"] is True
+    assert body["capabilities"]["max_context_length"] == 1000000
+    assert body["capabilities"]["input_modalities"] == ["text", "image"]
+    assert "supports_streaming" not in body["capabilities"]
+    missing = client.get(
+        "/api/v1/agentconf/capabilities/profile", params={"model_key": "missing/model"}
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"

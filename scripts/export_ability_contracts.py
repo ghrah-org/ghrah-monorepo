@@ -74,8 +74,13 @@ from ghrah.protocol.agent_control import (
     AgentSummaryView,
 )
 from ghrah.protocol.agentconf_control import (
+    AgentconfCapabilityConflictView,
+    AgentconfCapabilityDetailView,
     AgentconfCapabilityListView,
     AgentconfCapabilitySummary,
+    AgentconfCapabilityUpdatePreviewView,
+    AgentconfCapabilityUpdateRequest,
+    AgentconfCapabilityUpdateResultView,
     AgentconfDeletedView,
     AgentconfEndpointCreateRequest,
     AgentconfEndpointListView,
@@ -194,8 +199,13 @@ AGENTCONF_MODELS = (
     AgentconfMcpServerCreateRequest,
     AgentconfMcpServerPatchRequest,
     AgentconfMcpServerResolveView,
-    AgentconfCapabilitySummary,
+    AgentconfCapabilityConflictView,
+    AgentconfCapabilityDetailView,
     AgentconfCapabilityListView,
+    AgentconfCapabilitySummary,
+    AgentconfCapabilityUpdatePreviewView,
+    AgentconfCapabilityUpdateRequest,
+    AgentconfCapabilityUpdateResultView,
 )
 
 
