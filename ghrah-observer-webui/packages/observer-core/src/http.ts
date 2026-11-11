@@ -198,8 +198,16 @@ export class HttpClient {
     return this.request<T>("GET", path, options, true);
   }
 
+  async post<T>(path: string, body: unknown, options: HttpRequestOptions = {}): Promise<T> {
+    return this.request<T>("POST", path, { ...options, body }, false);
+  }
+
   async put<T>(path: string, body: unknown, options: HttpRequestOptions = {}): Promise<T> {
     return this.request<T>("PUT", path, { ...options, body }, false);
+  }
+
+  async patch<T>(path: string, body: unknown, options: HttpRequestOptions = {}): Promise<T> {
+    return this.request<T>("PATCH", path, { ...options, body }, false);
   }
 
   async delete<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
@@ -207,7 +215,7 @@ export class HttpClient {
   }
 
   private async request<T>(
-    method: "GET" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     options: HttpRequestOptions,
     retryable: boolean,
@@ -226,7 +234,7 @@ export class HttpClient {
   }
 
   private async requestOnce<T>(
-    method: "GET" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     options: HttpRequestOptions,
   ): Promise<T> {

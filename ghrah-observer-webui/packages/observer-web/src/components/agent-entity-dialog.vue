@@ -5,8 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import { useProjectsStore } from "@ghrah/observer-core";
-import { type AgentSnapshot, AgentSnapshotSchema } from "@ghrah/protocol";
+import { HttpClient, useConnectionStore, useProjectsStore } from "@ghrah/observer-core";
+import {
+  AgentconfEndpointListViewSchema,
+  type AgentSnapshot,
+  AgentSnapshotSchema,
+} from "@ghrah/protocol";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { z } from "zod";
@@ -28,6 +32,7 @@ const selectedTypes = ref<string[]>([]);
 const modelName = ref("");
 const modelNames = ref<string[]>([]);
 const modelCatalogError = ref("");
+let modelEpoch = 0;
 const name = ref("");
 const cluster = ref("");
 const prompt = ref("");
@@ -72,6 +77,27 @@ const canCreate = computed(
 function stringArrayOrNull(value: unknown): string[] | null {
   const parsed = z.array(z.string()).safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+async function preferEndpointNames(fallback: string[]) {
+  const epoch = ++modelEpoch;
+  try {
+    const connection = useConnectionStore();
+    const http = new HttpClient({
+      baseUrl: connection.httpBaseUrl,
+      token: connection.apiToken,
+      timeoutMs: 4000,
+    });
+    const page = AgentconfEndpointListViewSchema.parse(
+      await http.get("/api/v1/agentconf/endpoints", { query: { model_type: "llm" } }),
+    );
+    if (epoch !== modelEpoch) return;
+    const names = page.endpoints.map((item) => item.name);
+    if (modelName.value && !names.includes(modelName.value)) names.unshift(modelName.value);
+    modelNames.value = names;
+  } catch {
+    if (epoch === modelEpoch) modelNames.value = fallback;
+  }
 }
 const abilityView = computed(() => {
   const values = snapshot.value?.abilities;
@@ -150,7 +176,9 @@ function applySnapshot(value: AgentSnapshot) {
   if (entityPrompt.value === null) entityPrompt.value = value.specification.system_prompt;
   snapshot.value = value;
   modelName.value = value.specification.endpoint_name ?? "";
-  modelNames.value = stringArrayOrNull(value.abilities.model_config_names) ?? [];
+  const fallback = stringArrayOrNull(value.abilities.model_config_names) ?? [];
+  modelNames.value = fallback;
+  void preferEndpointNames(fallback);
   modelCatalogError.value =
     typeof value.abilities.model_catalog_error === "string"
       ? value.abilities.model_catalog_error
@@ -188,6 +216,7 @@ async function refresh() {
         types.value = result.available_ability_types;
         if (!types.value.length) source.value = "manifest";
         modelNames.value = result.model_config_names;
+        void preferEndpointNames(result.model_config_names);
         modelCatalogError.value = result.model_catalog_error ?? "";
       },
     );

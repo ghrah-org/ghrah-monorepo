@@ -93,4 +93,15 @@ describe("HttpClient", () => {
     expect((error as HttpError).status).toBe(0);
     expect((error as HttpError).message).toContain("超时");
   });
+
+  it("sends POST and PATCH bodies without retrying", async () => {
+    const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(jsonResponse({ ok: true }));
+    const client = new HttpClient({ baseUrl: "http://localhost", fetchImpl });
+    await client.post("/api/v1/agentconf/providers", { name: "gateway" });
+    await client.patch("/api/v1/agentconf/providers/id", { expected_revision: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1].method).toBe("POST");
+    expect(JSON.parse(fetchImpl.mock.calls[0]?.[1].body ?? "")).toEqual({ name: "gateway" });
+    expect(fetchImpl.mock.calls[1]?.[1].method).toBe("PATCH");
+  });
 });

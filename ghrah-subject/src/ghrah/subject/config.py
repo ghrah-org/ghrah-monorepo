@@ -367,6 +367,8 @@ class SubjectConfig:
         "http://localhost:5173",
         "http://localhost:5180",
     )
+    # 空值使用 agentconf 的默认库 ``~/.agentconf/config.db``。测试和特殊部署可指向别的文件。
+    agentconf_db_path: str | None = None
 
     # private backing（init=False，__post_init__ 后必有值；保证 property 非 Optional）。
     _persistence: PersistenceConfig = field(init=False)
@@ -730,6 +732,7 @@ class SubjectConfig:
                 ).split(",")
                 if item.strip()
             ),
+            agentconf_db_path=os.environ.get("GHRAH_SUBJECT_AGENTCONF_DB_PATH") or None,
         )
 
 

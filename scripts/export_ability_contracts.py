@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """从 Python 作者模型单向生成 Ability 消费者的 Zod 校验器。
 
-三组生成物共享同一个受限 schema 子集：
+四组生成物共享同一个受限 schema 子集：
 - ``ability-tree.generated.ts``：既有 Scheme 能力树契约；
 - ``ability-control.generated.ts``：观察端能力管理面契约；
-- ``agent-control.generated.ts``：观察端 Agent 资源契约。
+- ``agent-control.generated.ts``：观察端 Agent 资源契约；
+- ``agentconf-control.generated.ts``：观察端 Agentconf 连接配置契约。
 """
 
 from __future__ import annotations
@@ -67,6 +68,35 @@ from ghrah.protocol.agent_control import (
     AgentSpecPatch,
     AgentSummaryView,
 )
+from ghrah.protocol.agentconf_control import (
+    AgentconfCapabilityListView,
+    AgentconfCapabilitySummary,
+    AgentconfDeletedView,
+    AgentconfEndpointCreateRequest,
+    AgentconfEndpointListView,
+    AgentconfEndpointPatchRequest,
+    AgentconfEndpointResolveView,
+    AgentconfEndpointView,
+    AgentconfMcpProviderCreateRequest,
+    AgentconfMcpProviderListView,
+    AgentconfMcpProviderPatchRequest,
+    AgentconfMcpProviderReferencesView,
+    AgentconfMcpProviderView,
+    AgentconfMcpServerCreateRequest,
+    AgentconfMcpServerListView,
+    AgentconfMcpServerPatchRequest,
+    AgentconfMcpServerResolveView,
+    AgentconfMcpServerView,
+    AgentconfProviderCreateRequest,
+    AgentconfProviderListView,
+    AgentconfProviderPatchRequest,
+    AgentconfProviderReferencesView,
+    AgentconfProviderView,
+    AgentconfRevisionRequest,
+    AgentconfStatusView,
+    BindingView,
+    McpProviderReferenceView,
+)
 from pydantic import BaseModel
 
 TREE_MODELS = (
@@ -126,6 +156,37 @@ AGENT_MODELS = (
 TREE_TARGET = "ghrah-observer-webui/packages/protocol/src/ability-tree.generated.ts"
 CONTROL_TARGET = "ghrah-observer-webui/packages/protocol/src/ability-control.generated.ts"
 AGENT_TARGET = "ghrah-observer-webui/packages/protocol/src/agent-control.generated.ts"
+AGENTCONF_TARGET = "ghrah-observer-webui/packages/protocol/src/agentconf-control.generated.ts"
+
+AGENTCONF_MODELS = (
+    AgentconfStatusView,
+    AgentconfRevisionRequest,
+    AgentconfDeletedView,
+    BindingView,
+    AgentconfProviderView,
+    AgentconfProviderListView,
+    AgentconfProviderCreateRequest,
+    AgentconfProviderPatchRequest,
+    AgentconfProviderReferencesView,
+    AgentconfEndpointView,
+    AgentconfEndpointListView,
+    AgentconfEndpointCreateRequest,
+    AgentconfEndpointPatchRequest,
+    AgentconfEndpointResolveView,
+    AgentconfMcpProviderView,
+    AgentconfMcpProviderListView,
+    AgentconfMcpProviderCreateRequest,
+    AgentconfMcpProviderPatchRequest,
+    McpProviderReferenceView,
+    AgentconfMcpProviderReferencesView,
+    AgentconfMcpServerView,
+    AgentconfMcpServerListView,
+    AgentconfMcpServerCreateRequest,
+    AgentconfMcpServerPatchRequest,
+    AgentconfMcpServerResolveView,
+    AgentconfCapabilitySummary,
+    AgentconfCapabilityListView,
+)
 
 
 def _schema_expression(
@@ -244,7 +305,7 @@ def _generate(
 
 
 def _targets() -> list[tuple[Path, str]]:
-    """返回三组生成物的目标路径与预期内容。"""
+    """返回四组生成物的目标路径与预期内容。"""
     root = Path(__file__).resolve().parents[1]
     tree_text = _generate(
         TREE_MODELS,
@@ -256,10 +317,12 @@ def _targets() -> list[tuple[Path, str]]:
     exported = frozenset(re.findall(r"export const (\w+)Schema", tree_text))
     control_text = _generate(CONTROL_MODELS, external=exported)
     agent_text = _generate(AGENT_MODELS)
+    agentconf_text = _generate(AGENTCONF_MODELS)
     return [
         (root / TREE_TARGET, tree_text),
         (root / CONTROL_TARGET, control_text),
         (root / AGENT_TARGET, agent_text),
+        (root / AGENTCONF_TARGET, agentconf_text),
     ]
 
 

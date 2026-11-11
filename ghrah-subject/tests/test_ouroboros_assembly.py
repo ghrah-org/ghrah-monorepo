@@ -79,6 +79,7 @@ async def test_full_assembly_all_fibers_active(
             "project",
             "ability_control",
             "agent_control",
+            "agentconf_control",
             "room",
             "recovery",
             "room_filter",

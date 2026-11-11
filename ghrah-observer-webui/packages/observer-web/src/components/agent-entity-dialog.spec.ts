@@ -6,7 +6,7 @@
 import { useConnectionStore, useProjectsStore } from "@ghrah/observer-core";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ref } from "vue";
 import AgentEntityDialog from "./agent-entity-dialog.vue";
 const api = vi.hoisted(() => ({
@@ -74,6 +74,7 @@ function button(wrapper: ReturnType<typeof render>, text: string) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
   setActivePinia(createPinia());
   useConnectionStore().setConnected();
   useProjectsStore().setProjectsFromList([
@@ -118,6 +119,9 @@ beforeEach(() => {
     });
   });
   api.listInbox.mockResolvedValue({ items: [], next_before_seq: null });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 it("reads saved sessions and history while offline without starting the actor", async () => {
   const w = render();
@@ -348,5 +352,40 @@ it("saves a model binding independently from the entity name", async () => {
   await button(w, "Save model binding").trigger("click");
   await flushPromises();
   expect(api.configureModel).toHaveBeenCalledWith("shared-model", 5);
+  w.unmount();
+});
+
+it("prefers llm endpoint names from the management API", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            format: "ghrah.agentconf-control.endpoints.v1",
+            endpoints: [
+              {
+                format: "ghrah.agentconf-control.endpoint.v1",
+                id: "e1",
+                name: "chat-main",
+                provider_id: "p1",
+                provider_name: "gateway",
+                model_name: "m",
+                model_type: "llm",
+                api_format: "openai.responses",
+                capabilities_key: null,
+                revision: 1,
+                created_at: "2026-11-11T00:00:00+00:00",
+                updated_at: "2026-11-11T00:00:00+00:00",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    ),
+  );
+  const w = render();
+  await flushPromises();
+  expect(w.get('[data-testid="model-config"]').text()).toContain("chat-main");
   w.unmount();
 });
