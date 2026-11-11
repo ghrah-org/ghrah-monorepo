@@ -17,12 +17,12 @@ import type { ContentBlock } from "@ghrah/protocol";
 import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  CONVERSATION_WIDTH_DEFAULT_REM,
   CONVERSATION_WIDTH_MAX_REM,
   CONVERSATION_WIDTH_MIN_REM,
   CONVERSATION_WIDTH_STEP_REM,
   conversationWidthRem,
   previewConversationWidth,
-  resetConversationWidth,
   setConversationWidth,
 } from "@/composables/useConversationWidth";
 import { useMarkdown } from "@/composables/useMarkdown";
@@ -234,9 +234,64 @@ const { onScroll } = useTabScrollRestore(messageContainer, {
   target: () => (sticky.value ? "bottom" : null),
 });
 
+let applyingWidth = false;
+
 function handleScroll(): void {
-  sticky.value = isNearBottom();
+  // 调宽引起的滚动是程序式位置校正，不代表用户改变贴底/上翻意图。
+  if (!applyingWidth) sticky.value = isNearBottom();
   onScroll();
+}
+
+function firstVisibleEntry(el: HTMLElement): { node: HTMLElement; offset: number } | null {
+  const containerTop = el.getBoundingClientRect().top;
+  for (const node of el.querySelectorAll<HTMLElement>(".chat-entry")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > containerTop) return { node, offset: rect.top - containerTop };
+  }
+  return null;
+}
+
+function restoreEntryAnchor(el: HTMLElement, anchor: { node: HTMLElement; offset: number }) {
+  const containerTop = el.getBoundingClientRect().top;
+  const delta = anchor.node.getBoundingClientRect().top - containerTop - anchor.offset;
+  if (Math.abs(delta) > 0.5) el.scrollTop += delta;
+}
+
+/**
+ * 调宽期间锁定纵向阅读位置：贴底时保持贴底，否则锚定第一条可见消息，
+ * 宽度变化引起回流后把它放回原视口偏移，避免内容随拖拽上下漂移。
+ */
+function applyConversationWidth(value: number, commit: boolean) {
+  const el = messageContainer.value;
+  const keepBottom = sticky.value;
+  const anchor = el && !keepBottom ? firstVisibleEntry(el) : null;
+  applyingWidth = true;
+  try {
+    if (commit) setConversationWidth(value);
+    else previewConversationWidth(value);
+    if (!el) return;
+    // 读一次 scrollHeight 强制回流，再按锚点校正位置。
+    void el.scrollHeight;
+    if (keepBottom) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (anchor) restoreEntryAnchor(el, anchor);
+  } finally {
+    applyingWidth = false;
+  }
+}
+
+function previewWidth(value: number): void {
+  applyConversationWidth(value, false);
+}
+
+function commitWidth(value: number): void {
+  applyConversationWidth(value, true);
+}
+
+function resetWidth(): void {
+  applyConversationWidth(CONVERSATION_WIDTH_DEFAULT_REM, true);
 }
 
 // 贴底时新消息才自动跟随滚底；上翻浏览历史不被打断
@@ -432,17 +487,29 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
         </div>
       </div>
 
-      <!-- 手柄只在宽屏挂载；窄屏下拉宽本就该占满，给了只会诱导用户把自己拖窄。 -->
-      <ConversationResizer
-        v-if="resizable"
-        :width="conversationWidthRem"
-        :min="CONVERSATION_WIDTH_MIN_REM"
-        :max="maxWidthRem"
-        :step="CONVERSATION_WIDTH_STEP_REM"
-        @preview="previewConversationWidth"
-        @commit="setConversationWidth"
-        @reset="resetConversationWidth"
-      />
+      <!-- 左右各一只手柄；窄屏列宽本就该占满，不放手柄以免诱导用户把自己拖窄。 -->
+      <template v-if="resizable">
+        <ConversationResizer
+          side="left"
+          :width="conversationWidthRem"
+          :min="CONVERSATION_WIDTH_MIN_REM"
+          :max="maxWidthRem"
+          :step="CONVERSATION_WIDTH_STEP_REM"
+          @preview="previewWidth"
+          @commit="commitWidth"
+          @reset="resetWidth"
+        />
+        <ConversationResizer
+          side="right"
+          :width="conversationWidthRem"
+          :min="CONVERSATION_WIDTH_MIN_REM"
+          :max="maxWidthRem"
+          :step="CONVERSATION_WIDTH_STEP_REM"
+          @preview="previewWidth"
+          @commit="commitWidth"
+          @reset="resetWidth"
+        />
+      </template>
     </div>
 
     <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
@@ -467,9 +534,13 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
  * max-width 用 min() 再收一道：窗口变窄时列宽自动退到「可用宽度 - 3rem」，
  * 既不会顶掉手柄的位置，也不会让手柄被挤出视野。3rem 与 chat-panel 里的
  * RESIZER_GUTTER_REM 对应（两侧各 1.5rem）。
+ *
+ * overflow-anchor 关掉浏览器自带的滚动锚定：拖宽时由 applyConversationWidth
+ * 显式锚定第一条可见消息，避免两套锚定互相打架。
  */
 .chat-conversation {
   max-width: min(var(--width-conversation), calc(100% - 3rem));
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
 }

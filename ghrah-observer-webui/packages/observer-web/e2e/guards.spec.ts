@@ -264,3 +264,179 @@ for (const width of [1600, 1024]) {
     });
   }
 }
+
+/** 列宽手柄：左右各一、落在滚动条外侧，拖动对称调宽，双击复位。 */
+test("宽度手柄：左右各一且不压滚动条，拖拽对称调宽", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await openProject(page);
+  await page.locator(".room-list-row", { hasText: "architecture" }).click();
+  await expect(page.locator(".chat-conversation")).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const conv = document.querySelector(".chat-conversation") as HTMLElement;
+    const cr = conv.getBoundingClientRect();
+    const handles = [...document.querySelectorAll(".conversation-resizer")] as HTMLElement[];
+    return {
+      conv: { left: cr.left, right: cr.right, top: cr.top, bottom: cr.bottom },
+      handles: handles.map((handle) => {
+        const rect = handle.getBoundingClientRect();
+        return {
+          side: handle.classList.contains("is-left") ? "left" : "right",
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+        };
+      }),
+    };
+  });
+  expect(geometry.handles.map((handle) => handle.side).sort()).toEqual(["left", "right"]);
+  const [leftHandle, rightHandle] = geometry.handles;
+  // 手柄整体落在列外侧：不压消息列，也就不压列内的滚动条。
+  expect(leftHandle.right).toBeLessThanOrEqual(geometry.conv.left - 1);
+  expect(rightHandle.left).toBeGreaterThanOrEqual(geometry.conv.right + 1);
+  // 手柄纵向覆盖会话区，整列高度都能抓取。
+  for (const handle of geometry.handles) {
+    expect(handle.top).toBeLessThanOrEqual(geometry.conv.top + 2);
+    expect(handle.bottom).toBeGreaterThanOrEqual(geometry.conv.bottom - 2);
+  }
+
+  const width = () =>
+    page.evaluate(() =>
+      Math.round(
+        (document.querySelector(".chat-conversation") as HTMLElement).getBoundingClientRect().width,
+      ),
+    );
+  const drag = async (selector: string, dx: number) => {
+    const box = await page.locator(selector).boundingBox();
+    if (!box) throw new Error(`missing handle: ${selector}`);
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 5; step += 1) {
+      await page.mouse.move(box.x + box.width / 2 + (dx * step) / 5, y);
+      await page.waitForTimeout(20);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(80);
+  };
+
+  const start = await width();
+  // 居中的列单侧拖动 20px，列宽变化 40px（两侧同时外扩）。
+  await drag(".conversation-resizer.is-right", 20);
+  expect(Math.abs((await width()) - (start + 40))).toBeLessThan(4);
+  await drag(".conversation-resizer.is-left", -20);
+  expect(Math.abs((await width()) - (start + 80))).toBeLessThan(4);
+  // 调宽后手柄仍贴在列外侧，不会随着列变宽而被滚动条压住。
+  const resized = await page.evaluate(() => {
+    const conv = document.querySelector(".chat-conversation") as HTMLElement;
+    const cr = conv.getBoundingClientRect();
+    const handles = [...document.querySelectorAll(".conversation-resizer")] as HTMLElement[];
+    return {
+      conv: { left: cr.left, right: cr.right },
+      handles: handles.map((handle) => {
+        const rect = handle.getBoundingClientRect();
+        return {
+          side: handle.classList.contains("is-left") ? "left" : "right",
+          left: rect.left,
+          right: rect.right,
+        };
+      }),
+    };
+  });
+  const resizedLeft = resized.handles.find((handle) => handle.side === "left")!;
+  const resizedRight = resized.handles.find((handle) => handle.side === "right")!;
+  expect(resizedLeft.right).toBeLessThanOrEqual(resized.conv.left - 1);
+  expect(resizedRight.left).toBeGreaterThanOrEqual(resized.conv.right + 1);
+  // 双击回到默认宽度。
+  await page.locator(".conversation-resizer.is-right").dblclick();
+  await page.waitForTimeout(100);
+  expect(Math.abs((await width()) - start)).toBeLessThan(2);
+});
+
+/** 拖宽时锁定纵向阅读位置：上翻时锚定首条可见消息，位置由 scrollTop 主动补偿。 */
+test("拖宽时锁定纵向阅读位置", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await openProject(page);
+  await page.locator(".room-list-row", { hasText: "architecture" }).click();
+  const input = page.locator("textarea.field-multiline-chat");
+  await expect(input).toBeVisible();
+
+  // 演示房间内容不足以滚动：发几条长消息把会话撑到可纵向滚动。
+  for (let i = 0; i < 8; i += 1) {
+    await input.fill(
+      `消息 ${i}：` +
+        Array(30)
+          .fill("这是一段足够长的聊天内容，用来把会话撑到可以纵向滚动，观察拖宽时的滚动位置。")
+          .join(" "),
+    );
+    await input.press("Enter");
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(400);
+
+  const readState = () =>
+    page.evaluate(() => {
+      const el = document.querySelector(".chat-conversation") as HTMLElement;
+      const containerTop = el.getBoundingClientRect().top;
+      const entries = [...el.querySelectorAll(".chat-entry")] as HTMLElement[];
+      const firstVisible = entries.find(
+        (entry) => entry.getBoundingClientRect().bottom > containerTop,
+      );
+      return {
+        scrollTop: el.scrollTop,
+        max: el.scrollHeight - el.clientHeight,
+        anchor: firstVisible ? firstVisible.getBoundingClientRect().top - containerTop : null,
+      };
+    });
+
+  // 放到中间位置：既非贴底，锚点之上也有内容，拖窄必然引起回流。
+  await page.evaluate(() => {
+    const el = document.querySelector(".chat-conversation") as HTMLElement;
+    el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2);
+  });
+  await page.waitForTimeout(120);
+  const before = await readState();
+  expect(before.anchor).not.toBeNull();
+
+  const box = await page.locator(".conversation-resizer.is-right").boundingBox();
+  if (!box) throw new Error("missing right handle");
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width / 2, y);
+  await page.mouse.down();
+  for (let step = 1; step <= 6; step += 1) {
+    await page.mouse.move(box.x + box.width / 2 - (36 * step) / 6, y);
+    await page.waitForTimeout(30);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const after = await readState();
+
+  // 首条可见消息停在原视口偏移；scrollTop 主动补偿，而不是内容被卷走。
+  expect(Math.abs((after.anchor ?? 0) - (before.anchor ?? 0))).toBeLessThan(2);
+  expect(after.scrollTop).toBeGreaterThan(before.scrollTop + 10);
+  expect(after.max).toBeGreaterThan(before.max + 10);
+
+  // 贴底时调宽保持贴底：内容高度随宽度变化，视口仍然停在最新消息处。
+  await page.evaluate(() => {
+    const el = document.querySelector(".chat-conversation") as HTMLElement;
+    el.scrollTop = el.scrollHeight;
+  });
+  await page.waitForTimeout(120);
+  const bottomBefore = await readState();
+  expect(bottomBefore.max - bottomBefore.scrollTop).toBeLessThan(2);
+
+  const bottomBox = await page.locator(".conversation-resizer.is-right").boundingBox();
+  if (!bottomBox) throw new Error("missing right handle");
+  const bottomY = bottomBox.y + bottomBox.height / 2;
+  await page.mouse.move(bottomBox.x + bottomBox.width / 2, bottomY);
+  await page.mouse.down();
+  for (let step = 1; step <= 4; step += 1) {
+    await page.mouse.move(bottomBox.x + bottomBox.width / 2 - (24 * step) / 4, bottomY);
+    await page.waitForTimeout(30);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const bottomAfter = await readState();
+  expect(bottomAfter.max - bottomAfter.scrollTop).toBeLessThan(2);
+});

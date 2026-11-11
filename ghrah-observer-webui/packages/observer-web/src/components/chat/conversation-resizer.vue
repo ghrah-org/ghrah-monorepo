@@ -9,12 +9,16 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 /**
- * 会话列的宽度手柄。
+ * 会话列的宽度手柄（左右各一个，对称调节居中的消息列）。
  *
  * 只负责交互，不持有状态：拖拽过程发 preview（父级只改内联变量），
  * 松手或键盘调整才发 commit（父级写响应式状态与存储）。
+ *
+ * 列是居中的，所以单侧拖动 Δ 时列宽变化 2Δ、另一侧同步外扩，手柄
+ * 才能跟住指针。
  */
 const props = defineProps<{
+  side: "left" | "right";
   /** 已提交的列宽（rem）。 */
   width: number;
   min: number;
@@ -35,6 +39,10 @@ const hovering = ref(false);
 const dragging = ref(false);
 const focused = ref(false);
 const gripVisible = computed(() => hovering.value || dragging.value || focused.value);
+
+/** 向列中心方向为缩小，远离列中心为放大；左右手柄的按键映射因此相反。 */
+const growKey = computed(() => (props.side === "right" ? "ArrowRight" : "ArrowLeft"));
+const shrinkKey = computed(() => (props.side === "right" ? "ArrowLeft" : "ArrowRight"));
 
 let startX = 0;
 let startWidth = 0;
@@ -63,7 +71,9 @@ function onPointerDown(event: PointerEvent) {
 
 function onPointerMove(event: PointerEvent) {
   if (!dragging.value) return;
-  pending = clamp(startWidth + (event.clientX - startX) * pxToRem());
+  // 列宽变化是单侧位移的两倍：居中的列两侧同时向外/向内移动。
+  const factor = props.side === "right" ? 2 : -2;
+  pending = clamp(startWidth + (event.clientX - startX) * pxToRem() * factor);
   emit("preview", pending);
 }
 
@@ -85,13 +95,14 @@ function onPointerCancel(event: PointerEvent) {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  const moves: Record<string, number> = {
-    ArrowLeft: -props.step,
-    ArrowRight: props.step,
-  };
-  if (event.key in moves) {
+  if (event.key === growKey.value) {
     event.preventDefault();
-    emit("commit", clamp(props.width + moves[event.key]));
+    emit("commit", clamp(props.width + props.step));
+    return;
+  }
+  if (event.key === shrinkKey.value) {
+    event.preventDefault();
+    emit("commit", clamp(props.width - props.step));
     return;
   }
   if (event.key === "Home") {
@@ -108,8 +119,7 @@ function onKeydown(event: KeyboardEvent) {
 
 <template>
   <div
-    class="conversation-resizer"
-    :class="{ 'is-active': gripVisible }"
+    :class="['conversation-resizer', `is-${side}`, { 'is-active': dragging }]"
     role="separator"
     aria-orientation="vertical"
     :aria-label="t('chat.resize.handle')"
@@ -135,14 +145,13 @@ function onKeydown(event: KeyboardEvent) {
 
 <style scoped>
 /*
- * 命中区紧贴会话列右缘、落在列外的留白里，因此不会压住列的滚动条。
- * 列宽本身已被父级收成 min(变量, 100% - 3rem)，这里同步用同一个 min()，
- * 于是无论拖到多大、窗口多窄，手柄都稳稳停在列的右侧 0–0.75rem 处。
+ * 手柄落在列外侧的留白里：列是居中的，左右留白各为 (100% - 列宽) / 2，
+ * 手柄再往外让 0.25rem 贴边、自身宽 0.75rem，于是完全不压滚动条。
+ * 留白最窄时（列被「100% - 3rem」收住）单侧仍有 1.5rem，够放手柄。
  */
 .conversation-resizer {
   position: absolute;
   inset-block: 0;
-  right: calc((100% - min(var(--width-conversation), 100% - 3rem)) / 2);
   display: flex;
   width: 0.75rem;
   align-items: center;
@@ -151,6 +160,14 @@ function onKeydown(event: KeyboardEvent) {
   touch-action: none;
   user-select: none;
   z-index: 4;
+}
+
+.conversation-resizer.is-left {
+  left: calc((100% - min(var(--width-conversation), 100% - 3rem)) / 2 - 1rem);
+}
+
+.conversation-resizer.is-right {
+  right: calc((100% - min(var(--width-conversation), 100% - 3rem)) / 2 - 1rem);
 }
 
 .conversation-grip {
