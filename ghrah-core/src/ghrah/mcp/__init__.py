@@ -15,12 +15,15 @@ from __future__ import annotations
 from ghrah.mcp.agentconf_source import AgentconfMcpSource, load_spec
 from ghrah.mcp.client import (
     call_tool_once,
+    list_resource_templates,
+    list_resources,
     list_tool_names,
     list_tools,
     open_client,
     read_only_hint,
     resolve_headers,
     sdk_connect_mode,
+    server_supports_resources,
     translate_exception,
 )
 from ghrah.mcp.credentials import (
@@ -43,6 +46,7 @@ from ghrah.mcp.errors import (
     McpNotActivatedError,
     McpProtocolError,
     McpRequestError,
+    McpServerNotConfiguredError,
     McpToolMissingError,
     classify_http_status,
     classify_rpc_error,
@@ -57,6 +61,12 @@ from ghrah.mcp.identity import (
     truncate_description,
     validate_server_name,
     validate_tool_name,
+)
+from ghrah.mcp.probe import (
+    McpProbeFailure,
+    McpProbeReport,
+    McpResourceInfo,
+    probe_server,
 )
 from ghrah.mcp.result import ToolOutcome, project_result, structured_as_text
 from ghrah.mcp.runtime import McpRuntime
@@ -90,9 +100,13 @@ __all__ = [
     "McpCredentialMissingError",
     "McpError",
     "McpNotActivatedError",
+    "McpProbeFailure",
+    "McpProbeReport",
     "McpProtocolError",
     "McpRequestError",
+    "McpResourceInfo",
     "McpRuntime",
+    "McpServerNotConfiguredError",
     "McpServerSpec",
     "McpSession",
     "McpToolMissingError",
@@ -109,17 +123,21 @@ __all__ = [
     "explain_status",
     "format_unknown_tool_message",
     "is_session_terminated",
+    "list_resource_templates",
+    "list_resources",
     "list_tool_names",
     "list_tools",
     "load_spec",
     "no_credentials",
     "open_client",
     "probe_endpoint",
+    "probe_server",
     "project_result",
     "read_only_hint",
     "render_input_schema",
     "resolve_headers",
     "sdk_connect_mode",
+    "server_supports_resources",
     "should_replay",
     "structured_as_text",
     "suggest_tool_names",

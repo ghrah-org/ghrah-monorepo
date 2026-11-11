@@ -48,6 +48,7 @@ __all__ = [
     "McpNotActivatedError",
     "McpProtocolError",
     "McpRequestError",
+    "McpServerNotConfiguredError",
     "McpToolMissingError",
     "classify_http_status",
     "classify_rpc_error",
@@ -96,6 +97,18 @@ class McpConfigError(McpError):
 
 class McpUnsupportedTransportError(McpConfigError):
     """当前宿主没有接入声明的传输类型。"""
+
+
+class McpServerNotConfiguredError(McpConfigError):
+    """请求的服务器名不在 agentconf 已配置集合内。
+
+    探测在发起任何网络请求之前抛出它。消息只带这个名字，不列举其它服务器，
+    也不包含端点地址。
+    """
+
+    def __init__(self, server: str) -> None:
+        self.server = server
+        super().__init__(f"MCP server {server!r} is not configured")
 
 
 class McpNotActivatedError(McpError):

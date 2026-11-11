@@ -58,12 +58,15 @@ Connector = Callable[..., AbstractAsyncContextManager[Any]]
 __all__ = [
     "Connector",
     "call_tool_once",
+    "list_resource_templates",
+    "list_resources",
     "list_tool_names",
     "list_tools",
     "open_client",
     "read_only_hint",
     "resolve_headers",
     "sdk_connect_mode",
+    "server_supports_resources",
     "translate_exception",
 ]
 
@@ -264,6 +267,101 @@ async def list_tools(
 async def list_tool_names(client: Any) -> tuple[str, ...]:
     """取尽工具名；与完整契约发现共用分页和大小约束。"""
     return tuple(tool["name"] for tool in await list_tools(client))
+
+
+def server_supports_resources(client: Any) -> bool:
+    """服务器是否在握手结果里声明了资源能力。
+
+    只读 ``server_capabilities.resources``，不发请求。未声明时返回 ``False``，
+    调用方应跳过资源清单，避免把「方法不存在」当成探测失败。
+    """
+    capabilities = getattr(client, "server_capabilities", None)
+    if capabilities is None:
+        return False
+    return getattr(capabilities, "resources", None) is not None
+
+
+async def list_resources(
+    client: Any, *, max_pages: int = 100, max_bytes: int = 4_194_304
+) -> list[dict[str, Any]]:
+    """取尽分页资源清单。
+
+    拒绝重复游标、重复 URI、超页与超字节。返回普通字典，不返回 SDK 对象。
+    """
+    import json
+
+    result: list[dict[str, Any]] = []
+    cursors: set[str] = set()
+    uris: set[str] = set()
+    cursor: str | None = None
+    total = 0
+    for _ in range(max_pages):
+        page = await client.list_resources(cursor=cursor)
+        for resource in page.resources:
+            uri = str(resource.uri)
+            if uri in uris:
+                raise McpProtocolError("duplicate resource uri")
+            uris.add(uri)
+            item = {
+                "uri": uri,
+                "name": str(resource.name),
+                "title": getattr(resource, "title", None),
+                "description": getattr(resource, "description", None),
+                "mime_type": getattr(resource, "mime_type", None),
+                "size": getattr(resource, "size", None),
+            }
+            total += len(json.dumps(item, ensure_ascii=False).encode())
+            if total > max_bytes:
+                raise McpProtocolError("resource listing exceeds size limit")
+            result.append(item)
+        cursor = page.next_cursor
+        if not cursor:
+            return result
+        if cursor in cursors:
+            raise McpProtocolError("repeated resources cursor")
+        cursors.add(cursor)
+    raise McpProtocolError("resource listing exceeds page limit")
+
+
+async def list_resource_templates(
+    client: Any, *, max_pages: int = 100, max_bytes: int = 4_194_304
+) -> list[dict[str, Any]]:
+    """取尽分页资源模板。
+
+    拒绝重复游标、重复模板、超页与超字节。返回普通字典，不返回 SDK 对象。
+    """
+    import json
+
+    result: list[dict[str, Any]] = []
+    cursors: set[str] = set()
+    templates: set[str] = set()
+    cursor: str | None = None
+    total = 0
+    for _ in range(max_pages):
+        page = await client.list_resource_templates(cursor=cursor)
+        for template in page.resource_templates:
+            uri_template = str(template.uri_template)
+            if uri_template in templates:
+                raise McpProtocolError("duplicate resource template")
+            templates.add(uri_template)
+            item = {
+                "uri_template": uri_template,
+                "name": str(template.name),
+                "title": getattr(template, "title", None),
+                "description": getattr(template, "description", None),
+                "mime_type": getattr(template, "mime_type", None),
+            }
+            total += len(json.dumps(item, ensure_ascii=False).encode())
+            if total > max_bytes:
+                raise McpProtocolError("resource template listing exceeds size limit")
+            result.append(item)
+        cursor = page.next_cursor
+        if not cursor:
+            return result
+        if cursor in cursors:
+            raise McpProtocolError("repeated resource templates cursor")
+        cursors.add(cursor)
+    raise McpProtocolError("resource template listing exceeds page limit")
 
 
 async def call_tool_once(

@@ -39,6 +39,7 @@ __all__ = [
     "enrich_request_error",
     "explain_status",
     "probe_endpoint",
+    "redact_secrets",
 ]
 
 logger = logging.getLogger(__name__)
@@ -88,15 +89,20 @@ def _truncate(text: str, limit: int = PROBE_BODY_SNIPPET_CHARS) -> str:
     return collapsed[:limit] + "…"
 
 
-def _redact(text: str, secrets: Sequence[str]) -> str:
+def redact_secrets(text: str, secrets: Sequence[str]) -> str:
     """把已知密钥从正文里抹掉。
 
     网关偶尔会回显一段请求头（含 ``Bearer <key>``），日志与异常消息不该二次泄露。
+    探测结果在返回前用它再清一次失败详情。
     """
     for secret in secrets:
         if secret and secret in text:
             text = text.replace(secret, "***")
     return text
+
+
+def _redact(text: str, secrets: Sequence[str]) -> str:
+    return redact_secrets(text, secrets)
 
 
 async def probe_endpoint(
