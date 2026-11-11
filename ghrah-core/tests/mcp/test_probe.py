@@ -424,6 +424,64 @@ async def test_missing_templates_keep_listed_resources(tmp_path) -> None:
     assert report.resource_templates == ()
 
 
+class EmptyResourceClient(FakeClient):
+    """声明了资源能力，但资源与模板都是空清单。"""
+
+    async def list_resources(self, *, cursor):
+        self.calls.append("list_resources")
+        return SimpleNamespace(resources=[], next_cursor=None)
+
+    async def list_resource_templates(self, *, cursor):
+        self.calls.append("list_resource_templates")
+        return SimpleNamespace(resource_templates=[], next_cursor=None)
+
+
+async def test_supported_but_empty_resources_are_not_unsupported(tmp_path) -> None:
+    """``resources=[]`` 与「对端不支持资源」必须分开：前者 supported 仍为真。"""
+    db = provider_db(tmp_path / "config.db")
+    client = EmptyResourceClient(resources=object())
+    connector = Connector(client)
+
+    report = await probe_server("fetch", db_path=db, include_resources=True, connector=connector)
+
+    assert report.ok is True
+    assert report.resources_supported is True
+    assert report.resources == ()
+    assert report.resource_templates == ()
+    assert client.calls == ["list_tools", "list_resources", "list_resource_templates"]
+
+
+async def test_resources_and_templates_are_reported_together(tmp_path) -> None:
+    """资源与模板都成功时，两份清单都要进报告。"""
+    db = provider_db(tmp_path / "config.db")
+    client = FakeClient(resources=object())
+    connector = Connector(client)
+
+    report = await probe_server("fetch", db_path=db, include_resources=True, connector=connector)
+
+    assert report.ok is True
+    assert report.resources_supported is True
+    assert report.resources == (
+        McpResourceInfo(
+            uri="file:///notes.txt",
+            name="notes",
+            title="笔记",
+            description="一份说明",
+            mime_type="text/plain",
+            size=4,
+        ),
+    )
+    assert report.resource_templates == (
+        {
+            "uri_template": "file:///{name}.txt",
+            "name": "note",
+            "title": "笔记模板",
+            "description": "按名读取",
+            "mime_type": "text/plain",
+        },
+    )
+
+
 async def test_oversized_resource_list_keeps_tools(tmp_path) -> None:
     db = provider_db(tmp_path / "config.db")
     client = FakeClient(
