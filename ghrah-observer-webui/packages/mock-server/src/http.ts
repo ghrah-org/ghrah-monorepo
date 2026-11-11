@@ -4,9 +4,11 @@ import {
   AbilityAdminViewSchema,
   AbilityApiStatusSchema,
   AbilityChangesPageSchema,
+  AbilityPackageGroupsViewSchema,
   AbilityTreeChangeResultSchema,
   AbilityTreeViewSchema,
   ContentReadResultSchema,
+  type AbilityPackageGroupsView,
   type AbilityTreeView,
   type MemberAxes,
 } from "@ghrah/protocol";
@@ -18,6 +20,8 @@ export interface MockHttpServerOptions {
   agentId?: string;
   /** 写端点固定返回 409 冲突，供前端冲突分支联调。 */
   conflictOnWrite?: boolean;
+  /** 能力包目录与包组读取；关闭时 status 报 false、包组路由回 503。 */
+  packages?: boolean;
   logger?: (line: string) => void;
 }
 
@@ -141,7 +145,7 @@ function adminView(record: AgentRecord) {
   });
 }
 
-function statusView(projectId: string) {
+function statusView(projectId: string, packagesRead: boolean) {
   void projectId;
   return AbilityApiStatusSchema.parse({
     format: "ghrah.ability-control.v1",
@@ -154,11 +158,121 @@ function statusView(projectId: string) {
       grants_write: true,
       versions_read: true,
       versions_write: false,
-      packages_read: false,
+      packages_read: packagesRead,
       packages_install: false,
       surface_write: false,
     },
     reason: null,
+  });
+}
+
+/** 包组 fixture 里作为「当前选中」的摘要；与 defaultTree 的版本摘要一致。 */
+const SELECTED_DIGEST = "sha256:version";
+
+/**
+ * 确定性包组名单，覆盖观察端要呈现的状态：已安装遮蔽内置、已提交并选
+ * 中、授予跟随 ability-tree、以及关系库里有但发行版里找不到的版本。
+ * distribution 只含定义面组；project/agent 范围由调用方补关系事实。
+ */
+function packageGroupsView(
+  scope: "distribution" | "project" | "agent",
+  projectId: string | null,
+  agentId: string | null,
+  grantedAliases: Set<string>,
+): AbilityPackageGroupsView {
+  const granted = (alias: string) => alias !== "" && grantedAliases.has(alias);
+  const project = (digest: string | null, instanceId: string | null, selected: boolean) =>
+    scope === "distribution"
+      ? null
+      : {
+          committed: true,
+          digest,
+          instance_id: instanceId,
+          selected,
+          instance_revision: selected ? 1 : null,
+        };
+  const agent = (alias: string, instanceId: string | null) =>
+    scope === "agent" && granted(alias) && instanceId !== null
+      ? { granted: true, alias }
+      : scope === "agent"
+        ? { granted: false, alias: null }
+        : null;
+  return AbilityPackageGroupsViewSchema.parse({
+    format: "ghrah.ability-control.package-groups.v1",
+    scope,
+    installed_available: true,
+    project_id: projectId,
+    agent_id: agentId,
+    groups: [
+      {
+        namespace: "demo",
+        name: "notes",
+        full_name: "demo.notes",
+        title: "Notes",
+        versions: [
+          {
+            version: "0.3.0",
+            origin: "installed",
+            lock_state: "installed",
+            problem: null,
+            shadowed_builtin: true,
+            member_count: 3,
+            project: project("sha256:notes-installed", "notes-installed", false),
+            agent: agent("notes", scope === "distribution" ? null : "notes-installed"),
+          },
+          {
+            version: "0.3.0",
+            origin: "builtin",
+            lock_state: "builtin",
+            problem: null,
+            shadowed_builtin: false,
+            member_count: 3,
+            project: null,
+            agent: null,
+          },
+        ],
+      },
+      {
+        namespace: "ghrah",
+        name: "fs",
+        full_name: "ghrah.fs",
+        title: "Filesystem",
+        versions: [
+          {
+            version: "1",
+            origin: "builtin",
+            lock_state: "builtin",
+            problem: null,
+            shadowed_builtin: false,
+            member_count: 1,
+            project: project(SELECTED_DIGEST, "ghrah-fs", true),
+            agent: agent("ghrah-fs", "ghrah-fs"),
+          },
+        ],
+      },
+      ...(scope === "distribution"
+        ? []
+        : [
+            {
+              namespace: null,
+              name: null,
+              full_name: null,
+              title: null,
+              versions: [
+                {
+                  version: null,
+                  origin: null,
+                  lock_state: null,
+                  problem: "definition_missing",
+                  shadowed_builtin: false,
+                  member_count: null,
+                  project: project("sha256:missing", null, false),
+                  agent: agent("", null),
+                },
+              ],
+            },
+          ]),
+    ],
   });
 }
 
@@ -327,6 +441,7 @@ const CONTENT =
 /** 观察端 REST 管理面的确定性 mock；只服务演示与契约测试，不实现授权规则。 */
 export function createMockHttpServer(options: MockHttpServerOptions): MockHttpServer {
   const projectId = options.projectId ?? DEFAULT_PROJECT;
+  const packagesEnabled = options.packages ?? true;
   const agents = new Map<string, AgentRecord>();
   let server: Server | undefined;
 
@@ -353,7 +468,41 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
     }
 
     if (method === "GET" && path === "/api/v1/abilities/status") {
-      json(response, 200, statusView(projectId));
+      json(response, 200, statusView(projectId, packagesEnabled));
+      return;
+    }
+
+    const DISTRIBUTION_GROUPS = "/api/v1/ability-package-groups";
+    const PROJECT_GROUPS = /^\/api\/v1\/projects\/([^/]+)\/ability-package-groups$/;
+    const AGENT_GROUPS = /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/ability-package-groups$/;
+    const agentGroupsMatch = AGENT_GROUPS.exec(path);
+    const projectGroupsMatch = PROJECT_GROUPS.exec(path);
+    if (method === "GET" && (path === DISTRIBUTION_GROUPS || projectGroupsMatch)) {
+      if (!packagesEnabled) {
+        json(response, 503, {
+          error: { code: "capability_unavailable", message: "packages disabled" },
+        });
+        return;
+      }
+      const pid = projectGroupsMatch?.[1] ?? null;
+      // project 范围不带授予事实；scope 参数本身决定行上哪些字段为空。
+      json(
+        response,
+        200,
+        packageGroupsView(pid === null ? "distribution" : "project", pid, null, new Set()),
+      );
+      return;
+    }
+    if (method === "GET" && agentGroupsMatch) {
+      if (!packagesEnabled) {
+        json(response, 503, {
+          error: { code: "capability_unavailable", message: "packages disabled" },
+        });
+        return;
+      }
+      const [, pid, aid] = agentGroupsMatch;
+      const grantedAliases = new Set(recordFor(pid, aid).tree.abilities.map((a) => a.alias));
+      json(response, 200, packageGroupsView("agent", pid, aid, grantedAliases));
       return;
     }
 

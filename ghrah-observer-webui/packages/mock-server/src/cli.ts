@@ -17,6 +17,7 @@ interface CliOptions {
   chains: boolean;
   deliveries: boolean;
   replayOnConnect: boolean;
+  packages: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -28,6 +29,7 @@ function parseArgs(argv: string[]): CliOptions {
     chains: true,
     deliveries: true,
     replayOnConnect: false,
+    packages: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -54,14 +56,18 @@ function parseArgs(argv: string[]): CliOptions {
       case "--replay-on-connect":
         opts.replayOnConnect = true;
         break;
+      case "--no-packages":
+        opts.packages = false;
+        break;
       case "--help":
       case "-h":
         console.log(
           [
-            "Usage: ghrah-mock-server [--port N] [--http-port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains] [--no-deliveries] [--replay-on-connect]",
+            "Usage: ghrah-mock-server [--port N] [--http-port N] [--scenario NAME] [--hitl-timeout MS] [--no-chains] [--no-deliveries] [--replay-on-connect] [--no-packages]",
             "",
             "--replay-on-connect: 新连接也回放已缓冲事件（演示/视觉测试用；默认只回放带 last_seq_id 的增量）",
             "--no-deliveries: 关闭 room 消息投递态推进模拟（默认开启）",
+            "--no-packages: 关闭能力包目录与包组 mock（默认开启；status 的 packages_read 变 false）",
             "",
             `Available scenarios: ${listScenarios()
               .map((s) => s.name)
@@ -108,6 +114,7 @@ async function main(): Promise<void> {
   if (opts.httpPort !== null) {
     httpServer = createMockHttpServer({
       port: opts.httpPort,
+      packages: opts.packages,
       logger: (l) => console.log(`[mock] ${l}`),
     });
     await httpServer.start();

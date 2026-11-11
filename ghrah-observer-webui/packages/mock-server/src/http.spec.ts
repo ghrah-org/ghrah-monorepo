@@ -8,8 +8,8 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
-async function start(conflictOnWrite = false): Promise<string> {
-  const server = createMockHttpServer({ port: 0, conflictOnWrite });
+async function start(conflictOnWrite = false, packages = true): Promise<string> {
+  const server = createMockHttpServer({ port: 0, conflictOnWrite, packages });
   servers.push(server);
   await server.start();
   return `http://127.0.0.1:${server.port}`;
@@ -143,5 +143,105 @@ describe("MockHttpServer", () => {
       `${base}/api/v1/projects/project-1/agents/agent-1/ability-tree`,
     );
     expect(tree.bound_tools).toEqual([]);
+  });
+
+  it("serves package groups for distribution, project, and agent scopes", async () => {
+    const base = await start();
+    const distribution = await getJson<{
+      scope?: string;
+      groups?: {
+        full_name?: string | null;
+        versions?: {
+          origin?: string | null;
+          project?: { committed?: boolean; selected?: boolean } | null;
+          agent?: { granted?: boolean; alias?: string | null } | null;
+        }[];
+      }[];
+    }>(`${base}/api/v1/ability-package-groups`);
+    expect(distribution.scope).toBe("distribution");
+    const names = (distribution.groups ?? []).map((g) => g.full_name);
+    expect(names).toContain("demo.notes");
+    expect(names).toContain("ghrah.fs");
+    expect(names).not.toContain(null);
+    for (const group of distribution.groups ?? []) {
+      for (const version of group.versions ?? []) {
+        expect(version.project).toBeNull();
+        expect(version.agent).toBeNull();
+      }
+    }
+
+    const project = await getJson<{
+      scope?: string;
+      project_id?: string | null;
+      groups?: {
+        full_name?: string | null;
+        versions?: { project?: { committed?: boolean } | null; agent?: unknown }[];
+      }[];
+    }>(`${base}/api/v1/projects/demo-project/ability-package-groups`);
+    expect(project.scope).toBe("project");
+    expect(project.project_id).toBe("demo-project");
+    const missing = (project.groups ?? []).find((g) => g.full_name === null);
+    expect(missing).toBeDefined();
+    expect(missing?.versions?.[0]?.project?.committed).toBe(true);
+    for (const group of project.groups ?? []) {
+      for (const version of group.versions ?? []) {
+        expect(version.agent).toBeNull();
+      }
+    }
+
+    const agentView = await getJson<{
+      scope?: string;
+      agent_id?: string | null;
+      groups?: {
+        full_name?: string | null;
+        versions?: {
+          origin?: string | null;
+          project?: { selected?: boolean } | null;
+          agent?: { granted?: boolean; alias?: string | null } | null;
+        }[];
+      }[];
+    }>(`${base}/api/v1/projects/demo-project/agents/demo-architect/ability-package-groups`);
+    expect(agentView.scope).toBe("agent");
+    expect(agentView.agent_id).toBe("demo-architect");
+    const fsGroup = (agentView.groups ?? []).find((g) => g.full_name === "ghrah.fs");
+    expect(fsGroup?.versions?.[0]?.project?.selected).toBe(true);
+    expect(fsGroup?.versions?.[0]?.agent).toEqual({ granted: true, alias: "ghrah-fs" });
+    const notesGroup = (agentView.groups ?? []).find((g) => g.full_name === "demo.notes");
+    const notesInstalled = notesGroup?.versions?.find((v) => v.origin === "installed");
+    expect(notesInstalled?.agent).toEqual({ granted: false, alias: null });
+  });
+  it("flips the agent grant after revoking the ability", async () => {
+    const base = await start();
+    const revoked = await fetch(
+      `${base}/api/v1/projects/project-1/agents/agent-1/ability-tree/grants/ghrah-fs?expected_revision=1`,
+      { method: "DELETE" },
+    );
+    expect(revoked.status).toBe(200);
+    const view = await getJson<{
+      groups?: {
+        full_name?: string | null;
+        versions?: { agent?: { granted?: boolean } | null }[];
+      }[];
+    }>(`${base}/api/v1/projects/project-1/agents/agent-1/ability-package-groups`);
+    const fsGroup = (view.groups ?? []).find((g) => g.full_name === "ghrah.fs");
+    expect(fsGroup?.versions?.[0]?.agent?.granted).toBe(false);
+  });
+
+  it("closes the package surface when packages are disabled", async () => {
+    const base = await start(false, false);
+    const status = await getJson<{ features?: { packages_read?: boolean } }>(
+      `${base}/api/v1/abilities/status`,
+    );
+    expect(status.features?.packages_read).toBe(false);
+    for (const path of [
+      "/api/v1/ability-package-groups",
+      "/api/v1/projects/demo-project/ability-package-groups",
+      "/api/v1/projects/demo-project/agents/demo-architect/ability-package-groups",
+    ]) {
+      const response = await fetch(`${base}${path}`);
+      expect(response.status).toBe(503);
+      const body = (await response.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe("capability_unavailable");
+    }
   });
 });
