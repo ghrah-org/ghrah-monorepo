@@ -56,7 +56,7 @@ export default defineConfig({
       "box-border rounded-md border border-solid border-chat-input-border bg-chat-input text-chat-body text-chat-font font-inherit w-full px-3 py-2 resize-none placeholder:text-chat-subtle focus:outline-none focus:ring-2 focus:ring-chat-focus min-w-0 min-h-chat-input max-h-40 overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed",
     "chat-conversation": "box-border mx-auto w-full max-w-conversation min-w-0",
     "chat-composer":
-      "chat-conversation shrink-0 my-4 rounded-chat-card bg-[var(--color-surface)] shadow-[var(--shadow-chat-composer)]",
+      "box-border mx-auto w-full max-w-composer min-w-0 shrink-0 my-4 rounded-chat-card bg-[var(--color-surface)] shadow-[var(--shadow-chat-composer)]",
     "chat-target-chip-base":
       "px-2 py-0.5 rounded-full text-xs leading-meta border border-solid transition-colors",
     "chat-target-chip":
@@ -88,7 +88,7 @@ export default defineConfig({
       note: "var(--leading-note)",
       body: "var(--leading-body)",
     },
-    maxWidth: { conversation: "var(--width-conversation)" },
+    maxWidth: { conversation: "var(--width-conversation)", composer: "var(--width-composer)" },
     fontFamily: { inherit: "inherit" },
     colors: {
       "chat-input": "var(--color-chat-input)",

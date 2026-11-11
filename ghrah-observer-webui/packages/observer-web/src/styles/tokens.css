@@ -22,7 +22,10 @@
     --leading-meta: 1.4;
     --leading-note: 1.5;
     --leading-body: 1.6;
-    --width-conversation: 46rem;
+    /* 消息流与输入卡片各管各的列宽：消息流要装气泡，所以比输入区宽一档。
+       两者都用「占满 + 上限 + 居中」，窄屏自然贴满，宽屏才收成阅读列。 */
+    --width-conversation: 56rem;
+    --width-composer: 46rem;
     --height-chat-input-min: 5rem;
     --radius-chat-card: 0.875rem;
     --color-chat-input: #ffffff;

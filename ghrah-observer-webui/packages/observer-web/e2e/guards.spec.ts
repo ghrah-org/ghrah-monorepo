@@ -194,12 +194,28 @@ for (const width of [1600, 1024]) {
       }
       const metrics = await input.evaluate((element) => {
         const style = getComputedStyle(element);
+        const rootStyle = getComputedStyle(document.documentElement);
+        const remPx = Number.parseFloat(rootStyle.fontSize);
+        // 列宽上限来自根级宽度 token。消息流的 max-width 是 min()/calc()
+        // 表达式，getComputedStyle 会原样返回、parseFloat 得到 NaN，因此直接
+        // 读 token 再折算：与 chat-panel 的 RESIZER_GUTTER_REM 同步留手柄位。
+        const tokenPx = (name: string) =>
+          Number.parseFloat(rootStyle.getPropertyValue(name)) * remPx;
+        const RESIZER_GUTTER_REM = 3;
         const columns = [...document.querySelectorAll(".chat-conversation, .chat-composer")].map(
           (column) => {
             const rect = column.getBoundingClientRect();
             const parent = column.parentElement!.getBoundingClientRect();
+            const computed = getComputedStyle(column);
+            const isConversation = column.classList.contains("chat-conversation");
+            const cap = tokenPx(isConversation ? "--width-conversation" : "--width-composer");
+            const gutter = isConversation ? RESIZER_GUTTER_REM * remPx : 0;
             return {
               width: rect.width,
+              parentWidth: parent.width,
+              cap,
+              expected: Math.min(cap, parent.width - gutter),
+              scrollbarWidth: computed.getPropertyValue("scrollbar-width").trim(),
               center: Math.abs(rect.left + rect.right - (parent.left + parent.right)),
             };
           },
@@ -208,7 +224,6 @@ for (const width of [1600, 1024]) {
           ratio: parseFloat(style.lineHeight) / parseFloat(style.fontSize),
           font: style.fontFamily,
           padding: parseFloat(style.paddingTop),
-          root: parseFloat(getComputedStyle(document.documentElement).fontSize),
           columns,
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         };
@@ -217,11 +232,19 @@ for (const width of [1600, 1024]) {
       expect(metrics.font).not.toContain("monospace");
       expect(metrics.padding).toBeGreaterThanOrEqual(8);
       expect(metrics.columns).toHaveLength(2);
-      expect(Math.abs(metrics.columns[0].width - metrics.columns[1].width)).toBeLessThan(2);
+
+      // 消息流与输入区各按自己的上限收敛：消息流要装气泡，声明上限应当更宽。
+      const [conversation, composer] = metrics.columns;
+      expect(conversation.cap).toBeGreaterThan(composer.cap);
+
       for (const column of metrics.columns) {
-        expect(column.width).toBeLessThanOrEqual(46 * metrics.root + 1);
+        // 列宽 = min(声明上限, 容器可用宽度 - 手柄位)；容器更窄时占满可用宽度。
+        expect(Math.abs(column.width - column.expected)).toBeLessThan(2);
+        // 居中。
         expect(column.center).toBeLessThan(2);
       }
+      // 消息流滚动时用细滚动条。
+      expect(conversation.scrollbarWidth).toBe("thin");
       expect(metrics.overflow).toBeLessThanOrEqual(0);
       for (const dark of [false, true]) {
         await page.evaluate(

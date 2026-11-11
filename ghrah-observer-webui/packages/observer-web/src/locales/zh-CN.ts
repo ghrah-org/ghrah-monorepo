@@ -380,6 +380,10 @@ export default {
       send: "发送",
       hint: "Enter 发送 · Shift+Enter 换行",
     },
+    resize: {
+      handle: "调整聊天区宽度",
+      hint: "拖动调整宽度 · 双击恢复默认",
+    },
     header: {
       you: "你",
       all: "所有人",

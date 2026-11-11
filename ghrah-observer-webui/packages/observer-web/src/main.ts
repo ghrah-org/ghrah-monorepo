@@ -12,6 +12,7 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./style.css";
 import App from "./app.vue";
+import { initConversationWidth } from "./composables/useConversationWidth";
 import { initFontScale } from "./composables/useFontScale";
 import { i18n } from "./i18n";
 
@@ -28,6 +29,7 @@ function initDarkMode() {
 }
 initDarkMode();
 initFontScale();
+initConversationWidth();
 
 const app = createApp(App);
 app.use(createPinia());

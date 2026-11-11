@@ -404,6 +404,10 @@ export default {
       send: "Send",
       hint: "Enter to send · Shift+Enter for newline",
     },
+    resize: {
+      handle: "Resize chat column",
+      hint: "Drag to resize · double-click to reset",
+    },
     header: {
       you: "you",
       all: "all",

@@ -178,3 +178,11 @@ const placeholder = computed(() =>
     <div class="chat-hint">{{ t("chat.input.hint") }}</div>
   </form>
 </template>
+
+<style scoped>
+/* 输入框长到上限后自身会滚动：滚动条与消息流用同一套语义色。 */
+.chat-composer :deep(textarea) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+</style>

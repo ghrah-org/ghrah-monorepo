@@ -16,10 +16,21 @@ import {
 import type { ContentBlock } from "@ghrah/protocol";
 import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import {
+  CONVERSATION_WIDTH_MAX_REM,
+  CONVERSATION_WIDTH_MIN_REM,
+  CONVERSATION_WIDTH_STEP_REM,
+  conversationWidthRem,
+  previewConversationWidth,
+  resetConversationWidth,
+  setConversationWidth,
+} from "@/composables/useConversationWidth";
 import { useMarkdown } from "@/composables/useMarkdown";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
+import { useWorkspaceColumns } from "@/composables/useWorkspaceColumns";
+import ConversationResizer from "./conversation-resizer.vue";
 import MessageInput from "./message-input.vue";
 import RoomDetailDrawer, { type DeliveryDiagnostic } from "./room-detail-drawer.vue";
 import UiButton from "@/components/ui/button.vue";
@@ -67,6 +78,55 @@ const { t } = useI18n();
 const memberLabel = useRoomMemberLabel();
 
 const messageContainer = ref<HTMLElement | null>(null);
+
+// 会话区容器：只用于量出可用宽度，手柄也挂在它上面定位。
+const conversationArea = ref<HTMLElement | null>(null);
+const columnMode = useWorkspaceColumns();
+/** 可用宽度（rem）；0 表示尚未测量。 */
+const availableRem = ref(0);
+/** 手柄要让出的总宽度：列两侧各留一格，手柄只占其中靠近列的一小段。 */
+const RESIZER_GUTTER_REM = 3;
+
+// 只在宽屏可调：窄屏下列宽本就该占满，给出抓手只会诱导用户把自己的
+// 阅读区拖成一条缝。exclusive（<1024px）与 rail 两档都不放开。
+const resizable = computed(
+  () =>
+    (columnMode.value === "mid" || columnMode.value === "wide") &&
+    availableRem.value > CONVERSATION_WIDTH_MIN_REM + RESIZER_GUTTER_REM,
+);
+
+// 上限随可用宽度收缩，保证列永远不会吃掉手柄的位置：这样拖拽途中手柄
+// 不会突然消失（那会打断指针捕获），也不会压住列的滚动条。
+const maxWidthRem = computed(() =>
+  Math.max(
+    CONVERSATION_WIDTH_MIN_REM,
+    Math.min(CONVERSATION_WIDTH_MAX_REM, availableRem.value - RESIZER_GUTTER_REM),
+  ),
+);
+
+// 可用宽度随窗口与字号变化，交给容器自身的尺寸变化驱动。
+let areaObserver: ResizeObserver | null = null;
+watch(conversationArea, (area) => {
+  areaObserver?.disconnect();
+  areaObserver = null;
+  if (!area) {
+    availableRem.value = 0;
+    return;
+  }
+  const measure = () => {
+    const root = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+    availableRem.value = Number.isFinite(root) && root > 0 ? area.clientWidth / root : 0;
+  };
+  measure();
+  if (typeof ResizeObserver === "function") {
+    areaObserver = new ResizeObserver(measure);
+    areaObserver.observe(area);
+  }
+});
+onScopeDispose(() => {
+  areaObserver?.disconnect();
+  areaObserver = null;
+});
 
 /** 视口距底部在该阈值内视为"贴底"，新消息到达时才自动跟随滚底。 */
 const NEAR_BOTTOM_PX = 40;
@@ -294,81 +354,95 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       {{ t("chat.empty") }}
     </div>
 
-    <div
-      v-else
-      ref="messageContainer"
-      class="chat-conversation flex-1 overflow-y-auto px-3 py-4 space-y-3"
-      @scroll.passive="handleScroll"
-    >
+    <div v-else ref="conversationArea" class="relative flex min-h-0 flex-1 flex-col">
       <div
-        v-for="entry in roomEntries"
-        :key="`${entry.nodeId}-${entry.childSeq}`"
-        :class="['chat-entry', entryClass(entry), { 'entry-pending': entry.pending }]"
+        ref="messageContainer"
+        class="chat-conversation flex-1 overflow-y-auto px-3 py-4 space-y-3"
+        @scroll.passive="handleScroll"
       >
-        <div class="entry-header">{{ entryHeader(entry) }}</div>
+        <div
+          v-for="entry in roomEntries"
+          :key="`${entry.nodeId}-${entry.childSeq}`"
+          :class="['chat-entry', entryClass(entry), { 'entry-pending': entry.pending }]"
+        >
+          <div class="entry-header">{{ entryHeader(entry) }}</div>
 
-        <div v-if="entry.error" class="block-error">
-          <span class="text-sm text-red-600 dark:text-red-400">{{ entry.error }}</span>
-        </div>
-
-        <!-- 富块渲染 -->
-        <template v-else-if="entry.blocks && entry.blocks.length > 0">
-          <div
-            v-for="(block, j) in entry.blocks"
-            :key="j"
-            :class="['entry-block', `block-${block.type}`]"
-          >
-            <div v-if="isText(block)" class="markdown-body" v-html="renderMarkdown(block.text)" />
-            <details v-else-if="block.type === 'reasoning'" class="block-reasoning">
-              <summary class="text-xs italic text-gray-500 dark:text-gray-400">
-                {{ t("chat.reasoning") }}{{ block.incomplete ? "…" : "" }}
-              </summary>
-              <pre class="text-xs whitespace-pre-wrap">{{ block.reasoning }}</pre>
-            </details>
-            <img
-              v-else-if="block.type === 'image'"
-              :src="imgSrc(block)"
-              alt="image"
-              class="max-w-full rounded"
-            />
-            <audio
-              v-else-if="block.type === 'audio'"
-              :src="audioSrc(block)"
-              controls
-              class="w-full"
-            />
-            <a
-              v-else-if="block.type === 'file'"
-              :href="fileHref(block)"
-              :download="fileLabel(block)"
-              class="text-xs text-blue-600 dark:text-blue-400 underline"
-            >
-              📎 {{ fileLabel(block) }}
-            </a>
-            <details v-else-if="block.type === 'tool_call'" class="block-tool">
-              <summary class="text-xs">🔧 {{ block.name }}</summary>
-              <pre class="text-xs whitespace-pre-wrap">{{ block.arguments }}</pre>
-            </details>
-            <details v-else-if="block.type === 'tool_result'" class="block-tool">
-              <summary :class="['text-xs', block.success ? 'text-green-600' : 'text-red-600']">
-                ↳ {{ block.name ?? block.tool_call_id }}{{ block.success ? "" : t("chat.failed") }}
-              </summary>
-              <pre class="text-xs whitespace-pre-wrap">{{ block.content }}</pre>
-              <pre v-if="block.error" class="text-xs text-red-500 whitespace-pre-wrap">{{
-                block.error
-              }}</pre>
-            </details>
-            <div v-else-if="block.type === 'error'" class="block-error">
-              <span class="text-xs text-red-600 dark:text-red-400"
-                >{{ block.error_type }}: {{ block.message }}</span
-              >
-            </div>
+          <div v-if="entry.error" class="block-error">
+            <span class="text-sm text-red-600 dark:text-red-400">{{ entry.error }}</span>
           </div>
-        </template>
 
-        <!-- 无块：纯 content（与富块 text 同走 Markdown 渲染） -->
-        <div v-else class="markdown-body" v-html="renderMarkdown(entry.content)" />
+          <!-- 富块渲染 -->
+          <template v-else-if="entry.blocks && entry.blocks.length > 0">
+            <div
+              v-for="(block, j) in entry.blocks"
+              :key="j"
+              :class="['entry-block', `block-${block.type}`]"
+            >
+              <div v-if="isText(block)" class="markdown-body" v-html="renderMarkdown(block.text)" />
+              <details v-else-if="block.type === 'reasoning'" class="block-reasoning">
+                <summary class="text-xs italic text-gray-500 dark:text-gray-400">
+                  {{ t("chat.reasoning") }}{{ block.incomplete ? "…" : "" }}
+                </summary>
+                <pre class="text-xs whitespace-pre-wrap">{{ block.reasoning }}</pre>
+              </details>
+              <img
+                v-else-if="block.type === 'image'"
+                :src="imgSrc(block)"
+                alt="image"
+                class="max-w-full rounded"
+              />
+              <audio
+                v-else-if="block.type === 'audio'"
+                :src="audioSrc(block)"
+                controls
+                class="w-full"
+              />
+              <a
+                v-else-if="block.type === 'file'"
+                :href="fileHref(block)"
+                :download="fileLabel(block)"
+                class="text-xs text-blue-600 dark:text-blue-400 underline"
+              >
+                📎 {{ fileLabel(block) }}
+              </a>
+              <details v-else-if="block.type === 'tool_call'" class="block-tool">
+                <summary class="text-xs">🔧 {{ block.name }}</summary>
+                <pre class="text-xs whitespace-pre-wrap">{{ block.arguments }}</pre>
+              </details>
+              <details v-else-if="block.type === 'tool_result'" class="block-tool">
+                <summary :class="['text-xs', block.success ? 'text-green-600' : 'text-red-600']">
+                  ↳ {{ block.name ?? block.tool_call_id
+                  }}{{ block.success ? "" : t("chat.failed") }}
+                </summary>
+                <pre class="text-xs whitespace-pre-wrap">{{ block.content }}</pre>
+                <pre v-if="block.error" class="text-xs text-red-500 whitespace-pre-wrap">{{
+                  block.error
+                }}</pre>
+              </details>
+              <div v-else-if="block.type === 'error'" class="block-error">
+                <span class="text-xs text-red-600 dark:text-red-400"
+                  >{{ block.error_type }}: {{ block.message }}</span
+                >
+              </div>
+            </div>
+          </template>
+
+          <!-- 无块：纯 content（与富块 text 同走 Markdown 渲染） -->
+          <div v-else class="markdown-body" v-html="renderMarkdown(entry.content)" />
+        </div>
       </div>
+
+      <!-- 手柄只在宽屏挂载；窄屏下拉宽本就该占满，给了只会诱导用户把自己拖窄。 -->
+      <ConversationResizer
+        v-if="resizable"
+        :width="conversationWidthRem"
+        :min="CONVERSATION_WIDTH_MIN_REM"
+        :max="maxWidthRem"
+        :step="CONVERSATION_WIDTH_STEP_REM"
+        @preview="previewConversationWidth"
+        @commit="setConversationWidth"
+        @reset="resetConversationWidth"
+      />
     </div>
 
     <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
@@ -387,6 +461,19 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 </template>
 
 <style scoped>
+/*
+ * 消息流滚动条：细、无轨道底色，滑块复用边框语义色，暗色模式自动跟随 token。
+ *
+ * max-width 用 min() 再收一道：窗口变窄时列宽自动退到「可用宽度 - 3rem」，
+ * 既不会顶掉手柄的位置，也不会让手柄被挤出视野。3rem 与 chat-panel 里的
+ * RESIZER_GUTTER_REM 对应（两侧各 1.5rem）。
+ */
+.chat-conversation {
+  max-width: min(var(--width-conversation), calc(100% - 3rem));
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
 .room-header {
   display: flex;
   align-items: center;
