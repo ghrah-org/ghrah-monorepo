@@ -16,7 +16,9 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi import FastAPI
-from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
+from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, GrantRecord
+from ghrah.ability.loading.ability_catalog import load_ability_definitions
+from ghrah.ability.versions import AbilityVersion
 from ghrah.protocol.ability_tree import AbilityTreeView, BindToolRequest, GrantAbilityRequest
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
@@ -29,6 +31,7 @@ from ghrah.subject.runtime.service_keys import (
     OBSERVER_EVENT_BUS,
     PROJECT_STORE,
 )
+from ghrah.subject.units.ability_catalog import build_package_groups
 from ghrah.subject.units.ability_control import (
     AbilityControlUnit,
     _authorized,
@@ -482,6 +485,49 @@ async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any)
             )
             assert instance_status == 200
             assert instances["instances"] == []
+            group_status, groups = await _request(f"{base}/api/v1/ability-package-groups")
+            assert group_status == 200
+            assert groups["format"] == "ghrah.ability-control.package-groups.v1"
+            assert groups["scope"] == "distribution"
+            assert groups["project_id"] is None
+            assert groups["agent_id"] is None
+            assert groups["installed_available"] is False
+            assert groups["groups"]
+            assert any(
+                version["origin"] == "builtin"
+                for group in groups["groups"]
+                for version in group["versions"]
+            )
+            assert all(
+                version["project"] is None and version["agent"] is None
+                for group in groups["groups"]
+                for version in group["versions"]
+            )
+            _reject_root(groups)
+            project_status, project_groups = await _request(
+                f"{base}/api/v1/projects/proj/ability-package-groups"
+            )
+            assert project_status == 200
+            assert project_groups["scope"] == "project"
+            assert project_groups["project_id"] == "proj"
+            assert all(
+                version["project"]["committed"] is False and version["agent"] is None
+                for group in project_groups["groups"]
+                for version in group["versions"]
+            )
+            _reject_root(project_groups)
+            agent_status, agent_groups = await _request(
+                f"{base}/api/v1/projects/proj/agents/ghost/ability-package-groups"
+            )
+            assert agent_status == 200
+            assert agent_groups["scope"] == "agent"
+            assert agent_groups["agent_id"] == "ghost"
+            assert all(
+                version["agent"]["granted"] is False
+                for group in agent_groups["groups"]
+                for version in group["versions"]
+            )
+            _reject_root(agent_groups)
             closed, body = await _request(
                 f"{base}/api/v1/ability-packages/import", method="POST", body={}
             )
@@ -510,11 +556,191 @@ async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any)
                 assert denied == 503
                 assert denied_body["error"]["code"] == "capability_unavailable"
                 assert denied_body["error"]["detail"]["legacy_deprecated"] is True
+                for path in (
+                    "/api/v1/ability-package-groups",
+                    "/api/v1/projects/proj/ability-package-groups",
+                    "/api/v1/projects/proj/agents/ghost/ability-package-groups",
+                ):
+                    denied, denied_body = await _request(f"http://127.0.0.1:{closed_port}{path}")
+                    assert denied == 503
+                    assert denied_body["error"]["code"] == "capability_unavailable"
             finally:
                 closed_server.should_exit = True
                 await closed_task
+            disabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=False)
+            disabled_app = _app(disabled, _Handle("proj", store, operator), _Bus())
+            disabled_server, disabled_task, disabled_port = await _serve(disabled_app)
+            try:
+                for path in (
+                    "/api/v1/ability-package-groups",
+                    "/api/v1/projects/proj/ability-package-groups",
+                    "/api/v1/projects/proj/agents/ghost/ability-package-groups",
+                ):
+                    denied, denied_body = await _request(f"http://127.0.0.1:{disabled_port}{path}")
+                    assert denied == 503
+                    assert denied_body["error"]["code"] == "capability_unavailable"
+            finally:
+                disabled_server.should_exit = True
+                await disabled_task
         finally:
             server.should_exit = True
             await task
     finally:
         await store.close()
+
+
+class _RelationStore:
+    """只提供包组读取要用的关系库方法。"""
+
+    def __init__(
+        self,
+        versions: list[AbilityVersion],
+        instances: dict[str, dict[str, Any]],
+        grants: list[GrantRecord],
+        *,
+        missing_agent: bool = False,
+    ) -> None:
+        self.versions = versions
+        self.instances = instances
+        self.grant_rows = grants
+        self.missing_agent = missing_agent
+
+    async def list_versions(self, actor: object) -> list[AbilityVersion]:
+        del actor
+        return self.versions
+
+    async def list_instances(self, actor: object) -> list[str]:
+        del actor
+        return list(self.instances)
+
+    async def instance(self, instance_id: str) -> dict[str, Any]:
+        try:
+            return self.instances[instance_id]
+        except KeyError as exc:
+            raise AccessError("not_found") from exc
+
+    async def grants(self, actor: object, agent: str) -> list[GrantRecord]:
+        del actor, agent
+        if self.missing_agent:
+            raise AccessError("not_found")
+        return self.grant_rows
+
+
+def _known_definition() -> Any:
+    return next(iter(load_ability_definitions().values()))
+
+
+async def test_package_groups_align_definition_and_relation() -> None:
+    known = _known_definition()
+    identity = known.identity
+    instance_id = identity.full_name.replace(".", "-")
+    known_version = AbilityVersion(
+        "sha256:known",
+        known.model_dump_json(),
+        "implementation",
+    )
+    missing = known.model_copy(
+        update={"identity": identity.model_copy(update={"namespace": "sample", "name": "reader"})}
+    )
+    missing_version = AbilityVersion(
+        "sha256:missing",
+        missing.model_dump_json(),
+        "implementation",
+    )
+    broken = AbilityVersion("sha256:broken", "{}", "implementation")
+    instances = {
+        instance_id: {
+            "id": instance_id,
+            "revision": 4,
+            "digest": "sha256:known",
+            "definition": known.model_dump(mode="json"),
+        }
+    }
+    grants = [
+        GrantRecord(
+            alias="notes",
+            instance_id=instance_id,
+            members=(),
+            content=(),
+            roots=(),
+            axes={},
+            revision=4,
+            source="admin",
+        )
+    ]
+    store = _RelationStore(
+        [broken, missing_version, known_version],
+        instances,
+        grants,
+    )
+    view = await build_package_groups(
+        None,
+        store=store,
+        operator=object(),
+        project_id="proj",
+        agent_id="agent-1",
+    )
+    payload = view.model_dump(mode="json")
+    _reject_root(payload)
+    assert "/home" not in json.dumps(payload)
+    known_group = next(
+        group for group in payload["groups"] if group["full_name"] == identity.full_name
+    )
+    known_row = next(row for row in known_group["versions"] if row["version"] == identity.version)
+    assert known_row["origin"] == "builtin"
+    assert known_row["project"]["committed"] is True
+    assert known_row["project"]["selected"] is True
+    assert known_row["project"]["instance_id"] == instance_id
+    assert known_row["project"]["instance_revision"] == 4
+    assert known_row["project"]["digest"] == "sha256:known"
+    assert known_row["agent"]["granted"] is True
+    assert known_row["agent"]["alias"] == "notes"
+    for row in known_group["versions"]:
+        if row is not known_row:
+            assert row["agent"]["granted"] is False
+    missing_group = next(
+        group for group in payload["groups"] if group["full_name"] == "sample.reader"
+    )
+    missing_row = missing_group["versions"][0]
+    assert missing_row["origin"] is None
+    assert missing_row["problem"] == "definition_missing"
+    assert missing_row["project"]["committed"] is True
+    assert missing_row["agent"]["granted"] is False
+    broken_rows = [
+        row
+        for group in payload["groups"]
+        for row in group["versions"]
+        if row["problem"] and str(row["problem"]).startswith("definition_unreadable")
+    ]
+    assert broken_rows
+    assert broken_rows[0]["project"]["committed"] is True
+    assert broken_rows[0]["project"]["digest"] == "sha256:broken"
+
+    unassembled = _RelationStore(
+        [broken, missing_version, known_version],
+        instances,
+        grants,
+        missing_agent=True,
+    )
+    quiet = await build_package_groups(
+        None,
+        store=unassembled,
+        operator=object(),
+        project_id="proj",
+        agent_id="ghost",
+    )
+    quiet_payload = quiet.model_dump(mode="json")
+    assert quiet_payload["agent_id"] == "ghost"
+    assert all(
+        row["agent"]["granted"] is False
+        for group in quiet_payload["groups"]
+        for row in group["versions"]
+    )
+    distribution = await build_package_groups(None)
+    names = [group.full_name for group in distribution.groups]
+    assert "sample.reader" not in names
+    assert all(
+        row.project is None and row.agent is None
+        for group in distribution.groups
+        for row in group.versions
+    )

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AbilityApiStatus } from "@ghrah/protocol";
+import type { AbilityApiStatus, AbilityPackageGroupsView } from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
@@ -17,6 +17,8 @@ function errorText(error: unknown): string {
 
 export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () => {
   const status = ref<AbilityApiStatus | null>(null);
+  const groups = ref<AbilityPackageGroupsView | null>(null);
+  const groupsFailed = ref(false);
   const loading = ref(false);
   const stale = ref(false);
   const failed = ref(false);
@@ -44,11 +46,27 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
     failed.value = false;
     errorMessage.value = null;
     try {
-      status.value = await abilityControlClient(STATUS_PROJECT).status();
+      const client = abilityControlClient(STATUS_PROJECT);
+      status.value = await client.status();
       stale.value = false;
       loadedAt.value = Date.now();
+      if (status.value.features.packages_read) {
+        try {
+          groups.value = await client.packageGroups();
+          groupsFailed.value = false;
+        } catch (error) {
+          groups.value = null;
+          groupsFailed.value = true;
+          errorMessage.value = errorText(error);
+        }
+      } else {
+        groups.value = null;
+        groupsFailed.value = false;
+      }
     } catch (error) {
       failed.value = true;
+      groups.value = null;
+      groupsFailed.value = false;
       errorMessage.value = errorText(error);
     } finally {
       loading.value = false;
@@ -77,6 +95,8 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
 
   return {
     status,
+    groups,
+    groupsFailed,
     loading,
     stale,
     failed,

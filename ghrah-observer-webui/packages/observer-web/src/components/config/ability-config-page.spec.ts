@@ -11,21 +11,49 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AbilityConfigPage from "./ability-config-page.vue";
 
-function status(source: "builtin" | "legacy", tree: boolean) {
+function status(source: "builtin" | "legacy", tree: boolean, packagesRead = false) {
   return AbilityApiStatusSchema.parse({
     ability_source: source,
     legacy_deprecated: source === "legacy",
     features: {
       tree,
       grants_write: tree,
-      versions_read: false,
+      versions_read: packagesRead,
       versions_write: false,
-      packages_read: false,
+      packages_read: packagesRead,
       packages_install: false,
       surface_write: false,
     },
   });
 }
+
+const distributionGroups = {
+  format: "ghrah.ability-control.package-groups.v1",
+  scope: "distribution",
+  installed_available: false,
+  project_id: null,
+  agent_id: null,
+  groups: [
+    {
+      namespace: "sample",
+      name: "reader",
+      full_name: "sample.reader",
+      title: "Reader",
+      versions: [
+        {
+          version: "1",
+          origin: "builtin",
+          lock_state: "builtin",
+          problem: null,
+          shadowed_builtin: false,
+          member_count: 2,
+          project: null,
+          agent: null,
+        },
+      ],
+    },
+  ],
+};
 
 describe("AbilityConfigPage", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -45,6 +73,23 @@ describe("AbilityConfigPage", () => {
     await wrapper.get("button").trigger("click");
     await flushPromises();
     expect(read).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it("lists distribution package groups without install controls", async () => {
+    const read = vi.fn(async () => status("builtin", true, true));
+    const packageGroups = vi.fn(async () => distributionGroups);
+    setAbilityControlClientFactory(() => ({ status: read, packageGroups }) as never);
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reader");
+    expect(wrapper.text()).toContain("sample.reader");
+    expect(wrapper.text()).toContain("Built in");
+    expect(wrapper.text()).toContain("Lock builtin");
+    expect(wrapper.text()).toContain("2 members");
+    expect(wrapper.text()).not.toContain("No package list is shown.");
+    expect(wrapper.find("form").exists()).toBe(false);
+    expect(wrapper.findAll("button").map((button) => button.text())).toEqual(["Refresh status"]);
     wrapper.unmount();
   });
 

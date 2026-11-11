@@ -23,6 +23,32 @@ const statusLabel = computed(() => {
   if (packages.status.features.tree) return t("assembly.statusBuiltin");
   return t("assembly.statusUnavailable");
 });
+const showEmpty = computed(() => {
+  if (packages.loading || packages.groupsFailed) return false;
+  return !packages.groups || packages.groups.groups.length === 0;
+});
+
+function originText(origin: "builtin" | "installed" | null): string {
+  if (origin === "builtin") return t("assembly.catalog.origin.builtin");
+  if (origin === "installed") return t("assembly.catalog.origin.installed");
+  return t("assembly.catalog.origin.missing");
+}
+
+function problemText(problem: string): string {
+  if (problem === "definition_missing") return t("assembly.versions.missingDefinition");
+  if (problem.startsWith("definition_unreadable")) {
+    return t("assembly.versions.unreadableDefinition");
+  }
+  return problem;
+}
+
+function groupKey(
+  fullName: string | null,
+  versions: { version: string | null; origin: string | null }[],
+): string {
+  if (fullName) return fullName;
+  return versions.map((version) => `${version.origin ?? ""}:${version.version ?? ""}`).join("|");
+}
 
 onMounted(() => packages.setSettingsVisible(true));
 onUnmounted(() => packages.setSettingsVisible(false));
@@ -56,7 +82,42 @@ onUnmounted(() => packages.setSettingsVisible(false));
     <p v-if="packages.status && !packages.status.features.packages_install" class="ability-state">
       {{ t("assembly.catalog.installHidden") }}
     </p>
-    <p class="ability-state ability-state-empty">{{ t("assembly.catalog.empty") }}</p>
+    <p v-if="packages.groupsFailed" class="ability-state ability-state-alert" role="alert">
+      {{ t("assembly.catalog.groupsFailed") }}
+    </p>
+    <ul v-if="packages.groups?.groups.length" class="ability-groups">
+      <li
+        v-for="group in packages.groups.groups"
+        :key="groupKey(group.full_name, group.versions)"
+        class="ability-group"
+      >
+        <h3>{{ group.title || group.full_name || t("assembly.versions.unreadable") }}</h3>
+        <p v-if="group.full_name" class="ability-note">
+          <code>{{ group.full_name }}</code>
+        </p>
+        <ul class="ability-versions">
+          <li
+            v-for="(version, index) in group.versions"
+            :key="`${version.origin ?? ''}:${version.version ?? index}`"
+            class="ability-version"
+          >
+            <span>{{ version.version }}</span>
+            <span>{{ originText(version.origin) }}</span>
+            <span v-if="version.lock_state">
+              {{ t("assembly.catalog.lock", { state: version.lock_state }) }}
+            </span>
+            <span v-if="version.member_count != null">
+              {{ t("assembly.catalog.members", { count: version.member_count }) }}
+            </span>
+            <span v-if="version.shadowed_builtin">{{ t("assembly.catalog.shadowed") }}</span>
+            <span v-if="version.problem">{{ problemText(version.problem) }}</span>
+          </li>
+        </ul>
+      </li>
+    </ul>
+    <p v-if="showEmpty" class="ability-state ability-state-empty">
+      {{ t("assembly.catalog.empty") }}
+    </p>
   </section>
 </template>
 
@@ -122,5 +183,49 @@ onUnmounted(() => packages.setSettingsVisible(false));
 .ability-state-empty {
   background: var(--color-surface);
   text-align: center;
+}
+
+.ability-groups,
+.ability-versions {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ability-group {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ability-group h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+}
+
+.ability-versions {
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.ability-version {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.ability-group code {
+  font-size: var(--font-ui-code);
 }
 </style>

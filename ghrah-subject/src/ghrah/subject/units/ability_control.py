@@ -65,6 +65,7 @@ from ghrah.subject.units.ability_catalog import (
     build_instances_view,
     build_package_catalog,
     build_package_detail,
+    build_package_groups,
     valid_identity_segment,
 )
 
@@ -712,6 +713,63 @@ def build_ability_control_router(
         return _jsonable(view)
 
     router.add_api_route("/projects/{project_id}/ability-instances", _instances, methods=["GET"])
+
+    async def _package_groups(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
+        try:
+            groups = await build_package_groups(config.ability.install_root)
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(groups)
+
+    router.add_api_route("/ability-package-groups", _package_groups, methods=["GET"])
+
+    async def _project_package_groups(
+        project_id: str,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        resolved = await _resolve(request, project_id)
+        try:
+            groups = await build_package_groups(
+                config.ability.install_root,
+                store=resolved.handle.store,
+                operator=resolved.handle.operator,
+                project_id=project_id,
+            )
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(groups)
+
+    router.add_api_route(
+        "/projects/{project_id}/ability-package-groups",
+        _project_package_groups,
+        methods=["GET"],
+    )
+
+    async def _agent_package_groups(
+        project_id: str,
+        agent_id: str,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        resolved = await _resolve(request, project_id)
+        try:
+            groups = await build_package_groups(
+                config.ability.install_root,
+                store=resolved.handle.store,
+                operator=resolved.handle.operator,
+                project_id=project_id,
+                agent_id=agent_id,
+            )
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(groups)
+
+    router.add_api_route(
+        "/projects/{project_id}/agents/{agent_id}/ability-package-groups",
+        _agent_package_groups,
+        methods=["GET"],
+    )
 
     async def _closed_write(
         namespace: str = "",

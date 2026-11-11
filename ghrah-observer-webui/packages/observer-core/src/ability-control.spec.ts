@@ -90,4 +90,55 @@ describe("AbilityControlClient", () => {
       client.content(fixture.initial.agent_id, "files", "skill/guide/../secret"),
     ).rejects.toThrow("Invalid content member");
   });
+
+  it("reads one package-group shape for distribution, project, and agent", async () => {
+    const projectId = fixture.initial.project_id;
+    const agentId = fixture.initial.agent_id;
+    const fetchImpl = vi.fn<HttpFetch>(async (url) => {
+      const path = String(url);
+      if (path.includes(`/agents/${agentId}/ability-package-groups`)) {
+        return jsonResponse({
+          scope: "agent",
+          installed_available: false,
+          project_id: projectId,
+          agent_id: agentId,
+          groups: [],
+        });
+      }
+      if (path.includes(`/projects/${projectId}/ability-package-groups`)) {
+        return jsonResponse({
+          scope: "project",
+          installed_available: false,
+          project_id: projectId,
+          groups: [],
+        });
+      }
+      return jsonResponse({ scope: "distribution", installed_available: false, groups: [] });
+    });
+    const client = clientWith(fetchImpl);
+    await expect(client.packageGroups()).resolves.toMatchObject({ scope: "distribution" });
+    await expect(client.projectPackageGroups()).resolves.toMatchObject({
+      scope: "project",
+      project_id: projectId,
+    });
+    await expect(client.agentPackageGroups(agentId)).resolves.toMatchObject({
+      scope: "agent",
+      agent_id: agentId,
+    });
+    const urls = fetchImpl.mock.calls.map((call) => String(call[0]));
+    expect(urls[0]).toContain("/api/v1/ability-package-groups");
+    expect(urls[0]).not.toContain("/projects/");
+    expect(urls[1]).toContain(`/api/v1/projects/${projectId}/ability-package-groups`);
+    expect(urls[2]).toContain(`/agents/${agentId}/ability-package-groups`);
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse({
+        scope: "agent",
+        installed_available: false,
+        project_id: projectId,
+        agent_id: "someone-else",
+        groups: [],
+      }),
+    );
+    await expect(client.agentPackageGroups(agentId)).rejects.toThrow("target mismatch");
+  });
 });

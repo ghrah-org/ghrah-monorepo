@@ -955,7 +955,15 @@ export default {
     conflict: "关系已变化。请核对修订 {revision} 后再提交。",
     versions: {
       current: "版本 {digest}",
-      unavailable: "版本选择和包目录都不可用。",
+      committed: "已提交",
+      notCommitted: "未提交",
+      selected: "当前选中",
+      granted: "已授予 {alias}",
+      notGranted: "未授予",
+      missingDefinition: "这个已提交版本在发行版里已经找不到。",
+      unreadableDefinition: "这个已提交版本读不出来。",
+      unreadable: "读不出来的包",
+      groupsFailed: "包组名单没有读出来。",
     },
     changes: {
       empty: "没有能力变更。",
@@ -973,6 +981,15 @@ export default {
       installHidden: "不能安装能力包。",
       empty: "这里不显示包列表。",
       refresh: "刷新状态",
+      groupsFailed: "包组名单没有读出来。",
+      lock: "锁定 {state}",
+      members: "{count} 个成员",
+      shadowed: "遮住了同版本的内置包",
+      origin: {
+        builtin: "内置",
+        installed: "已安装",
+        missing: "发行版里没有",
+      },
     },
   },
 };

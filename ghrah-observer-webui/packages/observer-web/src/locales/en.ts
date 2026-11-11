@@ -994,7 +994,15 @@ export default {
     conflict: "The relation changed. Review revision {revision} and submit again.",
     versions: {
       current: "Version {digest}",
-      unavailable: "Version selection and the package catalog are not available.",
+      committed: "Committed",
+      notCommitted: "Not committed",
+      selected: "Selected",
+      granted: "Granted as {alias}",
+      notGranted: "Not granted",
+      missingDefinition: "This committed version is no longer in the distribution.",
+      unreadableDefinition: "This committed version could not be read.",
+      unreadable: "Unreadable package",
+      groupsFailed: "The package groups could not be read.",
     },
     changes: {
       empty: "No ability changes.",
@@ -1012,6 +1020,15 @@ export default {
       installHidden: "Package install is not available.",
       empty: "No package list is shown.",
       refresh: "Refresh status",
+      groupsFailed: "The package groups could not be read.",
+      lock: "Lock {state}",
+      members: "{count} members",
+      shadowed: "Shadows a built-in package",
+      origin: {
+        builtin: "Built in",
+        installed: "Installed",
+        missing: "Not in the distribution",
+      },
     },
   },
 } as const;

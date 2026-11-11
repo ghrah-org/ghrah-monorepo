@@ -2,6 +2,7 @@ import {
   AbilityAdminViewSchema,
   AbilityApiStatusSchema,
   AbilityChangesPageSchema,
+  AbilityPackageGroupsViewSchema,
   AbilityTreeChangeResultSchema,
   AbilityTreeIdSchema,
   AbilityTreeViewSchema,
@@ -11,6 +12,7 @@ import {
   type AbilityAdminView,
   type AbilityApiStatus,
   type AbilityChangesPage,
+  type AbilityPackageGroupsView,
   type AbilityTreeChangeResult,
   type AbilityTreeView,
   type BindToolRequest,
@@ -65,6 +67,9 @@ export class AbilityConflictError extends HttpError {
 
 export interface AbilityControlClient {
   status(): Promise<AbilityApiStatus>;
+  packageGroups(): Promise<AbilityPackageGroupsView>;
+  projectPackageGroups(): Promise<AbilityPackageGroupsView>;
+  agentPackageGroups(agentId: string): Promise<AbilityPackageGroupsView>;
   tree(agentId: string): Promise<AbilityTreeView>;
   admin(agentId: string, query?: AbilityAdminQuery): Promise<AbilityAdminView>;
   changes(agentId: string, query?: AbilityChangesQuery): Promise<AbilityChangesPage>;
@@ -118,9 +123,42 @@ export function createAbilityControlClient(
     return view;
   }
 
+  function rejectGroups(
+    view: AbilityPackageGroupsView,
+    scope: AbilityPackageGroupsView["scope"],
+    agentId?: string,
+  ): void {
+    const mismatched =
+      view.scope !== scope ||
+      (scope === "distribution" && (view.project_id !== null || view.agent_id !== null)) ||
+      (scope !== "distribution" && view.project_id !== projectId) ||
+      (scope === "project" && view.agent_id !== null) ||
+      (scope === "agent" && view.agent_id !== agentId);
+    if (mismatched) throw new Error("Ability package group target mismatch");
+  }
+
+  async function readGroups(
+    path: string,
+    scope: AbilityPackageGroupsView["scope"],
+    agentId?: string,
+  ): Promise<AbilityPackageGroupsView> {
+    const view = AbilityPackageGroupsViewSchema.parse(await http.get<unknown>(path));
+    rejectGroups(view, scope, agentId);
+    return view;
+  }
+
   return {
     async status() {
       return AbilityApiStatusSchema.parse(await http.get<unknown>("/api/v1/abilities/status"));
+    },
+    async packageGroups() {
+      return readGroups("/api/v1/ability-package-groups", "distribution");
+    },
+    async projectPackageGroups() {
+      return readGroups(`/api/v1/projects/${projectId}/ability-package-groups`, "project");
+    },
+    async agentPackageGroups(agentId) {
+      return readGroups(agentPath(agentId, "/ability-package-groups"), "agent", agentId);
     },
     tree,
     async admin(agentId, query = {}) {

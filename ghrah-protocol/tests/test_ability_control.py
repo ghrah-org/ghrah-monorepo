@@ -11,6 +11,10 @@ from ghrah.protocol.ability_control import (
     AbilityApiErrorResponse,
     AbilityApiStatus,
     AbilityPackageCatalogView,
+    AbilityPackageGroupProjectView,
+    AbilityPackageGroupsView,
+    AbilityPackageGroupVersionView,
+    AbilityPackageGroupView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.agent_control import AgentCreateRequest, AgentSpecPatch
@@ -99,6 +103,43 @@ def test_package_catalog_and_agent_patch_reject_unknown_fields() -> None:
         AgentSpecPatch(expected_revision=1)
     patched = AgentSpecPatch(expected_revision=2, system_prompt="next")
     assert patched.system_prompt == "next"
+
+
+def test_package_groups_share_one_shape_across_scopes() -> None:
+    distribution = AbilityPackageGroupsView(scope="distribution", installed_available=False)
+    assert distribution.format == "ghrah.ability-control.package-groups.v1"
+    assert distribution.groups == []
+    with pytest.raises(ValidationError):
+        AbilityPackageGroupsView(scope="distribution", installed_available=False, root="/tmp")
+    with pytest.raises(ValidationError):
+        AbilityPackageGroupsView(scope="distribution", installed_available=False, project_id="proj")
+    project = AbilityPackageGroupsView(
+        scope="project",
+        installed_available=False,
+        project_id="proj",
+        groups=[
+            AbilityPackageGroupView(
+                full_name="sample.reader",
+                versions=[
+                    AbilityPackageGroupVersionView(
+                        version="1",
+                        origin="builtin",
+                        lock_state="builtin",
+                        project=AbilityPackageGroupProjectView(committed=False),
+                    )
+                ],
+            )
+        ],
+    )
+    assert project.groups[0].versions[0].agent is None
+    with pytest.raises(ValidationError):
+        AbilityPackageGroupsView(
+            scope="agent",
+            installed_available=False,
+            project_id="proj",
+            agent_id="a1",
+            groups=project.groups,
+        )
 
 
 def test_error_response_requires_code() -> None:

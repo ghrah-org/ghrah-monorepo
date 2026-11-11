@@ -224,6 +224,107 @@ describe("AssemblyPanel", () => {
     wrapper.unmount();
   });
 
+  it("shows committed and ungranted package groups without assembly controls", async () => {
+    const agentPackageGroups = vi.fn(async () => ({
+      format: "ghrah.ability-control.package-groups.v1",
+      scope: "agent",
+      installed_available: false,
+      project_id: "p1",
+      agent_id: "a1",
+      groups: [
+        {
+          namespace: "sample",
+          name: "reader",
+          full_name: "sample.reader",
+          title: "Reader",
+          versions: [
+            {
+              version: "1",
+              origin: "builtin",
+              lock_state: "builtin",
+              problem: null,
+              shadowed_builtin: false,
+              member_count: 1,
+              project: {
+                committed: false,
+                digest: null,
+                instance_id: null,
+                selected: false,
+                instance_revision: null,
+              },
+              agent: { granted: false, alias: null },
+            },
+            {
+              version: "2",
+              origin: null,
+              lock_state: null,
+              problem: "definition_missing",
+              shadowed_builtin: false,
+              member_count: 1,
+              project: {
+                committed: true,
+                digest: "sha256:missing",
+                instance_id: "sample-reader",
+                selected: true,
+                instance_revision: 2,
+              },
+              agent: { granted: true, alias: "reader" },
+            },
+          ],
+        },
+      ],
+    }));
+    setAbilityControlClientFactory(
+      () =>
+        ({
+          status: async () =>
+            AbilityApiStatusSchema.parse({
+              ability_source: "builtin",
+              features: {
+                tree: true,
+                grants_write: false,
+                versions_read: true,
+                versions_write: false,
+                packages_read: true,
+                packages_install: false,
+                surface_write: false,
+              },
+            }),
+          packageGroups: async () => ({
+            scope: "distribution",
+            installed_available: false,
+            groups: [],
+          }),
+          admin: async () => admin,
+          tree: async () => tree,
+          changes: async () =>
+            AbilityChangesPageSchema.parse({ changes: [], next_after_seq: 0, has_more: false }),
+          agentPackageGroups,
+        }) as never,
+    );
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await wrapper.get("li button").trigger("click");
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    await wrapper
+      .findAll('[role="tab"]')
+      .find((item) => item.text() === "Versions")!
+      .trigger("click");
+    await flushPromises();
+    expect(agentPackageGroups).toHaveBeenCalledWith("a1");
+    expect(wrapper.text()).toContain("Reader");
+    expect(wrapper.text()).toContain("Not committed");
+    expect(wrapper.text()).toContain("Not granted");
+    expect(wrapper.text()).toContain("Committed");
+    expect(wrapper.text()).toContain("Granted as reader");
+    expect(wrapper.text()).toContain("no longer in the distribution");
+    expect(wrapper.text()).not.toContain(
+      "Version selection and the package catalog are not available.",
+    );
+    expect(wrapper.find("form").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("keeps a legacy source on the status explanation", async () => {
     const adminRead = vi.fn();
     setAbilityControlClientFactory(

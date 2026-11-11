@@ -39,6 +39,11 @@ __all__ = [
     "AbilityLifecycleView",
     "AbilityPackageCatalogView",
     "AbilityPackageDetailView",
+    "AbilityPackageGroupAgentView",
+    "AbilityPackageGroupProjectView",
+    "AbilityPackageGroupVersionView",
+    "AbilityPackageGroupView",
+    "AbilityPackageGroupsView",
     "AbilityPackageVersionDetail",
     "AbilityPackageVersionRow",
     "AbilityPendingRespawnView",
@@ -329,3 +334,81 @@ class AbilityInstancesView(TreeModel):
     project_id: TreeId
     instances: list[AbilityInstanceView] = Field(default_factory=list)
     unbound_versions: list[AbilityUnboundVersionView] = Field(default_factory=list)
+
+
+class AbilityPackageGroupProjectView(TreeModel):
+    """一个版本在项目关系库中的提交与实例事实。没有提交时 ``committed`` 为假。"""
+
+    committed: bool
+    digest: str | None = None
+    instance_id: TreeId | None = None
+    selected: bool = False
+    instance_revision: int | None = Field(default=None, ge=0)
+
+
+class AbilityPackageGroupAgentView(TreeModel):
+    """一个版本所在实例有没有授予这个 Agent。没有授予时 ``alias`` 为空。"""
+
+    granted: bool
+    alias: TreeKey | None = None
+
+
+class AbilityPackageGroupVersionView(TreeModel):
+    """包组里的一个版本。发行版、项目和 Agent 共用这一行，只填当前范围的事实。"""
+
+    version: str | None = None
+    origin: Literal["builtin", "installed"] | None = None
+    lock_state: str | None = None
+    problem: str | None = None
+    shadowed_builtin: bool = False
+    member_count: int | None = Field(default=None, ge=0)
+    project: AbilityPackageGroupProjectView | None = None
+    agent: AbilityPackageGroupAgentView | None = None
+
+
+class AbilityPackageGroupView(TreeModel):
+    """一个 ``namespace.name`` 包组。定义面找不到的已提交版本仍留在组里。"""
+
+    namespace: str | None = None
+    name: str | None = None
+    full_name: str | None = None
+    title: str | None = None
+    versions: list[AbilityPackageGroupVersionView] = Field(default_factory=list)
+
+
+class AbilityPackageGroupsView(TreeModel):
+    """按包身份对齐后的只读名单。``scope`` 决定行上哪些事实有值。"""
+
+    format: Literal["ghrah.ability-control.package-groups.v1"] = (
+        "ghrah.ability-control.package-groups.v1"
+    )
+    scope: Literal["distribution", "project", "agent"]
+    installed_available: bool
+    project_id: TreeId | None = None
+    agent_id: TreeId | None = None
+    groups: list[AbilityPackageGroupView] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def scope_facts(self) -> AbilityPackageGroupsView:
+        """发行版不带项目或 Agent；项目范围不带授予；Agent 范围两者都要有。"""
+        if self.scope == "distribution":
+            if self.project_id is not None or self.agent_id is not None:
+                raise ValueError("发行版范围不带项目或 Agent")
+            self._require(project=False, agent=False)
+        elif self.scope == "project":
+            if self.project_id is None or self.agent_id is not None:
+                raise ValueError("项目范围只带项目")
+            self._require(project=True, agent=False)
+        else:
+            if self.project_id is None or self.agent_id is None:
+                raise ValueError("Agent 范围必须带项目和 Agent")
+            self._require(project=True, agent=True)
+        return self
+
+    def _require(self, *, project: bool, agent: bool) -> None:
+        for group in self.groups:
+            for version in group.versions:
+                has_project = version.project is not None
+                has_agent = version.agent is not None
+                if has_project != project or has_agent != agent:
+                    raise ValueError("版本行的项目或 Agent 事实与范围不一致")

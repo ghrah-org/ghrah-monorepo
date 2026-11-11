@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""把内置定义和安装存储收成观察端目录与详情。
+"""把内置定义和安装存储收成观察端目录、详情和包组。
 
 不返回安装根或包目录的绝对路径。定义解析失败时保留该版本，并写入 problem。
+包组按身份把定义面和关系库对齐，不另写一张状态表。
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.ability.access import AccessError
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
@@ -22,6 +24,11 @@ from ghrah.protocol.ability_control import (
     AbilityInstanceView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
+    AbilityPackageGroupAgentView,
+    AbilityPackageGroupProjectView,
+    AbilityPackageGroupsView,
+    AbilityPackageGroupVersionView,
+    AbilityPackageGroupView,
     AbilityPackageVersionDetail,
     AbilityPackageVersionRow,
     AbilityUnboundVersionView,
@@ -391,4 +398,313 @@ async def build_instances_view(store: Any, operator: Any, project_id: str) -> Ab
     ]
     return AbilityInstancesView(
         project_id=project_id, instances=instances, unbound_versions=unbound
+    )
+
+
+@dataclass
+class _GroupDraft:
+    """对齐过程中的一行。只在本模块内使用，不进入响应。"""
+
+    namespace: str | None = None
+    name: str | None = None
+    full_name: str | None = None
+    title: str | None = None
+    version: str | None = None
+    origin: Literal["builtin", "installed"] | None = None
+    lock_state: str | None = None
+    problem: str | None = None
+    shadowed_builtin: bool = False
+    member_count: int | None = None
+    digest: str | None = None
+    instance_id: str | None = None
+    instance_revision: int | None = None
+    selected: bool = False
+
+
+@dataclass
+class _StoredVersion:
+    """关系库里读到的一个版本，定义解析失败时只留下摘要和问题。"""
+
+    digest: str
+    full_name: str | None
+    namespace: str | None
+    name: str | None
+    title: str | None
+    version: str | None
+    member_count: int | None
+    problem: str | None
+
+
+@dataclass
+class _InstanceFact:
+    """一个实例的身份、修订和当前选中摘要。"""
+
+    instance_id: str
+    revision: int
+    selected_digest: str
+    full_name: str | None
+    title: str | None
+
+
+def _draft_from_catalog(row: AbilityPackageVersionRow) -> _GroupDraft:
+    return _GroupDraft(
+        namespace=row.namespace,
+        name=row.name,
+        full_name=row.full_name,
+        title=row.title,
+        version=row.version,
+        origin=row.origin,
+        lock_state=row.lock_state,
+        problem=row.problem,
+        shadowed_builtin=row.shadowed_builtin,
+        member_count=row.member_count,
+    )
+
+
+def _parse_stored_version(version: Any) -> _StoredVersion:
+    try:
+        definition = version.definition()
+    except Exception as exc:
+        return _StoredVersion(
+            digest=version.digest,
+            full_name=None,
+            namespace=None,
+            name=None,
+            title=None,
+            version=None,
+            member_count=None,
+            problem=f"definition_unreadable: {exc}",
+        )
+    return _StoredVersion(
+        digest=version.digest,
+        full_name=definition.identity.full_name,
+        namespace=definition.identity.namespace,
+        name=definition.identity.name,
+        title=definition.title,
+        version=definition.identity.version,
+        member_count=_member_count(definition),
+        problem=None,
+    )
+
+
+def _missing_draft(stored: _StoredVersion) -> _GroupDraft:
+    """定义面没有这一行时，仍保留已提交版本，并标出问题。"""
+    return _GroupDraft(
+        namespace=stored.namespace,
+        name=stored.name,
+        full_name=stored.full_name,
+        title=stored.title,
+        version=stored.version,
+        problem=stored.problem or "definition_missing",
+        member_count=stored.member_count,
+        digest=stored.digest,
+    )
+
+
+def _group_key(draft: _GroupDraft) -> str:
+    if draft.full_name:
+        return draft.full_name
+    return f"digest:{draft.digest or ''}"
+
+
+def _catalog_error(exc: AccessError) -> CatalogError:
+    code = getattr(exc, "code", None) or "unavailable"
+    return CatalogError(code, "能力关系库拒绝")
+
+
+async def _load_relation(
+    store: Any, operator: Any, agent_id: str | None
+) -> tuple[list[_StoredVersion], list[_InstanceFact], dict[str, str]]:
+    """读取版本、实例，以及这个 Agent 的授予。没有 Agent 行时授予为空。"""
+    try:
+        stored_versions = await store.list_versions(operator)
+        instance_ids = await store.list_instances(operator)
+    except AccessError as exc:
+        raise _catalog_error(exc) from exc
+
+    stored = [_parse_stored_version(version) for version in stored_versions]
+    instances: list[_InstanceFact] = []
+    for instance_id in instance_ids:
+        try:
+            row = await store.instance(instance_id)
+        except AccessError as exc:
+            if getattr(exc, "code", None) == "not_found":
+                continue
+            raise _catalog_error(exc) from exc
+        full_name = None
+        title = None
+        try:
+            definition = AbilityDefinition.model_validate(row["definition"])
+            full_name = definition.identity.full_name
+            title = definition.title
+        except Exception:
+            full_name = None
+        instances.append(
+            _InstanceFact(
+                instance_id=str(row.get("id") or instance_id),
+                revision=int(row.get("revision") or 0),
+                selected_digest=str(row.get("digest") or ""),
+                full_name=full_name,
+                title=title,
+            )
+        )
+
+    aliases: dict[str, str] = {}
+    if agent_id is None:
+        return stored, instances, aliases
+    try:
+        grants = await store.grants(operator, agent_id)
+    except AccessError as exc:
+        if getattr(exc, "code", None) == "not_found":
+            return stored, instances, aliases
+        raise _catalog_error(exc) from exc
+    for grant in sorted(grants, key=lambda item: item.alias):
+        aliases.setdefault(grant.instance_id, grant.alias)
+    return stored, instances, aliases
+
+
+def _assign_stored(
+    groups: dict[str, list[_GroupDraft]],
+    stored: list[_StoredVersion],
+    selected_digests: set[str],
+) -> None:
+    """把已提交版本填进同身份同版本的定义行；对不上的另起一行。"""
+    open_rows: dict[tuple[str, str], list[_GroupDraft]] = {}
+    for drafts in groups.values():
+        for draft in drafts:
+            if draft.full_name and draft.version and draft.origin is not None:
+                open_rows.setdefault((draft.full_name, draft.version), []).append(draft)
+
+    def _order(item: _StoredVersion) -> tuple[int, str]:
+        preferred = 0 if item.digest in selected_digests else 1
+        return (preferred, item.digest)
+
+    for item in sorted(stored, key=_order):
+        if item.full_name and item.version and item.problem is None:
+            matches = open_rows.get((item.full_name, item.version), [])
+            if matches:
+                matches.pop(0).digest = item.digest
+                continue
+        draft = _missing_draft(item)
+        groups.setdefault(_group_key(draft), []).append(draft)
+
+
+def _attach_instances(groups: dict[str, list[_GroupDraft]], instances: list[_InstanceFact]) -> None:
+    """把实例标识和修订写到同身份的每一行，只把当前选中摘要标成 selected。"""
+    for fact in instances:
+        matched = groups.get(fact.full_name, []) if fact.full_name else []
+        if not matched:
+            matched = [
+                draft
+                for drafts in groups.values()
+                for draft in drafts
+                if draft.digest and draft.digest == fact.selected_digest
+            ]
+        if not matched:
+            draft = _GroupDraft(
+                full_name=fact.full_name,
+                title=fact.title,
+                digest=fact.selected_digest or None,
+                problem="definition_missing" if fact.full_name else "definition_unreadable",
+                instance_id=fact.instance_id,
+                instance_revision=fact.revision,
+                selected=bool(fact.selected_digest),
+            )
+            groups.setdefault(_group_key(draft), []).append(draft)
+            continue
+        for draft in matched:
+            draft.instance_id = fact.instance_id
+            draft.instance_revision = fact.revision
+            draft.selected = bool(draft.digest) and draft.digest == fact.selected_digest
+
+
+def _version_view(
+    draft: _GroupDraft, scope: str, aliases: dict[str, str]
+) -> AbilityPackageGroupVersionView:
+    project = None
+    agent = None
+    if scope != "distribution":
+        project = AbilityPackageGroupProjectView(
+            committed=draft.digest is not None,
+            digest=draft.digest,
+            instance_id=draft.instance_id,
+            selected=draft.selected,
+            instance_revision=draft.instance_revision,
+        )
+    if scope == "agent":
+        alias = aliases.get(draft.instance_id or "")
+        granted = bool(draft.selected and draft.instance_id and alias)
+        agent = AbilityPackageGroupAgentView(granted=granted, alias=alias if granted else None)
+    return AbilityPackageGroupVersionView(
+        version=draft.version,
+        origin=draft.origin,
+        lock_state=draft.lock_state,
+        problem=draft.problem,
+        shadowed_builtin=draft.shadowed_builtin,
+        member_count=draft.member_count,
+        project=project,
+        agent=agent,
+    )
+
+
+def _group_view(
+    drafts: list[_GroupDraft], scope: str, aliases: dict[str, str]
+) -> AbilityPackageGroupView:
+    named = next((draft for draft in drafts if draft.namespace), drafts[0])
+    title = next((draft.title for draft in drafts if draft.title), None)
+    versions = sorted(drafts, key=lambda draft: (draft.version or "", draft.digest or ""))
+    return AbilityPackageGroupView(
+        namespace=named.namespace,
+        name=named.name,
+        full_name=named.full_name,
+        title=title,
+        versions=[_version_view(draft, scope, aliases) for draft in versions],
+    )
+
+
+async def build_package_groups(
+    install_root: str | None,
+    *,
+    store: Any | None = None,
+    operator: Any | None = None,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+) -> AbilityPackageGroupsView:
+    """按包身份对齐定义面和关系库，不写库，也不返回安装根或实例根。
+
+    没有项目时只返回发行版。给出项目时补上是否已提交、实例标识和当前选中摘要。
+    再给出 Agent 时补上是否已授予。Agent 还没有关系行时名单照常返回，授予为假。
+    """
+    if agent_id is not None and project_id is None:
+        raise CatalogError("invalid_request", "读取 Agent 包组需要项目")
+    if project_id is not None and (store is None or operator is None):
+        raise CatalogError("invalid_request", "读取项目包组需要关系库")
+
+    if agent_id is not None:
+        scope = "agent"
+    elif project_id is not None:
+        scope = "project"
+    else:
+        scope = "distribution"
+
+    catalog = build_package_catalog(install_root)
+    groups: dict[str, list[_GroupDraft]] = {}
+    for row in catalog.packages:
+        draft = _draft_from_catalog(row)
+        groups.setdefault(_group_key(draft), []).append(draft)
+
+    aliases: dict[str, str] = {}
+    if project_id is not None:
+        stored, instances, aliases = await _load_relation(store, operator, agent_id)
+        selected = {fact.selected_digest for fact in instances if fact.selected_digest}
+        _assign_stored(groups, stored, selected)
+        _attach_instances(groups, instances)
+
+    ordered = sorted(groups, key=lambda key: (key.startswith("digest:"), key))
+    return AbilityPackageGroupsView(
+        scope=scope,
+        installed_available=catalog.installed_available,
+        project_id=project_id,
+        agent_id=agent_id,
+        groups=[_group_view(groups[key], scope, aliases) for key in ordered],
     )

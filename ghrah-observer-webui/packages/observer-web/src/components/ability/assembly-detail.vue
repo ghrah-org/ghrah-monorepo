@@ -5,7 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import { useAbilityAdminStore, useAbilityPackagesStore } from "@ghrah/observer-core";
+import {
+  abilityControlClient,
+  useAbilityAdminStore,
+  useAbilityPackagesStore,
+} from "@ghrah/observer-core";
+import type { AbilityPackageGroupsView } from "@ghrah/protocol";
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SchemeAbilitiesPanel from "@/components/scheme-abilities-panel.vue";
@@ -23,7 +28,11 @@ const packages = useAbilityPackagesStore();
 const { t } = useI18n();
 const tabs = ["overview", "grants", "tools", "versions", "changes"] as const;
 const tab = ref<(typeof tabs)[number]>("overview");
+const agentGroups = ref<AbilityPackageGroupsView | null>(null);
+const groupsLoading = ref(false);
+const groupsFailed = ref(false);
 let shown = false;
+let groupRequest = 0;
 
 const record = computed(() => {
   const current = admin.record(props.projectId, props.agentId);
@@ -41,6 +50,52 @@ const record = computed(() => {
 });
 const treeEnabled = computed(() => packages.status?.features.tree === true);
 const view = computed(() => record.value?.admin ?? null);
+const packagesReadable = computed(() => packages.status?.features.packages_read === true);
+
+function originText(origin: "builtin" | "installed" | null): string {
+  if (origin === "builtin") return t("assembly.catalog.origin.builtin");
+  if (origin === "installed") return t("assembly.catalog.origin.installed");
+  return t("assembly.catalog.origin.missing");
+}
+
+function problemText(problem: string): string {
+  if (problem === "definition_missing") return t("assembly.versions.missingDefinition");
+  if (problem.startsWith("definition_unreadable")) {
+    return t("assembly.versions.unreadableDefinition");
+  }
+  return problem;
+}
+
+function groupKey(group: AbilityPackageGroupsView["groups"][number]): string {
+  if (group.full_name) return group.full_name;
+  return group.versions
+    .map((version) => version.project?.digest ?? `${version.origin ?? ""}:${version.version ?? ""}`)
+    .join("|");
+}
+
+async function loadGroups(): Promise<void> {
+  const current = ++groupRequest;
+  if (!packagesReadable.value) {
+    agentGroups.value = null;
+    groupsFailed.value = false;
+    groupsLoading.value = false;
+    return;
+  }
+  groupsLoading.value = true;
+  groupsFailed.value = false;
+  try {
+    const next = await abilityControlClient(props.projectId).agentPackageGroups(props.agentId);
+    if (current !== groupRequest) return;
+    agentGroups.value = next;
+  } catch {
+    if (current !== groupRequest) return;
+    agentGroups.value = null;
+    groupsFailed.value = true;
+  } finally {
+    if (current === groupRequest) groupsLoading.value = false;
+  }
+}
+
 const canWrite = computed(() => {
   const status = packages.status;
   if (!status || status.ability_source === "legacy" || status.legacy_deprecated) return false;
@@ -74,6 +129,14 @@ watch(treeEnabled, (enabled) => {
   if (!shown) return;
   void admin.setVisible(props.projectId, props.agentId, enabled);
 });
+
+watch(
+  () =>
+    [tab.value, props.projectId, props.agentId, packages.status?.features.packages_read] as const,
+  () => {
+    if (tab.value === "versions") void loadGroups();
+  },
+);
 
 onMounted(show);
 onActivated(show);
@@ -199,11 +262,40 @@ onUnmounted(hide);
         <SchemeAbilitiesPanel readonly :project-id="projectId" :agent-id="agentId" />
       </div>
       <div v-else-if="tab === 'versions'" class="assembly-detail-body">
-        <p>{{ t("assembly.versions.unavailable") }}</p>
-        <ul>
-          <li v-for="grant in view?.grants ?? []" :key="grant.alias">
-            <code>{{ grant.alias }}</code>
-            <span>{{ t("assembly.versions.current", { digest: grant.version_digest }) }}</span>
+        <p v-if="groupsLoading || (packages.loading && !packages.status)">
+          {{ t("assembly.loading") }}
+        </p>
+        <p v-else-if="!packagesReadable">{{ t("assembly.catalog.packagesHidden") }}</p>
+        <p v-else-if="groupsFailed" role="alert">{{ t("assembly.versions.groupsFailed") }}</p>
+        <p v-else-if="!agentGroups?.groups.length">{{ t("assembly.catalog.empty") }}</p>
+        <ul v-else class="assembly-groups">
+          <li v-for="group in agentGroups.groups" :key="groupKey(group)" class="assembly-group">
+            <h3>{{ group.title || group.full_name || t("assembly.versions.unreadable") }}</h3>
+            <p v-if="group.full_name">
+              <code>{{ group.full_name }}</code>
+            </p>
+            <ul>
+              <li
+                v-for="(version, index) in group.versions"
+                :key="`${version.version ?? ''}:${version.project?.digest ?? index}`"
+              >
+                <span>{{ version.version }}</span>
+                <span>{{ originText(version.origin) }}</span>
+                <span>
+                  {{
+                    version.project?.committed
+                      ? t("assembly.versions.committed")
+                      : t("assembly.versions.notCommitted")
+                  }}
+                </span>
+                <span v-if="version.project?.selected">{{ t("assembly.versions.selected") }}</span>
+                <span v-if="version.agent?.granted">
+                  {{ t("assembly.versions.granted", { alias: version.agent.alias }) }}
+                </span>
+                <span v-else>{{ t("assembly.versions.notGranted") }}</span>
+                <span v-if="version.problem">{{ problemText(version.problem) }}</span>
+              </li>
+            </ul>
           </li>
         </ul>
       </div>
@@ -233,5 +325,44 @@ onUnmounted(hide);
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.assembly-groups,
+.assembly-groups ul {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assembly-group {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.assembly-group h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-ui-body);
+  font-weight: 600;
+}
+
+.assembly-group li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.assembly-group code {
+  font-size: var(--font-ui-code);
 }
 </style>

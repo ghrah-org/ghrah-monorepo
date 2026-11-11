@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { AbilityPackageCatalogViewSchema } from "./ability-control.js";
+import {
+  AbilityPackageCatalogViewSchema,
+  AbilityPackageGroupsViewSchema,
+} from "./ability-control.js";
 import { AgentCreateRequestSchema, AgentSpecificationSummarySchema } from "./agent-control.js";
 
 describe("agent control contracts", () => {
@@ -46,6 +49,19 @@ describe("agent control contracts", () => {
     expect(catalog.packages).toEqual([]);
     expect(() =>
       AbilityPackageCatalogViewSchema.parse({ installed_available: false, root: "/tmp" }),
+    ).toThrow();
+    const groups = AbilityPackageGroupsViewSchema.parse({
+      scope: "distribution",
+      installed_available: false,
+    });
+    expect(groups.format).toBe("ghrah.ability-control.package-groups.v1");
+    expect(groups.project_id).toBeNull();
+    expect(() =>
+      AbilityPackageGroupsViewSchema.parse({
+        scope: "distribution",
+        installed_available: false,
+        root: "/tmp",
+      }),
     ).toThrow();
   });
 });
