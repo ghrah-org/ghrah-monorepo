@@ -356,11 +356,12 @@ class SubjectConfig:
     # 仅进程内受信部署代码设置；不从 Skill 正文、annotations 或模型输入解析。
     mcp: McpDeploymentConfig | None = None
 
-    # 观测端能力管理面（REST /api/v1）开关与认证。默认关闭：管理面可写授权、
-    # 卸载包，开启前必须显式承认部署面。启用后回环请求视为受信；非回环
-    # 请求必须携带 ``Authorization: Bearer <token>``。CORS 只是浏览器策略，
-    # 不是安全边界；公网部署要求 TLS + token 或同源反代。
-    observer_http_api_enabled: bool = False
+    # 观测端能力管理面（REST /api/v1）开关与认证。默认启用，本机观察端可以直接调用。
+    # 回环请求视为受信；非回环请求必须携带 ``Authorization: Bearer <token>``。
+    # CORS 只是浏览器策略，不是安全边界。公网或跨机部署把
+    # ``GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED`` 设为 false，或配置 token，
+    # 并使用 TLS 或同源反代。
+    observer_http_api_enabled: bool = True
     observer_http_api_token: str = ""
     observer_cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
@@ -497,7 +498,7 @@ class SubjectConfig:
         - GHRAH_SUBJECT_ABILITY_GRANT_POLICY（启动期授权策略的 JSON 文本；
           空 = 不授予任何能力，非法内容直接报错）
         - GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED（观测端能力管理面开关，
-          默认 false；开启后可写授权/工具选择）
+          默认 true；设为 false 时只留 status，其余 /api/v1 返回 503）
         - GHRAH_SUBJECT_OBSERVER_HTTP_API_TOKEN（非回环请求的 Bearer token；
           回环部署可留空）
         - GHRAH_SUBJECT_OBSERVER_CORS_ORIGINS（逗号分隔的浏览器来源白名单）
@@ -717,7 +718,7 @@ class SubjectConfig:
             taskstore_slice=taskstore_slice,
             ability_grant_policy=ability_grant_policy,
             observer_http_api_enabled=os.environ.get(
-                "GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", "false"
+                "GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", "true"
             ).lower()
             in ("true", "1", "yes"),
             observer_http_api_token=os.environ.get("GHRAH_SUBJECT_OBSERVER_HTTP_API_TOKEN", ""),

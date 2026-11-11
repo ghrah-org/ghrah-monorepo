@@ -447,6 +447,18 @@ class TestFromEnv:
         monkeypatch.delenv("GHRAH_SUBJECT_ABILITY_SOURCE", raising=False)
         assert SubjectConfig.from_env().ability_source == "builtin"
 
+    def test_observer_http_api_enabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", raising=False)
+        assert SubjectConfig().observer_http_api_enabled is True
+        assert SubjectConfig.from_env().observer_http_api_enabled is True
+
+    @pytest.mark.parametrize("raw", ["false", "0", "no"])
+    def test_observer_http_api_disabled_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", raw)
+        assert SubjectConfig.from_env().observer_http_api_enabled is False
+
     def test_from_env_ability_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GHRAH_SUBJECT_ABILITY_SOURCE", "BUILTIN")
         assert SubjectConfig.from_env().ability_source == "builtin"
