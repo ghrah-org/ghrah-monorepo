@@ -39,8 +39,7 @@ jobs:
 
       - name: TypeScript 质量门禁
         run: |
-          pnpm --filter @ghrah/protocol build
-          pnpm --filter @ghrah/observer-core build
+          pnpm build:deps
           pnpm -r test
           pnpm type-check
           pnpm lint

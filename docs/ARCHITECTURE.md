@@ -3394,15 +3394,15 @@ webui 根：
       （默认）      → exec ghrah dev run（ghrah-toolchain 本地 dev 会话）
   dev:extension  → 构建 4 包 → 起 Core(:4111) → 轮询 /health 30s → 起 Subject → webui dev → extension watch
   build          → ./scripts/build.sh
-      protocol → plugin-registry → observer-core → observer-web → vscode-extension → vsce package
-      （**mock-server 不在链内**，由 dev.sh --mock 单独构建）
+      protocol → plugin-registry → observer-core → mock-server → observer-web → vscode-extension → vsce package
       observer-web build = prebuild(assemble-plugins.mjs) → vue-tsc --noEmit && vite build
+  build:deps     → protocol → plugin-registry → observer-core → mock-server（测试 / type-check 消费 dist 的前置构建）
   lint           → i18n 门禁 → ui-token 门禁 → oxlint . → eslint . → prettier --check .
-  test           → pnpm -r test（vscode-extension 无 test script，被跳过）
+  test           → pnpm -r test（不含构建；本地先跑 pnpm build:deps，CI 用独立构建步）
   type-check     → pnpm -r type-check（observer-web 用 vue-tsc，其余 tsc）
 ```
 
-> ⚠ `packages/protocol` 与 `packages/observer-core` 的 `exports` 指向 `dist/`——**改动后必须 `pnpm build`**，否则 dist 陈旧会让 type-check 与测试结果分裂（`AGENTS.md` 明确警告）。
+> ⚠ `packages/protocol`、`packages/plugin-registry`、`packages/observer-core`、`packages/mock-server` 的 `exports` 指向 `dist/`——**改动后必须 `pnpm build:deps`**，否则 dist 陈旧会让 type-check 与测试结果分裂（`AGENTS.md` 明确警告）。
 
 ---
 

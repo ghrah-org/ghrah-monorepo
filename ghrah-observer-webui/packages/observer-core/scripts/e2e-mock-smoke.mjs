@@ -8,9 +8,8 @@
  * 端到端 Mock 冒烟（计划任务 8.2）：真实 ObserverClient + connectStores 连接
  * @ghrah/mock-server（demo 场景，4 agent + 4 room），走完整 WS 协议断言全链路。
  *
- * 用法：
- *   pnpm --filter @ghrah/protocol build && pnpm --filter @ghrah/observer-core build \
- *     && pnpm --filter @ghrah/mock-server build
+ * 用法（在 ghrah-observer-webui 目录执行）：
+ *   pnpm build:deps      # 构建 protocol / plugin-registry / observer-core / mock-server 的 dist
  *   node packages/observer-core/scripts/e2e-mock-smoke.mjs
  */
 import { setTimeout as delay } from "node:timers/promises";

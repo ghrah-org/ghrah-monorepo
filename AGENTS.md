@@ -69,7 +69,7 @@ pnpm install                # TS 全量安装（webui 目录或根均可，works
 - 级联顺序由 `@layer` 决定，不要靠 import 顺序或堆特异性取胜；需要覆盖组件样式时用工具类，而不是加 `!important`。
 - 样式门禁：`pnpm lint` 内含 `check-style-governance`（ratchet，基线 `style-baseline.json`）。CSS 体积可在本地构建后用 `pnpm lint:css-budget` 检查（基线 `style-budget.json`，gzip 为主），不作为 CI 门禁。清理存量后跑对应 `--update` 下调基线。
 - 布局/样式改动须自查 1600 / 1024 两种宽度 × 100% / 110% 字号；涉及侧边栏的还要覆盖“展开 / 收起 / 两侧都收起”。
-- 构建：`packages/protocol` 与 `packages/observer-core` 改动后须 `pnpm build`（exports 指向 `dist/`，type-check 解析 dist；**dist 陈旧会让 type-check 与测试结果分裂**）。
+- 构建：`packages/protocol`、`packages/plugin-registry`、`packages/observer-core`、`packages/mock-server` 的 `exports` 指向 `dist/`；改动后须跑 `pnpm build:deps` 重建（monorepo 根或 webui 目录均可），否则 dist 陈旧会让测试与 type-check 结果分裂。
 
 ### 通用
 
@@ -88,8 +88,9 @@ uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-tasksto
 cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol
 cd ../ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.scheme
 
-# TS（webui 目录执行）
-pnpm vitest run        # 注意：根级无 test script，用 vitest run
+# TS（monorepo 根目录执行）
+pnpm build:deps        # 构建 workspace 库的 dist（测试按 exports 消费 dist）
+pnpm test              # 全部包测试（等价 pnpm -r test）
 pnpm type-check        # 根级递归；vue-tsc 在 observer-web 包级
 pnpm lint
 

@@ -20,9 +20,8 @@ ghrah 观察端 WebUI 与 VS Code 扩展（Vue 3 + Vite + pnpm workspace）。
 ```sh
 pnpm install        # 安装整个 workspace（单一 pnpm-lock.yaml 在仓库根）
 
-# 构建发布面（observer-web / observer-core 依赖 protocol 的 dist，须先构建）
-pnpm --filter @ghrah/protocol build
-pnpm --filter @ghrah/observer-core build
+# 构建 workspace 库的 dist（测试与 type-check 按包 exports 消费 dist，须先构建）
+pnpm build:deps     # protocol → plugin-registry → observer-core → mock-server
 
 # 测试
 pnpm --filter @ghrah/protocol test
@@ -42,7 +41,7 @@ pnpm -r build
 ```sh
 pnpm dev            # ./scripts/dev.sh — 全栈 dev（ghrah dev run）；--mock 仅起前端 demo
 pnpm build          # ./scripts/build.sh
-pnpm lint           # i18n / ui-tokens 检查 + biome
+pnpm lint           # oxlint / eslint / stylelint / prettier + i18n / ui-tokens 检查
 ```
 
 ## IDE

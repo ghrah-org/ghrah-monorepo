@@ -8,6 +8,7 @@
     "dev:extension": "./scripts/dev-extension.sh",
     "test:extension": "./scripts/test-extension.sh",
     "build": "./scripts/build.sh",
+    "build:deps": "pnpm --filter @ghrah/protocol build && pnpm --filter @ghrah/plugin-registry build && pnpm --filter @ghrah/observer-core build && pnpm --filter @ghrah/mock-server build",
     "lint": "pnpm --filter @ghrah/observer-web lint:i18n && pnpm --filter @ghrah/observer-web lint:ui-tokens && oxlint . && eslint . && stylelint \"packages/*/src/**/*.{css,vue}\" && node scripts/check-style-governance.mjs && prettier --check .",
     "lint:fix": "oxlint . && eslint . --fix && stylelint --fix \"packages/*/src/**/*.{css,vue}\" && prettier --write .",
     "lint:style": "node scripts/check-style-governance.mjs",

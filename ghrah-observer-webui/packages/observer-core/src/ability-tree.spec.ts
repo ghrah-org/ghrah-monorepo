@@ -76,6 +76,9 @@ describe("REST transport adapter", () => {
       revokeGrant: vi.fn().mockResolvedValue(result),
       bindTool: vi.fn().mockResolvedValue(result),
       unbindTool: vi.fn().mockResolvedValue(result),
+      packageGroups: vi.fn(),
+      projectPackageGroups: vi.fn(),
+      agentPackageGroups: vi.fn(),
     };
   }
 

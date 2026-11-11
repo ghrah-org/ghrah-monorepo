@@ -78,8 +78,9 @@ cd ghrah-observer-webui && pnpm dev -- --mock --scenario demo
 ```sh
 uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel  # Python 七包
 uv run ruff check . && uv run ruff format --check .     # Python lint/format
-pnpm -r test && pnpm type-check                          # TS 测试 + 类型检查（webui 内）
-pnpm lint                                                # TS biome + i18n/ui-token 门禁（webui 内）
+pnpm build:deps                                          # TS 库包 dist（测试 / type-check 按 exports 消费 dist）
+pnpm test && pnpm type-check                             # TS 测试 + 类型检查
+pnpm lint                                                # TS lint（oxlint/eslint/stylelint/prettier）+ i18n/ui-token 门禁
 ```
 
 发布前手工运行 GitHub Actions 的 `release-precheck`。它只测试、构建、审计并上传临时

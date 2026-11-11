@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm --dir ghrah-observer-webui dev",
     "build": "pnpm --dir ghrah-observer-webui build",
+    "build:deps": "pnpm --dir ghrah-observer-webui build:deps",
     "lint": "pnpm --dir ghrah-observer-webui lint",
     "lint:css-budget": "pnpm --dir ghrah-observer-webui lint:css-budget",
     "test": "pnpm --dir ghrah-observer-webui test",
