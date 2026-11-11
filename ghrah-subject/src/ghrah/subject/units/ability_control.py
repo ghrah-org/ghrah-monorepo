@@ -60,6 +60,13 @@ from ghrah.subject.runtime.service_keys import (
     AbilityAccessService,
 )
 from ghrah.subject.unit.base import RouteSpec, SubjectUnit, UnitMeta
+from ghrah.subject.units.ability_catalog import (
+    CatalogError,
+    build_instances_view,
+    build_package_catalog,
+    build_package_detail,
+    valid_identity_segment,
+)
 
 __all__ = [
     "AbilityApiError",
@@ -265,6 +272,8 @@ def build_ability_control_router(
     """构造管理面路由；依赖由 unit 从受信 ctx 注入（测试可直接构造）。"""
     router = APIRouter(prefix="/api/v1")
     enabled = config.observer_http_api_enabled
+    source = config.ability_source if config.ability_source in {"builtin", "legacy"} else "legacy"
+    ready = enabled and source == "builtin"
 
     async def _ensure_enabled() -> None:
         if enabled:
@@ -273,6 +282,18 @@ def build_ability_control_router(
             "capability_unavailable",
             "观测端能力管理面未启用（observer_http_api_enabled=false）",
         )
+
+    async def _ensure_catalog() -> None:
+        await _ensure_enabled()
+        if source != "builtin":
+            raise AbilityApiError(
+                "capability_unavailable",
+                "能力来源不是 builtin，目录与实例读面不可用",
+                detail={"legacy_deprecated": source == "legacy"},
+            )
+
+    def _catalog_error(error: CatalogError) -> None:
+        raise AbilityApiError(error.code, error.message) from error
 
     async def _resolve(request: Request, project_id: str) -> _Resolved:
         if not _authorized(request, config):
@@ -412,17 +433,20 @@ def build_ability_control_router(
         reason: str | None = None
         if not enabled:
             reason = "观测端能力管理面未启用（observer_http_api_enabled=false）"
+        elif source != "builtin":
+            reason = "能力来源不是 builtin，目录与实例读面不可用"
         features = AbilityApiFeatures(
-            tree=enabled,
-            grants_write=enabled,
-            versions_read=False,
+            tree=ready,
+            grants_write=ready,
+            versions_read=ready,
             versions_write=False,
-            packages_read=False,
+            packages_read=ready,
             packages_install=False,
             surface_write=False,
         )
         payload = AbilityApiStatus(
-            ability_source="builtin",
+            ability_source=source,  # type: ignore[arg-type]
+            legacy_deprecated=source == "legacy",
             operator="deployment" if enabled else None,
             features=features,
             reason=reason,
@@ -649,6 +673,74 @@ def build_ability_control_router(
         methods=["DELETE"],
     )
 
+    async def _packages(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
+        try:
+            catalog = build_package_catalog(config.ability.install_root)
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(catalog)
+
+    router.add_api_route("/ability-packages", _packages, methods=["GET"])
+
+    async def _package_detail(
+        namespace: str,
+        name: str,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        if not valid_identity_segment(namespace) or not valid_identity_segment(name):
+            raise AbilityApiError("invalid_request", "能力包身份不合法")
+        try:
+            detail = build_package_detail(config.ability.install_root, namespace, name)
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(detail)
+
+    router.add_api_route("/ability-packages/{namespace}/{name}", _package_detail, methods=["GET"])
+
+    async def _instances(
+        project_id: str,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        resolved = await _resolve(request, project_id)
+        try:
+            view = await build_instances_view(
+                resolved.handle.store, resolved.handle.operator, project_id
+            )
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(view)
+
+    router.add_api_route("/projects/{project_id}/ability-instances", _instances, methods=["GET"])
+
+    async def _closed_write(
+        namespace: str = "",
+        name: str = "",
+        version: str = "",
+        project_id: str = "",
+        instance_id: str = "",
+        _: None = Depends(_ensure_catalog),
+    ) -> None:
+        del namespace, name, version, project_id, instance_id
+        raise AbilityApiError("capability_unavailable", "该写入尚未开放")
+
+    router.add_api_route("/ability-packages/import", _closed_write, methods=["POST"])
+    router.add_api_route(
+        "/ability-packages/{namespace}/{name}/versions/{version}/verify",
+        _closed_write,
+        methods=["POST"],
+    )
+    router.add_api_route(
+        "/ability-packages/{namespace}/{name}/versions/{version}",
+        _closed_write,
+        methods=["DELETE"],
+    )
+    router.add_api_route(
+        "/projects/{project_id}/ability-instances/{instance_id}/select",
+        _closed_write,
+        methods=["POST"],
+    )
+
     return router
 
 
@@ -717,7 +809,7 @@ class AbilityControlUnit(SubjectUnit):
             CORSMiddleware,
             allow_origins=list(self._config.observer_cors_origins),
             allow_credentials=False,
-            allow_methods=["GET", "PUT", "DELETE", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type", "Accept"],
         )
         register_ability_control_error_handlers(app)

@@ -33,11 +33,20 @@ __all__ = [
     "AbilityChangesPage",
     "AbilityGrantPolicyView",
     "AbilityGrantView",
+    "AbilityInstanceVersionView",
+    "AbilityInstanceView",
+    "AbilityInstancesView",
     "AbilityLifecycleView",
+    "AbilityPackageCatalogView",
+    "AbilityPackageDetailView",
+    "AbilityPackageVersionDetail",
+    "AbilityPackageVersionRow",
     "AbilityPendingRespawnView",
     "AbilitySurfaceEntryView",
     "AbilitySurfaceView",
     "AbilityTreeChangeResult",
+    "AbilityUnboundVersionView",
+    "AbilityVerifyView",
 ]
 
 #: 管理面错误码（HTTP 状态由服务端映射；前端只做分支与文案）。
@@ -217,3 +226,106 @@ class AbilityApiErrorResponse(TreeModel):
         if not self.error.code:
             raise ValueError("错误码不能为空")
         return self
+
+
+class AbilityPackageVersionRow(TreeModel):
+    """目录里的一个版本。一行一个版本，不含安装根路径。"""
+
+    namespace: str
+    name: str | None = None
+    full_name: str
+    title: str | None = None
+    origin: Literal["builtin", "installed"]
+    version: str
+    member_count: int | None = Field(default=None, ge=0)
+    lock_state: str
+    problem: str | None = None
+    shadowed_builtin: bool = False
+
+
+class AbilityPackageCatalogView(TreeModel):
+    """发行版能力目录。不含项目当前选中的版本。"""
+
+    format: Literal["ghrah.ability-control.packages.v1"] = "ghrah.ability-control.packages.v1"
+    installed_available: bool
+    packages: list[AbilityPackageVersionRow] = Field(default_factory=list)
+
+
+class AbilityVerifyView(TreeModel):
+    """一次安装校验的结果。差异路径是包内相对路径。"""
+
+    ok: bool
+    code: str | None = None
+    message: str | None = None
+    package_digest: str | None = None
+    actual_digest: str | None = None
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+    changed: list[str] = Field(default_factory=list)
+
+
+class AbilityPackageVersionDetail(TreeModel):
+    """一个包版本的可读详情。不含定义全文和文件字节。"""
+
+    version: str
+    origin: Literal["builtin", "installed"]
+    title: str | None = None
+    description: str | None = None
+    operations: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    lock_state: str
+    problem: str | None = None
+    verify: AbilityVerifyView | None = None
+    shadowed_builtin: bool = False
+
+
+class AbilityPackageDetailView(TreeModel):
+    """两段身份的包详情。只有一段身份的包不走这条路径。"""
+
+    format: Literal["ghrah.ability-control.package.v1"] = "ghrah.ability-control.package.v1"
+    namespace: str
+    name: str
+    full_name: str
+    versions: list[AbilityPackageVersionDetail] = Field(default_factory=list)
+
+
+class AbilityInstanceVersionView(TreeModel):
+    """项目里已提交的一个版本，以及它是否为实例当前选择。"""
+
+    digest: str
+    definition_digest: str | None = None
+    member_count: int | None = Field(default=None, ge=0)
+    selected: bool = False
+    problem: str | None = None
+
+
+class AbilityInstanceView(TreeModel):
+    """一个项目实例及其同身份的版本。不返回实例根路径。"""
+
+    instance_id: str
+    revision: int = Field(ge=0)
+    selected_digest: str
+    full_name: str | None = None
+    title: str | None = None
+    member_count: int | None = Field(default=None, ge=0)
+    problem: str | None = None
+    versions: list[AbilityInstanceVersionView] = Field(default_factory=list)
+
+
+class AbilityUnboundVersionView(TreeModel):
+    """已提交、但没有任何实例按身份引用的版本。"""
+
+    digest: str
+    full_name: str | None = None
+    definition_digest: str | None = None
+    member_count: int | None = Field(default=None, ge=0)
+    problem: str | None = None
+
+
+class AbilityInstancesView(TreeModel):
+    """项目关系库中的实例与版本。只读，不改变当前选择。"""
+
+    format: Literal["ghrah.ability-control.instances.v1"] = "ghrah.ability-control.instances.v1"
+    project_id: TreeId
+    instances: list[AbilityInstanceView] = Field(default_factory=list)
+    unbound_versions: list[AbilityUnboundVersionView] = Field(default_factory=list)

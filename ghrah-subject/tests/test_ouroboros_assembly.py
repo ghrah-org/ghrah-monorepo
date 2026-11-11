@@ -78,6 +78,7 @@ async def test_full_assembly_all_fibers_active(
             "core_cluster_registry",
             "project",
             "ability_control",
+            "agent_control",
             "room",
             "recovery",
             "room_filter",

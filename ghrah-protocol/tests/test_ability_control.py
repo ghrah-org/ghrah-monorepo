@@ -10,8 +10,10 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiErrorResponse,
     AbilityApiStatus,
+    AbilityPackageCatalogView,
     AbilityTreeChangeResult,
 )
+from ghrah.protocol.agent_control import AgentCreateRequest, AgentSpecPatch
 
 
 def _tree_payload() -> dict[str, object]:
@@ -83,6 +85,20 @@ def test_tree_change_result_allows_stopped_view_and_validates_when_present() -> 
     # Agent 未运行时关系库仍可写，view 明确为 null（不伪造 run 视图）。
     stopped = AbilityTreeChangeResult.model_validate({"revision": 3})
     assert stopped.view is None
+
+
+def test_package_catalog_and_agent_patch_reject_unknown_fields() -> None:
+    catalog = AbilityPackageCatalogView(installed_available=False)
+    assert catalog.format == "ghrah.ability-control.packages.v1"
+    assert catalog.packages == []
+    with pytest.raises(ValidationError):
+        AbilityPackageCatalogView(installed_available=False, root="/tmp")
+    created = AgentCreateRequest(expected_revision=1, name="reviewer", cluster_id="clu")
+    assert created.desired_state == "stopped"
+    with pytest.raises(ValidationError):
+        AgentSpecPatch(expected_revision=1)
+    patched = AgentSpecPatch(expected_revision=2, system_prompt="next")
+    assert patched.system_prompt == "next"
 
 
 def test_error_response_requires_code() -> None:

@@ -243,6 +243,9 @@ async def test_status_reports_enabled_and_disabled() -> None:
     payload = await status()
     assert payload["ability_source"] == "builtin"
     assert payload["features"]["tree"] is True
+    assert payload["features"]["packages_read"] is True
+    assert payload["features"]["versions_read"] is True
+    assert payload["features"]["packages_install"] is False
     assert payload["legacy_deprecated"] is False
 
     disabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=False)
@@ -255,7 +258,24 @@ async def test_status_reports_enabled_and_disabled() -> None:
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
     payload = await status()
     assert payload["features"]["tree"] is False
+    assert payload["features"]["packages_read"] is False
     assert "未启用" in str(payload["reason"])
+
+    # 部署配置已只接受 builtin。这里直接改读到的来源，确认 HTTP 层仍会关闭目录。
+    closed = SubjectConfig(observer_http_api_enabled=True)
+    closed.ability_source = "legacy"
+    router = build_ability_control_router(
+        config=closed,
+        project_store=_ProjectStore("proj", "/tmp/proj"),
+        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
+        event_bus=_Bus(),
+    )
+    status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
+    payload = await status()
+    assert payload["ability_source"] == "legacy"
+    assert payload["legacy_deprecated"] is True
+    assert payload["features"]["packages_read"] is False
+    assert payload["features"]["versions_read"] is False
 
 
 def test_authorization_trusts_loopback_and_requires_token_elsewhere() -> None:
@@ -421,3 +441,80 @@ async def test_ability_tree_event_is_forwarded_to_observer_bus() -> None:
         assert events[-1]["type"] == "ability_tree_changed"
         assert events[-1]["payload"]["project_id"] == "p1"
         assert len(events) == 1
+
+
+def _reject_root(value: Any) -> None:
+    if isinstance(value, dict):
+        assert "root" not in value
+        for item in value.values():
+            _reject_root(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_root(item)
+
+
+async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any) -> None:
+    store, operator = await _open_store(tmp_path)
+    try:
+        config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
+        app = _app(config, _Handle("proj", store, operator), _Bus())
+        server, task, port = await _serve(app)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            status, catalog = await _request(f"{base}/api/v1/ability-packages")
+            assert status == 200
+            assert catalog["format"] == "ghrah.ability-control.packages.v1"
+            assert catalog["installed_available"] is False
+            assert catalog["packages"]
+            assert all(item["origin"] == "builtin" for item in catalog["packages"])
+            _reject_root(catalog)
+            sample = next(item for item in catalog["packages"] if item["name"])
+            detail_status, detail = await _request(
+                f"{base}/api/v1/ability-packages/{sample['namespace']}/{sample['name']}"
+            )
+            assert detail_status == 200
+            assert detail["full_name"] == sample["full_name"]
+            assert detail["versions"]
+            assert detail["versions"][0]["verify"] is None
+            _reject_root(detail)
+            instance_status, instances = await _request(
+                f"{base}/api/v1/projects/proj/ability-instances"
+            )
+            assert instance_status == 200
+            assert instances["instances"] == []
+            closed, body = await _request(
+                f"{base}/api/v1/ability-packages/import", method="POST", body={}
+            )
+            assert closed == 503
+            assert body["error"]["code"] == "capability_unavailable"
+            package = f"{base}/api/v1/ability-packages/{sample['namespace']}/{sample['name']}"
+            for method, path in (
+                ("POST", f"{package}/versions/0/verify"),
+                ("DELETE", f"{package}/versions/0"),
+                ("POST", f"{base}/api/v1/projects/proj/ability-instances/inst/select"),
+            ):
+                closed, body = await _request(path, method=method, body={})
+                assert closed == 503, (method, path, body)
+                assert body["error"]["code"] == "capability_unavailable"
+            bad, rejected = await _request(f"{base}/api/v1/ability-packages/Bad/Name")
+            assert bad == 400
+            assert rejected["error"]["code"] == "invalid_request"
+            closed_config = SubjectConfig(observer_http_api_enabled=True)
+            closed_config.ability_source = "legacy"
+            closed_app = _app(closed_config, _Handle("proj", store, operator), _Bus())
+            closed_server, closed_task, closed_port = await _serve(closed_app)
+            try:
+                denied, denied_body = await _request(
+                    f"http://127.0.0.1:{closed_port}/api/v1/ability-packages"
+                )
+                assert denied == 503
+                assert denied_body["error"]["code"] == "capability_unavailable"
+                assert denied_body["error"]["detail"]["legacy_deprecated"] is True
+            finally:
+                closed_server.should_exit = True
+                await closed_task
+        finally:
+            server.should_exit = True
+            await task
+    finally:
+        await store.close()

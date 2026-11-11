@@ -278,6 +278,39 @@ class AgentEntityManager:
         await self._projects._emit("project_updated", record)
         return record, updated
 
+    async def update_persisted_spec(
+        self,
+        project_id: str,
+        agent_id: str,
+        *,
+        expected_revision: int,
+        endpoint_name: Any = ...,
+        system_prompt: Any = ...,
+    ) -> tuple[ProjectRecord, AgentSpec]:
+        """保存端点或提示词。不要求停机，也不改正在运行的进程。
+
+        省略参数使用 ``...``。空字符串的端点视为清除。
+        """
+        async with self._projects._lifecycle_lock(project_id):
+            project, agent = await self._load(
+                AgentIdentity(project_id=project_id, agent_id=agent_id)
+            )
+            if project.version != expected_revision:
+                raise StableError("agent_specification_conflict")
+            changes: dict[str, Any] = {}
+            if endpoint_name is not ...:
+                cleaned = endpoint_name or None
+                if isinstance(cleaned, str):
+                    self.validate_model_name(cleaned)
+                changes["endpoint_name"] = cleaned
+            if system_prompt is not ...:
+                if not isinstance(system_prompt, str):
+                    raise StableError("invalid_request", "system_prompt 必须是字符串")
+                changes["system_prompt"] = system_prompt
+            if not changes:
+                raise StableError("invalid_request", "没有可保存的规格字段")
+            return await self._save(project, agent, changes)
+
     async def execute(self, request: AgentEntityPayload) -> dict[str, Any]:
         """对同一项目串行执行实体操作，与既有生命周期命令共用锁。"""
         identity = AgentIdentity(project_id=request.project_id, agent_id=request.agent_id)

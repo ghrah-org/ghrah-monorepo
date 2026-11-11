@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """从 Python 作者模型单向生成 Ability 消费者的 Zod 校验器。
 
-两组生成物共享同一个受限 schema 子集：
+三组生成物共享同一个受限 schema 子集：
 - ``ability-tree.generated.ts``：既有 Scheme 能力树契约；
-- ``ability-control.generated.ts``：观察端 REST 管理面契约（D0）。
+- ``ability-control.generated.ts``：观察端能力管理面契约；
+- ``agent-control.generated.ts``：观察端 Agent 资源契约。
 """
 
 from __future__ import annotations
@@ -29,11 +30,20 @@ from ghrah.protocol.ability_control import (
     AbilityChangeView,
     AbilityGrantPolicyView,
     AbilityGrantView,
+    AbilityInstancesView,
+    AbilityInstanceVersionView,
+    AbilityInstanceView,
     AbilityLifecycleView,
+    AbilityPackageCatalogView,
+    AbilityPackageDetailView,
+    AbilityPackageVersionDetail,
+    AbilityPackageVersionRow,
     AbilityPendingRespawnView,
     AbilitySurfaceEntryView,
     AbilitySurfaceView,
     AbilityTreeChangeResult,
+    AbilityUnboundVersionView,
+    AbilityVerifyView,
 )
 from ghrah.protocol.ability_tree import (
     AbilityTreeView,
@@ -42,6 +52,20 @@ from ghrah.protocol.ability_tree import (
     RevokeAbilityRequest,
     TreeChangeResult,
     UnbindToolRequest,
+)
+from ghrah.protocol.agent_control import (
+    AgentAbilitySummary,
+    AgentAdminView,
+    AgentCreateRequest,
+    AgentDeletedView,
+    AgentDesiredStateRequest,
+    AgentListView,
+    AgentPromptSummary,
+    AgentRuntimeView,
+    AgentSpecificationDetail,
+    AgentSpecificationSummary,
+    AgentSpecPatch,
+    AgentSummaryView,
 )
 from pydantic import BaseModel
 
@@ -73,10 +97,35 @@ CONTROL_MODELS = (
     AbilityTreeChangeResult,
     AbilityApiErrorView,
     AbilityApiErrorResponse,
+    AbilityPackageVersionRow,
+    AbilityPackageCatalogView,
+    AbilityVerifyView,
+    AbilityPackageVersionDetail,
+    AbilityPackageDetailView,
+    AbilityInstanceVersionView,
+    AbilityInstanceView,
+    AbilityUnboundVersionView,
+    AbilityInstancesView,
+)
+
+AGENT_MODELS = (
+    AgentPromptSummary,
+    AgentRuntimeView,
+    AgentAbilitySummary,
+    AgentSpecificationSummary,
+    AgentSpecificationDetail,
+    AgentSummaryView,
+    AgentListView,
+    AgentAdminView,
+    AgentCreateRequest,
+    AgentSpecPatch,
+    AgentDesiredStateRequest,
+    AgentDeletedView,
 )
 
 TREE_TARGET = "ghrah-observer-webui/packages/protocol/src/ability-tree.generated.ts"
 CONTROL_TARGET = "ghrah-observer-webui/packages/protocol/src/ability-control.generated.ts"
+AGENT_TARGET = "ghrah-observer-webui/packages/protocol/src/agent-control.generated.ts"
 
 
 def _schema_expression(
@@ -195,7 +244,7 @@ def _generate(
 
 
 def _targets() -> list[tuple[Path, str]]:
-    """返回两组生成物的目标路径与预期内容。"""
+    """返回三组生成物的目标路径与预期内容。"""
     root = Path(__file__).resolve().parents[1]
     tree_text = _generate(
         TREE_MODELS,
@@ -206,9 +255,11 @@ def _targets() -> list[tuple[Path, str]]:
     )
     exported = frozenset(re.findall(r"export const (\w+)Schema", tree_text))
     control_text = _generate(CONTROL_MODELS, external=exported)
+    agent_text = _generate(AGENT_MODELS)
     return [
         (root / TREE_TARGET, tree_text),
         (root / CONTROL_TARGET, control_text),
+        (root / AGENT_TARGET, agent_text),
     ]
 
 

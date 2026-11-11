@@ -377,6 +377,7 @@ export {
 export * from "./payloads/entity.js";
 export * from "./ability-tree.js";
 export * from "./ability-control.js";
+export * from "./agent-control.js";
 
 export {
   ActionDescriptorSchema,
