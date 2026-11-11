@@ -2,12 +2,12 @@
   "$comment": "样式治理 ratchet 基线：数字是当前允许出现的违规次数，只能降不能升。重写用 node scripts/check-style-governance.mjs --update。",
   "updated": "2026-11-11",
   "counts": {
-    "color-no-hex": 305,
+    "color-no-hex": 291,
     "px-font-size": 0,
     "important": 0,
-    "dark-variant": 116,
-    "scoped-root-dark": 12,
+    "dark-variant": 102,
+    "scoped-root-dark": 10,
     "arbitrary-utility": 0,
-    "palette-utility": 226
+    "palette-utility": 202
   }
 }

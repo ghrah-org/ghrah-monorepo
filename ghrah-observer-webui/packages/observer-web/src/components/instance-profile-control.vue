@@ -10,8 +10,11 @@ import { useI18n } from "vue-i18n";
 import { useObserver } from "@/composables/useObserver";
 import UiButton from "@/components/ui/button.vue";
 
+type SettingsSection =
+  "general" | "agents" | "abilities" | "connections" | "plugins" | "tasks" | "archived";
+
 const STORAGE_KEY = "ghrah.instance-profile.display-name";
-const emit = defineEmits<{ openSettings: [] }>();
+const emit = defineEmits<{ openSettings: [section: SettingsSection] }>();
 const { t } = useI18n();
 const { connection, autoConnect, disconnect } = useObserver();
 const root = ref<HTMLElement | null>(null);
@@ -19,12 +22,18 @@ const nameInput = ref<HTMLInputElement | null>(null);
 const addressButton = ref<HTMLButtonElement | null>(null);
 const connectionPopover = ref<HTMLElement | null>(null);
 const connectionAction = ref<{ focus: () => void; readonly disabled: boolean } | null>(null);
+const avatarButton = ref<HTMLButtonElement | null>(null);
+const menuTrigger = ref<HTMLButtonElement | null>(null);
+const instanceMenu = ref<HTMLElement | null>(null);
 const displayName = ref(loadDisplayName());
 const draftName = ref(displayName.value);
 const editing = ref(false);
 const detailsOpen = ref(false);
+const menuOpen = ref(false);
+let menuOrigin: HTMLElement | null = null;
 
-const avatarLabel = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || "G");
+// 默认头像先用九夏字标占位；品牌图形定稿后替换为 logo 资源。
+// 名字自定义与头像自定义都属于后续「单用户个性化配置」feat，本轮只落默认身份。
 const statusDotClass = computed(
   () =>
     ({
@@ -37,6 +46,18 @@ const statusDotClass = computed(
 const connectionBusy = computed(
   () => connection.state === "connecting" || connection.state === "reconnecting",
 );
+const menuItems: Array<{
+  id: string;
+  section: SettingsSection;
+  glyph: string;
+  labelKey: string;
+}> = [
+  { id: "user", section: "general", glyph: "◉", labelKey: "instanceMenu.user" },
+  { id: "agents", section: "agents", glyph: "◆", labelKey: "instanceMenu.agents" },
+  { id: "abilities", section: "abilities", glyph: "◇", labelKey: "instanceMenu.abilities" },
+  { id: "connections", section: "connections", glyph: "⇄", labelKey: "instanceMenu.connections" },
+  { id: "system", section: "general", glyph: "⚙", labelKey: "instanceMenu.system" },
+];
 
 function loadDisplayName(): string {
   try {
@@ -70,13 +91,80 @@ function cancelEditing() {
   editing.value = false;
 }
 
-function openSettings() {
-  void closeDetails(false);
-  emit("openSettings");
+function menuItemElements(): HTMLButtonElement[] {
+  if (!instanceMenu.value) return [];
+  return Array.from(instanceMenu.value.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+}
+
+function focusMenuItem(index: number) {
+  const items = menuItemElements();
+  if (items.length === 0) return;
+  items[(index + items.length) % items.length]?.focus();
+}
+
+async function openMenu(origin: HTMLElement | null) {
+  menuOrigin = origin;
+  if (detailsOpen.value) await closeDetails(false);
+  menuOpen.value = true;
+  await nextTick();
+  focusMenuItem(0);
+}
+
+async function toggleMenu(origin: HTMLElement | null) {
+  if (menuOpen.value) await closeMenu(true);
+  else await openMenu(origin);
+}
+
+async function closeMenu(restoreFocus: boolean) {
+  if (!menuOpen.value) return;
+  menuOpen.value = false;
+  if (restoreFocus) {
+    const origin = menuOrigin;
+    await nextTick();
+    origin?.focus();
+  }
+}
+
+function selectMenuSection(section: SettingsSection) {
+  const origin = menuOrigin;
+  menuOpen.value = false;
+  // 设置页会记住打开时的焦点元素；先把焦点还给菜单触发器，关闭后才能回到原位。
+  origin?.focus();
+  emit("openSettings", section);
+}
+
+function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    void closeMenu(true);
+    return;
+  }
+  const items = menuItemElements();
+  if (items.length === 0) return;
+  const current = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === "Tab") {
+    // 菜单内自成一个焦点环，避免 Tab 落到被菜单遮住的底部按钮上。
+    event.preventDefault();
+    focusMenuItem(current < 0 ? 0 : event.shiftKey ? current - 1 : current + 1);
+  } else if (event.key === "ArrowDown") {
+    event.preventDefault();
+    focusMenuItem(current < 0 ? 0 : current + 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    focusMenuItem(current < 0 ? items.length - 1 : current - 1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    focusMenuItem(0);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    focusMenuItem(items.length - 1);
+  }
 }
 
 async function toggleDetails() {
   if (detailsOpen.value) return closeDetails(true);
+  if (menuOpen.value) await closeMenu(false);
   detailsOpen.value = true;
   await nextTick();
   if (connectionAction.value && !connectionAction.value.disabled) connectionAction.value.focus();
@@ -126,7 +214,10 @@ function onPopoverKeydown(event: KeyboardEvent) {
 }
 
 function onWindowPointerDown(event: PointerEvent) {
-  if (!root.value?.contains(event.target as Node)) void closeDetails(false);
+  if (!root.value?.contains(event.target as Node)) {
+    void closeDetails(false);
+    void closeMenu(false);
+  }
 }
 
 onMounted(() => window.addEventListener("pointerdown", onWindowPointerDown));
@@ -172,7 +263,58 @@ onUnmounted(() => window.removeEventListener("pointerdown", onWindowPointerDown)
       </UiButton>
     </div>
 
-    <span class="instance-avatar" aria-hidden="true">{{ avatarLabel }}</span>
+    <div v-if="menuOpen" id="instance-menu" ref="instanceMenu" class="instance-menu">
+      <div class="instance-menu-header">
+        <span class="instance-avatar instance-menu-avatar" aria-hidden="true">
+          {{ t("instanceProfile.defaultAvatar") }}
+        </span>
+        <div class="instance-menu-identity">
+          <strong class="instance-menu-name">{{ displayName }}</strong>
+          <span class="instance-menu-status">
+            <span :class="['instance-status-dot', statusDotClass]" />
+            <span>{{ t(`app.status.${connection.state}`) }}</span>
+            <code :title="connection.serverUrl">{{ connection.serverUrl }}</code>
+          </span>
+        </div>
+      </div>
+      <div
+        class="instance-menu-list"
+        role="menu"
+        :aria-label="t('instanceMenu.label')"
+        @keydown="onMenuKeydown"
+      >
+        <template v-for="item in menuItems" :key="item.id">
+          <span v-if="item.id === 'system'" class="instance-menu-separator" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            tabindex="-1"
+            class="instance-menu-item"
+            @click="selectMenuSection(item.section)"
+          >
+            <span class="instance-menu-glyph" aria-hidden="true">{{ item.glyph }}</span>
+            <span class="instance-menu-label">{{ t(item.labelKey) }}</span>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <button
+      ref="avatarButton"
+      type="button"
+      class="instance-avatar-button"
+      :title="t('instanceMenu.open')"
+      :aria-label="t('instanceMenu.open')"
+      aria-haspopup="menu"
+      :aria-expanded="menuOpen ? 'true' : 'false'"
+      :aria-controls="menuOpen ? 'instance-menu' : undefined"
+      @click="toggleMenu(avatarButton)"
+    >
+      <span class="instance-avatar" aria-hidden="true">
+        {{ t("instanceProfile.defaultAvatar") }}
+        <span :class="['instance-avatar-status', statusDotClass]" />
+      </span>
+    </button>
     <div class="instance-profile-copy">
       <input
         v-if="editing"
@@ -206,11 +348,15 @@ onUnmounted(() => window.removeEventListener("pointerdown", onWindowPointerDown)
       </button>
     </div>
     <button
+      ref="menuTrigger"
       type="button"
-      class="instance-settings-button"
-      :title="t('instanceProfile.settings')"
-      :aria-label="t('instanceProfile.settings')"
-      @click="openSettings"
+      class="instance-menu-trigger"
+      :title="t('instanceMenu.open')"
+      :aria-label="t('instanceMenu.open')"
+      aria-haspopup="menu"
+      :aria-expanded="menuOpen ? 'true' : 'false'"
+      :aria-controls="menuOpen ? 'instance-menu' : undefined"
+      @click="toggleMenu(menuTrigger)"
     >
       <span aria-hidden="true">⚙</span>
     </button>

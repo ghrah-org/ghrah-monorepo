@@ -61,7 +61,9 @@ type WorkspaceTab = RoomTab | AgentTab | ProjectTab;
 type ProjectViewKind = ProjectTab["kind"];
 
 const emit = defineEmits<{
-  openSettings: [section: "general" | "agents" | "abilities"];
+  openSettings: [
+    section: "general" | "agents" | "abilities" | "connections" | "plugins" | "tasks" | "archived",
+  ];
 }>();
 const abilityAdmin = useAbilityAdminStore();
 const rooms = useRoomsStore();
@@ -364,7 +366,6 @@ watch(
           <RoomSelector @open-room="openRoom" @room-invalidated="invalidateRoom" />
         </div>
         <ProjectFixedNav @open-project-view="openProjectView" />
-        <InstanceProfileControl @open-settings="emit('openSettings', 'general')" />
       </div>
     </aside>
     <section class="workspace-main" :aria-label="t('dashboard.workspaceTabs')">
@@ -467,5 +468,6 @@ watch(
         </section>
       </div>
     </aside>
+    <InstanceProfileControl @open-settings="emit('openSettings', $event)" />
   </div>
 </template>

@@ -253,11 +253,20 @@ export default {
     },
   },
   instanceProfile: {
-    defaultName: "Operator",
+    defaultName: "User",
+    defaultAvatar: "九",
     name: "Display name",
     editName: "Edit display name",
-    settings: "Instance settings",
     connectionDetails: "Connection details",
+  },
+  instanceMenu: {
+    label: "Instance menu",
+    open: "Open instance menu",
+    user: "User settings",
+    agents: "Agent templates",
+    abilities: "Abilities",
+    connections: "Models & MCP",
+    system: "System settings",
   },
   dashboard: {
     projects: "Projects",

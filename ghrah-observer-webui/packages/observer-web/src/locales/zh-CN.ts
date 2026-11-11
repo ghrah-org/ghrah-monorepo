@@ -234,11 +234,20 @@ export default {
     },
   },
   instanceProfile: {
-    defaultName: "操作员",
+    defaultName: "用户",
+    defaultAvatar: "九",
     name: "个人称呼",
     editName: "编辑个人称呼",
-    settings: "实例设置",
     connectionDetails: "连接详情",
+  },
+  instanceMenu: {
+    label: "实例菜单",
+    open: "打开实例菜单",
+    user: "用户设置",
+    agents: "Agent 模板设置",
+    abilities: "能力管理",
+    connections: "模型与 MCP 管理",
+    system: "系统设置",
   },
   dashboard: {
     projects: "项目",
