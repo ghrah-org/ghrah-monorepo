@@ -1,6 +1,7 @@
 """仅显式 Agent API 使用的 Core 定义存储；不保存运行或投递状态副本。"""
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,6 +50,13 @@ class RuntimeAgentStore:
         await self.db.execute("PRAGMA foreign_keys=ON")
         try:
             await self.db.executescript(_SCHEMA)
+            identities = await (
+                await self.db.execute("SELECT agent_id FROM runtime_agents")
+            ).fetchall()
+            if any(not re.fullmatch(r"[0-9a-f]{32}", row[0]) for row in identities):
+                raise ValueError(
+                    "Pre-release Runtime identities require an explicit database rebuild"
+                )
             columns = await (await self.db.execute("PRAGMA table_info(mm_deliveries)")).fetchall()
             if "updated_at" not in {row[1] for row in columns}:
                 await self.db.execute("ALTER TABLE mm_deliveries ADD COLUMN updated_at REAL")

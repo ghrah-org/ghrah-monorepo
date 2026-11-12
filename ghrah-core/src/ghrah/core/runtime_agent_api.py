@@ -30,6 +30,7 @@ from ghrah.protocol.runtime_resources import (
     RuntimeStateTransition,
 )
 
+from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.core.config.builders import build_model_overrides_from_dict, build_window_from_dict
@@ -38,6 +39,7 @@ from ghrah.core.runtime_agent_store import RuntimeAgentStore, runtime_now
 from ghrah.core.runtime_read_api import RuntimeReadAPI
 from ghrah.core.runtime_resource_ids import ResourceError, internal_id, wire_id
 from ghrah.core.runtime_resources import RuntimeResources
+from ghrah.manifest.resolver import ResolvedAbility, ResolvedAgent
 from ghrah.types.config_types import AgentConfig
 
 _JSON_HEADERS = {"Content-Type": "application/json"}
@@ -54,9 +56,12 @@ class RuntimeAgentAPI:
         supervisor: SupervisorActor,
         config_quota: int,
         boot_id: str,
+        ability_store: AbilityAccessStore,
     ) -> None:
         """绑定已有 Core 服务，构造时不打开数据库。"""
         self.store = RuntimeAgentStore(database_path, scope_ref)
+        self.ability_store = ability_store
+        self._actor = AccessIdentity(scope_ref, "deployment", "deployment", True, "deployment")
         self.supervisor = supervisor
         self.manager = supervisor.message_manager
         self.config_quota = config_quota
@@ -105,10 +110,10 @@ class RuntimeAgentAPI:
             and request.packages[0].origin == "builtin"
             and not request.packages[0].whole_container
             and not request.packages[0].skills
-            and len(request.packages[0].operations) == 1
-            and request.packages[0].operations[0].key == "conversation"
-            and request.packages[0].operations[0].visible
-            and request.packages[0].operations[0].available
+            and len(request.packages[0].operations) == 2
+            and {item.key for item in request.packages[0].operations}
+            == {"conversation", "session_info"}
+            and all(item.visible and item.available for item in request.packages[0].operations)
             and config.context_policy.overrides is None
             and not permissions.auto_approve
             and permissions.require_approval_by_default
@@ -119,7 +124,8 @@ class RuntimeAgentAPI:
             raise ResourceError(
                 501,
                 "UNSUPPORTED",
-                "This capability supports explicit builtin ghrah.core/conversation, auto surface, "
+                "This capability supports builtin ghrah.core conversation/session_info, "
+                "auto surface, "
                 "supported model/window options, null context overrides and default permissions",
             )
 
@@ -141,11 +147,39 @@ class RuntimeAgentAPI:
     async def _registered(self, agent_id: str) -> bool:
         return any(item["agent_id"] == agent_id for item in await self.supervisor.list_agents())
 
+    async def _capability(self, agent_id: str) -> tuple[int, str]:
+        # 使用不要求活跃 run 的权威事实读取；停止态同样可查询。
+        for _ in range(3):
+            try:
+                revision = await self.ability_store.agent_revision(self._actor, agent_id)
+            except AccessError as exc:
+                if exc.code != "not_found":
+                    raise
+                return 0, digest({"grants": [], "tools": []})
+            grants = await self.ability_store.grants(self._actor, agent_id)
+            facts = []
+            for grant in grants:
+                instance = await self.ability_store.instance(grant.instance_id)
+                facts.append(
+                    {
+                        "alias": grant.alias,
+                        "instance": grant.instance_id,
+                        "version_digest": instance["digest"],
+                        "members": list(grant.members),
+                        "content": list(grant.content),
+                        "roots": list(grant.roots),
+                        "axes": grant.axes,
+                    }
+                )
+            tools = await self.ability_store.tool_names(self._actor, agent_id)
+            if revision == await self.ability_store.agent_revision(self._actor, agent_id):
+                return revision, digest({"grants": facts, "tools": list(tools)})
+        raise ResourceError(409, "BUSY", "Ability facts changed during the read; retry")
+
     async def _view(self, row: Any) -> dict[str, Any]:
         config = RuntimeAssemblyInput.model_validate_json(row["config"])
         running = await self._registered(row["agent_id"])
-        manifest = self._source.load_ability("ghrah.core.conversation").model_dump(mode="json")
-        tree_digest = digest({"operations": [manifest]})
+        tree_revision, tree_digest = await self._capability(row["agent_id"])
         current = await (
             await self.store.connection().execute(
                 "SELECT delivery_id, state, blocked_reason FROM mm_deliveries "
@@ -169,7 +203,7 @@ class RuntimeAgentAPI:
         )
         return RuntimeAgentResource.model_validate(
             {
-                "agent_id": row["agent_id"],
+                "agent_id": wire_id("agt", row["agent_id"]),
                 "scope_ref": self.store.scope_ref,
                 "external_ref": row["external_ref"],
                 "config": config.model_dump(mode="json"),
@@ -188,10 +222,16 @@ class RuntimeAgentAPI:
                 "config_revision": 1,
                 "assembly_digest": row["assembly_digest"],
                 "resolved_digest": digest(
-                    {"assembly_digest": row["assembly_digest"], "operations": [manifest]}
+                    {
+                        "assembly_digest": row["assembly_digest"],
+                        "operations": [
+                            self._source.load_ability("ghrah.core." + name).model_dump(mode="json")
+                            for name in ("conversation", "session_info")
+                        ],
+                    }
                 ),
                 "capability": {
-                    "tree_revision": 1,
+                    "tree_revision": tree_revision,
                     "tree_digest": tree_digest,
                     "pending_changes": 0,
                 },
@@ -239,7 +279,7 @@ class RuntimeAgentAPI:
         if await self.store.by_external_ref(request.external_ref) is not None:
             raise ResourceError(409, "CONFLICT", "external_ref already exists in this scope")
         record = {
-            "agent_id": wire_id("agt", uuid4().hex),
+            "agent_id": uuid4().hex,
             "external_ref": request.external_ref,
             "config": config,
             "assembly_digest": assembly_digest(request.config),
@@ -249,7 +289,7 @@ class RuntimeAgentAPI:
         view = await self._view({**record, "config": json.dumps(config, ensure_ascii=False)})
         result_headers = {
             **_JSON_HEADERS,
-            "Location": f"/v1/agents/{record['agent_id']}",
+            "Location": f"/v1/agents/{view['agent_id']}",
             "ETag": self._etag(),
         }
         await self.store.create(
@@ -274,38 +314,54 @@ class RuntimeAgentAPI:
         if transition.state == "running" and not running:
             config = RuntimeAssemblyInput.model_validate_json(row["config"])
             self._supported(config)
-            task = asyncio.create_task(
-                self.supervisor.spawn_agent(
-                    AgentConfig(
-                        name=agent_id,
-                        agent_id=agent_id,
-                        endpoint_name=config.model.endpoint_name,
-                        model_overrides=(
-                            build_model_overrides_from_dict(
-                                ModelOptions.model_validate(
-                                    config.model.model_overrides
-                                ).model_dump()
-                            )
-                            if config.model.model_overrides is not None
-                            else None
-                        ),
-                        window=(
-                            build_window_from_dict(
-                                WindowOptions.model_validate(
-                                    config.context_policy.window
-                                ).model_dump()
-                            )
-                            if config.context_policy.window is not None
-                            else None
-                        ),
-                        system_prompt=config.prompt.system_prompt,
-                        max_iterations=config.context_policy.max_iterations,
-                        communication_timeout=config.context_policy.communication_timeout,
-                    ),
-                    abilities=[self._source.create_operation("ghrah.core.conversation")],
-                    persistence_factory=lambda _: RuntimeResources.persistence(self.store.path),
-                )
+            agent_config = AgentConfig(
+                name=agent_id,
+                agent_id=agent_id,
+                endpoint_name=config.model.endpoint_name,
+                model_overrides=(
+                    build_model_overrides_from_dict(
+                        ModelOptions.model_validate(config.model.model_overrides).model_dump()
+                    )
+                    if config.model.model_overrides is not None
+                    else None
+                ),
+                window=(
+                    build_window_from_dict(
+                        WindowOptions.model_validate(config.context_policy.window).model_dump()
+                    )
+                    if config.context_policy.window is not None
+                    else None
+                ),
+                system_prompt=config.prompt.system_prompt,
+                max_iterations=config.context_policy.max_iterations,
+                communication_timeout=config.context_policy.communication_timeout,
             )
+
+            async def spawn() -> None:
+                async with self.supervisor.spawn_reservation(agent_config):
+                    materializer = self.supervisor.ability_materializer
+                    if materializer is None:
+                        raise RuntimeError("Authorized assembly is required")
+                    resolved = ResolvedAgent(
+                        config=agent_config,
+                        abilities=[
+                            ResolvedAbility.from_builtin(name, catalog=self._source)
+                            for name in ("conversation", "session_info")
+                        ],
+                    )
+                    materialization = await materializer.materialize(
+                        agent=agent_id, resolved=resolved
+                    )
+                    await self.supervisor.spawn_agent(
+                        agent_config,
+                        abilities=materialization.abilities,
+                        persistence_factory=lambda _: RuntimeResources.persistence(self.store.path),
+                        tool_table_projector=materializer.tool_table_projector(
+                            agent_id, materialization
+                        ),
+                    )
+
+            task = asyncio.create_task(spawn())
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
@@ -406,7 +462,7 @@ class RuntimeAgentAPI:
         # progress 的 branch/iteration 来自 Core checkpoint；不复制回复正文。
         return RuntimeDeliveryView(
             delivery_id=delivery_id,
-            agent_id=item.recipient_id,
+            agent_id=wire_id("agt", item.recipient_id),
             message_id=wire_id("msg", item.message_id),
             state=state,
             branch_id=progress.branch_id,
@@ -430,7 +486,8 @@ class RuntimeAgentAPI:
             expected = hashlib.sha256(self._cursor_secret + f"{boot}:{agent}".encode()).hexdigest()
             if boot != self.boot_id or not secrets.compare_digest(signature, expected):
                 raise ValueError("Expired cursor")
-            internal_id("agt", agent)
+            if not re.fullmatch(r"[0-9a-f]{32}", agent):
+                raise ValueError("Invalid cursor identity")
             return agent
         except (ValueError, ResourceError) as exc:
             raise ResourceError(
@@ -515,10 +572,10 @@ class RuntimeAgentAPI:
             if node_match:
                 return await self._read.node(node_match[1], query, headers)
             if match and match[2] == "/timeline":
-                internal_id("agt", match[1])
-                if await self.store.get(match[1]) is None:
+                raw_agent_id = internal_id("agt", match[1])
+                if await self.store.get(raw_agent_id) is None:
                     raise ResourceError(404, "NOT_FOUND", "Agent does not exist")
-                return await self._read.timeline(match[1], query)
+                return await self._read.timeline(raw_agent_id, query)
             if route == "/v1/agents" and method == "GET":
                 return RuntimeDispatchResponse(200, dict(_JSON_HEADERS), await self._list(query))
             if query:
@@ -527,8 +584,8 @@ class RuntimeAgentAPI:
                 )
             if route == "/v1/agents":
                 return await self._create(body, headers)
-            internal_id("agt", match[1])
-            row = await self.store.get(match[1])
+            raw_agent_id = internal_id("agt", match[1])
+            row = await self.store.get(raw_agent_id)
             if row is None:
                 raise ResourceError(404, "NOT_FOUND", "Agent does not exist")
             if match[2] == "/messages":

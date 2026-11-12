@@ -100,7 +100,7 @@ class RuntimeReadAPI:
         )
         return {
             "node_id": wire_id("nod", row["id"]),
-            "agent_id": row["agent_name"],
+            "agent_id": wire_id("agt", row["agent_name"]),
             "session_id": row["session_id"],
             "branch_id": row["created_on_branch_id"],
             "parent_id": wire_id("nod", row["parent_id"]) if row["parent_id"] else None,

@@ -10,6 +10,7 @@ from ghrah.protocol.runtime_resources import RuntimeNodeView, RuntimeTimelinePag
 from test_runtime_agent_api import EchoLLM, body, config, create, request, state
 
 from ghrah.core.runtime import CoreRuntime
+from ghrah.core.runtime_resource_ids import internal_id
 
 
 async def execute(runtime, agent_id, key="message"):
@@ -273,7 +274,7 @@ async def test_sequences_are_per_agent_and_deleted_anchor_expires(tmp_path):
         db = runtime._agent_api.store.connection()
         await db.execute(
             "DELETE FROM nodes WHERE agent_name=? AND runtime_node_seq=?",
-            (agents[0], first.body["items"][0]["seq"]),
+            (internal_id("agt", agents[0]), first.body["items"][0]["seq"]),
         )
         await db.commit()
         expired = await request(runtime, "GET", urls[0] + "?" + urlencode({"cursor": cursor}))

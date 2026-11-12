@@ -36,6 +36,11 @@
                   "key": "conversation",
                   "visible": true,
                   "available": true
+                },
+                {
+                  "key": "session_info",
+                  "visible": true,
+                  "available": true
                 }
               ],
               "skills": []
@@ -92,6 +97,11 @@
                   "key": "conversation",
                   "visible": true,
                   "available": true
+                },
+                {
+                  "key": "session_info",
+                  "visible": true,
+                  "available": true
                 }
               ],
               "skills": []
@@ -109,7 +119,7 @@
       "state": "stopped",
       "incarnation_id": null,
       "config_revision": 1,
-      "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+      "assembly_digest": "sha256:00d7afd87cd58aa15ac3e2120a6e507d2a469cf01ca802a5ea746d0ebd754a41",
       "resolved_digest": "sha256:example",
       "capability": {
         "tree_revision": 1,
@@ -134,7 +144,7 @@
           "external_ref": "example:worker",
           "state": "stopped",
           "config_revision": 1,
-          "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+          "assembly_digest": "sha256:00d7afd87cd58aa15ac3e2120a6e507d2a469cf01ca802a5ea746d0ebd754a41",
           "prompt": {
             "digest": "sha256:example",
             "size": 28
@@ -195,6 +205,11 @@
                     "key": "conversation",
                     "visible": true,
                     "available": true
+                  },
+                  {
+                    "key": "session_info",
+                    "visible": true,
+                    "available": true
                   }
                 ],
                 "skills": []
@@ -212,7 +227,7 @@
         "state": "stopped",
         "incarnation_id": null,
         "config_revision": 1,
-        "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+        "assembly_digest": "sha256:00d7afd87cd58aa15ac3e2120a6e507d2a469cf01ca802a5ea746d0ebd754a41",
         "resolved_digest": "sha256:example",
         "capability": {
           "tree_revision": 1,
@@ -898,6 +913,11 @@
                   "key": "conversation",
                   "visible": true,
                   "available": true
+                },
+                {
+                  "key": "session_info",
+                  "visible": true,
+                  "available": true
                 }
               ],
               "skills": []
@@ -952,6 +972,11 @@
               "operations": [
                 {
                   "key": "conversation",
+                  "visible": true,
+                  "available": true
+                },
+                {
+                  "key": "session_info",
                   "visible": true,
                   "available": true
                 }
@@ -1011,6 +1036,11 @@
                   "key": "conversation",
                   "visible": true,
                   "available": true
+                },
+                {
+                  "key": "session_info",
+                  "visible": true,
+                  "available": true
                 }
               ],
               "skills": []
@@ -1028,7 +1058,7 @@
       "state": "stopped",
       "incarnation_id": null,
       "config_revision": 1,
-      "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+      "assembly_digest": "sha256:00d7afd87cd58aa15ac3e2120a6e507d2a469cf01ca802a5ea746d0ebd754a41",
       "resolved_digest": "sha256:example",
       "capability": {
         "tree_revision": 1,
@@ -1075,6 +1105,11 @@
               "operations": [
                 {
                   "key": "conversation",
+                  "visible": true,
+                  "available": true
+                },
+                {
+                  "key": "session_info",
                   "visible": true,
                   "available": true
                 }
@@ -1131,6 +1166,11 @@
                   "key": "conversation",
                   "visible": true,
                   "available": true
+                },
+                {
+                  "key": "session_info",
+                  "visible": true,
+                  "available": true
                 }
               ],
               "skills": []
@@ -1184,6 +1224,11 @@
               "operations": [
                 {
                   "key": "conversation",
+                  "visible": true,
+                  "available": true
+                },
+                {
+                  "key": "session_info",
                   "visible": true,
                   "available": true
                 }

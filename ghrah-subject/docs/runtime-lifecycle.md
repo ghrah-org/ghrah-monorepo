@@ -42,45 +42,64 @@ HITL 重启通知及收敛控制器尚未实现，不作为本次进程内接入
 以下示例展示应用如何按 start → 业务调用 → stop 的顺序使用现有入口。
 不需要另起 Core 进程、监听端口或设置网络认证 token。
 
+命令入口沿用当前 main 的模板与授权语义。先在宿主模板库中准备 `runtime.worker`，
+其中显式声明 conversation 与 ghrah.core.session_info，并配置实际模型端点。再将模板库注入新 Runtime：
+
 ```python
+from uuid import uuid4
+
+from ghrah.core.runtime import CoreRuntime, RuntimeConfig
+from ghrah.core.unit import CoreUnitConfig
 from ghrah.protocol.types import SpawnAgentPayload, SendMessagePayload
+from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime_connection import RuntimeConnection, RuntimeConnectionConfig
 
-connection = RuntimeConnection(
-    RuntimeConnectionConfig(
-        enabled=True,
+runtime = CoreRuntime(
+    RuntimeConfig(
         scope_ref="demo",
         database_path="/absolute/new-runtime/demo.sqlite3",
-        ability_source="legacy",
         enabled_commands=("spawn_agent", "list_agents", "send_message", "terminate_agent"),
-    )
+    ),
+    unit_config=CoreUnitConfig(manifest_store=ManifestStore("/absolute/templates")),
 )
+connection = RuntimeConnection(RuntimeConnectionConfig(enabled=True, scope_ref="demo"), runtime)
+agent_id = uuid4().hex
 try:
     await connection.start()  # Core 已 ready；不会自动创建业务 Agent。
     client = connection.client
     spawned = await client.spawn_agent(
         SpawnAgentPayload(
             project_id="demo",
-            config={"name": "worker", "agent_id": "worker-1", "endpoint_name": "your-endpoint"},
-            abilities=[{"ability_type": "conversation", "params": {}}],
+            config={"name": "worker", "agent_id": agent_id},
+            manifest_ref="runtime.worker",
         )
     )
     if not spawned["success"]:
         raise RuntimeError(spawned)
     reply = await client.send_message(
         SendMessagePayload(
-            project_id="demo", agent_id="worker-1", target="worker", content="Hello", timeout=30
+            project_id="demo", agent_id=agent_id, target="worker", content="Hello", timeout=30
         )
     )
-    await client.terminate_agent("worker-1", "worker")
+    await client.terminate_agent(agent_id, "worker")
 finally:
     await connection.stop()
 ```
 
-业务 payload、模型配置、能力实例化、消息持久化和回执沿用既有 CoreUnit。
-`ability_source="legacy"` 显式选择现有直传 abilities 路径；不从 builtin 暗中降级。
+业务 payload、模板解析、授权装配、消息持久化和回执沿用当前 CoreUnit。
+当前 main 已退役 legacy 来源和 wire 直接传 abilities 的启动方式；新入口也不恢复它们。
+Core 内部使用 canonical UUID hex 稳定主体，资源 API 的 agt_ ID 是同一身份的可逆编码。
+
+启用 spawn_agent 命令或 Agent 资源入口时，若宿主未注入授权库，Runtime 在同一数据库中准备
+现有 AbilityAccessStore，部署策略只授予 session_info；完整宿主策略和授权库可经
+unit_config 显式注入，库的 project_id 必须与 scope_ref 相同。宿主注入连接由宿主关闭；
+Runtime 自建连接在 Agent 停止后、数据库 owner 释放前关闭。能力申请仍经授权装配边界，
+不直接拼装工具列表，不从模板隐式授予更广权限。main 自带的系统元工具按其既有规则装配。
+
 模型端点须在宿主环境中显式配置。新连接不接管旧 Context、Project、Registry 或旧数据库。
-未启用配置时无副作用；未指定 enabled_commands 时仅提供生命周期查询。
+未启用配置时无副作用；未指定 enabled_commands 时不开放命令业务写入。
+旧预发布 Runtime 数据库若仍用 agt_ 字符串作内部主体，显式拒绝启动，需另行重建或迁移；
+本次不自动重写历史消息和上下文身份。
 
 ## REST 风格请求/响应契约
 
@@ -152,7 +171,7 @@ Core 重启只加载定义，不自动启动 Agent。配置暂不支持修改，
 
 目前公布能力 `runtime.agents.conversation@1`，仅支持下面显式组合，不隐式补能力：
 
-- builtin 包 ghrah.core，唯一操作 conversation，visible/available 都为 true，无整包或 skill 申请。
+- builtin 包 ghrah.core，显式包含 conversation 和只读 session_info，visible/available 都为 true，无整包或 skill 申请。
 - surface 为 auto、static=[]、max_static=null，mcp_refs=[]。
 - model_overrides 可为 null，或声明 temperature、max_tokens、top_p、top_k、extra_params。
 - context_policy.window 可为 null，或声明现有窗口策略参数，详见下文；context_policy.overrides 仍须为 null。
@@ -232,7 +251,8 @@ try:
                             "origin": "builtin",
                             "whole_container": False,
                             "operations": [
-                                {"key": "conversation", "visible": True, "available": True}
+                                {"key": "conversation", "visible": True, "available": True},
+                                {"key": "session_info", "visible": True, "available": True},
                             ],
                             "skills": [],
                         }

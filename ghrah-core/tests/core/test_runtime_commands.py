@@ -14,12 +14,13 @@ COMMANDS = ("spawn_agent", "list_agents", "send_message", "terminate_agent")
 PRINCIPAL = RuntimePrincipal(scope_ref="scope")
 SPAWN = {
     "project_id": "scope",
-    "config": {"name": "worker", "agent_id": "worker-id"},
-    "abilities": [{"ability_type": "conversation", "params": {}}],
+    "cluster_id": "scope",
+    "config": {"name": "worker", "agent_id": "11111111111111111111111111111111"},
+    "manifest_ref": "tests.agent",
 }
 MESSAGE = {
     "project_id": "scope",
-    "agent_id": "worker-id",
+    "agent_id": "11111111111111111111111111111111",
     "target": "worker",
     "content": "work",
 }
@@ -38,16 +39,17 @@ class EchoLLM:
         return LLMResponse(content_blocks=[TextBlock(text="business reply")])
 
 
-def make_runtime(tmp_path, **kwargs):
+def make_runtime(tmp_path, *, unit_config=None, **kwargs):
     return CoreRuntime(
         RuntimeConfig(
             scope_ref="scope",
             database_path=str(tmp_path / "core.db"),
-            ability_source="legacy",
+            ability_source="builtin",
             enabled_commands=COMMANDS,
             **kwargs,
         ),
         llm_factory=lambda _: EchoLLM(),
+        unit_config=unit_config,
     )
 
 
@@ -79,20 +81,24 @@ async def test_default_init_has_no_resource_management_or_execution(tmp_path):
         await runtime.stop()
 
 
-async def test_commands_reuse_existing_execution_and_restore_only_when_explicit(tmp_path):
-    runtime = make_runtime(tmp_path)
+async def test_commands_reuse_existing_execution_and_restore_only_when_explicit(
+    tmp_path, runtime_unit_config
+):
+    runtime = make_runtime(tmp_path, unit_config=runtime_unit_config)
     assert (await command(runtime, "spawn_agent", SPAWN)).status == 503
     await runtime.init()
     first = await command(runtime, "spawn_agent", SPAWN)
     assert first.status == 200 and first.body["success"], first.body
     assert first.body["data"]["recovery_mode"] == "initialized"
     listed = await command(runtime, "list_agents", {"project_id": "scope"})
-    assert [a["agent_id"] for a in listed.body["data"]["agents"]] == ["worker-id"]
+    assert [a["agent_id"] for a in listed.body["data"]["agents"]] == [
+        "11111111111111111111111111111111"
+    ]
     sent = await command(runtime, "send_message", MESSAGE)
     assert sent.body == {"success": True, "data": {"content": "business reply"}}
     await runtime.stop()
     assert (await command(runtime, "send_message", MESSAGE)).status == 503
-    restarted = make_runtime(tmp_path)
+    restarted = make_runtime(tmp_path, unit_config=runtime_unit_config)
     await restarted.init()
     try:
         listed = await command(restarted, "list_agents", {"project_id": "scope"})
@@ -105,7 +111,7 @@ async def test_commands_reuse_existing_execution_and_restore_only_when_explicit(
             "terminate_agent",
             {
                 "project_id": "scope",
-                "agent_id": "worker-id",
+                "agent_id": "11111111111111111111111111111111",
                 "name": "worker",
             },
         )
@@ -149,7 +155,9 @@ async def test_unknown_command_allowlist_fails_before_opening_storage(tmp_path):
 
 
 @pytest.mark.parametrize("finish_work", [True, False])
-async def test_command_stop_waits_without_blocking_status(tmp_path, finish_work):
+async def test_command_stop_waits_without_blocking_status(
+    tmp_path, finish_work, runtime_unit_config
+):
     entered, finish = asyncio.Event(), asyncio.Event()
 
     class ControlledLLM(EchoLLM):
@@ -162,11 +170,12 @@ async def test_command_stop_waits_without_blocking_status(tmp_path, finish_work)
         RuntimeConfig(
             scope_ref="scope",
             database_path=str(tmp_path / "db"),
-            ability_source="legacy",
+            ability_source="builtin",
             enabled_commands=COMMANDS,
             stop_timeout=1 if finish_work else 0.05,
         ),
         llm_factory=lambda _: ControlledLLM(),
+        unit_config=runtime_unit_config,
     )
     await runtime.init()
     assert (await command(runtime, "spawn_agent", SPAWN)).body["success"]

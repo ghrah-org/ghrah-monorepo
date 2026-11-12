@@ -4,14 +4,18 @@ import asyncio
 from dataclasses import replace
 
 import pytest
+from ability_testutil import put_agent_template
+from ghrah.ability.access import GrantPolicy
 from ghrah.chat.content import TextBlock
 from ghrah.chat.format import LLMResponse
 from ghrah.core.runtime import CoreRuntime, RuntimeConfig
+from ghrah.core.unit import CoreUnitConfig
 from ghrah.protocol.types import SendMessagePayload, SpawnAgentPayload
 from ouroboros import Context
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.core_cluster.registry import CoreClusterRegistry, default_core_unit_factory
+from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime_connection import RuntimeConnection, RuntimeConnectionConfig
 
 
@@ -83,7 +87,7 @@ async def test_subject_timeout_releases_owner_and_keeps_failure_diagnosis(tmp_pa
             enabled=True,
             scope_ref="new",
             init_timeout=0.2,
-            ready_timeout=1,
+            ready_timeout=10,  # 包含失败清理时间，不以旧基线的 1 秒覆盖 Core 诊断。
         ),
         runtime,
     )
@@ -114,10 +118,16 @@ async def test_new_connection_and_legacy_business_have_independent_lifecycles(
             return LLMResponse(content_blocks=[TextBlock(text="legacy reply")])
 
     config = SubjectConfig(
-        workspace_root=str(tmp_path / "ws"), db_path=str(tmp_path / "subject.db")
+        workspace_root=str(tmp_path / "ws"),
+        db_path=str(tmp_path / "subject.db"),
+        ability_grant_policy=GrantPolicy(mode="merge"),
     )
+    templates = ManifestStore(tmp_path / "templates")
+    template_ref = put_agent_template(templates)
     registry = CoreClusterRegistry(
-        unit_factory=default_core_unit_factory(config, llm_factory=lambda _: EchoLLM())
+        unit_factory=default_core_unit_factory(
+            config, manifest_store=templates, llm_factory=lambda _: EchoLLM()
+        )
     )
     connection = RuntimeConnection(
         RuntimeConnectionConfig(
@@ -138,7 +148,7 @@ async def test_new_connection_and_legacy_business_have_independent_lifecycles(
                 SpawnAgentPayload(
                     project_id="legacy",
                     config={"name": "worker"},
-                    abilities=[{"ability_type": "conversation", "params": {}}],
+                    manifest_ref=template_ref,
                 )
             )
             assert spawned["success"], spawned
@@ -183,14 +193,17 @@ async def test_owned_client_waits_ready_then_calls_existing_business(tmp_path):
         async def generate(self, messages, tools=None):
             return LLMResponse(content_blocks=[TextBlock(text="owned reply")])
 
+    templates = ManifestStore(tmp_path / "templates")
+    template_ref = put_agent_template(templates)
     runtime = CoreRuntime(
         RuntimeConfig(
             scope_ref="scope",
             database_path=str(tmp_path / "core.db"),
-            ability_source="legacy",
+            ability_source="builtin",
             enabled_commands=("spawn_agent", "list_agents", "send_message", "terminate_agent"),
         ),
         llm_factory=lambda _: LLM(),
+        unit_config=CoreUnitConfig(manifest_store=templates),
     )
     connection = RuntimeConnection(
         RuntimeConnectionConfig(enabled=True, scope_ref="scope"), runtime
@@ -202,19 +215,24 @@ async def test_owned_client_waits_ready_then_calls_existing_business(tmp_path):
             await connection.client.spawn_agent(
                 SpawnAgentPayload(
                     project_id="scope",
-                    config={"name": "worker", "agent_id": "worker-id"},
-                    abilities=[{"ability_type": "conversation", "params": {}}],
+                    config={"name": "worker", "agent_id": "11111111111111111111111111111111"},
+                    manifest_ref=template_ref,
                 )
             )
         )["success"]
         assert (
             await connection.client.send_message(
                 SendMessagePayload(
-                    project_id="scope", agent_id="worker-id", target="worker", content="work"
+                    project_id="scope",
+                    agent_id="11111111111111111111111111111111",
+                    target="worker",
+                    content="work",
                 )
             )
         )["data"]["content"] == "owned reply"
-        assert (await connection.client.terminate_agent("worker-id", "worker"))["success"]
+        assert (
+            await connection.client.terminate_agent("11111111111111111111111111111111", "worker")
+        )["success"]
         assert await connection.client.list_agents() == []
     finally:
         await connection.stop()

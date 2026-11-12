@@ -160,3 +160,59 @@ async def test_cancelled_stop_still_releases_resources(tmp_path):
     replacement = make_runtime(tmp_path)
     await replacement.init()
     await replacement.stop()
+
+
+async def test_host_ability_store_and_empty_policy_remain_host_owned(tmp_path):
+    from ghrah.ability.access import AbilityAccessStore, AccessIdentity, GrantPolicy
+
+    store = await AbilityAccessStore.open(
+        tmp_path / "host-ability.db",
+        "scope",
+        operators=frozenset({"deployment"}),
+        runs=lambda _: None,
+    )
+    runtime = CoreRuntime(
+        RuntimeConfig(scope_ref="scope", database_path=str(tmp_path / "core.db")),
+        unit_config=CoreUnitConfig(ability_store=store, ability_grant_policy=GrantPolicy()),
+    )
+    try:
+        await runtime.init()
+        await runtime.stop()
+        # 仍可使用宿主连接，Runtime 不代替宿主关闭它。
+        assert (
+            await store.ensure_agent(
+                AccessIdentity("scope", "deployment", "deployment", True, "deployment"), "a" * 32
+            )
+            == 0
+        )
+    finally:
+        await runtime.stop()
+        await store.close()
+
+
+async def test_explicit_policy_is_not_replaced_by_runtime_default(tmp_path):
+    from ghrah.ability.access import GrantPolicy
+
+    policy = GrantPolicy(mode="replace", rules=())
+    runtime = CoreRuntime(
+        RuntimeConfig(
+            scope_ref="scope", database_path=str(tmp_path / "core.db"), enabled_agent_api=True
+        ),
+        unit_config=CoreUnitConfig(ability_grant_policy=policy),
+    )
+    try:
+        await runtime.init()
+        assert runtime._unit._config.ability_grant_policy is policy
+    finally:
+        await runtime.stop()
+
+
+async def test_host_scope_mismatch_releases_runtime_owner(tmp_path):
+    config = RuntimeConfig(scope_ref="scope", database_path=str(tmp_path / "core.db"))
+    runtime = CoreRuntime(config, unit_config=CoreUnitConfig(project_id="another"))
+    with pytest.raises(ValueError, match="project does not match"):
+        await runtime.init()
+    assert runtime.status().phase == "failed"
+    replacement = CoreRuntime(config)
+    await replacement.init()
+    await replacement.stop()

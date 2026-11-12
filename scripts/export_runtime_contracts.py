@@ -110,7 +110,10 @@ def fixtures() -> dict[str, BaseModel]:
                         "package": "ghrah.core",
                         "origin": "builtin",
                         "whole_container": False,
-                        "operations": [{"key": "conversation", "visible": True, "available": True}],
+                        "operations": [
+                            {"key": name, "visible": True, "available": True}
+                            for name in ("conversation", "session_info")
+                        ],
                         "skills": [],
                     }
                 ],

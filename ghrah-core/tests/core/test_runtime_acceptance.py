@@ -200,7 +200,9 @@ asyncio.run(main())
 
 
 @pytest.mark.parametrize("finish_work", [True, False])
-async def test_stop_with_real_agent_delivery(tmp_path, monkeypatch, finish_work):
+async def test_stop_with_real_agent_delivery(
+    tmp_path, monkeypatch, finish_work, runtime_unit_config
+):
     entered, finish = asyncio.Event(), asyncio.Event()
 
     class ControlledLLM:
@@ -223,7 +225,11 @@ async def test_stop_with_real_agent_delivery(tmp_path, monkeypatch, finish_work)
         lambda settings: CoreUnit(replace(settings, llm_factory=lambda _: llm)),
     )
     runtime = CoreRuntime(
-        config(tmp_path, ability_source="legacy", stop_timeout=1 if finish_work else 0.05)
+        replace(
+            config(tmp_path, stop_timeout=1 if finish_work else 0.05),
+            enabled_commands=("spawn_agent", "list_agents"),
+        ),
+        unit_config=runtime_unit_config,
     )
     await runtime.init()
     unit = runtime._unit
@@ -232,7 +238,7 @@ async def test_stop_with_real_agent_delivery(tmp_path, monkeypatch, finish_work)
         {
             "project_id": "scope",
             "config": {"name": "worker"},
-            "abilities": [{"ability_type": "conversation", "params": {}}],
+            "manifest_ref": "tests.agent",
         },
         None,
     )

@@ -10,7 +10,12 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import yaml
+from ghrah.core.runtime import CoreRuntime, RuntimeConfig
+from ghrah.core.unit import CoreUnitConfig
+from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime_connection import (
     RuntimeClient,
     RuntimeConnection,
@@ -38,14 +43,33 @@ async def verify(endpoint: str, *, timeout: float) -> dict[str, Any]:
         api_format = resolved.connection.api_format
     scope = "runtime-live-model"
     with tempfile.TemporaryDirectory(prefix="ghrah-runtime-live-") as temporary:
-        connection = RuntimeConnection(
-            RuntimeConnectionConfig(
-                enabled=True,
+        templates = ManifestStore(Path(temporary) / "templates")
+        templates.put_agent(
+            "runtime.probe",
+            yaml.safe_dump(
+                {
+                    "manifest": "agent",
+                    "version": "2",
+                    "metadata": {"namespace": "runtime", "name": "probe"},
+                    "model": {"endpoint_name": endpoint, "max_tokens": 512},
+                    "system_prompt": "Return exactly CORE_RUNTIME_OK. Do not use tools.",
+                    "max_iterations": 2,
+                    "communication_timeout": timeout,
+                    "abilities": [{"type": "conversation"}, {"ref": "ghrah.core.session_info"}],
+                }
+            ),
+        )
+        agent_id = uuid4().hex
+        runtime = CoreRuntime(
+            RuntimeConfig(
                 scope_ref=scope,
                 database_path=str(Path(temporary) / "core.db"),
-                ability_source="legacy",
                 enabled_commands=("spawn_agent", "list_agents", "send_message", "terminate_agent"),
-            )
+            ),
+            unit_config=CoreUnitConfig(manifest_store=templates),
+        )
+        connection = RuntimeConnection(
+            RuntimeConnectionConfig(enabled=True, scope_ref=scope), runtime
         )
         try:
             await connection.start()
@@ -63,14 +87,14 @@ async def verify(endpoint: str, *, timeout: float) -> dict[str, Any]:
                         "project_id": scope,
                         "config": {
                             "name": "live-worker",
-                            "agent_id": "live-worker-id",
+                            "agent_id": agent_id,
                             "endpoint_name": endpoint,
                             "system_prompt": "Return exactly CORE_RUNTIME_OK. Do not use tools.",
                             "max_iterations": 2,
                             "communication_timeout": timeout,
                             "model_overrides": {"max_tokens": 512},
                         },
-                        "abilities": [{"ability_type": "conversation", "params": {}}],
+                        "manifest_ref": "runtime.probe",
                     },
                 )
                 assert spawned["recovery_mode"] == "initialized"
@@ -84,7 +108,7 @@ async def verify(endpoint: str, *, timeout: float) -> dict[str, Any]:
                     "send_message",
                     {
                         "project_id": scope,
-                        "agent_id": "live-worker-id",
+                        "agent_id": agent_id,
                         "target": "live-worker",
                         "content": "Reply with CORE_RUNTIME_OK.",
                         "timeout": timeout,
@@ -96,7 +120,7 @@ async def verify(endpoint: str, *, timeout: float) -> dict[str, Any]:
                 terminated = await _command(
                     client,
                     "terminate_agent",
-                    {"project_id": scope, "agent_id": "live-worker-id", "name": "live-worker"},
+                    {"project_id": scope, "agent_id": agent_id, "name": "live-worker"},
                 )
                 assert terminated["terminated"]
                 assert (await _command(client, "list_agents", {"project_id": scope}))[

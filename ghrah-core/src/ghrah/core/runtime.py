@@ -7,7 +7,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,7 @@ from ghrah.protocol.types import (
 )
 from pydantic import ValidationError
 
+from ghrah.ability.access import AbilityAccessStore, GrantPolicy, GrantRule
 from ghrah.core.lifecycle import RuntimePhase, RuntimeStatus
 from ghrah.core.runtime_agent_api import ResourceError, RuntimeAgentAPI
 from ghrah.core.runtime_resources import RuntimeResources
@@ -66,11 +67,19 @@ class CoreRuntime:
     """唯一拥有新路径资源与生命周期，不依赖 Subject Context。"""
 
     def __init__(
-        self, config: RuntimeConfig, *, llm_factory: Callable[[Any], Any] | None = None
+        self,
+        config: RuntimeConfig,
+        *,
+        llm_factory: Callable[[Any], Any] | None = None,
+        unit_config: CoreUnitConfig | None = None,
     ) -> None:
         """保存配置，构造时不打开数据库、不创建后台任务。"""
         self.config = config
-        self._llm_factory = llm_factory
+        self._unit_config = unit_config or CoreUnitConfig()
+        self._llm_factory = (
+            llm_factory if llm_factory is not None else self._unit_config.llm_factory
+        )
+        self._ability_store: AbilityAccessStore | None = None
         self._command_tasks: set[asyncio.Task[Any]] = set()
         self._status = RuntimeStatus("booting", uuid4().hex, self._now())
         self._resources = RuntimeResources()
@@ -140,8 +149,43 @@ class CoreRuntime:
     async def _initialize(self) -> None:
         manager = await self._resources.acquire(self.config.scope_ref, self.config.database_path)
         self._acquired = True
+        options = self._unit_config
+        if options.project_id and options.project_id != self.config.scope_ref:
+            raise ValueError("CoreUnit project does not match Runtime scope")
+        if options.message_manager is not None or options.persistence_factory is not None:
+            raise ValueError("Runtime owns message and context persistence resources")
+        if (
+            options.ability_store is not None
+            and options.ability_store.project_id != self.config.scope_ref
+        ):
+            raise ValueError("Ability store scope does not match Runtime scope")
+        if (
+            self.config.enabled_agent_api or "spawn_agent" in self.config.enabled_commands
+        ) and options.ability_store is None:
+            self._ability_store = await AbilityAccessStore.open(
+                self.config.database_path,
+                self.config.scope_ref,
+                operators=frozenset({"deployment"}),
+                runs=lambda agent: (
+                    self._unit.supervisor.incarnation_for_agent(agent)
+                    if self._unit is not None
+                    else None
+                ),
+            )
+            # 本入口只承诺已显式请求的只读 session_info 子集，策略不授予其他业务成员。
+            options = replace(
+                options,
+                ability_store=self._ability_store,
+                ability_grant_policy=options.ability_grant_policy
+                or GrantPolicy(
+                    mode="replace",
+                    rules=(GrantRule(package="ghrah.core", operation="session_info"),),
+                ),
+            )
         self._unit = CoreUnit(
-            CoreUnitConfig(
+            replace(
+                options,
+                cluster_id=self.config.scope_ref,
                 project_id=self.config.scope_ref,
                 message_manager=manager,
                 persistence_factory=lambda _: RuntimeResources.persistence(
@@ -160,6 +204,7 @@ class CoreRuntime:
                 supervisor=self._unit.supervisor,
                 config_quota=self.config.config_quota,
                 boot_id=self._status.boot_id,
+                ability_store=options.ability_store,
             )
             await self._agent_api.open()
 
@@ -172,9 +217,14 @@ class CoreRuntime:
                 if self._agent_api is not None:
                     await self._agent_api.close()
             finally:
-                if self._acquired:
-                    self._acquired = False
-                    await self._resources.release(self.config.scope_ref)
+                try:
+                    if self._ability_store is not None:
+                        await self._ability_store.close()
+                        self._ability_store = None
+                finally:
+                    if self._acquired:
+                        self._acquired = False
+                        await self._resources.release(self.config.scope_ref)
 
     async def stop(self) -> None:
         """幂等释放新入口的资源，宿主取消不会遗留无主写者。"""
