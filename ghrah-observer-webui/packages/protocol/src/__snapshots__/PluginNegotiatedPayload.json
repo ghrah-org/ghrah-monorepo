@@ -1,3 +1,6 @@
 {
-  "changed": ["task-commit-attribution", "demo-plugin"]
+    "changed":  [
+                    "task-commit-attribution",
+                    "demo-plugin"
+                ]
 }

@@ -1,13 +1,13 @@
 {
-  "evidence_id": "ev-001",
-  "kind": "git_commit",
-  "ref": "abc1234",
-  "digest": "sha256:deadbeef",
-  "payload": {
-    "repo": "ghrah",
-    "branch": "main",
-    "short_sha": "abc1234"
-  },
-  "created_by": "agent:backend-dev",
-  "created_at": "2026-09-20T10:00:00Z"
+    "evidence_id":  "ev-001",
+    "kind":  "git_commit",
+    "ref":  "abc1234",
+    "digest":  "sha256:deadbeef",
+    "payload":  {
+                    "repo":  "ghrah",
+                    "branch":  "main",
+                    "short_sha":  "abc1234"
+                },
+    "created_by":  "agent:backend-dev",
+    "created_at":  "2026-09-20T10:00:00Z"
 }

@@ -103,7 +103,6 @@ export interface MockDeliveryRecord {
 interface AgentRecord {
   projectId: string;
   agentId: string;
-  clusterId: string;
   name: string;
   config: AgentConfigPayload;
   abilities: AbilityDefinitionPayload[];
@@ -113,7 +112,6 @@ interface AgentRecord {
 interface AgentActionState {
   projectId: string;
   agentId: string;
-  clusterId: string;
   activeSessionId: string;
   sessions: Map<string, SessionInfoPayload>;
   branches: Map<string, BranchInfoPayload>;
@@ -333,7 +331,7 @@ export class MockState {
       // Agent / Core
       case CommandType.SPAWN_AGENT:
         return this._parse(SpawnAgentPayloadSchema, rawPayload, (p) =>
-          this.spawnAgent(p.project_id, p.config, p.abilities ?? [], p.cluster_id),
+          this.spawnAgent(p.project_id, p.config, p.abilities ?? []),
         );
       case CommandType.TERMINATE_AGENT:
         return this._parse(TerminateAgentPayloadSchema, rawPayload, (p) =>
@@ -805,7 +803,6 @@ export class MockState {
     this.emit(EventType.AGENT_RESPONSE, {
       project_id: agent.projectId,
       agent_id: agent.agentId,
-      cluster_id: agent.clusterId,
       agent_name: agent.name,
       sender: agent.name,
       recipient: "room",
@@ -848,7 +845,6 @@ export class MockState {
       project_root_locator: p.project_root_locator ?? "",
       manifest_ref: p.manifest_ref ?? "",
       shell_cwd: p.shell_cwd ?? "",
-      cluster_ids: [],
       workspaces: [],
       agents: [],
       task_ids: [],
@@ -1054,7 +1050,6 @@ export class MockState {
     project_id: string;
     agent_id: string;
     agent_name: string;
-    cluster_id?: string;
   }): CommandOutcome {
     const state = this._actionState(p);
     if (!state) return fail("agent context not found");
@@ -1104,7 +1099,6 @@ export class MockState {
     this.emit(EventType.ACTION_CHAIN_UPDATED, {
       project_id: state.projectId,
       agent_id: state.agentId,
-      cluster_id: state.clusterId,
       agent_name: p.agent_name,
       node,
       branch: { ...branch },
@@ -1112,7 +1106,6 @@ export class MockState {
     this.emit(EventType.CONTEXT_USAGE_UPDATED, {
       project_id: state.projectId,
       agent_id: state.agentId,
-      cluster_id: state.clusterId,
       agent_name: p.agent_name,
       phase: "post_call",
       occupied_tokens: tokensAfter,
@@ -1145,14 +1138,12 @@ export class MockState {
     this.emit(EventType.SESSION_CREATED, {
       project_id: p.project_id,
       agent_id: p.agent_id,
-      cluster_id: state.clusterId,
       agent_name: agent.name,
       session,
     });
     this.emit(EventType.SESSION_ACTIVATED, {
       project_id: p.project_id,
       agent_id: p.agent_id,
-      cluster_id: state.clusterId,
       agent_name: agent.name,
       session,
     });
@@ -1194,7 +1185,6 @@ export class MockState {
       context_usage,
       project_id: p.project_id,
       agent_id: p.agent_id,
-      cluster_id: agent.clusterId ?? "",
     });
   }
 
@@ -1256,7 +1246,6 @@ export class MockState {
     const session: SessionInfoPayload = {
       project_id: state.projectId,
       agent_id: state.agentId,
-      cluster_id: state.clusterId,
       session_id: sessionId,
       agent_name: agentName,
       name: options.name ?? `Session ${state.sessions.size + 1}`,
@@ -1502,7 +1491,6 @@ export class MockState {
     projectId: string,
     config: AgentConfigPayload,
     abilities: AbilityDefinitionPayload[] = [],
-    requestedClusterId = "",
   ): CommandOutcome {
     const project = this.projects.get(projectId);
     if (!project) return fail(`project not found: ${projectId}`);
@@ -1514,12 +1502,10 @@ export class MockState {
     const agentId = config.agent_id || uuid();
     const key = agentKey(projectId, agentId);
     if (this.agents.has(key)) return fail("agent_identity_conflict");
-    const clusterId = requestedClusterId || `${projectId}:default`;
     const normalizedConfig = { ...config, agent_id: agentId };
     const record: AgentRecord = {
       projectId,
       agentId,
-      clusterId,
       name: config.name,
       config: normalizedConfig,
       abilities,
@@ -1529,7 +1515,6 @@ export class MockState {
     const actionState: AgentActionState = {
       projectId,
       agentId,
-      clusterId,
       activeSessionId: "",
       sessions: new Map(),
       branches: new Map(),
@@ -1554,7 +1539,6 @@ export class MockState {
     project.agents.push({
       agent_id: agentId,
       name: config.name,
-      cluster_id: clusterId,
       manifest_ref: "",
       instance_manifest_path: "",
       system_prompt: config.system_prompt,
@@ -1564,7 +1548,6 @@ export class MockState {
       runtime_status: "running",
       runtime_error: "",
     });
-    if (!project.cluster_ids.includes(clusterId)) project.cluster_ids.push(clusterId);
     project.version += 1;
     project.updated_at = isoNow();
     this.emit(EventType.PROJECT_AGENT_ADDED, {
@@ -1604,7 +1587,6 @@ export class MockState {
         .map((agent) => ({
           project_id: projectId,
           agent_id: agent.agentId,
-          cluster_id: agent.clusterId,
           name: agent.name,
           config: agent.config,
           runtime_state: agent.runtimeState,
@@ -1637,7 +1619,6 @@ export class MockState {
       this.emit(EventType.CONTEXT_USAGE_UPDATED, {
         project_id: state.projectId,
         agent_id: state.agentId,
-        cluster_id: state.clusterId,
         agent_name: agent.name,
         phase: "pre_call",
         occupied_tokens: usageOccupied,
@@ -1712,7 +1693,6 @@ export class MockState {
       this.emit(EventType.ACTION_CHAIN_UPDATED, {
         project_id: state.projectId,
         agent_id: state.agentId,
-        cluster_id: state.clusterId,
         agent_name: agent.name,
         node,
         branch: { ...branch },
@@ -1720,7 +1700,6 @@ export class MockState {
       this.emit(EventType.CONTEXT_USAGE_UPDATED, {
         project_id: state.projectId,
         agent_id: state.agentId,
-        cluster_id: state.clusterId,
         agent_name: agent.name,
         phase: "post_call",
         occupied_tokens: usageOccupied + 400,
@@ -1777,7 +1756,6 @@ export class MockState {
     return {
       project_id: agent.projectId,
       agent_id: agent.agentId,
-      cluster_id: agent.clusterId,
       name: agent.name,
       config: agent.config,
       incarnation_id: "mock",
@@ -1809,7 +1787,6 @@ export class MockState {
       promise_id: `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`,
       agent_id: agent.agentId,
       project_id: agent.projectId,
-      cluster_id: agent.clusterId,
       agent_name: agentName,
       ability_name: abilityName,
       tool_args: toolArgs,

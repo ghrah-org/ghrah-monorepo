@@ -1,14 +1,18 @@
 {
-  "enabled_ts": [
-    {
-      "plugin_id": "task-commit-attribution",
-      "version": "1.0.0",
-      "provides": ["badge/git_commit"]
-    },
-    {
-      "plugin_id": "demo-plugin",
-      "version": "0.2.0",
-      "provides": ["command/demo_run"]
-    }
-  ]
+    "enabled_ts":  [
+                       {
+                           "plugin_id":  "task-commit-attribution",
+                           "version":  "1.0.0",
+                           "provides":  [
+                                            "badge/git_commit"
+                                        ]
+                       },
+                       {
+                           "plugin_id":  "demo-plugin",
+                           "version":  "0.2.0",
+                           "provides":  [
+                                            "command/demo_run"
+                                        ]
+                       }
+                   ]
 }

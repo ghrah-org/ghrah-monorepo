@@ -34,7 +34,6 @@ const modelNames = ref<string[]>([]);
 const modelCatalogError = ref("");
 let modelEpoch = 0;
 const name = ref("");
-const cluster = ref("");
 const prompt = ref("");
 const entityPrompt = ref<string | null>(null);
 const startNow = ref(false);
@@ -68,7 +67,6 @@ const canCreate = computed(
   () =>
     writable.value &&
     !!name.value.trim() &&
-    !!cluster.value &&
     (!startNow.value || active.value) &&
     (source.value === "manifest"
       ? !!manifest.value.trim()
@@ -328,7 +326,6 @@ async function create() {
       const result = await client.value!.createAgentEntity({
         project_id: props.projectId,
         name: name.value.trim(),
-        cluster_id: cluster.value,
         start: startNow.value,
         endpoint_name: source.value === "types" ? modelName.value : null,
         system_prompt: prompt.value,
@@ -419,15 +416,6 @@ onMounted(() => {
             }}<input v-model="name" :disabled="busy" required data-autofocus
           /></label>
           <label
-            >{{ t("agentEntity.cluster")
-            }}<UiSelect v-model="cluster" :disabled="busy" required>
-              <option value="" disabled>{{ t("agentEntity.choose") }}</option>
-              <option v-for="id in project?.cluster_ids ?? []" :key="id" :value="id">
-                {{ id }}
-              </option>
-            </UiSelect></label
-          >
-          <label
             >{{ t("agentEntity.prompt") }}<textarea v-model="prompt" :disabled="busy" rows="3" />
           </label>
           <label
@@ -509,8 +497,6 @@ onMounted(() => {
                 {{ t(`agentEntity.runtime.${snapshot.runtime.availability}`) }}
                 <span v-if="snapshot.runtime.busy">{{ t("agentEntity.busy") }}</span>
               </dd>
-              <dt>{{ t("agentEntity.cluster") }}</dt>
-              <dd>{{ snapshot.specification.cluster_id }}</dd>
               <dt>{{ t("agentEntity.incarnation") }}</dt>
               <dd>{{ snapshot.runtime.incarnation_id ?? t("agentEntity.none") }}</dd>
             </dl>

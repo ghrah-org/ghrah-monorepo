@@ -13,7 +13,6 @@ import {
   AgentSpawnedPayloadSchema,
   AgentTerminatedPayloadSchema,
   BroadcastMessagePayloadSchema,
-  ClusterStatusPayloadSchema,
   CommandResultPayloadSchema,
   CreateWorkspacePayloadSchema,
   DelegatePayloadSchema,
@@ -27,10 +26,7 @@ import {
   HITLRequestPayloadSchema,
   HITLResolvedPayloadSchema,
   HITLResponsePayloadSchema,
-  InitClusterPayloadSchema,
   ListAgentsPayloadSchema,
-  ListClustersPayloadSchema,
-  ListClustersResultPayloadSchema,
   ManifestAbilityEventPayloadSchema,
   ManifestAgentEventPayloadSchema,
   ManifestDeletePayloadSchema,
@@ -53,7 +49,6 @@ import {
   RoomDeletePayloadSchema,
   RoomLifecyclePayloadSchema,
   SendMessagePayloadSchema,
-  ShutdownClusterPayloadSchema,
   SpawnAgentPayloadSchema,
   SubscribePayloadSchema,
   TerminateAgentPayloadSchema,
@@ -124,7 +119,6 @@ describe("Project payload schemas", () => {
         {
           agent_id: "agent-001",
           name: "architect",
-          cluster_id: "cluster-1",
           runtime_status: "error",
           runtime_error: "transport down",
         },
@@ -320,7 +314,7 @@ describe("Project-scoped compatibility", () => {
 
   it("accepts legacy events but exposes empty ownership fields", () => {
     const event = AgentErrorPayloadSchema.parse({ agent_name: "agent-1", error: "boom" });
-    expect(event).toMatchObject({ project_id: "", agent_id: "", cluster_id: "" });
+    expect(event).toMatchObject({ project_id: "", agent_id: "" });
   });
 });
 
@@ -449,58 +443,6 @@ describe("HITLResolvedPayloadSchema", () => {
   });
 });
 
-describe("InitClusterPayloadSchema", () => {
-  it("parses with required cluster_id and default config", () => {
-    const result = InitClusterPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result.cluster_id).toBe("cluster-1");
-    expect(result.config).toEqual({});
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(InitClusterPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ShutdownClusterPayloadSchema", () => {
-  it("parses with required cluster_id and default config", () => {
-    const result = ShutdownClusterPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result.cluster_id).toBe("cluster-1");
-    expect(result.config).toEqual({});
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(ShutdownClusterPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ClusterStatusPayloadSchema", () => {
-  it("parses with required cluster_id", () => {
-    const result = ClusterStatusPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result).toEqual({ cluster_id: "cluster-1" });
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(ClusterStatusPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ListClustersPayloadSchema", () => {
-  it("parses empty object", () => {
-    const result = ListClustersPayloadSchema.parse({});
-    expect(result).toEqual({});
-  });
-});
-
-describe("ListClustersResultPayloadSchema", () => {
-  it("parses clusters list", () => {
-    const result = ListClustersResultPayloadSchema.parse({
-      clusters: [{ cluster_id: "cluster-1", active_agents: 2, status: "running", bound: true }],
-    });
-    expect(result.clusters).toHaveLength(1);
-    expect(result.clusters[0].cluster_id).toBe("cluster-1");
-    expect(result.clusters[0].bound).toBe(true);
-  });
-});
 
 describe("PersistSavePayloadSchema", () => {
   it("parses with required fields and default namespace", () => {

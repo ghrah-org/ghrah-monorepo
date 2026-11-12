@@ -77,7 +77,6 @@ function spawn(name: string): AgentSpawnedPayload {
     type: "agent_spawned",
     project_id: "p1",
     agent_id: `${name}-id`,
-    cluster_id: "cluster",
     incarnation_id: "incarnation",
     recovery_mode: "fresh",
     name,
@@ -975,7 +974,6 @@ describe("ActionChainPanel", () => {
     chains.onActionChainUpdated({
       type: "action_chain_updated",
       project_id: "p1",
-      cluster_id: "cluster",
       agent_id: "alpha-id",
       agent_name: "alpha",
       node: node({
@@ -1010,7 +1008,6 @@ describe("ActionChainPanel", () => {
     chains.onActionChainUpdated({
       type: "action_chain_updated",
       project_id: "p1",
-      cluster_id: "cluster",
       agent_id: "alpha-id",
       agent_name: "alpha",
       node: node({

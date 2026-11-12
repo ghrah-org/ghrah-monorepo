@@ -62,7 +62,6 @@ function makeMsg(
     payload = {
       project_id: "p1",
       agent_id: `id-${agentName}`,
-      cluster_id: "c1",
       ...payload,
       node: {
         session_id: "s1",
@@ -72,7 +71,7 @@ function makeMsg(
     };
   }
   if (type === EventType.HITL_REQUEST || type === EventType.HITL_RESOLVED) {
-    payload = { project_id: "p1", agent_id: "a1", cluster_id: "c1", ...payload };
+    payload = { project_id: "p1", agent_id: "a1", ...payload };
   }
   if (type === SystemType.COMMAND_RESULT && payload.original_command === CommandType.LIST_AGENTS) {
     const data = payload.data as { agents?: Array<Record<string, unknown>> } | undefined;
@@ -312,7 +311,6 @@ describe("connectStores", () => {
         makeMsg(EventType.AGENT_SPAWNED, {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           incarnation_id: "i1",
           recovery_mode: "fresh",
           name: "agent-1",
@@ -331,7 +329,6 @@ describe("connectStores", () => {
         name: "agent-1",
         agent_id: "a1",
         project_id: "p1",
-        cluster_id: "c1",
         incarnation_id: "i1",
         recovery_mode: "",
         config: { ...DEFAULT_CONFIG, name: "agent-1" },
@@ -343,7 +340,6 @@ describe("connectStores", () => {
         makeMsg(EventType.AGENT_TERMINATED, {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           incarnation_id: "i1",
           name: "agent-1",
         }),
@@ -547,7 +543,6 @@ describe("connectStores", () => {
         project_id: projectId,
         name: projectId,
         manifest_ref: "",
-        cluster_ids: [],
         workspaces: [],
         agents: [],
         task_ids: [],
@@ -589,7 +584,6 @@ describe("connectStores", () => {
             agents: [
               {
                 name: "agent-1",
-                cluster_id: "c1",
                 manifest_ref: "",
                 instance_manifest_path: "",
                 system_prompt: "",
@@ -609,7 +603,6 @@ describe("connectStores", () => {
       const session = {
         project_id: "p1",
         agent_id: "a1",
-        cluster_id: "c1",
         agent_name: "same",
         session_id: "s1",
         root_node_id: "root",
@@ -1048,7 +1041,6 @@ describe("connectStores", () => {
         makeMsg(EventType.CONTEXT_USAGE_UPDATED, {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           agent_name: "agent-1",
           phase: "post_call",
           occupied_tokens: 4096,
@@ -1073,7 +1065,6 @@ describe("connectStores", () => {
         name: "agent-1",
         agent_id: "a1",
         project_id: "p1",
-        cluster_id: "c1",
         incarnation_id: "i1",
         recovery_mode: "",
         config: { ...DEFAULT_CONFIG, name: "agent-1" },
@@ -1082,7 +1073,6 @@ describe("connectStores", () => {
         {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           agent_name: "agent-1",
           phase: "post_call",
           occupied_tokens: 100,
@@ -1100,7 +1090,6 @@ describe("connectStores", () => {
         makeMsg(EventType.AGENT_TERMINATED, {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           incarnation_id: "i1",
           name: "agent-1",
         }),
@@ -1327,7 +1316,6 @@ describe("connectStores", () => {
         {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           agent_name: "same",
           name: "Session 1",
           session_id: "s1",
@@ -1435,13 +1423,11 @@ describe("connectStores", () => {
           project_root_locator: "",
           manifest_ref: "",
           shell_cwd: "",
-          cluster_ids: [],
           workspaces: [],
           agents: [
             {
               name: "agent-1",
               agent_id: "a1",
-              cluster_id: "c1",
               manifest_ref: "",
               instance_manifest_path: "",
               system_prompt: "",
@@ -1453,7 +1439,6 @@ describe("connectStores", () => {
             {
               name: "agent-2",
               agent_id: "a2",
-              cluster_id: "c1",
               manifest_ref: "",
               instance_manifest_path: "",
               system_prompt: "",
@@ -1658,7 +1643,6 @@ describe("connectStores", () => {
                 project_id: "p1",
                 name: "proj",
                 manifest_ref: "",
-                cluster_ids: [],
                 workspaces: [],
                 agents: [],
                 task_ids: [],
@@ -1784,7 +1768,6 @@ describe("connectStores", () => {
         {
           project_id: "p1",
           agent_id: "a1",
-          cluster_id: "c1",
           agent_name: "agent-1",
           phase: "post_call",
           occupied_tokens: 100,

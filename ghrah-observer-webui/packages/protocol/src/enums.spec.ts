@@ -48,10 +48,6 @@ describe("CommandType", () => {
     "get_agent_info",
     "agent_compact_context",
     "agent_reset",
-    "init_cluster",
-    "shutdown_cluster",
-    "cluster_status",
-    "list_clusters",
     "subscribe",
     "unsubscribe",
     "execute_ability",
@@ -276,10 +272,6 @@ describe("CORE_COMMANDS", () => {
     "get_agent_info",
     "agent_compact_context",
     "agent_reset",
-    "init_cluster",
-    "shutdown_cluster",
-    "cluster_status",
-    "list_clusters",
     "session_create",
     "session_activate",
     "session_list",
@@ -292,7 +284,7 @@ describe("CORE_COMMANDS", () => {
     "branch_delete",
   ]);
 
-  it("contains exactly 26 core command values", () => {
+  it("contains exactly 22 core command values", () => {
     expect(CORE_COMMANDS).toEqual(PYTHON_CORE_COMMANDS);
   });
 });

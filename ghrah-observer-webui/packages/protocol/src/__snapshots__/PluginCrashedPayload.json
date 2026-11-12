@@ -1,6 +1,6 @@
 {
-  "plugin_id": "demo-plugin",
-  "command": "command/demo_run",
-  "error": "ValueError: boom",
-  "instance_id": "prod-eu"
+    "plugin_id":  "demo-plugin",
+    "command":  "command/demo_run",
+    "error":  "ValueError: boom",
+    "instance_id":  "prod-eu"
 }

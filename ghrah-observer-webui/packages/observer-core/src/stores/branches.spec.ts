@@ -54,7 +54,6 @@ describe("useBranchesStore", () => {
     store.onBranchActivated({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       agent_name: "coder",
       branch: branch("b1"),
     });
@@ -70,7 +69,6 @@ describe("useBranchesStore", () => {
     store.removeBranch({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       agent_name: "coder",
       session_id: "s1",
       branch_id: "b1",

@@ -1,37 +1,61 @@
 {
-  "matched": [
-    {
-      "plugin_id": "demo",
-      "version": "1.0.0",
-      "provides": ["checker/x", "command/y", "badge/z"],
-      "instances": []
-    }
-  ],
-  "python_only": [
-    {
-      "plugin_id": "py-only",
-      "version": "1.0.0",
-      "provides": ["checker/a"],
-      "requires_capabilities": [],
-      "instances": []
-    }
-  ],
-  "ts_only": [
-    {
-      "plugin_id": "ts-only",
-      "version": "0.3.0",
-      "provides": ["badge/w"]
-    },
-    {
-      "plugin_id": "conflicted",
-      "version": "2.0.0",
-      "provides": ["badge/c"]
-    }
-  ],
-  "version_conflicts": [],
-  "missing_capabilities": ["core:z"],
-  "instances": {
-    "demo": [],
-    "py-only": []
-  }
+    "matched":  [
+                    {
+                        "plugin_id":  "demo",
+                        "version":  "1.0.0",
+                        "provides":  [
+                                         "checker/x",
+                                         "command/y",
+                                         "badge/z"
+                                     ],
+                        "instances":  [
+
+                                      ]
+                    }
+                ],
+    "python_only":  [
+                        {
+                            "plugin_id":  "py-only",
+                            "version":  "1.0.0",
+                            "provides":  [
+                                             "checker/a"
+                                         ],
+                            "requires_capabilities":  [
+
+                                                      ],
+                            "instances":  [
+
+                                          ]
+                        }
+                    ],
+    "ts_only":  [
+                    {
+                        "plugin_id":  "ts-only",
+                        "version":  "0.3.0",
+                        "provides":  [
+                                         "badge/w"
+                                     ]
+                    },
+                    {
+                        "plugin_id":  "conflicted",
+                        "version":  "2.0.0",
+                        "provides":  [
+                                         "badge/c"
+                                     ]
+                    }
+                ],
+    "version_conflicts":  [
+
+                          ],
+    "missing_capabilities":  [
+                                 "core:z"
+                             ],
+    "instances":  {
+                      "demo":  [
+
+                               ],
+                      "py-only":  [
+
+                                  ]
+                  }
 }

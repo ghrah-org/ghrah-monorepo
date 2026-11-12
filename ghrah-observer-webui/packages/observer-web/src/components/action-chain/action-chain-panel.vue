@@ -47,7 +47,7 @@ const {
   agentReset,
 } = useObserver();
 
-// store 中的 AgentInfo 含 clusterId/config 等额外字段，对外（RPC/store 键）只投影纯 AgentTarget
+// store 中的 AgentInfo 含 config 等额外字段，对外（RPC/store 键）只投影纯 AgentTarget
 const agentTarget = computed<AgentTarget>(() => {
   const resolved = agents.getAgent(props.agent);
   return resolved

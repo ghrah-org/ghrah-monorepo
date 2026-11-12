@@ -1,6 +1,5 @@
 {
   "project_id": "proj-001",
-  "cluster_id": "",
   "config": {
     "name": "agent-1",
     "endpoint_name": null,

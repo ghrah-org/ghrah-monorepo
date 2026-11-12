@@ -1,45 +1,57 @@
 {
-  "task": {
-    "task_id": "task-001",
-    "project_id": "proj-001",
-    "title": "Implement login flow",
-    "description": "",
-    "agent_id": null,
-    "agent_name": "backend-dev",
-    "status": "delivered",
-    "priority": "high",
-    "parent_id": null,
-    "dependencies": [],
-    "result": null,
-    "error": null,
-    "created_at": "2026-09-20T00:00:00Z",
-    "updated_at": "2026-09-20T10:05:00Z",
-    "started_at": "2026-09-20T00:30:00Z",
-    "completed_at": null,
-    "metadata": {},
-    "verification": {
-      "evidence_min": 1,
-      "evidence_kinds": [],
-      "checks": ["commit_in_repo"],
-      "approver": null
-    }
-  },
-  "claim": {
-    "claim_id": "claim-001",
-    "task_id": "task-001",
-    "claimant_type": "agent",
-    "claimant_id": "agent:backend-dev",
-    "claimant_name": "backend-dev",
-    "note": null,
-    "evidence": [],
-    "state": "submitted",
-    "checks": [],
-    "verdict_by": null,
-    "verdict_at": null,
-    "verdict_reason": null,
-    "provenance": null,
-    "created_at": "2026-09-20T10:05:00Z"
-  },
-  "previous_status": "in_progress",
-  "reason": null
+    "task":  {
+                 "task_id":  "task-001",
+                 "project_id":  "proj-001",
+                 "title":  "Implement login flow",
+                 "description":  "",
+                 "agent_id":  null,
+                 "agent_name":  "backend-dev",
+                 "status":  "delivered",
+                 "priority":  "high",
+                 "parent_id":  null,
+                 "dependencies":  [
+
+                                  ],
+                 "result":  null,
+                 "error":  null,
+                 "created_at":  "2026-09-20T00:00:00Z",
+                 "updated_at":  "2026-09-20T10:05:00Z",
+                 "started_at":  "2026-09-20T00:30:00Z",
+                 "completed_at":  null,
+                 "metadata":  {
+
+                              },
+                 "verification":  {
+                                      "evidence_min":  1,
+                                      "evidence_kinds":  [
+
+                                                         ],
+                                      "checks":  [
+                                                     "commit_in_repo"
+                                                 ],
+                                      "approver":  null
+                                  }
+             },
+    "claim":  {
+                  "claim_id":  "claim-001",
+                  "task_id":  "task-001",
+                  "claimant_type":  "agent",
+                  "claimant_id":  "agent:backend-dev",
+                  "claimant_name":  "backend-dev",
+                  "note":  null,
+                  "evidence":  [
+
+                               ],
+                  "state":  "submitted",
+                  "checks":  [
+
+                             ],
+                  "verdict_by":  null,
+                  "verdict_at":  null,
+                  "verdict_reason":  null,
+                  "provenance":  null,
+                  "created_at":  "2026-09-20T10:05:00Z"
+              },
+    "previous_status":  "in_progress",
+    "reason":  null
 }

@@ -1,9 +1,9 @@
 {
-  "task_id": "task-001",
-  "claim_id": "claim-001",
-  "verdict": "rejected",
-  "verifier_id": "human:reviewer",
-  "verifier_name": "reviewer",
-  "reason": "missing tests",
-  "expected_version": 8
+    "task_id":  "task-001",
+    "claim_id":  "claim-001",
+    "verdict":  "rejected",
+    "verifier_id":  "human:reviewer",
+    "verifier_name":  "reviewer",
+    "reason":  "missing tests",
+    "expected_version":  8
 }

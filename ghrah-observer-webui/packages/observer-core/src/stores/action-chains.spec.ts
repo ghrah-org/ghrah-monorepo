@@ -48,7 +48,6 @@ describe("useActionChainsStore", () => {
     const payload = {
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       agent_name: "coder",
       node: node("n3"),
     };
@@ -63,7 +62,6 @@ describe("useActionChainsStore", () => {
       store.onActionChainUpdated({
         project_id: "p1",
         agent_id: "a1",
-        cluster_id: "c1",
         agent_name: "coder",
         node: node("n1"),
       }),
@@ -77,7 +75,6 @@ describe("useActionChainsStore", () => {
       store.onActionChainUpdated({
         project_id: "p1",
         agent_id: "a1",
-        cluster_id: "c1",
         agent_name: "coder",
         node: node("n1", "", ""),
       }),

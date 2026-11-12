@@ -1,68 +1,82 @@
 {
-  "tasks": [
-    {
-      "task_id": "task-001",
-      "project_id": "proj-001",
-      "title": "Implement login flow",
-      "description": "",
-      "agent_id": null,
-      "agent_name": null,
-      "status": "delivered",
-      "priority": "normal",
-      "parent_id": null,
-      "dependencies": [],
-      "result": null,
-      "error": null,
-      "created_at": "2026-09-20T00:00:00Z",
-      "updated_at": "2026-09-20T10:05:00Z",
-      "started_at": null,
-      "completed_at": null,
-      "metadata": {},
-      "verification": {
-        "evidence_min": 1,
-        "evidence_kinds": [],
-        "checks": ["commit_in_repo"],
-        "approver": null
-      }
-    }
-  ],
-  "claims": [
-    {
-      "claim_id": "claim-001",
-      "task_id": "task-001",
-      "claimant_type": "agent",
-      "claimant_id": "agent:backend-dev",
-      "claimant_name": null,
-      "note": null,
-      "evidence": [
-        {
-          "evidence_id": "ev-001",
-          "kind": "git_commit",
-          "ref": "abc1234",
-          "digest": null,
-          "payload": {},
-          "created_by": "agent:backend-dev",
-          "created_at": "2026-09-20T10:00:00Z"
-        }
-      ],
-      "state": "submitted",
-      "checks": [],
-      "verdict_by": null,
-      "verdict_at": null,
-      "verdict_reason": null,
-      "provenance": null,
-      "created_at": "2026-09-20T10:05:00Z"
-    }
-  ],
-  "evidence": [
-    {
-      "evidence_id": "ev-001",
-      "kind": "git_commit",
-      "ref": "abc1234",
-      "digest": null,
-      "payload": {},
-      "created_by": "agent:backend-dev",
-      "created_at": "2026-09-20T10:00:00Z"
-    }
-  ]
+    "tasks":  [
+                  {
+                      "task_id":  "task-001",
+                      "project_id":  "proj-001",
+                      "title":  "Implement login flow",
+                      "description":  "",
+                      "agent_id":  null,
+                      "agent_name":  null,
+                      "status":  "delivered",
+                      "priority":  "normal",
+                      "parent_id":  null,
+                      "dependencies":  [
+
+                                       ],
+                      "result":  null,
+                      "error":  null,
+                      "created_at":  "2026-09-20T00:00:00Z",
+                      "updated_at":  "2026-09-20T10:05:00Z",
+                      "started_at":  null,
+                      "completed_at":  null,
+                      "metadata":  {
+
+                                   },
+                      "verification":  {
+                                           "evidence_min":  1,
+                                           "evidence_kinds":  [
+
+                                                              ],
+                                           "checks":  [
+                                                          "commit_in_repo"
+                                                      ],
+                                           "approver":  null
+                                       }
+                  }
+              ],
+    "claims":  [
+                   {
+                       "claim_id":  "claim-001",
+                       "task_id":  "task-001",
+                       "claimant_type":  "agent",
+                       "claimant_id":  "agent:backend-dev",
+                       "claimant_name":  null,
+                       "note":  null,
+                       "evidence":  [
+                                        {
+                                            "evidence_id":  "ev-001",
+                                            "kind":  "git_commit",
+                                            "ref":  "abc1234",
+                                            "digest":  null,
+                                            "payload":  {
+
+                                                        },
+                                            "created_by":  "agent:backend-dev",
+                                            "created_at":  "2026-09-20T10:00:00Z"
+                                        }
+                                    ],
+                       "state":  "submitted",
+                       "checks":  [
+
+                                  ],
+                       "verdict_by":  null,
+                       "verdict_at":  null,
+                       "verdict_reason":  null,
+                       "provenance":  null,
+                       "created_at":  "2026-09-20T10:05:00Z"
+                   }
+               ],
+    "evidence":  [
+                     {
+                         "evidence_id":  "ev-001",
+                         "kind":  "git_commit",
+                         "ref":  "abc1234",
+                         "digest":  null,
+                         "payload":  {
+
+                                     },
+                         "created_by":  "agent:backend-dev",
+                         "created_at":  "2026-09-20T10:00:00Z"
+                     }
+                 ]
 }

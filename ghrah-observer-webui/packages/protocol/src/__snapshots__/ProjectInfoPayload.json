@@ -5,7 +5,6 @@
   "project_root_locator": "file:///srv/ghrah/projects/proj-001",
   "shell_cwd": "",
   "manifest_ref": "ghrah/demo",
-  "cluster_ids": ["cluster-1"],
   "workspaces": [
     {
       "workspace_id": "ws-001",
@@ -17,7 +16,6 @@
     {
       "agent_id": "",
       "name": "architect",
-      "cluster_id": "cluster-1",
       "manifest_ref": "ghrah/architect",
       "instance_manifest_path": ".ghrah/agents/architect.yaml",
       "system_prompt": "You are the architect.",

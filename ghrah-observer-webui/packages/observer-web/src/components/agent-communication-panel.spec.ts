@@ -25,9 +25,9 @@ beforeEach(() => {
       name: "demo",
       status: "active",
       agents: [
-        { name: "A", agent_id: "a", cluster_id: "c1" },
-        { name: "B", agent_id: "b", cluster_id: "c2" },
-        { name: "C", agent_id: "c", cluster_id: "c2" },
+        { name: "A", agent_id: "a" },
+        { name: "B", agent_id: "b" },
+        { name: "C", agent_id: "c" },
       ],
     } as never,
   ]);

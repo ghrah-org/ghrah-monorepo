@@ -1,7 +1,6 @@
 {
   "project_id": "proj-001",
   "agent_id": "agent-001",
-  "cluster_id": "cluster-1",
   "sender": "agent-1",
   "recipient": "user",
   "content": "result",

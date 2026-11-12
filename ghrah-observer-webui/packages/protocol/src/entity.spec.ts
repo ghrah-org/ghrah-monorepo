@@ -35,7 +35,7 @@ describe("Agent entity Python/TS wire agreement", () => {
       ).toBe(false);
     }
     expect(
-      AgentEntityCreatePayloadSchema.safeParse({ project_id: "p1", name: "a", cluster_id: "c1" })
+      AgentEntityCreatePayloadSchema.safeParse({ project_id: "p1", name: "a" })
         .success,
     ).toBe(false);
   });

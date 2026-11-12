@@ -456,49 +456,6 @@ export class ObserverClient extends ServerClient {
     );
   }
 
-  async initCluster(
-    clusterId: string,
-    config?: Record<string, unknown>,
-  ): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.INIT_CLUSTER,
-      payload: { cluster_id: clusterId, config: config ?? {} },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async shutdownCluster(clusterId: string): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.SHUTDOWN_CLUSTER,
-      payload: { cluster_id: clusterId, config: {} },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async clusterStatus(clusterId: string): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.CLUSTER_STATUS,
-      payload: { cluster_id: clusterId },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async listClusters(): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.LIST_CLUSTERS,
-      payload: {},
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
   async createWorkspace(target: AgentTarget): Promise<CommandResultPayload> {
     const msg: ServerMessage = {
       type: CommandType.CREATE_WORKSPACE,

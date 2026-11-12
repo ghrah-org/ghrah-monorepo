@@ -11,7 +11,6 @@ describe("agent control contracts", () => {
     const created = AgentCreateRequestSchema.parse({
       expected_revision: 1,
       name: "reviewer",
-      cluster_id: "clu",
     });
     expect(created.desired_state).toBe("stopped");
     expect(created.system_prompt).toBe("");
@@ -21,7 +20,6 @@ describe("agent control contracts", () => {
     const summary = AgentSpecificationSummarySchema.parse({
       agent_id: "a1",
       name: "reviewer",
-      cluster_id: "clu",
       prompt: { digest: "sha256:ab", size_bytes: 5 },
       desired_state: "stopped",
       runtime_status: "stopped",
@@ -33,7 +31,6 @@ describe("agent control contracts", () => {
       AgentSpecificationSummarySchema.parse({
         agent_id: "a1",
         name: "reviewer",
-        cluster_id: "clu",
         prompt: { digest: "sha256:ab", size_bytes: 5 },
         desired_state: "stopped",
         runtime_status: "stopped",

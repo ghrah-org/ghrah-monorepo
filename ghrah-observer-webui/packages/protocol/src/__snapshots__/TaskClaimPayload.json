@@ -1,40 +1,40 @@
 {
-  "claim_id": "claim-001",
-  "task_id": "task-001",
-  "claimant_type": "agent",
-  "claimant_id": "agent:backend-dev",
-  "claimant_name": "backend-dev",
-  "note": "login flow implemented",
-  "evidence": [
-    {
-      "evidence_id": "ev-001",
-      "kind": "git_commit",
-      "ref": "abc1234",
-      "digest": null,
-      "payload": {
-        "repo": "ghrah",
-        "branch": "main"
-      },
-      "created_by": "agent:backend-dev",
-      "created_at": "2026-09-20T10:00:00Z"
-    }
-  ],
-  "state": "submitted",
-  "checks": [
-    {
-      "checker": "commit_in_repo",
-      "passed": true,
-      "detail": null
-    }
-  ],
-  "verdict_by": null,
-  "verdict_at": null,
-  "verdict_reason": null,
-  "provenance": {
-    "agent_id": "agent:backend-dev",
-    "session_id": "sess-001",
-    "branch_id": null,
-    "node_id": "node-001"
-  },
-  "created_at": "2026-09-20T10:05:00Z"
+    "claim_id":  "claim-001",
+    "task_id":  "task-001",
+    "claimant_type":  "agent",
+    "claimant_id":  "agent:backend-dev",
+    "claimant_name":  "backend-dev",
+    "note":  "login flow implemented",
+    "evidence":  [
+                     {
+                         "evidence_id":  "ev-001",
+                         "kind":  "git_commit",
+                         "ref":  "abc1234",
+                         "digest":  null,
+                         "payload":  {
+                                         "repo":  "ghrah",
+                                         "branch":  "main"
+                                     },
+                         "created_by":  "agent:backend-dev",
+                         "created_at":  "2026-09-20T10:00:00Z"
+                     }
+                 ],
+    "state":  "submitted",
+    "checks":  [
+                   {
+                       "checker":  "commit_in_repo",
+                       "passed":  true,
+                       "detail":  null
+                   }
+               ],
+    "verdict_by":  null,
+    "verdict_at":  null,
+    "verdict_reason":  null,
+    "provenance":  {
+                       "agent_id":  "agent:backend-dev",
+                       "session_id":  "sess-001",
+                       "branch_id":  null,
+                       "node_id":  "node-001"
+                   },
+    "created_at":  "2026-09-20T10:05:00Z"
 }

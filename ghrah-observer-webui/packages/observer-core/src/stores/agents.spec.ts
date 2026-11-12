@@ -88,7 +88,6 @@ describe("useAgentsStore", () => {
       {
         project_id: "p3",
         agent_id: "a3",
-        cluster_id: "c1",
         name: "three",
         incarnation_id: "i1",
         recovery_mode: "fresh",
@@ -114,7 +113,6 @@ describe("useAgentsStore", () => {
     store.onAgentSpawned({
       project_id: "",
       agent_id: "",
-      cluster_id: "",
       name: "bad",
       incarnation_id: "",
       recovery_mode: "",
@@ -124,7 +122,6 @@ describe("useAgentsStore", () => {
     store.onAgentSpawned({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       name: "coder",
       incarnation_id: "i1",
       recovery_mode: "fresh",
@@ -134,7 +131,6 @@ describe("useAgentsStore", () => {
     store.onAgentTerminated({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       name: "coder",
       incarnation_id: "i1",
     });

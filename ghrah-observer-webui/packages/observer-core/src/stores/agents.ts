@@ -21,7 +21,6 @@ import {
 export interface AgentListItem {
   project_id?: string;
   agent_id?: string;
-  cluster_id?: string;
   name: string;
   runtime_state?: string;
   runtime_status?: string;
@@ -32,7 +31,6 @@ export interface AgentListItem {
 }
 
 export interface AgentInfo extends AgentTarget {
-  clusterId: string;
   incarnationId: string;
   recoveryMode: string;
   runtimeStatus: string;
@@ -100,7 +98,6 @@ export const useAgentsStore = defineStore("ghrah-agents", () => {
     const runtimeStatus = project && !projectIsOperable(project) ? "stopped" : "running";
     agents.value.set(agentKey(target), {
       ...target,
-      clusterId: payload.cluster_id,
       incarnationId: payload.incarnation_id,
       recoveryMode: payload.recovery_mode,
       runtimeStatus,
@@ -149,8 +146,7 @@ export const useAgentsStore = defineStore("ghrah-agents", () => {
       retained.add(key);
       next.set(key, {
         ...target,
-        clusterId: item.cluster_id || "",
-        incarnationId: item.incarnation_id || "",
+          incarnationId: item.incarnation_id || "",
         recoveryMode: item.recovery_mode || "",
         runtimeStatus,
         runtimeError: item.runtime_error || "",

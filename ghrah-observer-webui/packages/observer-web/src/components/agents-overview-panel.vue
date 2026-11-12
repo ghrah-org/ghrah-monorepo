@@ -88,7 +88,6 @@ const rows = computed(() =>
     return {
       agentId,
       name: runtime?.agentName ?? spec.name,
-      clusterId: runtime?.clusterId ?? spec.cluster_id ?? "",
       status: displayRuntimeStatus(runtime?.runtimeStatus ?? spec.runtime_status ?? "stopped"),
       runtimeError: runtime?.runtimeError ?? spec.runtime_error ?? "",
       roomNames,
@@ -200,8 +199,7 @@ function openAgent(row: (typeof rows.value)[number]) {
             </template>
           </span>
           <span class="agents-overview-runtime"
-            ><strong>{{ t(`agentsOverview.status.${row.status}`) }}</strong
-            ><span>{{ row.clusterId }}</span></span
+            ><strong>{{ t(`agentsOverview.status.${row.status}`) }}</strong></span
           >
         </button>
         <div class="flex gap-2 px-3 pb-3">
