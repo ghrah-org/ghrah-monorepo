@@ -14,6 +14,7 @@ from test_references import basis, denied, probe, release, until
 from test_service_chain import assert_clean
 
 from ghrah_kernel.kernel.events import EventRecord
+from ghrah_kernel.kernel.pipe import create_pipe
 from ghrah_kernel.kernel.runtime import Kernel
 from ghrah_kernel.kernel.streams import Stream
 from ghrah_kernel.kernel.tables import KernelFault, ObjectRecord, Scheme
@@ -425,7 +426,7 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
             meta = {"op": "wait", "targets": [{"kind": kind, "reference": node.handle_id}]}
         else:
             writer = kernel.derived(session, obj, source, {"write"})
-            read_fd, write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            read_fd, write_fd, capacity = create_pipe(4096)
             kernel.streams.records[obj.object_id] = Stream(
                 obj.object_id,
                 "local-test",
@@ -433,7 +434,8 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
                 writer.handle_id,
                 read_fd,
                 write_fd,
-                4096,
+                capacity,
+                buffered=len(b"secret"),
             )
             os.write(write_fd, b"secret")
             meta = {"op": "read", "handle": node.handle_id, "max_bytes": 16}
