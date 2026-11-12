@@ -313,7 +313,47 @@ const placeholder = computed(() =>
       </p>
     </div>
 
+    <!-- 正文输入：占满整行，左侧与容器内边距对齐 -->
     <div class="chat-input-row">
+      <div class="chat-input-field">
+        <UiTextField
+          ref="inputEl"
+          v-model="input"
+          multiline
+          variant="chat"
+          rows="1"
+          :disabled="props.disabled"
+          class="chat-input-text"
+          :placeholder="placeholder"
+          @keydown="onKeydown"
+          @paste="onPaste"
+        />
+        <!-- @-补全下拉 -->
+        <ul v-if="mentionCandidates.length > 0" class="chat-mention-list">
+          <li
+            v-for="agent in mentionCandidates"
+            :key="agent.id"
+            class="chat-mention-item"
+            @mousedown.prevent="pickMention(agent.id)"
+          >
+            @{{ agent.name }}
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 工具栏：左侧目标选择与附件，右侧发送 -->
+    <div class="chat-toolbar">
+      <input
+        ref="fileInput"
+        class="chat-file-input"
+        type="file"
+        accept="image/*,video/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.zip"
+        multiple
+        :disabled="props.disabled"
+        @change="onFileChange"
+      />
+
       <div v-if="memberAgents.length > 0" ref="targetRoot" class="chat-target">
         <button
           type="button"
@@ -354,15 +394,6 @@ const placeholder = computed(() =>
         </div>
       </div>
 
-      <input
-        ref="fileInput"
-        class="chat-file-input"
-        type="file"
-        accept="image/*,video/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.zip"
-        multiple
-        :disabled="props.disabled"
-        @change="onFileChange"
-      />
       <UiIconButton
         variant="ghost"
         size="sm"
@@ -381,31 +412,7 @@ const placeholder = computed(() =>
         </svg>
       </UiIconButton>
 
-      <div class="chat-input-field">
-        <UiTextField
-          ref="inputEl"
-          v-model="input"
-          multiline
-          variant="chat"
-          rows="1"
-          :disabled="props.disabled"
-          class="chat-input-text"
-          :placeholder="placeholder"
-          @keydown="onKeydown"
-          @paste="onPaste"
-        />
-        <!-- @-补全下拉 -->
-        <ul v-if="mentionCandidates.length > 0" class="chat-mention-list">
-          <li
-            v-for="agent in mentionCandidates"
-            :key="agent.id"
-            class="chat-mention-item"
-            @mousedown.prevent="pickMention(agent.id)"
-          >
-            @{{ agent.name }}
-          </li>
-        </ul>
-      </div>
+      <div class="chat-toolbar-spacer" />
 
       <UiButton type="submit" :disabled="!canSend" variant="primary" size="sm">
         {{ t("chat.input.send") }}
@@ -446,8 +453,6 @@ const placeholder = computed(() =>
 .chat-input-row {
   display: flex;
   min-width: 0;
-  align-items: flex-end;
-  gap: 0.375rem;
 }
 
 .chat-input-field {
@@ -457,7 +462,21 @@ const placeholder = computed(() =>
   flex: 1;
 }
 
+/* 正文从容器内边距起步，与左侧工具栏对齐；边框/背景已由上一条 :deep 规则去掉。 */
 .chat-input-field :deep(textarea) {
+  flex: 1;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.chat-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.chat-toolbar-spacer {
   flex: 1;
 }
 
