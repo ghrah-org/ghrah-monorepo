@@ -1105,12 +1105,18 @@ class CoreUnit:
                     "error_detail": f"Agent '{sp.target}' has no registered ability '{name}'",
                     "data": {"agent_name": sp.target, "ability_name": name},
                 }
+        content_blocks = (
+            [block.model_dump(mode="json", exclude_none=True) for block in sp.content_blocks]
+            if sp.content_blocks
+            else None
+        )
         result = await supervisor.send(
             target=sp.target,
             content=sp.content,
             sender=sp.sender,
             timeout=sp.timeout,
             metadata=sp.metadata,
+            content_blocks=content_blocks,
         )
         return self._ok({"content": result})
 

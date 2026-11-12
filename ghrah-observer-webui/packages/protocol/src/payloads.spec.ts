@@ -909,3 +909,31 @@ describe("Manifest payload schemas", () => {
     expect(result.manifest_ref).toBeUndefined();
   });
 });
+
+describe("SendMessagePayload content_blocks", () => {
+  it("accepts image blocks with empty content", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "",
+      content_blocks: [
+        { type: "text", text: "look" },
+        { type: "image", base64: "iVBORw0KGgo=", mime_type: "image/png" },
+      ],
+    });
+    expect(parsed.content_blocks).toHaveLength(2);
+  });
+
+  it("rejects unknown block types", () => {
+    expect(() =>
+      SendMessagePayloadSchema.parse({
+        project_id: "p1",
+        agent_id: "a1",
+        target: "agent-a",
+        content: "",
+        content_blocks: [{ type: "hologram", data: "x" }],
+      }),
+    ).toThrow();
+  });
+});

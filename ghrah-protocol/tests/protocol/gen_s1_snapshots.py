@@ -21,6 +21,7 @@ from ghrah.protocol.types import (
     PluginNegotiatedPayload,
     PluginNegotiatePayload,
     PluginNegotiateResultPayload,
+    SendMessagePayload,
     TaskCheckOutcomePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
@@ -266,6 +267,21 @@ SAMPLES: dict[str, object] = {
                 created_at="2026-09-20T10:00:00Z",
             )
         ],
+    ),
+    "SendMessagePayload_with_blocks": SendMessagePayload(
+        project_id="proj-001",
+        agent_id="agent-001",
+        target="requirement-agent",
+        content="",
+        content_blocks=[
+            {"type": "text", "text": "请看这张图纸"},
+            {
+                "type": "image",
+                "base64": "iVBORw0KGgo=",
+                "mime_type": "image/png",
+            },
+        ],
+        metadata={"room_id": "room-001"},
     ),
 }
 

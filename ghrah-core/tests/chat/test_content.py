@@ -22,6 +22,7 @@ from ghrah.chat.content import (
     ToolResultBlock,
     block_from_dict,
     block_to_dict,
+    blocks_from_dicts,
 )
 
 
@@ -192,3 +193,15 @@ class TestContentBlockUnion:
     def test_streaming_block_includes_chunk(self) -> None:
         assert TextBlock in StreamingBlock.__args__
         assert ToolCallChunkBlock in StreamingBlock.__args__
+
+
+class TestBlocksFromDictsUnknownType:
+    def test_unknown_block_type_degrades_to_visible_placeholder(self) -> None:
+        blocks = blocks_from_dicts([{"type": "hologram", "payload": "..."}])
+        assert len(blocks) == 1
+        assert isinstance(blocks[0], TextBlock)
+        assert "hologram" in blocks[0].text
+
+    def test_known_block_still_parsed(self) -> None:
+        blocks = blocks_from_dicts([block_to_dict(ImageBlock(base64="abc", mime_type="image/png"))])
+        assert isinstance(blocks[0], ImageBlock)

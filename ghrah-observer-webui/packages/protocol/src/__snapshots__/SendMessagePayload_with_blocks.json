@@ -1,0 +1,23 @@
+{
+  "project_id": "proj-001",
+  "agent_id": "agent-001",
+  "target": "requirement-agent",
+  "content": "",
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "请看这张图纸"
+    },
+    {
+      "type": "image",
+      "url": null,
+      "base64": "iVBORw0KGgo=",
+      "mime_type": "image/png"
+    }
+  ],
+  "sender": "user",
+  "timeout": null,
+  "metadata": {
+    "room_id": "room-001"
+  }
+}

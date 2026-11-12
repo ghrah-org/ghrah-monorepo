@@ -377,3 +377,62 @@ async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
             assert actor._ability_executor._deferred_invocations == {}
         finally:
             await supervisor.shutdown()
+
+
+class ImageCaptureLLM(ScriptedLLM):
+    async def generate(self, messages, tools=None):
+        self.calls.append(list(messages))
+        return LLMResponse(content_blocks=[TextBlock(text="seen")])
+
+
+async def test_send_message_carries_image_blocks_to_agent(tmp_path):
+    """supervisor.send 的 content_blocks 经 MM 落库/还原后进入 LLM 上下文。"""
+    from ghrah.chat.content import ImageBlock, block_to_dict
+
+    path = tmp_path / "core.sqlite"
+    await bootstrap(path)
+    llm = ImageCaptureLLM([])
+    async with MessageManager(
+        path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
+    ) as mm:
+        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        try:
+            await spawn(supervisor, "a", llm)
+            image = block_to_dict(ImageBlock(base64="aGVsbG8=", mime_type="image/png"))
+            assert await supervisor.send("a", "", content_blocks=[image]) == "seen"
+            seen = [
+                b
+                for message in llm.calls[0]
+                for b in message.content_blocks
+                if isinstance(b, ImageBlock)
+            ]
+            assert seen, "image block must reach the model"
+            assert seen[0].mime_type == "image/png"
+        finally:
+            await supervisor.shutdown()
+
+
+async def test_send_message_metadata_blocks_are_preserved(tmp_path):
+    """metadata.content_blocks 旁路仍可用：不被 _accept_input 覆盖。"""
+    from ghrah.chat.content import ImageBlock, block_to_dict
+
+    path = tmp_path / "core.sqlite"
+    await bootstrap(path)
+    llm = ImageCaptureLLM([])
+    async with MessageManager(
+        path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
+    ) as mm:
+        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        try:
+            await spawn(supervisor, "a", llm)
+            image = block_to_dict(ImageBlock(base64="aGVsbG8=", mime_type="image/png"))
+            assert await supervisor.send("a", "", metadata={"content_blocks": [image]}) == "seen"
+            seen = [
+                b
+                for message in llm.calls[0]
+                for b in message.content_blocks
+                if isinstance(b, ImageBlock)
+            ]
+            assert seen, "metadata content_blocks must survive _accept_input"
+        finally:
+            await supervisor.shutdown()

@@ -24,6 +24,7 @@ from ghrah.protocol.types import (
     PluginNegotiatedPayload,
     PluginNegotiatePayload,
     PluginNegotiateResultPayload,
+    SendMessagePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
     TaskClaimListResultPayload,
@@ -66,6 +67,7 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TaskInfoPayload_verification": TaskInfoPayload,
     "TaskDumpPayload": TaskDumpPayload,
     "TaskDumpResultPayload": TaskDumpResultPayload,
+    "SendMessagePayload_with_blocks": SendMessagePayload,
 }
 
 

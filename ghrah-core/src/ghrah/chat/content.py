@@ -119,8 +119,10 @@ def block_from_dict(data: dict[str, Any]) -> ContentBlock | ToolCallChunkBlock:
 def blocks_from_dicts(content_blocks: list[dict[str, Any]]) -> list[ContentBlock]:
     """将序列化的内容块字典列表解析为 ContentBlock 列表。
 
-    单项解析失败时回退为 TextBlock（取 text 或 reasoning 字段），
-    保证调用方总能拿到结构化块而非抛异常。供 AgentMessage.to_chat_message()
+    单项解析失败时回退为 TextBlock：未知块类型给出可识别的占位文本，
+    已知类型但字段异常时取 text 或 reasoning 字段。这样调用方总能拿到
+    结构化块而非抛异常，且「旧核收到新块类型」时降级是可见的，
+    不会表现为「消息发出去了但什么也没有」。供 AgentMessage.to_chat_message()
     与 AgentActor.receive() 共用，避免两处解析逻辑漂移。
     """
     blocks: list[ContentBlock] = []
@@ -128,7 +130,11 @@ def blocks_from_dicts(content_blocks: list[dict[str, Any]]) -> list[ContentBlock
         try:
             blocks.append(block_from_dict(bd))  # type: ignore[arg-type]
         except ValueError, KeyError:
-            blocks.append(TextBlock(text=str(bd.get("text", bd.get("reasoning", "")))))
+            raw_type = bd.get("type") if isinstance(bd, dict) else None
+            if isinstance(raw_type, str) and raw_type:
+                blocks.append(TextBlock(text=f"[不支持的媒体块: {raw_type}]"))
+            else:
+                blocks.append(TextBlock(text=str(bd.get("text", bd.get("reasoning", "")))))
     return blocks
 
 

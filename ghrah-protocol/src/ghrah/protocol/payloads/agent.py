@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ghrah.protocol.payloads.content import InputContentBlock
 from ghrah.protocol.payloads.model import EndpointReferenceModel
 
 # ─── 命令载荷模型 ───
@@ -63,12 +64,19 @@ class AgentResetPayload(BaseModel):
 
 
 class SendMessagePayload(BaseModel):
-    """send_message 命令载荷。"""
+    """send_message 命令载荷。
+
+    ``content`` 是纯文本正文；``content_blocks`` 是可选的结构化内容块
+    （text / image / audio / file）。两者并存：纯文本消息只带 ``content``；
+    多模态消息可让 ``content`` 为空字符串，由 ``content_blocks`` 承载内容。
+    块的大小、MIME 与总量校验属于 Subject 入口策略，不在协议层。
+    """
 
     project_id: str
     agent_id: str
     target: str
     content: str
+    content_blocks: list[InputContentBlock] | None = None
     sender: str = "user"
     timeout: float | None = None
     metadata: dict[str, Any] | None = None

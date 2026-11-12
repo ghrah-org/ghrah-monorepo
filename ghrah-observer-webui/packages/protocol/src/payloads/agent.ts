@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { z } from "zod";
+import { InputContentBlockSchema } from "./content.js";
 import { BranchInfoPayloadSchema } from "./session.js";
 
 export const AgentConfigPayloadSchema = z
@@ -52,6 +53,7 @@ export const SendMessagePayloadSchema = z.object({
   agent_id: z.string(),
   target: z.string(),
   content: z.string(),
+  content_blocks: z.array(InputContentBlockSchema).nullable().optional(),
   sender: z.string().optional().default("user"),
   timeout: z.number().nullable().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
