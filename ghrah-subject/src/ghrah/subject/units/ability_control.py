@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import hmac
+import importlib.util
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from ghrah.ability.access import AccessError
 from ghrah.ability.content import ContentReadRequest
+from ghrah.ability.loading.ability_schema import V1_SEMVER_PATTERN
 from ghrah.ability.surface.projection import project_grants
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -34,6 +37,8 @@ from ghrah.protocol.ability_control import (
     AbilityGrantPolicyView,
     AbilityGrantView,
     AbilityLifecycleView,
+    AbilityMcpProbeRequest,
+    AbilityMcpProbeView,
     AbilityPendingRespawnView,
     AbilitySurfaceEntryView,
     AbilitySurfaceView,
@@ -66,6 +71,7 @@ from ghrah.subject.units.ability_catalog import (
     build_package_catalog,
     build_package_detail,
     build_package_groups,
+    build_version_profile,
     valid_identity_segment,
 )
 
@@ -263,18 +269,42 @@ def _changes_page(rows: list[dict[str, Any]], after_seq: int, limit: int) -> Abi
     )
 
 
+def _mcp_probe_ready() -> bool:
+    """MCP 探测是否可用：MCP SDK 与 Core probe 都能导入。
+
+    两者都是可选能力（``ghrah-core[mcp]``）；缺任一时探测端点返回 503，
+    前端据此隐藏入口而不是点了才失败。
+    """
+    try:
+        return (
+            importlib.util.find_spec("mcp") is not None
+            and importlib.util.find_spec("ghrah.mcp.probe") is not None
+        )
+    except ImportError, ValueError:
+        return False
+
+
 def build_ability_control_router(
     *,
     config: SubjectConfig,
     project_store: Any,
     access: AbilityAccessService,
     event_bus: Any,
+    probe: Callable[..., Awaitable[AbilityMcpProbeView]] | None = None,
 ) -> APIRouter:
-    """构造管理面路由；依赖由 unit 从受信 ctx 注入（测试可直接构造）。"""
+    """构造管理面路由；依赖由 unit 从受信 ctx 注入（测试可直接构造）。
+
+    ``probe`` 是 MCP 探测的注入缝：生产为 ``None``（延迟导入 Subject 探测模块），
+    测试可传入 stub 以验证路由映射而不触发真实网络。
+    """
     router = APIRouter(prefix="/api/v1")
     enabled = config.observer_http_api_enabled
     source = config.ability_source if config.ability_source in {"builtin", "legacy"} else "legacy"
     ready = enabled and source == "builtin"
+
+    def _probe_supported() -> bool:
+        """探测能力是否可用；注入 stub 时视为可用（测试路径）。"""
+        return probe is not None or _mcp_probe_ready()
 
     async def _ensure_enabled() -> None:
         if enabled:
@@ -443,6 +473,7 @@ def build_ability_control_router(
             versions_write=False,
             packages_read=ready,
             packages_install=False,
+            mcp_probe=ready and _probe_supported(),
             surface_write=False,
         )
         payload = AbilityApiStatus(
@@ -697,6 +728,77 @@ def build_ability_control_router(
         return _jsonable(detail)
 
     router.add_api_route("/ability-packages/{namespace}/{name}", _package_detail, methods=["GET"])
+
+    async def _package_version_profile(
+        namespace: str,
+        name: str,
+        version: str,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        try:
+            profile = build_version_profile(config.ability.install_root, namespace, name, version)
+        except CatalogError as error:
+            _catalog_error(error)
+        return _jsonable(profile)
+
+    router.add_api_route(
+        "/ability-packages/{namespace}/{name}/versions/{version}",
+        _package_version_profile,
+        methods=["GET"],
+    )
+
+    async def _package_mcp_probe(
+        namespace: str,
+        name: str,
+        version: str,
+        body: AbilityMcpProbeRequest,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        if not _probe_supported():
+            raise AbilityApiError(
+                "capability_unavailable",
+                "MCP 探测未启用：缺少 MCP SDK 或 Core probe",
+            )
+        if not valid_identity_segment(namespace) or not valid_identity_segment(name):
+            raise AbilityApiError("invalid_request", "能力包身份不合法")
+        if not V1_SEMVER_PATTERN.fullmatch(version):
+            raise AbilityApiError("invalid_request", "能力包版本必须是 SemVer core 三段")
+        runner = probe
+        if runner is None:
+            try:
+                from ghrah.subject.units.ability_mcp_probe import probe_package_mcp
+            except ImportError as error:
+                logger.warning("mcp probe module unavailable", exc_info=True)
+                raise AbilityApiError(
+                    "capability_unavailable",
+                    "MCP 探测不可用：Core probe 尚未就绪",
+                ) from error
+            runner = probe_package_mcp
+        try:
+            view = await runner(
+                config.ability.install_root,
+                namespace,
+                name,
+                version,
+                body,
+                db_path=config.agentconf_db_path,
+            )
+        except CatalogError as error:
+            if error.code == "invalid_change":
+                raise AbilityApiError(
+                    "invalid_change",
+                    "该能力包不是 MCP 包，不能探测",
+                    detail={"reason": "definition_not_mcp"},
+                    status=409,
+                ) from error
+            _catalog_error(error)
+        return _jsonable(view)
+
+    router.add_api_route(
+        "/ability-packages/{namespace}/{name}/versions/{version}/mcp/probe",
+        _package_mcp_probe,
+        methods=["POST"],
+    )
 
     async def _instances(
         project_id: str,
