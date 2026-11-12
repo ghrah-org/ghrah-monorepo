@@ -68,6 +68,7 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TaskDumpPayload": TaskDumpPayload,
     "TaskDumpResultPayload": TaskDumpResultPayload,
     "SendMessagePayload_with_blocks": SendMessagePayload,
+    "SendMessagePayload_with_video": SendMessagePayload,
 }
 
 

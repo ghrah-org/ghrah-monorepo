@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from dataclasses import replace
 from typing import Any
 
 from ghrah.chat.content import (
@@ -18,6 +19,7 @@ from ghrah.chat.content import (
     TextBlock,
     ToolCallBlock,
     ToolCallChunkBlock,
+    expand_video_blocks,
 )
 from ghrah.chat.format import LLMResponse, LLMStreamEvent
 from ghrah.chat.format.openai import OpenAIFormat
@@ -38,6 +40,7 @@ class OpenAIResponsesFormat(OpenAIFormat):
     def _format_input(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for msg in messages:
+            msg = replace(msg, content_blocks=expand_video_blocks(msg.content_blocks))
             if msg.role == "tool":
                 items.extend(
                     {

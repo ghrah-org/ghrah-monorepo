@@ -18,6 +18,7 @@ from ghrah.chat.content import (
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
+    VideoBlock,
 )
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.format.openai import OpenAIFormat
@@ -387,3 +388,26 @@ class TestGenerateIntegration:
         result = await fmt.generate(messages)
         assert isinstance(result, LLMResponse)
         assert result.text == "Hello"
+
+
+class TestVideoBlockProjection:
+    def test_video_with_frames_becomes_image_parts(self) -> None:
+        fmt = OpenAIFormat(model="gpt-4o")
+        video = VideoBlock(
+            attachment_id="a" * 64,
+            mime_type="video/mp4",
+            filename="demo.mp4",
+            duration_s=12.5,
+            frames=[ImageBlock(base64="frame1", mime_type="image/jpeg")],
+        )
+        result = fmt._format_messages([ChatMessage.user(text_or_blocks=[video])])
+        parts = result[0]["content"]
+        assert any(p.get("type") == "image_url" for p in parts)
+        assert any(p.get("type") == "text" and "视频附件" in p.get("text", "") for p in parts)
+
+    def test_video_without_frames_becomes_text_placeholder(self) -> None:
+        fmt = OpenAIFormat(model="gpt-4o")
+        video = VideoBlock(attachment_id="a" * 64, mime_type="video/mp4", filename="demo.mp4")
+        result = fmt._format_messages([ChatMessage.user(text_or_blocks=[video])])
+        assert isinstance(result[0]["content"], str)
+        assert "视频附件" in result[0]["content"]

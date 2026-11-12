@@ -283,6 +283,30 @@ SAMPLES: dict[str, object] = {
         ],
         metadata={"room_id": "room-001"},
     ),
+    "SendMessagePayload_with_video": SendMessagePayload(
+        project_id="proj-001",
+        agent_id="agent-001",
+        target="requirement-agent",
+        content="请看这段视频",
+        content_blocks=[
+            {
+                "type": "video",
+                "attachment_id": "a" * 64,
+                "mime_type": "video/mp4",
+                "filename": "demo.mp4",
+                "duration_s": 12.5,
+                "width": 1280,
+                "height": 720,
+                "frames": [
+                    {
+                        "type": "image",
+                        "base64": "iVBORw0KGgo=",
+                        "mime_type": "image/jpeg",
+                    }
+                ],
+            }
+        ],
+    ),
 }
 
 

@@ -357,6 +357,8 @@ export {
   TerminateAgentPayloadSchema,
   type TextBlockPayload,
   TextBlockPayloadSchema,
+  type VideoBlockPayload,
+  VideoBlockPayloadSchema,
   type TsHalfReport,
   type UnregisterAbilityPayload,
   UnregisterAbilityPayloadSchema,

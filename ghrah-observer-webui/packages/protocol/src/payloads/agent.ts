@@ -211,19 +211,45 @@ export const ContentBlockSchema = z.discriminatedUnion("type", [
     type: z.literal("image"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
   }),
   z.object({
     type: z.literal("audio"),
     data: z.string(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string(),
   }),
   z.object({
     type: z.literal("file"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
     filename: z.string().nullable().optional(),
+  }),
+  z.object({
+    type: z.literal("video"),
+    url: z.string().nullable().optional(),
+    base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
+    mime_type: z.string().nullable().optional(),
+    filename: z.string().nullable().optional(),
+    duration_s: z.number().nullable().optional(),
+    width: z.number().int().nullable().optional(),
+    height: z.number().int().nullable().optional(),
+    frames: z
+      .array(
+        z.object({
+          type: z.literal("image"),
+          url: z.string().nullable().optional(),
+          base64: z.string().nullable().optional(),
+          attachment_id: z.string().nullable().optional(),
+          mime_type: z.string().nullable().optional(),
+        }),
+      )
+      .nullable()
+      .optional(),
   }),
   z.object({
     type: z.literal("tool_call"),

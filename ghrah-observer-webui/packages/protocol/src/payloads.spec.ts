@@ -937,3 +937,39 @@ describe("SendMessagePayload content_blocks", () => {
     ).toThrow();
   });
 });
+
+describe("SendMessagePayload video content_blocks", () => {
+  it("parses video block with attachment_id and frames", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "看这段视频",
+      content_blocks: [
+        {
+          type: "video",
+          attachment_id: "a".repeat(64),
+          mime_type: "video/mp4",
+          filename: "demo.mp4",
+          duration_s: 12.5,
+          width: 1280,
+          height: 720,
+          frames: [{ type: "image", base64: "aGVsbG8=", mime_type: "image/jpeg" }],
+        },
+      ],
+    });
+    expect(parsed.content_blocks).toHaveLength(1);
+    expect(parsed.content_blocks?.[0]?.type).toBe("video");
+  });
+
+  it("accepts image blocks referenced by attachment_id", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "",
+      content_blocks: [{ type: "image", attachment_id: "b".repeat(64), mime_type: "image/png" }],
+    });
+    expect(parsed.content_blocks).toHaveLength(1);
+  });
+});

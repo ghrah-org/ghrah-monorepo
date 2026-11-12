@@ -1,0 +1,31 @@
+{
+  "project_id": "proj-001",
+  "agent_id": "agent-001",
+  "target": "requirement-agent",
+  "content": "请看这段视频",
+  "content_blocks": [
+    {
+      "type": "video",
+      "url": null,
+      "base64": null,
+      "attachment_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mime_type": "video/mp4",
+      "filename": "demo.mp4",
+      "duration_s": 12.5,
+      "width": 1280,
+      "height": 720,
+      "frames": [
+        {
+          "type": "image",
+          "url": null,
+          "base64": "iVBORw0KGgo=",
+          "attachment_id": null,
+          "mime_type": "image/jpeg"
+        }
+      ]
+    }
+  ],
+  "sender": "user",
+  "timeout": null,
+  "metadata": null
+}

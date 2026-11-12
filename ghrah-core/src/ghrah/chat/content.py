@@ -26,6 +26,7 @@ class ImageBlock:
     type: Literal["image"] = "image"
     url: str | None = None
     base64: str | None = None
+    attachment_id: str | None = None
     mime_type: str | None = None
 
 
@@ -33,6 +34,7 @@ class ImageBlock:
 class AudioBlock:
     type: Literal["audio"] = "audio"
     data: str = ""
+    attachment_id: str | None = None
     mime_type: str = ""
 
 
@@ -41,8 +43,23 @@ class FileBlock:
     type: Literal["file"] = "file"
     url: str | None = None
     base64: str | None = None
+    attachment_id: str | None = None
     mime_type: str | None = None
     filename: str | None = None
+
+
+@dataclass
+class VideoBlock:
+    type: Literal["video"] = "video"
+    url: str | None = None
+    base64: str | None = None
+    attachment_id: str | None = None
+    mime_type: str | None = None
+    filename: str | None = None
+    duration_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    frames: list[ImageBlock] = field(default_factory=list)
 
 
 @dataclass
@@ -86,6 +103,7 @@ ContentBlock = (
     | ImageBlock
     | AudioBlock
     | FileBlock
+    | VideoBlock
     | ToolCallBlock
     | ToolResultBlock
     | ErrorBlock
@@ -99,6 +117,7 @@ _BLOCK_TYPE_MAP: dict[str, type] = {
     "image": ImageBlock,
     "audio": AudioBlock,
     "file": FileBlock,
+    "video": VideoBlock,
     "tool_call": ToolCallBlock,
     "tool_result": ToolResultBlock,
     "error": ErrorBlock,
@@ -113,6 +132,16 @@ def block_from_dict(data: dict[str, Any]) -> ContentBlock | ToolCallChunkBlock:
         raise ValueError(f"Unknown block type: {block_type!r}")
     valid_fields = {f.name for f in cls.__dataclass_fields__.values() if f.name != "type"}  # type: ignore[attr-defined]
     kwargs = {k: v for k, v in data.items() if k in valid_fields}
+    if cls is VideoBlock:
+        # 帧是嵌套的 image 块（wire 上是 dict）；解析成 ImageBlock 以便
+        # format 投影与 token 估算共用同一份数据。
+        raw_frames = kwargs.get("frames", [])
+        kwargs["frames"] = [
+            frame
+            for item in (raw_frames or [])
+            if isinstance(item, dict)
+            if isinstance(frame := block_from_dict(item), ImageBlock)
+        ]
     return cls(**kwargs)  # type: ignore[no-any-return]
 
 
@@ -144,8 +173,36 @@ def block_to_dict(block: ContentBlock | ToolCallChunkBlock) -> dict[str, Any]:
         if f.name == "type":
             continue
         val = getattr(block, f.name)
+        if isinstance(block, VideoBlock) and f.name == "frames":
+            if val:
+                result["frames"] = [block_to_dict(frame) for frame in val]
+            continue
         if val is not None and not (
             isinstance(val, (list, dict)) and len(val) == 0 and f.name == "arguments"
         ):
             result[f.name] = val
     return result
+
+
+def expand_video_blocks(blocks: list[ContentBlock]) -> list[ContentBlock]:
+    """把 ``video`` 块投影为当前模型可消费的块。
+
+    当前所有 provider 都没有原生视频输入：有 ``frames`` 时投影成 image 块，
+    没有帧时投影成可识别的文本占位（不静默丢弃）。非 video 块原样保留。
+    供 chat format 适配器在编码前统一调用，避免三家各写一套。
+    """
+    expanded: list[ContentBlock] = []
+    for block in blocks:
+        if not isinstance(block, VideoBlock):
+            expanded.append(block)
+            continue
+        if block.frames:
+            expanded.extend(block.frames)
+            label = block.filename or "video"
+            duration = f"，{block.duration_s:g}s" if block.duration_s else ""
+            expanded.append(TextBlock(text=f"[视频附件: {label}{duration}，以下为抽帧]"))
+        else:
+            label = block.filename or "video"
+            duration = f"，{block.duration_s:g}s" if block.duration_s else ""
+            expanded.append(TextBlock(text=f"[视频附件: {label}{duration}]"))
+    return expanded

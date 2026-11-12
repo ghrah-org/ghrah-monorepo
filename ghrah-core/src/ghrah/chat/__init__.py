@@ -6,7 +6,7 @@
 
 核心数据模型：
 - ContentBlock 系列：TextBlock, ReasoningBlock, ImageBlock, AudioBlock, FileBlock,
-  ToolCallBlock, ToolResultBlock, ErrorBlock, ToolCallChunkBlock（预留）
+  VideoBlock, ToolCallBlock, ToolResultBlock, ErrorBlock, ToolCallChunkBlock（预留）
 - ChatMessage：统一消息表示（content_blocks + source）
 - LLMResponse：统一的 LLM 响应
 - ChatFormat：格式适配器抽象基类
@@ -35,9 +35,11 @@ from ghrah.chat.content import (
     ToolCallBlock,
     ToolCallChunkBlock,
     ToolResultBlock,
+    VideoBlock,
     block_from_dict,
     block_to_dict,
     blocks_from_dicts,
+    expand_video_blocks,
 )
 from ghrah.chat.factory import ChatMessageFactory
 from ghrah.chat.format import ChatFormat, LLMResponse, TokenUsage
@@ -59,6 +61,7 @@ __all__ = [
     "ImageBlock",
     "AudioBlock",
     "FileBlock",
+    "VideoBlock",
     "ToolCallBlock",
     "ToolResultBlock",
     "ErrorBlock",
@@ -68,6 +71,7 @@ __all__ = [
     "block_from_dict",
     "block_to_dict",
     "blocks_from_dicts",
+    "expand_video_blocks",
     # Message
     "ChatMessage",
     # Factory

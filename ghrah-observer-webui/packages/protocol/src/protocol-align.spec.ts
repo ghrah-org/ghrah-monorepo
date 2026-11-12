@@ -165,6 +165,7 @@ const PAYLOAD_SCHEMA_MAP: Record<string, import("zod").ZodTypeAny> = {
   TerminateAgentPayload: TerminateAgentPayloadSchema,
   SendMessagePayload: SendMessagePayloadSchema,
   SendMessagePayload_with_blocks: SendMessagePayloadSchema,
+  SendMessagePayload_with_video: SendMessagePayloadSchema,
   SendMessagePayload_default_sender: SendMessagePayloadSchema,
   BroadcastMessagePayload: BroadcastMessagePayloadSchema,
   RegisterAbilityPayload: RegisterAbilityPayloadSchema,

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ghrah.chat.content import (
@@ -14,6 +15,7 @@ from ghrah.chat.content import (
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
+    expand_video_blocks,
 )
 from ghrah.chat.format import ChatFormat, LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -110,6 +112,7 @@ class AnthropicFormat(ChatFormat):
         formatted: list[dict[str, Any]] = []
 
         for msg in messages:
+            msg = replace(msg, content_blocks=expand_video_blocks(msg.content_blocks))
             if msg.role == "system":
                 system_parts.append(msg.text)
                 continue

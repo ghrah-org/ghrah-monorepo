@@ -20,9 +20,11 @@ from ghrah.chat.content import (
     ToolCallBlock,
     ToolCallChunkBlock,
     ToolResultBlock,
+    VideoBlock,
     block_from_dict,
     block_to_dict,
     blocks_from_dicts,
+    expand_video_blocks,
 )
 
 
@@ -205,3 +207,39 @@ class TestBlocksFromDictsUnknownType:
     def test_known_block_still_parsed(self) -> None:
         blocks = blocks_from_dicts([block_to_dict(ImageBlock(base64="abc", mime_type="image/png"))])
         assert isinstance(blocks[0], ImageBlock)
+
+
+class TestVideoBlock:
+    def test_video_round_trip_with_frames(self) -> None:
+        video = VideoBlock(
+            attachment_id="a" * 64,
+            mime_type="video/mp4",
+            filename="demo.mp4",
+            duration_s=12.5,
+            width=1280,
+            height=720,
+            frames=[ImageBlock(base64="frame1", mime_type="image/jpeg")],
+        )
+        restored = block_from_dict(block_to_dict(video))
+        assert isinstance(restored, VideoBlock)
+        assert restored.attachment_id == "a" * 64
+        assert restored.frames and restored.frames[0].base64 == "frame1"
+
+    def test_expand_video_with_frames(self) -> None:
+        video = VideoBlock(
+            attachment_id="a" * 64,
+            mime_type="video/mp4",
+            filename="demo.mp4",
+            duration_s=12.5,
+            frames=[ImageBlock(base64="frame1", mime_type="image/jpeg")],
+        )
+        expanded = expand_video_blocks([video])
+        assert any(isinstance(b, ImageBlock) for b in expanded)
+        assert any(isinstance(b, TextBlock) and "视频附件" in b.text for b in expanded)
+
+    def test_expand_video_without_frames_uses_placeholder(self) -> None:
+        video = VideoBlock(attachment_id="a" * 64, mime_type="video/mp4", filename="demo.mp4")
+        expanded = expand_video_blocks([video])
+        assert len(expanded) == 1
+        assert isinstance(expanded[0], TextBlock)
+        assert "视频附件" in expanded[0].text

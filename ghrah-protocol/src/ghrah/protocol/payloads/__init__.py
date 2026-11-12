@@ -47,6 +47,7 @@ from ghrah.protocol.payloads.content import (  # noqa: F401
     ImageBlockPayload,
     InputContentBlock,
     TextBlockPayload,
+    VideoBlockPayload,
 )
 from ghrah.protocol.payloads.entity import (  # noqa: F401
     AgentEntityCreatePayload,
@@ -367,6 +368,7 @@ __all__ = [
     "TaskVerifyPayload",
     "TerminateAgentPayload",
     "TextBlockPayload",
+    "VideoBlockPayload",
     "UnregisterAbilityPayload",
     "UnsubscribePayload",
     "WorkspaceCreatedPayload",

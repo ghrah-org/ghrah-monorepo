@@ -16,6 +16,7 @@ from ghrah.chat.content import (
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
+    VideoBlock,
 )
 from ghrah.chat.format import LLMResponse
 from ghrah.chat.format.anthropic import AnthropicFormat
@@ -388,3 +389,17 @@ class TestGenerateIntegration:
         result = await fmt.generate(messages)
         assert isinstance(result, LLMResponse)
         assert result.text == "Hello"
+
+
+class TestVideoBlockProjection:
+    def test_video_frames_become_image_blocks(self) -> None:
+        fmt = AnthropicFormat(model="claude-3-sonnet")
+        video = VideoBlock(
+            attachment_id="a" * 64,
+            mime_type="video/mp4",
+            filename="demo.mp4",
+            frames=[ImageBlock(base64="frame1", mime_type="image/jpeg")],
+        )
+        _system, formatted = fmt._format_messages([ChatMessage.user(text_or_blocks=[video])])
+        parts = formatted[0]["content"]
+        assert any(p.get("type") == "image" for p in parts)

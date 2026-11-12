@@ -118,3 +118,55 @@ def test_send_message_rejects_unknown_block_type() -> None:
                 "content_blocks": [{"type": "hologram", "data": "..."}],
             }
         )
+
+
+def test_send_message_accepts_video_block_with_frames() -> None:
+    """视频块：附件引用 + 抽帧；帧按 image 块校验。"""
+    payload = SendMessagePayload.model_validate(
+        {
+            "project_id": "p1",
+            "agent_id": "a1",
+            "target": "agent-a",
+            "content": "看这段视频",
+            "content_blocks": [
+                {
+                    "type": "video",
+                    "attachment_id": "a" * 64,
+                    "mime_type": "video/mp4",
+                    "filename": "demo.mp4",
+                    "duration_s": 12.5,
+                    "width": 1280,
+                    "height": 720,
+                    "frames": [{"type": "image", "base64": "aGVsbG8=", "mime_type": "image/jpeg"}],
+                }
+            ],
+        }
+    )
+    blocks = payload.content_blocks
+    assert blocks is not None
+    video = blocks[0]
+    assert video.type == "video"
+    assert video.attachment_id == "a" * 64
+    assert video.frames is not None and len(video.frames) == 1
+
+
+def test_send_message_accepts_attachment_id_on_image() -> None:
+    """图片块可用 attachment_id 引用附件，不必内联 base64。"""
+    payload = SendMessagePayload.model_validate(
+        {
+            "project_id": "p1",
+            "agent_id": "a1",
+            "target": "agent-a",
+            "content": "",
+            "content_blocks": [
+                {
+                    "type": "image",
+                    "attachment_id": "b" * 64,
+                    "mime_type": "image/png",
+                }
+            ],
+        }
+    )
+    image = payload.content_blocks[0]
+    assert image.type == "image"
+    assert image.attachment_id == "b" * 64

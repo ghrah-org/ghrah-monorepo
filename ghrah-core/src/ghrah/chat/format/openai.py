@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ghrah.chat.content import (
@@ -16,6 +17,7 @@ from ghrah.chat.content import (
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
+    expand_video_blocks,
 )
 from ghrah.chat.format import ChatFormat, LLMResponse
 from ghrah.chat.message import ChatMessage
@@ -106,6 +108,7 @@ class OpenAIFormat(ChatFormat):
     def _format_messages(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for msg in messages:
+            msg = replace(msg, content_blocks=expand_video_blocks(msg.content_blocks))
             role = "assistant" if msg.role == "ai" else msg.role
             formatted = self._format_single_message(msg, role)
             if isinstance(formatted, list):
