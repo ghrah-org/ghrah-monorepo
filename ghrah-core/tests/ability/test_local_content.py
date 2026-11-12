@@ -17,7 +17,12 @@ from ghrah.protocol.ability_tree import GrantAbilityRequest, RevokeAbilityReques
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.builtin.core.operations.list_abilities import ListAbilitiesAbility
 from ghrah.ability.builtin.core.operations.load_skill import LoadSkillAbility
-from ghrah.ability.content import ContentReadRequest
+from ghrah.ability.content import (
+    ContentChunk,
+    ContentDescription,
+    ContentReadRequest,
+    is_loadable_text,
+)
 from ghrah.ability.local_content import LocalGrantedContentProvider
 from ghrah.ability.versions import capture_ability_version
 from ghrah.chat.factory import ChatMessageFactory
@@ -155,6 +160,103 @@ async def test_relative_paths_cannot_escape_granted_members(content, path):
     _, provider, _, _, _ = content
     with pytest.raises((ValueError, AccessError)):
         await provider.load_skill("reports/guide", path=path)
+
+
+@pytest.mark.parametrize(
+    ("media_type", "allowed"),
+    [
+        ("text/markdown", True),
+        ("application/json", True),
+        ("Application/JSON; charset=utf-8", True),
+        ("application/yaml", True),
+        ("application/octet-stream", False),
+        ("image/png", False),
+    ],
+)
+def test_is_loadable_text_allows_structured_text(media_type, allowed):
+    assert is_loadable_text(media_type) is allowed
+
+
+def _chunk(media_type: str, data: bytes) -> ContentChunk:
+    return ContentChunk(
+        description=ContentDescription(
+            instance_id="reporting",
+            version_digest="version",
+            member="skill/guide/assets/example",
+            path="skills/guide/assets/example.json",
+            media_type=media_type,
+            digest="sha256:example",
+            total_bytes=len(data),
+        ),
+        offset=0,
+        data=data,
+        next_offset=None,
+    )
+
+
+def test_json_chunk_is_utf8_and_binary_stays_base64():
+    text = _chunk("application/json", b'{"slot":"length"}\n')
+    result = text.to_json_result()
+    assert result.encoding == "utf-8"
+    assert result.content == '{"slot":"length"}\n'
+    binary = _chunk("application/octet-stream", bytes([0, 255]))
+    encoded = binary.to_json_result()
+    assert encoded.encoding == "base64"
+    assert base64.b64decode(encoded.content) == bytes([0, 255])
+
+
+async def test_json_asset_loads_as_text_and_binary_stays_rejected(tmp_path):
+    source = tmp_path / "source"
+    shutil.copytree(EXAMPLE, source)
+    payload = '{"slot":"length"}\n'
+    (source / "skills/guide/assets/example.json").write_text(payload, encoding="utf-8")
+    definition_path = source / "ability.yaml"
+    definition = definition_path.read_text(encoding="utf-8")
+    needle = "      assets:\n        mark:\n"
+    assert needle in definition
+    definition_path.write_text(
+        definition.replace(
+            needle,
+            "      assets:\n"
+            "        example:\n"
+            "          path: skills/guide/assets/example.json\n"
+            "          media_type: application/json\n"
+            "        mark:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    runs = {ALICE: "alice-run"}
+    store = await AbilityAccessStore.open(
+        tmp_path / "project.db",
+        "project",
+        operators=frozenset({"deployment"}),
+        runs=runs.get,
+    )
+    try:
+        version = capture_ability_version(definition_path.read_text(encoding="utf-8"), root=source)
+        await store.commit_version(ADMIN, version)
+        await store.select_instance(ADMIN, "reporting", version.digest, tmp_path)
+        await store.register_agent(ADMIN, ALICE)
+        await store.grant(
+            ADMIN,
+            ALICE,
+            GrantAbilityRequest(
+                alias="reports",
+                instance_id="reporting",
+                whole_container=True,
+                expected_revision=0,
+            ),
+        )
+        provider = LocalGrantedContentProvider(store, ALICE)
+        provider.bind_run(runs[ALICE])
+        loaded = await provider.load_skill("reports/guide", path="assets/example.json")
+        assert loaded["content"] == payload
+        assert loaded["media_type"] == "application/json"
+        with pytest.raises(ValueError, match="有界文本"):
+            await provider.load_skill("reports/guide", path="assets/mark.bin")
+    finally:
+        await store.close()
 
 
 async def test_binary_is_explicit_and_not_inserted_as_text(content):
