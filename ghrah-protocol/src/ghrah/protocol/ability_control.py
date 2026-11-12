@@ -31,12 +31,26 @@ __all__ = [
     "AbilityBoundToolView",
     "AbilityChangeView",
     "AbilityChangesPage",
+    "AbilityContentResourceView",
+    "AbilityExecutionView",
     "AbilityGrantPolicyView",
     "AbilityGrantView",
     "AbilityInstanceVersionView",
     "AbilityInstanceView",
     "AbilityInstancesView",
     "AbilityLifecycleView",
+    "AbilityMcpMemberView",
+    "AbilityMcpProbeErrorView",
+    "AbilityMcpProbePhase",
+    "AbilityMcpProbeReason",
+    "AbilityMcpProbeRequest",
+    "AbilityMcpProbeView",
+    "AbilityMcpResourceView",
+    "AbilityMcpServerInfoView",
+    "AbilityMcpSnapshotView",
+    "AbilityMcpToolView",
+    "AbilityNamedResourceView",
+    "AbilityOperationMemberView",
     "AbilityPackageCatalogView",
     "AbilityPackageDetailView",
     "AbilityPackageGroupAgentView",
@@ -45,8 +59,10 @@ __all__ = [
     "AbilityPackageGroupView",
     "AbilityPackageGroupsView",
     "AbilityPackageVersionDetail",
+    "AbilityPackageVersionProfileView",
     "AbilityPackageVersionRow",
     "AbilityPendingRespawnView",
+    "AbilitySkillMemberView",
     "AbilitySurfaceEntryView",
     "AbilitySurfaceView",
     "AbilityTreeChangeResult",
@@ -76,6 +92,7 @@ class AbilityApiFeatures(TreeModel):
     versions_write: bool = False
     packages_read: bool = False
     packages_install: bool = False
+    mcp_probe: bool = False
     surface_write: bool = False
 
 
@@ -292,6 +309,215 @@ class AbilityPackageDetailView(TreeModel):
     name: str
     full_name: str
     versions: list[AbilityPackageVersionDetail] = Field(default_factory=list)
+
+
+class AbilityContentResourceView(TreeModel):
+    """包内一个静态文件的位置与摘要；``path`` 必须是包内相对路径。"""
+
+    path: str
+    media_type: str
+    size: int | None = Field(default=None, ge=0)
+    digest: str | None = None
+
+
+class AbilityNamedResourceView(AbilityContentResourceView):
+    """技能附件：在内容资源上补一个包内键。"""
+
+    key: str
+
+
+class AbilityExecutionView(TreeModel):
+    """一次调用的执行约束；只读镜像定义面的 ``execution``。"""
+
+    mode: Literal["request"]
+    timeout_ms: int = Field(ge=1)
+    cancellation: Literal["cooperative", "unsupported"]
+    on_revoke: Literal["drain", "request_cancel"]
+    retry: Literal["never"]
+
+
+class AbilityMcpMemberView(TreeModel):
+    """MCP 成员的服务器引用与远端原始工具名；不含连接参数。"""
+
+    server: str
+    tool: str
+
+
+class AbilityOperationMemberView(TreeModel):
+    """版本画像里的一个可执行成员；字段是定义面的只读裁切。"""
+
+    key: str
+    title: str
+    description: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+    effects: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    resources: dict[str, Any]
+    permissions: dict[str, Any]
+    expose: bool = True
+    execution: AbilityExecutionView
+    mcp: AbilityMcpMemberView | None = None
+    entry: AbilityContentResourceView | None = None
+
+
+class AbilitySkillMemberView(TreeModel):
+    """版本画像里的一个技能成员：正文与三类附件的包内相对路径。"""
+
+    key: str
+    title: str
+    description: str
+    tags: list[str] = Field(default_factory=list)
+    body: AbilityContentResourceView
+    assets: list[AbilityNamedResourceView] = Field(default_factory=list)
+    references: list[AbilityNamedResourceView] = Field(default_factory=list)
+    scripts: list[AbilityNamedResourceView] = Field(default_factory=list)
+
+
+class AbilityMcpSnapshotView(TreeModel):
+    """已安装 MCP 包的安装快照健康；``server`` 是 agentconf 服务器名，不是 URL。"""
+
+    server: str
+    fetched_at: str
+    stale: bool
+    last_error: str | None = None
+
+
+class AbilityPackageVersionProfileView(TreeModel):
+    """一个能力包版本的只读画像：包级事实 + 成员明细 + MCP 快照。
+
+    只出现在版本画像端点
+    ``GET /ability-packages/{namespace}/{name}/versions/{version}``；
+    旧目录/详情端点形状不变。``path`` 一律包内相对路径，不返回安装根。
+    """
+
+    format: Literal["ghrah.ability-control.package-version.v1"] = (
+        "ghrah.ability-control.package-version.v1"
+    )
+    namespace: str
+    name: str
+    full_name: str
+    version: str
+    origin: Literal["builtin", "installed"]
+    definition_origin: Literal["source", "mcp"] | None = None
+    title: str | None = None
+    description: str | None = None
+    lock_state: str
+    problem: str | None = None
+    shadowed_builtin: bool = False
+    verify: AbilityVerifyView | None = None
+    mcp: AbilityMcpSnapshotView | None = None
+    operations: list[AbilityOperationMemberView] = Field(default_factory=list)
+    skills: list[AbilitySkillMemberView] = Field(default_factory=list)
+
+
+#: 探测阶段；与 Core ``probe_server`` 报告的阶段一致。
+AbilityMcpProbePhase = Literal[
+    "config",
+    "connect",
+    "initialize",
+    "list_tools",
+    "list_resources",
+]
+
+#: 探测失败的封闭分类；前端按该枚举映射固定文案。
+AbilityMcpProbeReason = Literal[
+    "config_invalid",
+    "server_not_configured",
+    "credential_missing",
+    "unsupported_transport",
+    "sdk_unavailable",
+    "agentconf_unavailable",
+    "connect_failed",
+    "auth_failed",
+    "endpoint_not_found",
+    "method_not_allowed",
+    "rate_limited",
+    "server_error",
+    "timeout",
+    "protocol_error",
+    "too_large",
+    "probe_in_progress",
+    "probe_busy",
+    "internal",
+]
+
+
+class AbilityMcpProbeRequest(TreeModel):
+    """MCP 探测请求；只接受超时与是否查询资源，不接受 URL/凭据。"""
+
+    timeout_ms: int = Field(default=5000, ge=1000, le=10000)
+    include_resources: bool = False
+
+
+class AbilityMcpServerInfoView(TreeModel):
+    """对端 ``server_info``；握手失败时两个字段都可能为空。"""
+
+    name: str | None = None
+    version: str | None = None
+
+
+class AbilityMcpToolView(TreeModel):
+    """探测列出的一个远端工具；schema 原样透传，不执行。"""
+
+    name: str
+    title: str | None = None
+    description: str | None = None
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    read_only_hint: bool | None = None
+
+
+class AbilityMcpResourceView(TreeModel):
+    """探测列出的一个远端资源清单项；不含资源正文。"""
+
+    uri: str
+    name: str
+    title: str | None = None
+    description: str | None = None
+    mime_type: str | None = None
+    size: int | None = Field(default=None, ge=0)
+
+
+class AbilityMcpProbeErrorView(TreeModel):
+    """探测失败的封闭分类；``message`` 已脱敏，不承诺可翻译。"""
+
+    reason: AbilityMcpProbeReason
+    message: str
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    hint: str | None = None
+
+
+class AbilityMcpProbeView(TreeModel):
+    """一次只读探测的结果；成功与失败共用同一形状，HTTP 一律 200。"""
+
+    format: Literal["ghrah.ability-control.mcp-probe.v1"] = "ghrah.ability-control.mcp-probe.v1"
+    namespace: str
+    name: str
+    version: str
+    server: str
+    transport: Literal["streamable_http"] = "streamable_http"
+    ok: bool
+    phase: AbilityMcpProbePhase
+    elapsed_ms: int = Field(ge=0)
+    protocol_version: str | None = None
+    server_info: AbilityMcpServerInfoView | None = None
+    tools: list[AbilityMcpToolView] = Field(default_factory=list)
+    tool_count: int = Field(ge=0)
+    truncated: bool = False
+    resources_supported: bool = False
+    resources: list[AbilityMcpResourceView] = Field(default_factory=list)
+    resource_count: int = Field(ge=0)
+    error: AbilityMcpProbeErrorView | None = None
+
+    @model_validator(mode="after")
+    def error_matches_ok(self) -> AbilityMcpProbeView:
+        """成功时不得带错误；失败时必须给出分类错误。"""
+        if self.ok and self.error is not None:
+            raise ValueError("探测成功时 error 必须为 null")
+        if not self.ok and self.error is None:
+            raise ValueError("探测失败时必须给出 error")
+        return self
 
 
 class AbilityInstanceVersionView(TreeModel):

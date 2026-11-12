@@ -4,6 +4,9 @@ import {
   AbilityAdminViewSchema,
   AbilityApiErrorResponseSchema,
   AbilityApiStatusSchema,
+  AbilityMcpProbeRequestSchema,
+  AbilityMcpProbeViewSchema,
+  AbilityPackageVersionProfileViewSchema,
   AbilityTreeChangeResultSchema,
 } from "./ability-control.js";
 
@@ -68,5 +71,104 @@ describe("ability control contracts", () => {
       }).error.code,
     ).toBe("conflict");
     expect(() => AbilityApiErrorResponseSchema.parse({ error: { message: "no code" } })).toThrow();
+  });
+
+  it("parses a package version profile and rejects install-root fields", () => {
+    const parsed = AbilityPackageVersionProfileViewSchema.parse({
+      namespace: "ghrah",
+      name: "fs",
+      full_name: "ghrah.fs",
+      version: "0.1.0",
+      origin: "builtin",
+      definition_origin: "source",
+      lock_state: "builtin",
+      operations: [
+        {
+          key: "read_file",
+          title: "Read file",
+          description: "Read a file",
+          input_schema: { type: "object" },
+          output_schema: { type: "object" },
+          resources: {},
+          permissions: {},
+          execution: {
+            mode: "request",
+            timeout_ms: 30000,
+            cancellation: "cooperative",
+            on_revoke: "drain",
+            retry: "never",
+          },
+        },
+      ],
+    });
+    expect(parsed.format).toBe("ghrah.ability-control.package-version.v1");
+    expect(parsed.definition_origin).toBe("source");
+    expect(parsed.operations[0]?.entry).toBeNull();
+    expect(parsed.mcp).toBeNull();
+    expect(() =>
+      AbilityPackageVersionProfileViewSchema.parse({
+        namespace: "ghrah",
+        name: "fs",
+        full_name: "ghrah.fs",
+        version: "0.1.0",
+        origin: "builtin",
+        lock_state: "builtin",
+        root: "/home/user/.ghrah/ability",
+      }),
+    ).toThrow();
+  });
+
+  it("bounds the MCP probe timeout and keeps error in sync with ok", () => {
+    expect(AbilityMcpProbeRequestSchema.parse({})).toEqual({
+      timeout_ms: 5000,
+      include_resources: false,
+    });
+    expect(() => AbilityMcpProbeRequestSchema.parse({ timeout_ms: 999 })).toThrow();
+    expect(() => AbilityMcpProbeRequestSchema.parse({ timeout_ms: 10001 })).toThrow();
+    expect(() =>
+      AbilityMcpProbeRequestSchema.parse({ timeout_ms: 5000, url: "https://example.com" }),
+    ).toThrow();
+
+    const failed = AbilityMcpProbeViewSchema.parse({
+      namespace: "mcp",
+      name: "fetch",
+      version: "1.0.0",
+      server: "fetch",
+      ok: false,
+      phase: "connect",
+      elapsed_ms: 20,
+      tool_count: 0,
+      resource_count: 0,
+      error: { reason: "timeout", message: "probe timed out" },
+    });
+    expect(failed.transport).toBe("streamable_http");
+    expect(failed.error?.reason).toBe("timeout");
+    expect(() =>
+      AbilityMcpProbeViewSchema.parse({
+        namespace: "mcp",
+        name: "fetch",
+        version: "1.0.0",
+        server: "fetch",
+        ok: false,
+        phase: "connect",
+        elapsed_ms: 20,
+        tool_count: 0,
+        resource_count: 0,
+      }),
+    ).toThrow();
+    expect(() =>
+      AbilityMcpProbeViewSchema.parse({
+        namespace: "mcp",
+        name: "fetch",
+        version: "1.0.0",
+        server: "fetch",
+        ok: false,
+        phase: "connect",
+        elapsed_ms: 20,
+        tool_count: 0,
+        resource_count: 0,
+        error: { reason: "unknown_reason", message: "x" },
+      }),
+    ).toThrow();
   });
 });

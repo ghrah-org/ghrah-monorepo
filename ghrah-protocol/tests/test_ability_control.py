@@ -9,12 +9,17 @@ from pydantic import ValidationError
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiErrorResponse,
+    AbilityApiFeatures,
     AbilityApiStatus,
+    AbilityMcpProbeRequest,
+    AbilityMcpProbeView,
+    AbilityMcpSnapshotView,
     AbilityPackageCatalogView,
     AbilityPackageGroupProjectView,
     AbilityPackageGroupsView,
     AbilityPackageGroupVersionView,
     AbilityPackageGroupView,
+    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.agent_control import AgentCreateRequest, AgentSpecPatch
@@ -149,3 +154,216 @@ def test_error_response_requires_code() -> None:
     assert parsed.error.code == "conflict"
     with pytest.raises(ValidationError):
         AbilityApiErrorResponse.model_validate({"error": {"message": "no code"}})
+
+
+def _profile_payload() -> dict[str, object]:
+    """一个内置 source 包的版本画像载荷：一个操作 + 一个技能（含附件）。"""
+    return {
+        "namespace": "ghrah",
+        "name": "fs",
+        "full_name": "ghrah.fs",
+        "version": "0.1.0",
+        "origin": "builtin",
+        "definition_origin": "source",
+        "title": "File system",
+        "description": "Read and write files",
+        "lock_state": "builtin",
+        "operations": [
+            {
+                "key": "read_file",
+                "title": "Read file",
+                "description": "Read a file from an allowed root",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "effects": ["fs_read"],
+                "tags": ["fs"],
+                "resources": {},
+                "permissions": {"fs_read_only": True},
+                "expose": True,
+                "execution": {
+                    "mode": "request",
+                    "timeout_ms": 30000,
+                    "cancellation": "cooperative",
+                    "on_revoke": "drain",
+                    "retry": "never",
+                },
+                "entry": {"path": "operations/read_file.py", "media_type": "text/x-python"},
+            }
+        ],
+        "skills": [
+            {
+                "key": "guide",
+                "title": "Guide",
+                "description": "How to use the package",
+                "body": {"path": "skills/guide/SKILL.md", "media_type": "text/markdown"},
+                "assets": [
+                    {
+                        "key": "diagram",
+                        "path": "skills/guide/assets/diagram.png",
+                        "media_type": "image/png",
+                        "size": 12,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_package_version_profile_parses_member_details() -> None:
+    profile = AbilityPackageVersionProfileView.model_validate(_profile_payload())
+    assert profile.format == "ghrah.ability-control.package-version.v1"
+    assert profile.definition_origin == "source"
+    assert profile.verify is None and profile.mcp is None
+    operation = profile.operations[0]
+    assert operation.key == "read_file"
+    assert operation.expose is True
+    assert operation.execution.timeout_ms == 30000
+    assert operation.mcp is None
+    assert operation.entry is not None
+    assert operation.entry.path == "operations/read_file.py"
+    assert operation.entry.size is None
+    skill = profile.skills[0]
+    assert skill.body.path == "skills/guide/SKILL.md"
+    assert skill.assets[0].key == "diagram"
+    assert skill.assets[0].size == 12
+    assert skill.references == [] and skill.scripts == []
+
+
+def test_package_version_profile_degrades_and_rejects_absolute_paths_field() -> None:
+    degraded = AbilityPackageVersionProfileView.model_validate(
+        {
+            "namespace": "sample",
+            "name": "reader",
+            "full_name": "sample.reader",
+            "version": "1.2.3",
+            "origin": "installed",
+            "lock_state": "present",
+            "problem": "definition_unreadable",
+        }
+    )
+    assert degraded.definition_origin is None
+    assert degraded.operations == [] and degraded.skills == []
+    # 画像不允许携带安装根/包目录绝对路径这类字段。
+    with pytest.raises(ValidationError):
+        AbilityPackageVersionProfileView.model_validate(
+            {**_profile_payload(), "root": "/home/user/.ghrah/ability"}
+        )
+
+
+def test_package_version_profile_carries_mcp_snapshot_health() -> None:
+    profile = AbilityPackageVersionProfileView.model_validate(
+        {
+            **_profile_payload(),
+            "origin": "installed",
+            "definition_origin": "mcp",
+            "lock_state": "present",
+            "mcp": {
+                "server": "fetch",
+                "fetched_at": "2026-11-12T00:00:00Z",
+                "stale": False,
+            },
+        }
+    )
+    assert profile.mcp is not None
+    assert profile.mcp.server == "fetch"
+    assert profile.mcp.last_error is None
+    with pytest.raises(ValidationError):
+        AbilityMcpSnapshotView.model_validate(
+            {
+                "server": "fetch",
+                "fetched_at": "2026-11-12T00:00:00Z",
+                "stale": False,
+                "url": "https://example.com/mcp",
+            }
+        )
+
+
+def test_mcp_probe_request_defaults_and_bounds() -> None:
+    request = AbilityMcpProbeRequest()
+    assert request.timeout_ms == 5000
+    assert request.include_resources is False
+    assert AbilityMcpProbeRequest(timeout_ms=1000).timeout_ms == 1000
+    assert AbilityMcpProbeRequest(timeout_ms=10000).timeout_ms == 10000
+    for value in (999, 10001):
+        with pytest.raises(ValidationError):
+            AbilityMcpProbeRequest(timeout_ms=value)
+    with pytest.raises(ValidationError):
+        AbilityMcpProbeRequest(url="https://example.com/mcp")
+
+
+def _probe_payload() -> dict[str, object]:
+    return {
+        "namespace": "mcp",
+        "name": "fetch",
+        "version": "1.0.0",
+        "server": "fetch",
+        "ok": True,
+        "phase": "list_tools",
+        "elapsed_ms": 12,
+        "protocol_version": "2025-06-18",
+        "server_info": {"name": "remote", "version": "1.2.3"},
+        "tools": [
+            {
+                "name": "echo",
+                "title": "Echo",
+                "input_schema": {"type": "object"},
+                "output_schema": None,
+            }
+        ],
+        "tool_count": 1,
+        "resources_supported": False,
+        "resource_count": 0,
+    }
+
+
+def test_mcp_probe_view_keeps_ok_and_error_in_sync() -> None:
+    probe = AbilityMcpProbeView.model_validate(_probe_payload())
+    assert probe.format == "ghrah.ability-control.mcp-probe.v1"
+    assert probe.transport == "streamable_http"
+    assert probe.error is None
+    assert probe.server_info is not None and probe.server_info.name == "remote"
+    assert probe.tools[0].name == "echo" and probe.tools[0].output_schema is None
+    assert probe.truncated is False
+
+    failed = AbilityMcpProbeView.model_validate(
+        {
+            **_probe_payload(),
+            "ok": False,
+            "phase": "connect",
+            "error": {"reason": "timeout", "message": "probe timed out"},
+        }
+    )
+    assert failed.error is not None
+    assert failed.error.reason == "timeout"
+    assert failed.error.http_status is None
+
+    with pytest.raises(ValidationError):
+        AbilityMcpProbeView.model_validate(
+            {
+                **_probe_payload(),
+                "error": {"reason": "internal", "message": "unexpected"},
+            }
+        )
+    with pytest.raises(ValidationError):
+        AbilityMcpProbeView.model_validate({**_probe_payload(), "ok": False})
+    with pytest.raises(ValidationError):
+        AbilityMcpProbeView.model_validate(
+            {
+                **_probe_payload(),
+                "ok": False,
+                "error": {"reason": "unknown_reason", "message": "x"},
+            }
+        )
+    with pytest.raises(ValidationError):
+        AbilityMcpProbeView.model_validate({**_probe_payload(), "url": "https://example.com/mcp"})
+
+
+def test_mcp_probe_resources_are_separate_from_support_flag() -> None:
+    empty = AbilityMcpProbeView.model_validate({**_probe_payload(), "resources_supported": True})
+    assert empty.resources_supported is True
+    assert empty.resources == [] and empty.resource_count == 0
+
+
+def test_features_mcp_probe_defaults_off() -> None:
+    assert AbilityApiFeatures().mcp_probe is False
+    assert AbilityApiFeatures(mcp_probe=True).mcp_probe is True
