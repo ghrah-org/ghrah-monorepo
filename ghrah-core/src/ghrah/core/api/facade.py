@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from ghrah.protocol.ability_control import (
@@ -433,7 +433,7 @@ class _Mailbox:
         self,
         *,
         sender: str,
-        recipient_ids: list[str],
+        recipient_ids: Sequence[str],
         content: str,
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
