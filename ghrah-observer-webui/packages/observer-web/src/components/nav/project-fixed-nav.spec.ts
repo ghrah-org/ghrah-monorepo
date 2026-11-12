@@ -35,6 +35,7 @@ describe("ProjectFixedNav", () => {
       [{ kind: "changes", projectId: "p1" }],
       [{ kind: "agents", projectId: "p1" }],
       [{ kind: "assembly", projectId: "p1" }],
+      [{ kind: "artifacts", projectId: "p1" }],
       [{ kind: "project", projectId: "p1" }],
     ]);
   });

@@ -22,6 +22,7 @@ import {
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AssemblyPanel from "@/components/ability/assembly-panel.vue";
+import ArtifactsPanel from "@/components/artifacts/artifacts-panel.vue";
 import ActionChainPanel from "@/components/action-chain/action-chain-panel.vue";
 import AgentList from "@/components/agent-list.vue";
 import AgentsOverviewPanel from "@/components/agents-overview-panel.vue";
@@ -53,7 +54,7 @@ type AgentTab = {
 };
 type ProjectTab = {
   id: string;
-  kind: "changes" | "project" | "agents" | "assembly";
+  kind: "changes" | "project" | "agents" | "assembly" | "artifacts";
   target: { projectId: string };
   fallbackLabel: string;
 };
@@ -158,11 +159,20 @@ function tabLabel(tab: WorkspaceTab): string {
   if (tab.kind === "changes") return t("dashboard.tabChanges", { project: projectName });
   if (tab.kind === "agents") return t("dashboard.tabAgents", { project: projectName });
   if (tab.kind === "assembly") return t("dashboard.tabAssembly", { project: projectName });
+  if (tab.kind === "artifacts") return t("dashboard.tabArtifacts", { project: projectName });
   return t("dashboard.tabProject", { project: projectName });
 }
 
 function tabIcon(kind: WorkspaceTab["kind"]): string {
-  return { room: "#", agent: "◎", changes: "△", agents: "◆", assembly: "◇", project: "▣" }[kind];
+  return {
+    room: "#",
+    agent: "◎",
+    changes: "△",
+    agents: "◆",
+    assembly: "◇",
+    artifacts: "▤",
+    project: "▣",
+  }[kind];
 }
 
 function openAssembly(target: { projectId: string; agentId: string }) {
@@ -431,6 +441,11 @@ watch(
           />
           <AssemblyPanel
             v-else-if="activeTab?.kind === 'assembly'"
+            :key="activeTab.id"
+            :project-id="activeTab.target.projectId"
+          />
+          <ArtifactsPanel
+            v-else-if="activeTab?.kind === 'artifacts'"
             :key="activeTab.id"
             :project-id="activeTab.target.projectId"
           />
