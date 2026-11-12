@@ -487,8 +487,12 @@ export default {
       toTarget: "To {'@'}{name}...",
       broadcast: "Message this room (broadcast); {'@'}name or chips to target...",
       attach: "Add attachment",
+      targets: "Targets",
+      targetAll: "All",
+      targetCount: "{count} selected",
+      selectAll: "Select all",
+      clearAll: "Clear all",
       send: "Send",
-      hint: "Enter to send · Shift+Enter for newline",
     },
     resize: {
       handle: "Resize chat column",

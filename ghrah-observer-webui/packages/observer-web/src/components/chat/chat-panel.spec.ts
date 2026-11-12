@@ -251,19 +251,20 @@ describe("ChatPanel", () => {
     expect(wrapper.find(".entry-error").exists()).toBe(true);
   });
 
-  it("targeted send: chip 选中后 roomSend 携带 targets", async () => {
+  it("targeted send: 目标下拉选择后 roomSend 携带非空 targets", async () => {
     const { rooms } = setup();
     rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend", "backend"])], "active");
     rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    // 会话头也有 type="button" 的“详情”按钮，chip 只在输入表单内查找
-    const chips = wrapper.find("form").findAll('button[type="button"]');
-    await chips[0].trigger("click"); // @frontend
+    // 默认选中第一个 agent；再从下拉勾选 backend。
+    await wrapper.find(".chat-target-trigger").trigger("click");
+    const options = wrapper.findAll(".chat-target-option");
+    await options[1].find('input[type="checkbox"]').trigger("change");
     await wrapper.find("textarea").setValue("please review");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend"], []);
+    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend", "backend"], []);
   });
 
   it("entry 带 targets 时 header 显示定向标记", async () => {

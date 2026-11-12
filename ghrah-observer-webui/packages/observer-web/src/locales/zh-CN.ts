@@ -462,8 +462,12 @@ export default {
       toTarget: "发送给 {'@'}{name}...",
       broadcast: "向此 room 广播；可用 {'@'}name 或 chips 指定目标...",
       attach: "添加附件",
+      targets: "发送目标",
+      targetAll: "全部",
+      targetCount: "{count} 个",
+      selectAll: "全选",
+      clearAll: "取消全选",
       send: "发送",
-      hint: "Enter 发送 · Shift+Enter 换行",
     },
     resize: {
       handle: "调整聊天区宽度",

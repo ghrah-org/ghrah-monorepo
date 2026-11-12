@@ -41,37 +41,118 @@ function mountInput(
   });
 }
 
+async function openTargets(wrapper: ReturnType<typeof mountInput>) {
+  await wrapper.find(".chat-target-trigger").trigger("click");
+}
+
+function targetOptions(wrapper: ReturnType<typeof mountInput>) {
+  return wrapper.findAll(".chat-target-option");
+}
+
+async function toggleOption(wrapper: ReturnType<typeof mountInput>, name: string) {
+  const option = targetOptions(wrapper).find((item) => item.text().includes(name));
+  await option!.find('input[type="checkbox"]').trigger("change");
+}
+
+function targetButton(wrapper: ReturnType<typeof mountInput>) {
+  return wrapper.find(".chat-target-trigger");
+}
+
 describe("MessageInput", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
   });
 
-  it("broadcast: emits empty targets with content", async () => {
+  it("默认选中第一个 agent，发送 targets 非空", async () => {
     const wrapper = mountInput();
+    expect(targetButton(wrapper).text()).toContain("@frontend");
     await wrapper.find("textarea").setValue("hello room");
     await wrapper.find("form").trigger("submit");
-    const sendEvents = wrapper.emitted("send");
-    expect(sendEvents).toBeTruthy();
-    expect(sendEvents![0]).toEqual([[], "hello room", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "hello room", []]);
   });
 
-  it("chip 多选：emits selected targets", async () => {
+  it("不再渲染底部快捷键说明行", () => {
     const wrapper = mountInput();
-    const chips = wrapper
-      .findAll('button[type="button"]')
-      .filter((button) => button.text().startsWith("@"));
-    expect(chips.map((c) => c.text())).toEqual(["@frontend", "@backend"]);
-    await chips[0].trigger("click");
-    await wrapper.find("textarea").setValue("hi");
-    await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "hi", []]);
+    expect(wrapper.text()).not.toContain("Enter to send");
+    expect(wrapper.find(".chat-hint").exists()).toBe(false);
   });
 
-  it("@前导解析：targets 合并、content 剥离 mention", async () => {
+  it("附件入口是图标按钮，aria-label 保留且可点击", async () => {
     const wrapper = mountInput();
-    await wrapper.find("textarea").setValue("@frontend 看一下这个");
+    const button = wrapper.find('button[aria-label="Add attachment"]');
+    expect(button.exists()).toBe(true);
+    expect(button.find("svg").exists()).toBe(true);
+    const click = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => undefined);
+    await button.trigger("click");
+    expect(click).toHaveBeenCalledOnce();
+    click.mockRestore();
+  });
+
+  it("目标下拉：默认第一个 agent、复选列表与全选/取消全选", async () => {
+    const wrapper = mountInput();
+    await openTargets(wrapper);
+    const options = targetOptions(wrapper);
+    expect(options.map((item) => item.text())).toEqual(["@frontend", "@backend"]);
+    const boxes = wrapper.findAll('.chat-target-option input[type="checkbox"]');
+    expect((boxes[0].element as HTMLInputElement).checked).toBe(true);
+    expect((boxes[1].element as HTMLInputElement).checked).toBe(false);
+
+    await wrapper.findAll(".chat-target-action")[0].trigger("click");
+    expect(targetButton(wrapper).text()).toContain("All");
+    expect(
+      wrapper
+        .findAll('.chat-target-option input[type="checkbox"]')
+        .every((box) => (box.element as HTMLInputElement).checked),
+    ).toBe(true);
+
+    await wrapper.findAll(".chat-target-action")[1].trigger("click");
+    expect(targetButton(wrapper).text()).toContain("@frontend");
+  });
+
+  it("目标下拉：多选显示数量，全选显示全部", async () => {
+    const wrapper = mountInput({ members: memberList(["a", "b", "c"]) });
+    await openTargets(wrapper);
+    await toggleOption(wrapper, "b");
+    expect(targetButton(wrapper).text()).toContain("2 selected");
+    await toggleOption(wrapper, "c");
+    expect(targetButton(wrapper).text()).toContain("All");
+  });
+
+  it("取消最后一个目标时至少保留一个，避免退回广播", async () => {
+    const wrapper = mountInput();
+    await openTargets(wrapper);
+    await toggleOption(wrapper, "frontend");
+    expect(targetButton(wrapper).text()).toContain("@frontend");
+    expect(
+      (wrapper.findAll('.chat-target-option input[type="checkbox"]')[0].element as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+  });
+
+  it("目标下拉：点击外部与 Esc 关闭", async () => {
+    const wrapper = mountInput();
+    await openTargets(wrapper);
+    expect(wrapper.find(".chat-target-menu").exists()).toBe(true);
+    document.dispatchEvent(new Event("pointerdown"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".chat-target-menu").exists()).toBe(false);
+
+    await openTargets(wrapper);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".chat-target-menu").exists()).toBe(false);
+  });
+
+  it("@前导解析：与下拉选择合并去重、content 剥离 mention", async () => {
+    const wrapper = mountInput();
+    await wrapper.find("textarea").setValue("@backend 看一下这个");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "看一下这个", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend", "backend"], "看一下这个", []]);
+
+    const second = mountInput();
+    await second.find("textarea").setValue("@frontend hi");
+    await second.find("form").trigger("submit");
+    expect(second.emitted("send")![0]).toEqual([["frontend"], "hi", []]);
   });
 
   it("@补全下拉：候选来自 room 成员，点选并入 targets", async () => {
@@ -89,18 +170,16 @@ describe("MessageInput", () => {
     const wrapper = mountInput();
     await wrapper.find("textarea").setValue("@ghost hello");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([[], "@ghost hello", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "@ghost hello", []]);
   });
 
-  it("clears input and targets after submit", async () => {
+  it("clears input and resets targets after submit", async () => {
     const wrapper = mountInput();
-    const chips = wrapper.findAll('button[type="button"]');
-    await chips[0].trigger("click");
     const input = wrapper.find("textarea");
     await input.setValue("hi");
     await wrapper.find("form").trigger("submit");
     expect((input.element as HTMLTextAreaElement).value).toBe("");
-    expect(wrapper.findAll('button[type="button"]')[0].classes()).not.toContain("bg-blue-100");
+    expect(targetButton(wrapper).text()).toContain("@frontend");
   });
 
   it("does not emit on empty content", async () => {
@@ -110,21 +189,20 @@ describe("MessageInput", () => {
     expect(wrapper.emitted("send")).toBeFalsy();
   });
 
-  it("disables input and button when disabled", () => {
+  it("disables input and buttons when disabled", () => {
     const wrapper = mountInput({ disabled: true });
     expect(wrapper.find("textarea").attributes("disabled")).toBeDefined();
     expect(wrapper.find('button[type="submit"]').attributes("disabled")).toBeDefined();
+    expect(targetButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
-  it("无成员时不渲染 target chips（附件按钮仍保留）", () => {
+  it("无 agent 成员时不渲染目标下拉（附件按钮仍保留）", () => {
     const wrapper = mountInput({ members: memberList([]) });
-    const chips = wrapper
-      .findAll('button[type="button"]')
-      .filter((button) => button.text().startsWith("@"));
-    expect(chips).toHaveLength(0);
+    expect(wrapper.find(".chat-target-trigger").exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Add attachment"]').exists()).toBe(true);
   });
 
-  it("renders member names but emits stable IDs for chips and mentions", async () => {
+  it("renders member names but emits stable IDs for targets and mentions", async () => {
     const wrapper = mountInput({
       members: [
         {
@@ -135,7 +213,7 @@ describe("MessageInput", () => {
         },
       ],
     });
-    expect(wrapper.find('button[type="button"]').text()).toBe("@shuoxi");
+    expect(targetButton(wrapper).text()).toContain("@shuoxi");
     await wrapper.find("textarea").setValue("@shuoxi 下午好");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.emitted("send")![0]).toEqual([["stable-shuoxi"], "下午好", []]);
@@ -146,7 +224,7 @@ describe("MessageInput", () => {
     const textarea = wrapper.find("textarea");
     await textarea.setValue("first line");
     await textarea.trigger("keydown", { key: "Enter" });
-    expect(wrapper.emitted("send")![0]).toEqual([[], "first line", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "first line", []]);
 
     await textarea.setValue("first line\nsecond");
     await textarea.trigger("keydown", { key: "Enter", shiftKey: true });
@@ -159,7 +237,7 @@ describe("MessageInput", () => {
     const textarea = wrapper.find("textarea");
     await textarea.setValue("with modifier");
     await textarea.trigger("keydown", { key: "Enter", ctrlKey: true });
-    expect(wrapper.emitted("send")![0]).toEqual([[], "with modifier", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "with modifier", []]);
     await textarea.setValue("with meta");
     await textarea.trigger("keydown", { key: "Enter", metaKey: true });
     expect(wrapper.emitted("send")).toHaveLength(2);
@@ -171,11 +249,6 @@ describe("MessageInput", () => {
     await textarea.setValue("nihongo");
     await textarea.trigger("keydown", { key: "Enter", isComposing: true });
     expect(wrapper.emitted("send")).toBeFalsy();
-  });
-
-  it("renders key hint below input", () => {
-    const wrapper = mountInput();
-    expect(wrapper.text()).toContain("Enter to send · Shift+Enter for newline");
   });
 
   function pngFile(name = "shot.png"): File {
@@ -195,7 +268,7 @@ describe("MessageInput", () => {
     await vi.waitFor(() => expect(wrapper.find(".attachment-chip img").exists()).toBe(true));
     await wrapper.find("form").trigger("submit");
     expect(wrapper.emitted("send")![0]).toEqual([
-      [],
+      ["frontend"],
       "",
       [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
     ]);
@@ -240,7 +313,7 @@ describe("MessageInput", () => {
     expect(wrapper.find(".attachment-chip").exists()).toBe(false);
     await wrapper.find("textarea").setValue("still works");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([[], "still works", []]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "still works", []]);
   });
 
   it("文字 + 图片：正文与块同时 emit", async () => {
@@ -250,7 +323,7 @@ describe("MessageInput", () => {
     await wrapper.find("textarea").setValue("看这张图");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.emitted("send")![0]).toEqual([
-      [],
+      ["frontend"],
       "看这张图",
       [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
     ]);
@@ -275,7 +348,7 @@ describe("MessageInput", () => {
     await wrapper.find("textarea").setValue("看这个文件");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.emitted("send")![0]).toEqual([
-      [],
+      ["frontend"],
       "看这个文件",
       [
         {
@@ -313,7 +386,7 @@ describe("MessageInput", () => {
     expect(wrapper.text()).toContain("0:05");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.emitted("send")![0]).toEqual([
-      [],
+      ["frontend"],
       "",
       [
         {
