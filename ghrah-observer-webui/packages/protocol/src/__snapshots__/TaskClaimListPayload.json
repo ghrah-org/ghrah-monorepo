@@ -1,6 +1,6 @@
 {
-    "task_id":  "task-001",
-    "claimant_id":  null,
-    "state":  "submitted",
-    "limit":  50
+  "task_id": "task-001",
+  "claimant_id": null,
+  "state": "submitted",
+  "limit": 50
 }

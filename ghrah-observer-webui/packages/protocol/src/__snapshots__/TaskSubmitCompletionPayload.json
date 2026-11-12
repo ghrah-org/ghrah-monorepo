@@ -1,24 +1,24 @@
 {
-    "task_id":  "task-001",
-    "claimant_type":  "agent",
-    "claimant_id":  "agent:backend-dev",
-    "claimant_name":  "backend-dev",
-    "note":  "login flow implemented",
-    "evidence":  [
-                     {
-                         "kind":  "git_commit",
-                         "ref":  "abc1234",
-                         "digest":  "sha256:deadbeef",
-                         "payload":  {
-                                         "repo":  "ghrah"
-                                     }
-                     }
-                 ],
-    "provenance":  {
-                       "agent_id":  "agent:backend-dev",
-                       "session_id":  "sess-001",
-                       "branch_id":  null,
-                       "node_id":  "node-001"
-                   },
-    "expected_version":  7
+  "task_id": "task-001",
+  "claimant_type": "agent",
+  "claimant_id": "agent:backend-dev",
+  "claimant_name": "backend-dev",
+  "note": "login flow implemented",
+  "evidence": [
+    {
+      "kind": "git_commit",
+      "ref": "abc1234",
+      "digest": "sha256:deadbeef",
+      "payload": {
+        "repo": "ghrah"
+      }
+    }
+  ],
+  "provenance": {
+    "agent_id": "agent:backend-dev",
+    "session_id": "sess-001",
+    "branch_id": null,
+    "node_id": "node-001"
+  },
+  "expected_version": 7
 }

@@ -1,23 +1,19 @@
 {
-    "evidence_have":  0,
-    "evidence_need":  1,
-    "missing_evidence_kinds":  [
-                                   "git_commit"
-                               ],
-    "missing_checks":  [
-                           {
-                               "checker":  "commit_in_repo",
-                               "candidates":  [
-                                                  "task-commit-attribution"
-                                              ]
-                           }
-                       ],
-    "failed_checks":  [
-                          {
-                              "checker":  "tests_pass",
-                              "passed":  false,
-                              "detail":  "2 failed"
-                          }
-                      ],
-    "missing_approver":  "human"
+  "evidence_have": 0,
+  "evidence_need": 1,
+  "missing_evidence_kinds": ["git_commit"],
+  "missing_checks": [
+    {
+      "checker": "commit_in_repo",
+      "candidates": ["task-commit-attribution"]
+    }
+  ],
+  "failed_checks": [
+    {
+      "checker": "tests_pass",
+      "passed": false,
+      "detail": "2 failed"
+    }
+  ],
+  "missing_approver": "human"
 }

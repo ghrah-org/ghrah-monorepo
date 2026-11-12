@@ -146,7 +146,7 @@ export const useAgentsStore = defineStore("ghrah-agents", () => {
       retained.add(key);
       next.set(key, {
         ...target,
-          incarnationId: item.incarnation_id || "",
+        incarnationId: item.incarnation_id || "",
         recoveryMode: item.recovery_mode || "",
         runtimeStatus,
         runtimeError: item.runtime_error || "",
