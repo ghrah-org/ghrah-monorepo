@@ -30,7 +30,7 @@ async def mount_builtin_units(
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
     均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
-    + taskstore + task/desired_state）；full = 18（coexistence 7 +
+    + taskstore + task/desired_state）；full = 19（coexistence 7 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
     project/ability_control/agent_control/agentconf_control/media_control/
     room/recovery + room_filter）。
@@ -84,6 +84,7 @@ async def mount_builtin_units(
         from ghrah.subject.units.ability_control import AbilityControlUnit
         from ghrah.subject.units.agent_control import AgentControlUnit
         from ghrah.subject.units.agentconf_control import AgentconfControlUnit
+        from ghrah.subject.units.artifact_control import ArtifactControlUnit
         from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
         from ghrah.subject.units.media_control import MediaControlUnit
         from ghrah.subject.units.project import ProjectUnit
@@ -113,6 +114,9 @@ async def mount_builtin_units(
                 # 项目级附件库：requires PROJECT_MANAGER（ProjectUnit 之后）；
                 # REST 错误映射由 AbilityControlUnit 注册的处理器统一提供。
                 MediaControlUnit(config),
+                # 工作区浏览 + 产物只读面：requires PROJECT_MANAGER/WORKSPACE_MANAGER
+                # （ProjectUnit/WorkspaceUnit 之后）；REST 错误映射由 AbilityControlUnit 提供。
+                ArtifactControlUnit(config),
                 RoomUnit(config),
                 RecoveryUnit(config),
             ]

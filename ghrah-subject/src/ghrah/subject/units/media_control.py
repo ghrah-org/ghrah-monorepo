@@ -31,10 +31,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Iterator
-from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -46,6 +45,12 @@ from ghrah.subject.project.attachments import (
 )
 from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT, PROJECT_MANAGER
 from ghrah.subject.unit.base import RouteSpec, SubjectUnit, UnitMeta
+from ghrah.subject.units._http_bytes import (
+    content_disposition,
+    iter_file_range,
+    parse_byte_range,
+    read_body_limited,
+)
 from ghrah.subject.units.ability_control import AbilityApiError, _authorized
 
 __all__ = [
@@ -62,7 +67,6 @@ ProjectRootLookup = Callable[[str], Awaitable[str | None]]
 
 _FALLBACK_MIME_TYPE = "application/octet-stream"
 _MAX_FILENAME_CHARS = 255
-_STREAM_CHUNK_BYTES = 256 * 1024
 
 
 def _media_type(content_type: str) -> str:
@@ -88,82 +92,8 @@ def _content_length(request: Request) -> int | None:
     return value if value >= 0 else None
 
 
-async def _read_body_limited(request: Request, max_bytes: int) -> bytes:
-    """按块读取请求体，超过上限立即中止（不把超大流全量缓冲进内存）。"""
-    if max_bytes <= 0:
-        return await request.body()
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > max_bytes:
-            raise AbilityApiError(
-                "attachment_too_large",
-                f"上传超过上限：>{max_bytes} 字节",
-                status=413,
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def parse_byte_range(header: str, size: int) -> tuple[int, int] | None:
-    """解析单段 ``Range: bytes=...``。
-
-    Returns:
-        ``(start, end)`` 闭区间；``None`` 表示忽略 Range 头（返回完整字节）。
-
-    Raises:
-        AbilityApiError: 语法合法但区间不可满足（416 ``range_not_satisfiable``）。
-    """
-    value = header.strip()
-    if not value.lower().startswith("bytes="):
-        return None
-    spec = value[len("bytes=") :].strip()
-    if not spec or "," in spec:
-        # 多段 Range 不支持：按 HTTP 语义可忽略（返回完整内容）。
-        return None
-    start_raw, _, end_raw = spec.partition("-")
-    start_raw = start_raw.strip()
-    end_raw = end_raw.strip()
-    try:
-        if start_raw == "":
-            # bytes=-N：最后 N 字节
-            suffix = int(end_raw)
-            if suffix <= 0:
-                return None
-            if suffix >= size:
-                return (0, size - 1) if size else None
-            return (size - suffix, size - 1)
-        start = int(start_raw)
-        end = int(end_raw) if end_raw else size - 1
-    except ValueError:
-        return None
-    if start < 0 or end < start or start >= size:
-        raise AbilityApiError(
-            "range_not_satisfiable",
-            f"Range 超出附件长度：{header!r}（size={size}）",
-            status=416,
-        )
-    return (start, min(end, size - 1))
-
-
-def attachment_content_disposition(filename: str) -> str:
-    """``Content-Disposition``：非 ASCII 文件名走 RFC 5987 编码。"""
-    name = filename or "attachment"
-    return f"attachment; filename*=UTF-8''{quote(name)}"
-
-
-def _iter_file(path: Path, start: int, length: int) -> Iterator[bytes]:
-    """从 ``start`` 起流式读取 ``length`` 字节（同步迭代器，starlette 走线程池）。"""
-    with path.open("rb") as handle:
-        handle.seek(start)
-        remaining = length
-        while remaining > 0:
-            chunk = handle.read(min(_STREAM_CHUNK_BYTES, remaining))
-            if not chunk:
-                break
-            remaining -= len(chunk)
-            yield chunk
+attachment_content_disposition = content_disposition
+"""兼容别名：``Content-Disposition`` 生成器（实现已抽到 ``_http_bytes``）。"""
 
 
 def build_media_control_router(
@@ -211,7 +141,7 @@ def build_media_control_router(
                 f"上传超过上限：{declared} > {media.max_upload_bytes} 字节",
                 status=413,
             )
-        data = await _read_body_limited(request, media.max_upload_bytes)
+        data = await read_body_limited(request, media.max_upload_bytes)
         if not data:
             raise AbilityApiError("invalid_request", "上传内容为空")
 
@@ -271,12 +201,12 @@ def build_media_control_router(
             if header:
                 byte_range = parse_byte_range(header, record.size)
         headers = {
-            "Content-Disposition": attachment_content_disposition(record.filename),
+            "Content-Disposition": content_disposition(record.filename),
             "Accept-Ranges": "bytes" if media.range_requests else "none",
         }
         if byte_range is None:
             return StreamingResponse(
-                _iter_file(path, 0, record.size),
+                iter_file_range(path, 0, record.size),
                 status_code=200,
                 media_type=record.mime_type,
                 headers={**headers, "Content-Length": str(record.size)},
@@ -284,7 +214,7 @@ def build_media_control_router(
         start, end = byte_range
         length = end - start + 1
         return StreamingResponse(
-            _iter_file(path, start, length),
+            iter_file_range(path, start, length),
             status_code=206,
             media_type=record.mime_type,
             headers={

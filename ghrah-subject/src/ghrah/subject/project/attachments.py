@@ -25,17 +25,20 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
-import os
-import re
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ghrah.subject.project.content_store import (
+    CONTENT_ID_RE,
+    atomic_write_bytes,
+    content_id_for,
+    dump_json_bytes,
+    is_content_id,
+    read_json_dict,
+)
 from ghrah.subject.project.paths import ProjectPaths
 
 __all__ = [
@@ -48,7 +51,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ATTACHMENT_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+ATTACHMENT_ID_RE = CONTENT_ID_RE
+"""附件 id 形状（= 内容 sha256 hex）；与产物 id 共用同一规则。"""
 
 _SIDECAR_SUFFIX = ".json"
 _FALLBACK_MIME_TYPE = "application/octet-stream"
@@ -56,7 +60,7 @@ _FALLBACK_MIME_TYPE = "application/octet-stream"
 
 def is_valid_attachment_id(value: object) -> bool:
     """``attachment_id`` 是否为合法 sha256 hex（同时用于防路径穿越）。"""
-    return isinstance(value, str) and ATTACHMENT_ID_RE.fullmatch(value) is not None
+    return is_content_id(value)
 
 
 def _now_iso() -> str:
@@ -114,7 +118,7 @@ class AttachmentStore:
         filename: str = "",
     ) -> AttachmentRecord:
         """写入（或复用）一份附件，返回其记录；同内容幂等。"""
-        attachment_id = hashlib.sha256(data).hexdigest()
+        attachment_id = content_id_for(data)
         record = await asyncio.to_thread(
             self._save_sync,
             attachment_id,
@@ -148,10 +152,7 @@ class AttachmentStore:
                 **record.to_wire(),
                 "created_at": record.created_at,
             }
-            self._atomic_write(
-                sidecar,
-                (json.dumps(sidecar_payload, ensure_ascii=False) + "\n").encode("utf-8"),
-            )
+            self._atomic_write(sidecar, dump_json_bytes(sidecar_payload))
         existing = self._read_sidecar(attachment_id)
         if existing is not None:
             return existing
@@ -185,12 +186,8 @@ class AttachmentStore:
         )
 
     def _read_sidecar(self, attachment_id: str) -> AttachmentRecord | None:
-        try:
-            raw = self._sidecar_for(attachment_id).read_text(encoding="utf-8")
-            payload = json.loads(raw)
-        except OSError, ValueError:
-            return None
-        if not isinstance(payload, dict):
+        payload = read_json_dict(self._sidecar_for(attachment_id))
+        if payload is None:
             return None
         return AttachmentRecord(
             attachment_id=attachment_id,
@@ -202,19 +199,7 @@ class AttachmentStore:
 
     def _atomic_write(self, target: Path, payload: bytes) -> None:
         """同目录临时文件 → fsync → os.replace，避免半截文件。"""
-        tmp = target.with_name(f".{target.name}.tmp-{uuid.uuid4().hex}")
-        try:
-            with tmp.open("wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except BaseException:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        atomic_write_bytes(target, payload)
 
 
 def project_attachment_store(project_root_locator: str) -> AttachmentStore:
