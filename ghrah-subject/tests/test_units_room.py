@@ -312,6 +312,17 @@ IMAGE_BLOCK: dict[str, Any] = {
     "mime_type": "image/png",
 }
 
+VIDEO_BLOCK: dict[str, Any] = {
+    "type": "video",
+    "attachment_id": "a" * 64,
+    "mime_type": "video/mp4",
+    "filename": "demo.mp4",
+    "duration_s": 2.5,
+    "width": 320,
+    "height": 240,
+    "frames": [{"type": "image", "base64": "ZmFrZQ==", "mime_type": "image/jpeg"}],
+}
+
 
 def _mm_rows(project: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """只读 Core MM 表：取 (content, metadata) 行（本测试仅一条消息）。"""
@@ -364,6 +375,70 @@ async def test_human_room_send_with_image_blocks_persists_and_reads_back(
         assert log["count"] == 1
         assert log["entries"][0]["data"]["content_blocks"] == [IMAGE_BLOCK]
         assert "message" not in log["entries"][0]["data"]
+
+
+async def test_human_room_send_with_video_block_persists_and_reads_back(
+    tmp_path: Path,
+) -> None:
+    """视频块：attachment_id + frames 经 Room → MM metadata → 日志回读保真。"""
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        project_id = await _make_project(ctx)
+        project = _data(await _dispatch(ctx, "project_get", {"project_id": project_id}))["project"]
+        room = _data(
+            await _dispatch(ctx, "room_create", {"project_id": project_id, "name": "video"})
+        )["room"]
+
+        entry = _data(
+            await _dispatch(
+                ctx,
+                "room_send",
+                {
+                    "room_id": room["room_id"],
+                    "author": "human:yuki",
+                    "author_type": "human",
+                    "data": {"content_blocks": [VIDEO_BLOCK]},
+                },
+            )
+        )["entry"]
+        assert entry["data"]["content_blocks"] == [VIDEO_BLOCK]
+        assert "message" not in entry["data"]
+
+        [(content, metadata)] = _mm_rows(project)
+        assert content == ""
+        assert metadata["content_blocks"] == [VIDEO_BLOCK]
+
+        log = _data(await _dispatch(ctx, "room_get_log", {"room_id": room["room_id"]}))
+        assert log["entries"][0]["data"]["content_blocks"] == [VIDEO_BLOCK]
+
+
+async def test_room_send_rejects_video_without_attachment(tmp_path: Path) -> None:
+    """video 块不内联字节：缺 attachment_id 在受理前拒绝且不落库。"""
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        project_id = await _make_project(ctx)
+        project = _data(await _dispatch(ctx, "project_get", {"project_id": project_id}))["project"]
+        room = _data(
+            await _dispatch(ctx, "room_create", {"project_id": project_id, "name": "video"})
+        )["room"]
+
+        result = await _dispatch(
+            ctx,
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {
+                    "content_blocks": [
+                        {"type": "video", "mime_type": "video/mp4", "frames": [IMAGE_BLOCK]}
+                    ]
+                },
+            },
+        )
+        assert result["success"] is False
+        assert result["error"] == "content_blocks_malformed"
+        assert _mm_rows(project) == []
 
 
 async def test_room_send_rejects_invalid_blocks_before_persisting(tmp_path: Path) -> None:

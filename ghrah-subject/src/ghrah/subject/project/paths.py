@@ -127,6 +127,15 @@ class ProjectPaths:
     def artifacts_dir(self) -> Path:
         return self.root / "artifacts"
 
+    @property
+    def attachments_dir(self) -> Path:
+        """Project 级附件库：内容寻址字节 + sidecar 元数据。
+
+        独立于 workspace，避免 Agent 的 fs 能力直接看到；目录本身在
+        ``initialize()`` 时创建，已存在的 Project Root 首次上传时惰性补建。
+        """
+        return self.root / "attachments"
+
     def initialize(self, project_id: str) -> ProjectRootInit:
         """认领空 Root，创建固定布局和 owner marker。"""
         root_created = not self.root.exists()
@@ -152,6 +161,7 @@ class ProjectPaths:
                 self.agent_manifest_dir,
                 self.memory_dir,
                 self.artifacts_dir,
+                self.attachments_dir,
             ):
                 if not directory.exists():
                     directory.mkdir(parents=True, exist_ok=True)

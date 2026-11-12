@@ -25,6 +25,7 @@ def test_project_paths_initialize_and_safe_rollback(tmp_path: Path) -> None:
     assert paths.marker_path.is_file()
     assert paths.task_db_path.parent.is_dir()
     assert paths.agent_manifest_dir.is_dir()
+    assert paths.attachments_dir.is_dir()
     paths.rollback_initialize(receipt)
     assert not paths.root.exists()
 

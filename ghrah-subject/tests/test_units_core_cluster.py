@@ -493,7 +493,7 @@ class TestProjectRuntimeStateGuards:
                     "content_blocks_malformed",
                 ),
                 (
-                    {**base, "content": "hi", "content_blocks": [{"type": "video", "url": "x"}]},
+                    {**base, "content": "hi", "content_blocks": [{"type": "hologram", "url": "x"}]},
                     "unsupported_block_type",
                 ),
                 (
@@ -517,6 +517,14 @@ class TestProjectRuntimeStateGuards:
                         "content_blocks": [{"type": "text", "text": "x"}] * 9,
                     },
                     "content_blocks_total_too_large",
+                ),
+                (
+                    {
+                        **base,
+                        "content": "",
+                        "content_blocks": [{"type": "video", "mime_type": "video/mp4"}],
+                    },
+                    "content_blocks_malformed",
                 ),
                 ({**base, "content": "   "}, "content_text_required"),
             ]

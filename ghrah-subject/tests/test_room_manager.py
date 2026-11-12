@@ -804,6 +804,14 @@ IMAGE_BLOCK: dict[str, Any] = {
     "mime_type": "image/png",
 }
 
+VIDEO_BLOCK: dict[str, Any] = {
+    "type": "video",
+    "attachment_id": "a" * 64,
+    "mime_type": "video/mp4",
+    "filename": "demo.mp4",
+    "frames": [{"type": "image", "base64": "ZmFrZQ==", "mime_type": "image/jpeg"}],
+}
+
 
 async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Path) -> None:
     """纯块消息：空正文受理成功；日志 data 与投递闭包都拿到校验后的块。"""
@@ -842,6 +850,43 @@ async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Pa
 
         await _drain_delivery_tasks()
         assert deliveries == [("architect", "human:yuki", "", [IMAGE_BLOCK])]
+    finally:
+        await m.store.stop()
+
+
+async def test_room_send_video_block_flows_through_legacy_delivery(tmp_path: Path) -> None:
+    """无 publish 的 legacy 路径：video 块同样进入日志 data 与 deliver 闭包。"""
+    deliveries: list[tuple[str, str, str, list[dict[str, Any]] | None]] = []
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def deliver(
+        target: str,
+        sender: str,
+        content: str,
+        room_id: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        deliveries.append((target, sender, content, blocks))
+        return {"success": True, "data": {}, "error": None}
+
+    m = RoomManager(store, deliver=deliver)
+    try:
+        room = await _make_room(m)
+        await _join(m, room["room_id"], "architect", "agent")
+        result = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"content_blocks": [VIDEO_BLOCK]},
+            },
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["content_blocks"] == [VIDEO_BLOCK]
+        await _drain_delivery_tasks()
+        assert deliveries == [("architect", "human:yuki", "", [VIDEO_BLOCK])]
     finally:
         await m.store.stop()
 
@@ -898,7 +943,7 @@ async def test_room_send_rejects_malformed_blocks_with_stable_code(tmp_path: Pat
         room = await _make_room(m)
         cases = [
             ({"content_blocks": "blocks"}, "content_blocks_malformed"),
-            ({"content_blocks": [{"type": "video", "url": "x"}]}, "unsupported_block_type"),
+            ({"content_blocks": [{"type": "hologram", "url": "x"}]}, "unsupported_block_type"),
             ({"message": "x", "content_blocks": [{"type": "image"}]}, "content_blocks_malformed"),
             (
                 {"message": "x", "content_blocks": [{"type": "text", "text": "x"}] * 9},

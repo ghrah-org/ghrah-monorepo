@@ -970,7 +970,10 @@ class AbilityControlUnit(SubjectUnit):
             allow_origins=list(self._config.observer_cors_origins),
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "Accept"],
+            # X-Filename（附件上传文件名）、Range（分段读取）会触发预检；
+            # Content-Range/Accept-Ranges/Content-Disposition 供客户端读取。
+            allow_headers=["Authorization", "Content-Type", "Accept", "X-Filename", "Range"],
+            expose_headers=["Content-Range", "Accept-Ranges", "Content-Disposition"],
         )
         register_ability_control_error_handlers(app)
         app.include_router(router)
