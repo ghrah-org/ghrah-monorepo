@@ -399,7 +399,21 @@ class RoomManager:
         if error is not None:
             return error
         records = await self._store.get_log(p.room_id, since_seq=p.since_seq, limit=p.limit)
-        entries = [(await self._hydrate_reference(r)).to_wire() for r in records]
+        entries: list[dict[str, Any]] = []
+        dropped = 0
+        for record in records:
+            try:
+                entries.append((await self._hydrate_reference(record)).to_wire())
+            except ValueError:
+                # Room 日志是投影，正文权威在 MM。单条引用失配（源消息被回收、
+                # 或库被单独恢复导致不一致）不应让整个列表不可读。
+                dropped += 1
+        if dropped:
+            logger.warning(
+                "room %s: %d log entries dropped (source message unavailable)",
+                p.room_id,
+                dropped,
+            )
         return _ok({"room_id": p.room_id, "entries": entries, "count": len(entries)})
 
     async def _handle_send(self, payload: dict[str, Any]) -> dict[str, Any]:
