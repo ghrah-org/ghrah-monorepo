@@ -727,7 +727,6 @@ class TestStandalone:
         publisher = UnitEventPublisher(
             emit=lambda name, payload: emitted.append((name, payload)),
             project_id="default",
-            cluster_id="default",
             agent_id_resolver=lambda name: name or "",
         )
         await publisher.publish(
@@ -766,7 +765,6 @@ class TestStandalone:
         publisher = UnitEventPublisher(
             emit=lambda name, payload: emitted.append((name, payload)),
             project_id="default",
-            cluster_id="c1",
             agent_id_resolver=lambda name: name or "",
         )
         await publisher.publish(
@@ -782,7 +780,6 @@ class TestStandalone:
         assert emitted[0][0] == "core:context_usage_updated"
         payload = emitted[0][1]
         assert payload["project_id"] == "default"
-        assert payload["cluster_id"] == "c1"
         assert payload["agent_id"] == "agent-1"
         assert payload["agent_name"] == "agent-1"
         assert payload["phase"] == "post_call"
@@ -1078,7 +1075,6 @@ class TestForkContextContinuity:
             ability_core_config(
                 project_id="default",
                 require_approval_by_default=False,
-                cluster_id="policy-v2",
             )
         )
         await unit_loose.init(FakeCtx())
@@ -1106,7 +1102,6 @@ async def test_multi_agent_core_restart_restores_independent_snapshots(
         return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
 
     config = ability_core_config(
-        cluster_id="cluster-a",
         project_id="default",
         persistence_factory=persistence_factory,
     )
@@ -1167,7 +1162,6 @@ async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
     for cluster_id, agent_id in identities.items():
         unit = create_core_unit(
             ability_core_config(
-                cluster_id=cluster_id,
                 project_id="default",
                 persistence_factory=persistence_factory,
             )
@@ -1190,7 +1184,6 @@ async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
     for cluster_id, agent_id in identities.items():
         unit = create_core_unit(
             ability_core_config(
-                cluster_id=cluster_id,
                 project_id="default",
                 persistence_factory=persistence_factory,
             )

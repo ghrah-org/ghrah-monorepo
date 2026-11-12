@@ -67,7 +67,7 @@ async def bootstrap(path):
 
 
 async def assemble(mm, sender_llm):
-    supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+    supervisor = SupervisorActor(message_manager=mm)
     await supervisor.spawn_agent(
         AgentConfig(name="controller"),
         abilities=[ConversationAbility()],
@@ -218,7 +218,7 @@ async def test_terminated_recipient_is_offline_and_respawn_restores_pending(tmp_
 
 
 async def test_no_router_fallback_for_agents():
-    supervisor = SupervisorActor(cluster_id="cluster")
+    supervisor = SupervisorActor()
     await supervisor.spawn_agent(
         AgentConfig(name="a"),
         abilities=[ConversationAbility()],
@@ -247,7 +247,7 @@ async def test_supervisor_requires_scoped_manager_and_declared_identity(tmp_path
     with pytest.raises(ValueError, match="session_routing"):
         SupervisorActor(message_manager=MessageManager(path, project_id="p", agent_ids=("a",)))
     async with MessageManager(path, project_id="p", agent_ids=("a",), session_routing=True) as mm:
-        supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         with pytest.raises(RegistryError, match="not declared"):
             await supervisor.spawn_agent(
                 AgentConfig(name="unknown"), abilities=[ConversationAbility()]
@@ -259,7 +259,7 @@ async def test_wrong_backend_is_rejected_before_registering_or_binding(tmp_path)
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
     async with MessageManager(path, project_id="p", agent_ids=("a",), session_routing=True) as mm:
-        supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         with pytest.raises(RegistryError, match="same-file"):
             await supervisor.spawn_agent(
                 AgentConfig(name="a"),
@@ -285,7 +285,7 @@ async def test_room_send_fails_before_log_or_background_delivery():
             raise AssertionError("Should reject before appending a false sent log")
 
     bridge = Bridge()
-    supervisor = SupervisorActor(cluster_id="cluster", room_bridge=bridge)
+    supervisor = SupervisorActor(room_bridge=bridge)
     await supervisor.spawn_agent(
         AgentConfig(name="a"),
         abilities=[ConversationAbility()],

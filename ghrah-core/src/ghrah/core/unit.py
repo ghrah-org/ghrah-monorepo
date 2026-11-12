@@ -124,7 +124,6 @@ class CoreUnitConfig:
     """CoreUnit 配置。
 
     Attributes:
-        cluster_id: SupervisorActor 的集群标识
         default_timeout: Agent 间通信默认超时（秒）
         hitl_timeout: HITL 审批等待超时（秒）。
             AgentBuilder 不透传 hitl_timeout 到 LocalAbilityExecutor，
@@ -178,9 +177,8 @@ class CoreUnitConfig:
         surface_loaded_limit: 已加载集默认上限。
     """
 
-    cluster_id: str = "default"
     # 空 = 未归属：Agent 作用域事件将按契约跳过发布（绝不猜测归属）。
-    # Subject 挂载模式由 registry 工厂显式注入；standalone 显式传入。
+    # 装配层显式传入；standalone 亦须传入。
     project_id: str = ""
     default_timeout: float = 300.0
     hitl_timeout: float = 300.0
@@ -221,6 +219,9 @@ class CoreUnitConfig:
     ability_store: Any = None
     # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
     ability_grant_policy: Any = None
+    # Room 投影器：``async (message) -> None``。None = 不投影（Room 日志留 pending）。
+    # 房间状态归 Subject 所有，投影目标由装配方注入。
+    room_projector: Any = None
     # 受信 MCP 装配配置；None = 关闭，不读取 agentconf、不发现端点。
     mcp: Any = None
     # 宿主命令授权表：key = instance_id 或 f"{instance_id}/{member}"；
@@ -405,7 +406,6 @@ class UnitEventPublisher(EventPublisher):
         emit: Callable[[str, dict[str, Any]], None] | None = None,
         *,
         project_id: str = "",
-        cluster_id: str = "",
         agent_id_resolver: Callable[[str], str] | None = None,
     ) -> None:
         """初始化 UnitEventPublisher。
@@ -415,14 +415,12 @@ class UnitEventPublisher(EventPublisher):
         """
         self._emit = emit
         self._project_id = project_id
-        self._cluster_id = cluster_id
         self._agent_id_resolver = agent_id_resolver
 
     async def publish(self, event: CoreEvent) -> None:
         """发布事件到宿主 ctx。"""
         event_type, payload = _core_event_to_dict(event)
         payload["project_id"] = self._project_id
-        payload["cluster_id"] = self._cluster_id
         payload["agent_id"] = (
             self._agent_id_resolver(event.agent_name) if self._agent_id_resolver is not None else ""
         )
@@ -586,7 +584,6 @@ class CoreUnit:
         self._publisher = UnitEventPublisher(
             emit=self._emit,
             project_id=self._config.project_id,
-            cluster_id=self._config.cluster_id,
             agent_id_resolver=self._agent_id_for_name,
         )
 
@@ -618,9 +615,7 @@ class CoreUnit:
                 raise TypeError("mcp 必须是 McpDeploymentConfig 或 None")
             if self._config.ability_store is None:
                 raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
-            self._mcp_deployment = McpDeployment(
-                self._config.mcp, self._config.ability_store, self._config.cluster_id
-            )
+            self._mcp_deployment = McpDeployment(self._config.mcp, self._config.ability_store)
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
         # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
         # （不再回退按模板实例化）。
@@ -650,7 +645,6 @@ class CoreUnit:
 
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
-            cluster_id=self._config.cluster_id,
             event_publisher=self._publisher,
             room_bridge=room_bridge,
             max_cluster_members=self._config.max_cluster_members,
@@ -664,7 +658,7 @@ class CoreUnit:
         )
         self._supervisor = supervisor
 
-        logger.info(f"CoreUnit initialized (cluster_id={self._config.cluster_id})")
+        logger.info("CoreUnit initialized (project_id=%s)", self._config.project_id)
 
     async def start(self) -> None:
         """启动 Unit（幂等空实现 — 路由注册由 bridge 完成）。"""
@@ -762,8 +756,6 @@ class CoreUnit:
             # （协议默认 project_id=""），已存在的空键不会被 setdefault 覆盖。
             if not enriched.get("project_id"):
                 enriched["project_id"] = self._config.project_id
-            if not enriched.get("cluster_id"):
-                enriched["cluster_id"] = self._config.cluster_id
             agent_name = str(enriched.get("agent_name") or enriched.get("name") or "")
             if agent_name and not enriched.get("agent_id"):
                 enriched["agent_id"] = self._agent_id_for_name(agent_name)
@@ -782,8 +774,6 @@ class CoreUnit:
             if isinstance(session, dict):
                 if not session.get("project_id"):
                     session["project_id"] = self._config.project_id
-                if not session.get("cluster_id"):
-                    session["cluster_id"] = self._config.cluster_id
                 if not session.get("agent_id"):
                     session["agent_id"] = enriched.get("agent_id", "")
             self._emit(f"core:{event_type}", enriched)
@@ -801,7 +791,7 @@ class CoreUnit:
         if not project_id:
             raise ValueError("project_id required")
         if project_id != self._config.project_id:
-            raise ValueError("cluster_project_mismatch")
+            raise ValueError("project_mismatch")
 
     def _validate_agent(self, project_id: str, agent_id: str, agent_name: str) -> None:
         self._validate_project(project_id)
@@ -846,7 +836,6 @@ class CoreUnit:
         return {
             "deployment": deployment,
             "project_id": self._config.project_id,
-            "cluster_id": self._config.cluster_id,
             "workspace_root": self._config.workspace_root,
             "default_working_dir": self._config.workspace_root,
             "allowed_roots": roots,
@@ -942,8 +931,6 @@ class CoreUnit:
         source = self._require_assembly().source
         supervisor = self._require_supervisor()
         self._validate_project(sp.project_id)
-        if sp.cluster_id and sp.cluster_id != self._config.cluster_id:
-            raise ValueError("cluster_id_mismatch")
         if sp.abilities:
             AbilityAssembly.refuse(
                 "direct-abilities spawn",
@@ -1181,7 +1168,6 @@ class CoreUnit:
             agent.update(
                 {
                     "project_id": request.project_id,
-                    "cluster_id": self._config.cluster_id,
                     "agent_id": self._agent_id_for_name(name),
                 }
             )
@@ -1443,10 +1429,9 @@ class CoreUnit:
             triplet = self._hitl_promises.resolve(promise_id)
             if triplet is None and not (agent_name and ability_name and tool_call_id):
                 logger.debug(
-                    "hitl_response: promise '%s' not held by cluster '%s'; "
+                    "hitl_response: promise '%s' not held by this CoreUnit; "
                     "passing through to next CoreUnit",
                     promise_id,
-                    self._config.cluster_id,
                 )
                 return None
             if triplet is not None:

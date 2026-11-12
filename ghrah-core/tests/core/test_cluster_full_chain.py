@@ -163,7 +163,6 @@ async def test_cluster_abilities_full_chain_with_scripted_tool_calls(
         unit = create_core_unit(
             ability_core_config(
                 project_id="default",
-                cluster_id="cluster-e2e",
                 manifest_store=_CompositeStore(),
                 llm_factory=llm_factory,
                 message_manager=mm,

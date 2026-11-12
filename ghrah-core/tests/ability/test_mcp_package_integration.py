@@ -407,7 +407,7 @@ async def test_closing_another_cluster_does_not_remove_current_backend(tmp_path,
         assert (await direct(env))["data"]["success"]
         other = McpDeployment(
             McpDeploymentConfig(
-                (replace(env.binding, cluster_id="other", agent_id="b" * 32),),
+                (replace(env.binding, agent_id="b" * 32),),
                 source=env.source,
             ),
             env.store,

@@ -111,6 +111,28 @@ class MailboxReader:
             projected.append(item)
         return {"message": message, "deliveries": projected}
 
+    async def get_delivery(self, delivery_id: str) -> dict[str, Any]:
+        """读取本实体可见的单条投递。
+
+        可见性：收件人只看自己的投递；发件人可看该消息的全部投递。
+        """
+        assert self._db is not None
+        row = await (
+            await self._db.execute(
+                "SELECT d.*, m.sender_id AS _sender FROM mm_deliveries d "
+                "JOIN mm_messages m ON m.message_id=d.message_id "
+                "WHERE d.delivery_id=? AND (d.recipient_id=? OR m.sender_id=?)",
+                (delivery_id, self._identity.agent_id, self._identity.agent_id),
+            )
+        ).fetchone()
+        if row is None:
+            raise ValueError("delivery_not_found")
+        item = dict(row)
+        item.pop("_sender", None)
+        if item.get("blocked_reason"):
+            item["state"] = "blocked"
+        return item
+
     async def list_messages(
         self, *, inbox: bool, limit: int, before_seq: int | None
     ) -> dict[str, Any]:

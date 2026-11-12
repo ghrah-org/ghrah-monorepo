@@ -219,7 +219,7 @@ class TestGetClusterContext:
 
     def test_context_shape_and_tags(self) -> None:
         """cluster_id + 成员清单（含 manifest tags 透传）。"""
-        supervisor = SupervisorActor(cluster_id="cluster-x")
+        supervisor = SupervisorActor()
         supervisor._registry.register(
             "planner",
             AgentConfig(name="planner", description="任务规划"),
@@ -233,7 +233,6 @@ class TestGetClusterContext:
         )
 
         ctx = supervisor.get_cluster_context()
-        assert ctx["cluster_id"] == "cluster-x"
         assert len(ctx["members"]) == 2
         planner = next(m for m in ctx["members"] if m["name"] == "planner")
         assert planner["description"] == "任务规划"
@@ -245,7 +244,7 @@ class TestGetClusterContext:
         """截断上限：成员 ≤ 20（prompt 固定开销守恒）。"""
         from ghrah.communication.supervisor import _MAX_CONTEXT_MEMBERS
 
-        supervisor = SupervisorActor(cluster_id="c")
+        supervisor = SupervisorActor()
         for i in range(_MAX_CONTEXT_MEMBERS + 5):
             supervisor._registry.register(f"agent-{i}", AgentConfig(name=f"agent-{i}"), MagicMock())
         assert len(supervisor.get_cluster_context()["members"]) == _MAX_CONTEXT_MEMBERS
@@ -253,7 +252,6 @@ class TestGetClusterContext:
     def test_empty_cluster(self) -> None:
         supervisor = SupervisorActor()
         ctx = supervisor.get_cluster_context()
-        assert ctx["cluster_id"] == ""
         assert ctx["members"] == []
 
 

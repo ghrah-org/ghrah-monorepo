@@ -75,7 +75,7 @@ async def test_user_chat_can_send_synchronous_requests_and_receive_original_repl
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", source_llm, agent_id="id-a")
             await spawn(supervisor, "b", ScriptedLLM(["b reply"]), agent_id="id-b")
@@ -115,7 +115,7 @@ async def test_external_delegate_and_broadcast_keep_returned_results(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", ScriptedLLM(["a reply"]), agent_id="id-a")
             await spawn(supervisor, "b", ScriptedLLM(["delegated", "b reply"]), agent_id="id-b")
@@ -142,7 +142,7 @@ async def test_sync_cycle_finishes_with_diagnostic_tool_result(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="cluster", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         a_llm, b_llm = RequestLLM("b"), RequestLLM("a")
         try:
             await spawn(supervisor, "a", a_llm)
@@ -171,7 +171,7 @@ async def main():
     await ns['bootstrap'](path)
     async with CrashManager(path, project_id='p', agent_ids=(), session_routing=True,
                             allow_persisted_agents=True) as mm:
-        supervisor = ns['SupervisorActor'](cluster_id='c', message_manager=mm)
+        supervisor = ns['SupervisorActor'](message_manager=mm)
         await ns['spawn'](supervisor, 'a', ns['RequestLLM']())
         await ns['spawn'](supervisor, 'b', ns['ScriptedLLM'](['b reply']))
         await supervisor.send('a', 'start')
@@ -191,7 +191,7 @@ asyncio.run(main())
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", source_llm)
             await spawn(supervisor, "b", peer_llm)
@@ -237,7 +237,7 @@ async def test_sync_timeout_keeps_request_and_delivers_late_reply(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", source_llm)
             await spawn(supervisor, "b", slow_llm, timeout=0.03)
@@ -261,7 +261,7 @@ async def test_broadcast_partial_failure_keeps_successful_responses(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", source_llm)
             await spawn(supervisor, "b", ScriptedLLM(["successful b"]))
@@ -287,7 +287,7 @@ async def test_sync_checkpoint_records_model_usage_once(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         llm = UsageLLM()
         try:
             await spawn(supervisor, "a", llm)
@@ -317,7 +317,7 @@ async def test_structured_input_and_reply_blocks_survive_persistent_route(tmp_pa
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", llm)
             actor = await supervisor.get_agent_handle("a")
@@ -366,7 +366,7 @@ async def test_sync_post_execute_hook_observes_final_reply(tmp_path):
     async with MessageManager(
         path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
     ) as mm:
-        supervisor = SupervisorActor(cluster_id="c", message_manager=mm)
+        supervisor = SupervisorActor(message_manager=mm)
         try:
             await spawn(supervisor, "a", RequestLLM())
             await spawn(supervisor, "b", ScriptedLLM(["b reply"]))

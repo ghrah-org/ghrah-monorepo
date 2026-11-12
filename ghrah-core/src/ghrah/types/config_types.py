@@ -132,7 +132,7 @@ class AgentConfig:
         model_overrides: ghrah 持有的请求参数
         workspace_root: 工作区根目录，用于将相对路径解析到沙盒内（None 表示不限制）
         cluster_context_injection: 集群身份注入开关——True 时 AgentBuilder
-            在 system_prompt 头部拼接 [Cluster Context] 段（cluster_id +
+            在 system_prompt 头部拼接 [Cluster Context] 段（成员清单
             成员清单）。默认 False（零隐式：prompt 内容不因挂进集群而变化）
         environment_context_injection: 环境信息注入开关——True 且
             environment_info 提供时，AgentBuilder 在 system_prompt 头部拼接

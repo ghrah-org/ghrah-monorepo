@@ -65,9 +65,9 @@ class SupervisorProtocol(Protocol):
     async def get_agent_handle(self, name: str) -> Any: ...
 
     def get_cluster_context(self) -> dict[str, Any]:
-        """返回集群上下文（cluster_id + 成员清单）。
+        """返回协作群上下文（成员清单）。
 
         供 AgentBuilder 渲染 [Cluster Context] 注入段。返回形状：
-        ``{"cluster_id": str, "members": [{"name", "description", "tags"}]}``。
+        ``{"members": [{"name", "description", "tags"}]}``。
         """
         ...
