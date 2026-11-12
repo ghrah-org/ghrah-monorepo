@@ -295,6 +295,10 @@ class SqliteBackend(PersistenceBackend):
         await self._db.execute("PRAGMA foreign_keys=ON")
         logger.debug("SQLite database connected: %s", self._db_path)
 
+    async def initialize(self) -> None:
+        """显式准备已连接数据库的 schema，无需读取虚构的 Agent checkpoint。"""
+        await self._ensure_db()
+
     async def close(self) -> None:
         """关闭数据库连接。"""
         if self._db is not None:

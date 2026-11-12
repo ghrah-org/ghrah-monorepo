@@ -247,6 +247,8 @@ class MessageManager:
         self._scan_lock = asyncio.Lock()
         self._receivers: dict[str, Receiver] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
+        self._reply_waiters: set[asyncio.Future[None]] = set()
+        self._paused_agents: set[str] = set()
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._closing = False
@@ -280,7 +282,7 @@ class MessageManager:
         """关闭服务，保留尚未完成的消息。"""
         await self.close()
 
-    async def open(self) -> None:
+    async def open(self, *, start_dispatcher: bool = True, prepare_context: bool = False) -> None:
         """打开服务；上次进程未完成的投递转为中断，禁止隐式重跑。"""
         if self._db is not None:
             raise RuntimeError("MessageManager is already open")
@@ -294,6 +296,9 @@ class MessageManager:
         self._owner = owner
         self._closing = False
         try:
+            if prepare_context:
+                async with SqliteBackend(self._path) as backend:
+                    await backend.initialize()
             self._db = await aiosqlite.connect(self._path)
             self._db.row_factory = aiosqlite.Row
             await self._db.execute("PRAGMA journal_mode=WAL")
@@ -357,12 +362,29 @@ class MessageManager:
                 )
             await self.refresh_agent_ids()
             await self.recover_completions()
-            self._dispatcher = asyncio.create_task(
-                self._dispatch_loop(), context=self._task_context()
-            )
+            if start_dispatcher:
+                self.start_dispatcher()
         except BaseException:
             await self.close()
             raise
+
+    async def prepare_dispatch(self) -> None:
+        """显式验收恢复路径；错误直接传播，不通过后台循环吞掉初始化故障。"""
+        self._require_db()
+        if self._closing or self._dispatcher is not None or self._receivers:
+            raise RuntimeError("Dispatch preparation requires an open, inactive manager")
+        await self.recover_completions()
+        await self.recover_room_projections()
+
+    def start_dispatcher(self) -> None:
+        """在运行时就绪时幂等启动调度，不创建或绑定 Agent。"""
+        self._require_db()
+        if self._closing:
+            raise RuntimeError("MessageManager is closing")
+        if self._dispatcher is None:
+            self._dispatcher = asyncio.create_task(
+                self._dispatch_loop(), context=self._task_context()
+            )
 
     async def close(self) -> None:
         """停止调度并等待取消收敛；处理中断记录保留到下次显式重试。"""
@@ -374,6 +396,7 @@ class MessageManager:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._workers.clear()
+        self._paused_agents.clear()
         self._receivers.clear()
         self._session_receivers.clear()
         self._dispatcher = None
@@ -402,12 +425,24 @@ class MessageManager:
         """停止该 agent 的消费；未开始消息继续离线待收。"""
         self._require_db()
         self._receivers.pop(agent_id, None)
+        self._paused_agents.discard(agent_id)
         self._session_receivers.discard(agent_id)
         task = self._workers.get(agent_id)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self._workers.pop(agent_id, None)
+
+    async def drain(self, agent_ids: Collection[str], *, timeout: float) -> None:
+        """暂停指定 Agent 的新投递，有界等待在途工作及回复读取。"""
+        async with self._scan_lock:
+            self._paused_agents.update(agent_ids)
+            active = [
+                *(self._workers[key] for key in agent_ids if key in self._workers),
+                *self._reply_waiters,
+            ]
+        if active:
+            await asyncio.wait(active, timeout=timeout)
 
     async def bind_atomic(self, agent: ActorAgent) -> None:
         """显式绑定同文件 SQLite 上下文，原子提交消费确认与本轮出站。"""
@@ -735,9 +770,16 @@ class MessageManager:
                             )
                 await asyncio.sleep(min(self._poll_interval, 0.05))
 
-        if timeout < 0:
-            return await wait()
-        return await asyncio.wait_for(wait(), timeout)
+        marker = asyncio.get_running_loop().create_future()
+        self._reply_waiters.add(marker)
+        try:
+            if timeout < 0:
+                return await wait()
+            return await asyncio.wait_for(wait(), timeout)
+        finally:
+            self._reply_waiters.discard(marker)
+            if not marker.done():
+                marker.set_result(None)
 
     async def wait_inline(
         self, message_id: str, *, timeout: float = -1, tolerate_errors: bool = False
@@ -1432,6 +1474,8 @@ class MessageManager:
             await self.recover_completions()
             await self.recover_room_projections()
             for agent_id, receiver in tuple(self._receivers.items()):
+                if agent_id in self._paused_agents:
+                    continue
                 if agent_id in self._workers:
                     continue
                 async with self._lock:

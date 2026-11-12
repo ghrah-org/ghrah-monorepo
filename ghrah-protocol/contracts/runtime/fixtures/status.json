@@ -1,0 +1,8 @@
+{
+  "phase": "ready",
+  "ready": true,
+  "boot_id": "example-boot",
+  "since": "2026-11-12T00:00:00.000Z",
+  "contract": "v1",
+  "error": null
+}

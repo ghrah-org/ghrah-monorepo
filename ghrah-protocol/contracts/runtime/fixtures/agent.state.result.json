@@ -1,0 +1,72 @@
+{
+  "agent": {
+    "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "scope_ref": "example",
+    "external_ref": "example:worker",
+    "config": {
+      "model": {
+        "endpoint_name": "your-endpoint",
+        "model_overrides": null
+      },
+      "prompt": {
+        "system_prompt": "You are a helpful assistant.",
+        "template_ref": null
+      },
+      "context_policy": {
+        "max_iterations": 10,
+        "communication_timeout": 300.0,
+        "window": null,
+        "overrides": null
+      },
+      "ability_request": {
+        "surface": {
+          "mode": "auto",
+          "static": [],
+          "max_static": null
+        },
+        "packages": [
+          {
+            "package": "ghrah.core",
+            "origin": "builtin",
+            "whole_container": false,
+            "operations": [
+              {
+                "key": "conversation",
+                "visible": true,
+                "available": true
+              },
+              {
+                "key": "session_info",
+                "visible": true,
+                "available": true
+              }
+            ],
+            "skills": []
+          }
+        ],
+        "mcp_refs": []
+      },
+      "permission_request": {
+        "auto_approve": [],
+        "require_approval_by_default": true,
+        "safe_extra_commands": [],
+        "safe_extra_sub_commands": null
+      }
+    },
+    "state": "stopped",
+    "incarnation_id": null,
+    "config_revision": 1,
+    "assembly_digest": "sha256:00d7afd87cd58aa15ac3e2120a6e507d2a469cf01ca802a5ea746d0ebd754a41",
+    "resolved_digest": "sha256:example",
+    "capability": {
+      "tree_revision": 1,
+      "tree_digest": "sha256:example",
+      "pending_changes": 0
+    },
+    "current_delivery": null,
+    "last_error": null,
+    "created_at": "2026-11-12T00:00:00.000Z",
+    "updated_at": "2026-11-12T00:00:00.000Z"
+  },
+  "recovered": null
+}

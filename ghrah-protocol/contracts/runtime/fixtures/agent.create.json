@@ -1,0 +1,54 @@
+{
+  "external_ref": "example:worker",
+  "config": {
+    "model": {
+      "endpoint_name": "your-endpoint",
+      "model_overrides": null
+    },
+    "prompt": {
+      "system_prompt": "You are a helpful assistant.",
+      "template_ref": null
+    },
+    "context_policy": {
+      "max_iterations": 10,
+      "communication_timeout": 300.0,
+      "window": null,
+      "overrides": null
+    },
+    "ability_request": {
+      "surface": {
+        "mode": "auto",
+        "static": [],
+        "max_static": null
+      },
+      "packages": [
+        {
+          "package": "ghrah.core",
+          "origin": "builtin",
+          "whole_container": false,
+          "operations": [
+            {
+              "key": "conversation",
+              "visible": true,
+              "available": true
+            },
+            {
+              "key": "session_info",
+              "visible": true,
+              "available": true
+            }
+          ],
+          "skills": []
+        }
+      ],
+      "mcp_refs": []
+    },
+    "permission_request": {
+      "auto_approve": [],
+      "require_approval_by_default": true,
+      "safe_extra_commands": [],
+      "safe_extra_sub_commands": null
+    }
+  },
+  "state": "stopped"
+}
