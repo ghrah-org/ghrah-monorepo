@@ -19,6 +19,7 @@ dispose 全部 fiber（unit.stop 逆序由 Ouroboros 负责）。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +42,17 @@ if TYPE_CHECKING:
 __all__ = ["assemble_subject"]
 
 logger = logging.getLogger(__name__)
+
+#: 启动期后台任务：持有强引用，避免 reconcile 被 GC 回收。
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+async def _reconcile_in_background(service: Any) -> None:
+    """后台执行启动期 reconcile；失败只记日志，不影响服务可用。"""
+    try:
+        await service.reconcile()
+    except Exception:
+        logger.exception("reconcile on start failed (non-fatal)")
 
 
 async def assemble_subject(
@@ -71,10 +83,14 @@ async def assemble_subject(
     if config.recovery.enabled and config.recovery.reconcile_on_start:
         reconcile_service = ctx.get(RECONCILIATION_SERVICE.name, strict=False)
         if reconcile_service is not None:
-            try:
-                await reconcile_service.reconcile()
-            except Exception:
-                logger.exception("reconcile on start failed (non-fatal)")
+            # 后台执行：恢复可能拉起多个 Agent（每个都要解析 manifest、核定授权、
+            # 绑定 run），阻塞装配会让服务晚几秒才监听端口。先能服务，再补状态。
+            task = asyncio.create_task(
+                _reconcile_in_background(reconcile_service),
+                name="subject-reconcile-on-start",
+            )
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
         else:
             logger.info(
                 "reconcile_on_start enabled but recovery unit not mounted (profile=%s)",

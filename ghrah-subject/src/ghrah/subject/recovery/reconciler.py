@@ -181,9 +181,8 @@ class ReconciliationService:
         project = await self._project_mgr.bootstrap_default_project()
         report.bootstrap = True
         report.projects_reconciled += 1
-        if project.cluster_ids:
-            cluster_id = project.cluster_ids[0]
-            agents = await self._project_mgr.adopt_existing_agents(project.project_id, cluster_id)
+        if project.project_id:
+            agents = await self._project_mgr.adopt_existing_agents(project.project_id)
             report.agents_spawned += len(agents)
         migrated = await self._task_store.reassign_project_id(
             "", project.project_id, include_terminal=True, include_deleted=True
@@ -220,8 +219,8 @@ class ReconciliationService:
             if mount.workspace_id in registered_ids:
                 continue
             await self._handle_unknown_workspace(project, mount, report)
-        # cluster：幂等 init
-        for cluster_id in project.cluster_ids:
+        # 单元：幂等 init（单元按项目唯一）
+        for cluster_id in (project.project_id,):
             try:
                 await self._cluster_transport.ensure_cluster(
                     cluster_id,
@@ -284,7 +283,7 @@ class ReconciliationService:
             if not agent.agent_id:
                 legacy_name_counts[agent.name] = legacy_name_counts.get(agent.name, 0) + 1
         ambiguous_legacy = {name for name, count in legacy_name_counts.items() if count > 1}
-        for cluster_id in project.cluster_ids:
+        for cluster_id in (project.project_id,):
             try:
                 handle = self._cluster_transport.get_handle(cluster_id)
             except KeyError:
@@ -312,7 +311,7 @@ class ReconciliationService:
                 )
                 continue
             for agent in project.agents:
-                if agent.cluster_id != cluster_id or agent.desired_state == "stopped":
+                if agent.desired_state == "stopped":
                     continue
                 if not agent.agent_id and agent.name in ambiguous_legacy:
                     report.agents_failed += 1
@@ -324,7 +323,6 @@ class ReconciliationService:
                     report.agent_results.append(
                         {
                             "project_id": project.project_id,
-                            "cluster_id": cluster_id,
                             "agent_id": "",
                             "agent_name": agent.name,
                             "outcome": "failed",
@@ -358,7 +356,6 @@ class ReconciliationService:
                     report.agent_results.append(
                         {
                             "project_id": project.project_id,
-                            "cluster_id": cluster_id,
                             "agent_id": agent.agent_id,
                             "agent_name": agent.name,
                             "outcome": recovery_mode,
@@ -374,7 +371,6 @@ class ReconciliationService:
                     report.agent_results.append(
                         {
                             "project_id": project.project_id,
-                            "cluster_id": cluster_id,
                             "agent_id": agent.agent_id,
                             "agent_name": agent.name,
                             "outcome": "failed",

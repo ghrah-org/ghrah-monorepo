@@ -22,7 +22,6 @@ from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import ProjectConfig, RecoveryConfig, SubjectConfig
-from ghrah.subject.ledger.chain import ActionChainLedger
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
@@ -125,26 +124,29 @@ class TestAssembleSubject:
             ).action_chain_db_path
             assert str(actor._context_manager.persistence.db_path) == str(action_chain_db_path)
 
-            # ledger 读侧直连连通（同文件 WAL 双连接）。P2a 新契约：spawn 即
+            # 读侧经 Core 端口连通（不再直连 sqlite）。P2a 新契约：spawn 即
             # connect + 首次 persist——根节点（system prompt 快照）与 agents
             # 行当场落库（非旧「首次 save_node 才登记」语义）
-            ledger = ActionChainLedger(action_chain_db_path)
-            await ledger.start()
-            meta = await ledger.get_chain_meta(spawn["data"]["agent_id"])
-            assert meta is not None
-            session_id = meta.active_session_id
-            branch_id = next(
-                item["active_branch_id"]
-                for item in meta.sessions
-                if item["session_id"] == session_id
-            )
-            history = await ledger.get_chain_history(
-                spawn["data"]["agent_id"], session_id, branch_id
-            )
-            assert len(history) == 1
-            assert history[0].parent_id is None
-            assert await ledger.list_agents() == [spawn["data"]["agent_id"]]
-            await ledger.stop()
+            from ghrah.core.wiring import build_core_port
+
+            port = build_core_port(
+                resolve_db_path=lambda project_id: action_chain_db_path,
+            ).project(project["project_id"])
+            try:
+                catalog = await port.sessions.catalog(agent_id=spawn["data"]["agent_id"])
+                session_id = catalog.active_session_id
+                branch_id = next(
+                    item.branch_id for item in catalog.sessions if item.session_id == session_id
+                )
+                history = await port.sessions.history(
+                    agent_id=spawn["data"]["agent_id"],
+                    session_id=session_id,
+                    branch_id=branch_id,
+                )
+                assert len(history.nodes) == 1
+                assert history.nodes[0].parent_id is None
+            finally:
+                await port.aclose()
 
     async def test_reconcile_disabled_leaves_no_report(self, tmp_path: Path) -> None:
         async with _assemble(

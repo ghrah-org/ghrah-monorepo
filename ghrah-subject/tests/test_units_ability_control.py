@@ -29,7 +29,7 @@ from starlette.requests import Request
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
 from ghrah.subject.runtime.service_keys import (
-    ABILITY_ACCESS,
+    CORE_PORT_SERVICE,
     OBSERVER_EVENT_BUS,
     PROJECT_STORE,
 )
@@ -89,6 +89,145 @@ class _Access:
         return None
 
 
+class _FakePort:
+    """最小 Core 端口替身：把能力调用映射回本文件的假 store。
+
+    这一层只用于验证 Subject 的 HTTP 适配（鉴权/错误码/事件/开关），
+    Core 的真实行为由 ghrah-core 自己的测试覆盖。
+    """
+
+    def __init__(self, handle: _Handle, runtime: tuple[str, ...] | None = None) -> None:
+        self._handle = handle
+        self._runtime = runtime
+        self._abilities = _FakeAbilities(handle, runtime)
+
+    @property
+    def abilities(self) -> Any:
+        return self._abilities
+
+    def project(self, project_id: str) -> Any:
+        del project_id
+        return self
+
+
+class _FakeAbilities:
+    def __init__(self, handle: _Handle, runtime: tuple[str, ...] | None) -> None:
+        self._handle = handle
+        self._runtime = runtime
+
+    async def status(self) -> Any:
+        from ghrah.protocol.ability_control import AbilityApiFeatures, AbilityApiStatus
+
+        return AbilityApiStatus(
+            ability_source="builtin",
+            operator="deployment",
+            features=AbilityApiFeatures(tree=True, grants_write=True),
+        )
+
+    async def tree(self, *, agent_id: str) -> Any:
+        try:
+            return await self._handle.store.view(self._handle.operator, agent_id)
+        except AccessError as error:
+            raise _api_error("NOT_FOUND", str(error)) from error
+
+    async def admin(self, *, agent_id: str) -> Any:
+        from ghrah.protocol.ability_control import (
+            AbilityAdminView,
+            AbilityLifecycleView,
+            AbilitySurfaceView,
+        )
+
+        assembled = True
+        revision = 0
+        try:
+            revision = await self._handle.store.agent_revision(self._handle.operator, agent_id)
+        except AccessError as error:
+            if getattr(error, "code", None) != "not_found" and str(error) != "not_found":
+                raise
+            assembled = False
+        if assembled:
+            try:
+                await self._handle.store.grants(self._handle.operator, agent_id)
+            except AccessError:
+                assembled = False
+        state = "unassembled" if not assembled else ("running" if self._runtime else "stopped")
+        return AbilityAdminView(
+            project_id=self._handle.project_id,
+            agent_id=agent_id,
+            revision=revision,
+            run_id=None,
+            lifecycle=AbilityLifecycleView(state=state),
+            grants=[],
+            bound_tools=[],
+            surface=AbilitySurfaceView(),
+            changes_cursor=0,
+        )
+
+    async def changes(self, *, after_seq: int = 0, limit: int = 100) -> Any:
+        from ghrah.protocol.ability_control import AbilityChangesPage
+
+        return AbilityChangesPage(changes=[], next_after_seq=after_seq, has_more=False)
+
+    async def content(self, **kwargs: Any) -> Any:
+        from ghrah.protocol.errors import ApiError
+        from ghrah.protocol.problem import Problem, ProblemCode
+
+        del kwargs
+        raise ApiError(Problem.make(ProblemCode.NOT_FOUND, capability="abilities.content"))
+
+    async def _write(self, method: str, agent_id: str, change: Any) -> Any:
+        from ghrah.protocol.ability_control import AbilityTreeChangeResult
+
+        try:
+            revision = await getattr(self._handle.store, method)(
+                self._handle.operator, agent_id, change
+            )
+        except AccessError as error:
+            code = getattr(error, "code", None) or str(error)
+            if "conflict" not in str(code):
+                raise _api_error("INTERNAL", code) from error
+            details: dict[str, Any] = {}
+            try:
+                details["revision"] = await self._handle.store.agent_revision(
+                    self._handle.operator, agent_id
+                )
+            except AccessError:
+                pass
+            try:
+                view = await self._handle.store.view(self._handle.operator, agent_id)
+                details["view"] = view.model_dump(mode="json")
+            except AccessError:
+                pass
+            raise _api_error("FAILED_PRECONDITION", "conflict", details) from error
+        try:
+            view = await self._handle.store.view(self._handle.operator, agent_id)
+        except AccessError:
+            view = None
+        return AbilityTreeChangeResult(view=view, revision=revision)
+
+    async def grant(self, *, agent_id: str, change: Any) -> Any:
+        return await self._write("write_grant", agent_id, change)
+
+    async def revoke(self, *, agent_id: str, change: Any) -> Any:
+        return await self._write("write_revoke", agent_id, change)
+
+    async def enable_tool(self, *, agent_id: str, change: Any) -> Any:
+        return await self._write("write_bind_tool", agent_id, change)
+
+    async def disable_tool(self, *, agent_id: str, change: Any) -> Any:
+        return await self._write("write_unbind_tool", agent_id, change)
+
+
+def _api_error(code: str, detail: Any, details: dict[str, Any] | None = None) -> Any:
+    """构造协议层的 ApiError。"""
+    from ghrah.protocol.errors import ApiError
+    from ghrah.protocol.problem import Problem, ProblemCode
+
+    return ApiError(
+        Problem.make(ProblemCode(code), capability="test", detail=str(detail), details=details)
+    )
+
+
 class _Bus:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -113,6 +252,10 @@ class _FakeStore:
     async def agent_revision(self, actor: Any, agent: str) -> int:
         del actor, agent
         return 6
+
+    async def grants(self, actor: Any, agent: str) -> list[Any]:
+        del actor, agent
+        return []
 
     async def view(self, actor: Any, agent: str) -> Any:
         del actor
@@ -183,13 +326,13 @@ async def _request(
 
 
 def _app(config: SubjectConfig, handle: _Handle, bus: _Bus, runtime: Any = None) -> FastAPI:
-    access = _Access(handle, runtime)
+    core_port = _FakePort(handle, runtime)
     app = FastAPI()
     app.include_router(
         build_ability_control_router(
             config=config,
             project_store=_ProjectStore("proj", "/tmp/proj"),
-            access=access,  # type: ignore[arg-type]
+            core_port=core_port,
             event_bus=bus,
         )
     )
@@ -223,7 +366,7 @@ async def test_unit_mounts_router_and_status_route_on_observer_app() -> None:
             PROJECT_STORE.name,
             _ProjectStore("proj", "/tmp/proj"),
         )
-        ctx.provide(ABILITY_ACCESS.name, _Access(_Handle("proj", None, None)))
+        ctx.provide(CORE_PORT_SERVICE.name, _FakePort(_Handle("proj", None, None)))
         unit = AbilityControlUnit(config)
         fiber = ctx.plugin(mount_unit(unit))
         await wait_active(fiber)
@@ -241,7 +384,7 @@ async def test_status_reports_enabled_and_disabled() -> None:
     router = build_ability_control_router(
         config=enabled,
         project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
+        core_port=_FakePort(_Handle("proj", None, None)),
         event_bus=_Bus(),
     )
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
@@ -257,7 +400,7 @@ async def test_status_reports_enabled_and_disabled() -> None:
     router = build_ability_control_router(
         config=disabled,
         project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
+        core_port=_FakePort(_Handle("proj", None, None)),
         event_bus=_Bus(),
     )
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))

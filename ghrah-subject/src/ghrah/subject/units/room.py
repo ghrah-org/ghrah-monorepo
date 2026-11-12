@@ -107,9 +107,9 @@ class RoomUnit(SubjectUnit):
                 matches = [a for a in agents if a.get("name") == target]
             resolved: list[tuple[dict[str, Any], Any]] = []
             for agent in matches:
-                cluster_id = str(agent.get("cluster_id") or "")
+                # 单元按项目唯一：运行键就是 project_id。
                 handle = await cluster_registry.ensure_cluster(
-                    cluster_id,
+                    room.project_id,
                     project_id=room.project_id,
                     project_root_locator=str(project.get("project_root_locator") or ""),
                 )
@@ -148,13 +148,9 @@ class RoomUnit(SubjectUnit):
             try:
                 manager = cluster_registry.get_message_manager(room.project_id)
             except KeyError:
-                clusters = project.get("cluster_ids") or []
-                if not clusters:
-                    return {"success": False, "error": "No cluster for Room project", "data": None}
-                first = clusters[0]
-                cluster_id = first["cluster_id"] if isinstance(first, dict) else str(first)
+                # 单元按项目唯一：直接用 project_id 作为运行键。
                 await cluster_registry.ensure_cluster(
-                    cluster_id,
+                    room.project_id,
                     project_id=room.project_id,
                     project_root_locator=project["project_root_locator"],
                 )

@@ -9,6 +9,8 @@ from pathlib import Path
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend  # type: ignore[import-untyped]
 from ghrah.context.session_runtime import SessionRuntime
+from ghrah.core.wiring import build_core_port
+from ghrah.protocol.ports.keys import CORE_PORT
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
 
@@ -56,6 +58,11 @@ class FakeProjectManager:
         return {"success": project is not None, "data": {"project": project} if project else {}}
 
 
+def _provide_core(ctx, resolve_db_path) -> None:
+    """注入真实 Core 端口（测试允许 import Core，src 不允许）。"""
+    ctx.provide(CORE_PORT, build_core_port(resolve_db_path=resolve_db_path))
+
+
 async def test_ledger_unit_reads_explicit_session_branch(tmp_path: Path) -> None:
     project_id = "project-a"
     agent_id = "agent-a-id"
@@ -72,6 +79,7 @@ async def test_ledger_unit_reads_explicit_session_branch(tmp_path: Path) -> None
     ledger = LedgerUnit(_config(tmp_path))
     async with Context() as ctx:
         ctx.provide(PROJECT_MANAGER.name, FakeProjectManager(projects))
+        _provide_core(ctx, lambda project_id: paths.action_chain_db_path)
         fiber = ctx.plugin(mount_unit(ledger))
         await wait_active(fiber)
         payload = {
@@ -95,9 +103,11 @@ async def test_ledger_unit_reads_explicit_session_branch(tmp_path: Path) -> None
 async def test_same_agent_name_isolated_by_project_and_stable_id(tmp_path: Path) -> None:
     projects: dict[str, dict[str, object]] = {}
     runtimes: dict[str, SessionRuntime] = {}
+    db_paths: dict[str, Path] = {}
     for project_id, agent_id in (("project-a", "agent-a-id"), ("project-b", "agent-b-id")):
         paths = ProjectPaths.from_locator((tmp_path / project_id).as_uri())
         paths.action_chain_db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_paths[project_id] = paths.action_chain_db_path
         runtimes[project_id] = await _seed(paths.action_chain_db_path, agent_id, project_id)
         projects[project_id] = {
             "project_id": project_id,
@@ -107,6 +117,7 @@ async def test_same_agent_name_isolated_by_project_and_stable_id(tmp_path: Path)
     ledger = LedgerUnit(_config(tmp_path))
     async with Context() as ctx:
         ctx.provide(PROJECT_MANAGER.name, FakeProjectManager(projects))
+        _provide_core(ctx, lambda project_id: db_paths[project_id])
         fiber = ctx.plugin(mount_unit(ledger))
         await wait_active(fiber)
         for project_id, agent_id in (("project-a", "agent-a-id"), ("project-b", "agent-b-id")):
