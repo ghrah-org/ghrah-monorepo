@@ -5,11 +5,13 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { RoomMember } from "@ghrah/protocol";
+import type { ContentBlock, RoomMember } from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AttachmentChip from "./attachment-chip.vue";
 import UiButton from "@/components/ui/button.vue";
 import UiTextField from "@/components/ui/text-field.vue";
+import { useAttachments } from "@/composables/useAttachments";
 
 const { t } = useI18n();
 
@@ -18,11 +20,14 @@ const props = defineProps<{
   /** 当前 room 的成员表（候选 target 上限）。 */
   members: RoomMember[];
 }>();
-const emit = defineEmits<{ send: [targets: string[], content: string] }>();
+const emit = defineEmits<{ send: [targets: string[], content: string, blocks: ContentBlock[]] }>();
 
 const input = ref("");
 const inputEl = ref<{ element: HTMLTextAreaElement | null } | null>(null);
 const selectedTargets = ref<Set<string>>(new Set());
+const attachments = useAttachments();
+const fileInput = ref<HTMLInputElement | null>(null);
+const dragging = ref(false);
 
 /** autosize：内容变化时高度自适应；CSS max-h-40 封顶后转滚动。
  *  happy-dom 无真实布局（scrollHeight=0），单测中此函数为无害空转。 */
@@ -106,19 +111,65 @@ function parseLeadingMentions(text: string): { targets: string[]; content: strin
   return { targets: [...targets], content: rest.trim() };
 }
 
+const canSend = computed(
+  () =>
+    !props.disabled &&
+    !attachments.busy.value &&
+    (input.value.trim().length > 0 || attachments.hasAttachments.value),
+);
+
 function handleSubmit() {
+  if (!canSend.value) return;
   const raw = input.value.trim();
-  if (!raw) return;
+  const blocks = attachments.blocks.value;
+  if (!raw && blocks.length === 0) return;
   const parsed = parseLeadingMentions(raw);
   const targets = new Set(selectedTargets.value);
   for (const t of parsed.targets) targets.add(t);
-  // 有前导 @ 被解析时 content 取剥离后剩余；否则 content 取原文
+  // 有前导 @ 被解析时 content 取剥离后剩余；否则 content 取原文。
   const content = parsed.targets.length > 0 ? parsed.content : raw;
-  if (!content) return;
-  // 空 targets = 整室广播（允许发送）
-  emit("send", [...targets], content);
+  if (!content && blocks.length === 0) return;
+  // 空 targets = 整室广播（允许发送）；允许「只有块没有文字」。
+  emit("send", [...targets], content, blocks);
   input.value = "";
   selectedTargets.value = new Set();
+  attachments.clear();
+}
+
+function onFileChange(event: Event) {
+  const target = event.target as HTMLInputElement;
+  if (target.files && target.files.length > 0) void attachments.addFiles(target.files);
+  // 清空 value：同一文件连续选择两次仍会触发 change。
+  target.value = "";
+}
+
+function onDragOver(event: DragEvent) {
+  if (props.disabled) return;
+  const types = event.dataTransfer?.types;
+  if (types && Array.from(types).includes("Files")) dragging.value = true;
+}
+
+function onDragLeave() {
+  dragging.value = false;
+}
+
+function onDrop(event: DragEvent) {
+  dragging.value = false;
+  if (props.disabled) return;
+  const files = event.dataTransfer?.files;
+  if (files && files.length > 0) void attachments.addFiles(files);
+}
+
+/** 粘贴图片：剪贴板同时带纯文本时放行文本粘贴，只拦「纯文件/截图」场景。 */
+function onPaste(event: ClipboardEvent) {
+  if (props.disabled) return;
+  const text = event.clipboardData?.getData("text/plain");
+  if (text) return;
+  const files = event.clipboardData?.files;
+  if (files && files.length > 0) {
+    event.preventDefault();
+    void attachments.addFiles(files);
+  }
 }
 
 const placeholder = computed(() =>
@@ -133,7 +184,35 @@ const placeholder = computed(() =>
 </script>
 
 <template>
-  <form class="chat-composer flex flex-col gap-2 p-3" @submit.prevent="handleSubmit">
+  <form
+    class="chat-composer flex flex-col gap-2 p-3"
+    :class="{ 'chat-composer-dragging': dragging }"
+    @submit.prevent="handleSubmit"
+    @dragover.prevent="onDragOver"
+    @dragleave.prevent="onDragLeave"
+    @drop.prevent="onDrop"
+  >
+    <!-- 附件缩略图与错误提示 -->
+    <div
+      v-if="attachments.items.value.length > 0 || attachments.errors.value.length > 0"
+      class="chat-attachments"
+    >
+      <AttachmentChip
+        v-for="item in attachments.items.value"
+        :key="item.id"
+        :attachment="item"
+        @remove="attachments.remove(item.id)"
+      />
+      <p
+        v-for="(key, index) in attachments.errors.value"
+        :key="`${key}-${index}`"
+        class="chat-attachment-error"
+        role="alert"
+      >
+        {{ t(key) }}
+      </p>
+    </div>
+
     <!-- room 成员多选 target chips（空选 = 广播） -->
     <div v-if="memberAgents.length > 0" class="flex flex-wrap gap-2">
       <button
@@ -148,6 +227,25 @@ const placeholder = computed(() =>
     </div>
 
     <div class="relative flex items-center gap-3">
+      <input
+        ref="fileInput"
+        class="chat-file-input"
+        type="file"
+        accept="image/*"
+        multiple
+        :disabled="props.disabled"
+        @change="onFileChange"
+      />
+      <UiButton
+        type="button"
+        variant="secondary"
+        size="sm"
+        :disabled="props.disabled"
+        :aria-label="t('chat.input.attach')"
+        @click="fileInput?.click()"
+      >
+        {{ t("chat.input.attach") }}
+      </UiButton>
       <UiTextField
         ref="inputEl"
         v-model="input"
@@ -158,6 +256,7 @@ const placeholder = computed(() =>
         class="flex-1"
         :placeholder="placeholder"
         @keydown="onKeydown"
+        @paste="onPaste"
       />
       <!-- @-补全下拉 -->
       <ul v-if="mentionCandidates.length > 0" class="chat-mention-list">
@@ -170,7 +269,7 @@ const placeholder = computed(() =>
           @{{ agent.name }}
         </li>
       </ul>
-      <UiButton type="submit" :disabled="props.disabled || !input.trim()" variant="primary">
+      <UiButton type="submit" :disabled="!canSend" variant="primary">
         {{ t("chat.input.send") }}
       </UiButton>
     </div>
@@ -184,5 +283,26 @@ const placeholder = computed(() =>
 .chat-composer :deep(textarea) {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.chat-file-input {
+  display: none;
+}
+
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chat-attachment-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-ui-note);
+}
+
+.chat-composer-dragging {
+  outline: 1px dashed var(--color-border-strong);
+  outline-offset: -0.25rem;
 }
 </style>

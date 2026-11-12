@@ -2,10 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RoomLogEntryPayload } from "@ghrah/protocol";
+import type { ContentBlock, RoomLogEntryPayload } from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { ChatEntry } from "../projection.js";
+import {
+  type ChatEntry,
+  contentBlocksFromData,
+  textFromBlocks,
+  withTextContent,
+} from "../projection.js";
 import type { AgentTarget, RoomTarget } from "../scope.js";
 
 export const DEFAULT_HUMAN_AUTHOR = "user";
@@ -13,6 +18,8 @@ export const DEFAULT_HUMAN_AUTHOR = "user";
 export const useChatStore = defineStore("ghrah-chat", () => {
   const entries = ref<ChatEntry[]>([]);
   const currentAuthor = ref<string>(DEFAULT_HUMAN_AUTHOR);
+  /** 服务端回读确认时没带回我们发出的媒体块 → 提示「图片可能被旧核丢弃」。 */
+  const blockLossRooms = ref<Set<string>>(new Set());
   let pendingSeq = 0;
 
   function addPendingEntry(partial: {
@@ -23,14 +30,17 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     agentId?: string;
     roomId: string;
     targets?: string[];
+    blocks?: ContentBlock[];
   }): ChatEntry {
     const seq = ++pendingSeq;
+    const blocks = withTextContent(partial.blocks, partial.content);
     const entry: ChatEntry = {
       projectId: partial.projectId,
       agentId: partial.agentId,
       from: currentAuthor.value,
       to: partial.to,
       content: partial.content,
+      blocks: blocks && blocks.length > 0 ? blocks : undefined,
       kind: "human_input",
       timestamp: new Date().toISOString(),
       nodeId: "",
@@ -45,8 +55,12 @@ export const useChatStore = defineStore("ghrah-chat", () => {
   }
 
   function entryContent(entry: RoomLogEntryPayload): string {
-    const message = entry.data?.message;
-    return typeof message === "string" ? message : JSON.stringify(entry.data ?? {});
+    const data = entry.data ?? {};
+    const message = data.message;
+    if (typeof message === "string" && message) return message;
+    const blocks = contentBlocksFromData(data);
+    if (blocks) return textFromBlocks(blocks);
+    return typeof message === "string" ? message : JSON.stringify(data);
   }
 
   function onRoomLogAppended(entry: RoomLogEntryPayload, projectId: string) {
@@ -60,18 +74,47 @@ export const useChatStore = defineStore("ghrah-chat", () => {
         pending.content === content,
     );
     if (index < 0) return;
+    const pending = entries.value[index];
+    const sentMedia = pending.blocks?.some((block) => block.type !== "text") === true;
+    const incoming = contentBlocksFromData(entry.data ?? {});
+    const echoedMedia = incoming?.some((block) => block.type !== "text") === true;
+    if (sentMedia && !echoedMedia) {
+      const next = new Set(blockLossRooms.value);
+      next.add(entry.room_id);
+      blockLossRooms.value = next;
+    }
     const next = [...entries.value];
     next.splice(index, 1);
     entries.value = next;
   }
 
-  function markPendingError(target: RoomTarget, content: string, error: string) {
+  function clearBlockLoss(roomId?: string) {
+    if (roomId === undefined) {
+      if (blockLossRooms.value.size === 0) return;
+      blockLossRooms.value = new Set();
+      return;
+    }
+    if (!blockLossRooms.value.has(roomId)) return;
+    const next = new Set(blockLossRooms.value);
+    next.delete(roomId);
+    blockLossRooms.value = next;
+  }
+
+  function markPendingError(
+    target: RoomTarget,
+    content: string,
+    error: string,
+    mediaBlockCount?: number,
+  ) {
     const index = entries.value.findIndex(
       (pending) =>
         pending.pending === true &&
         pending.projectId === target.projectId &&
         pending.roomId === target.roomId &&
-        pending.content === content,
+        pending.content === content &&
+        (mediaBlockCount === undefined ||
+          (pending.blocks?.filter((block) => block.type !== "text").length ?? 0) ===
+            mediaBlockCount),
     );
     if (index < 0) return;
     const next = [...entries.value];
@@ -110,9 +153,11 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     entries,
     allEntries,
     currentAuthor,
+    blockLossRooms,
     setCurrentAuthor,
     addPendingEntry,
     onRoomLogAppended,
+    clearBlockLoss,
     markPendingError,
     clearAgent,
     clearRoom,

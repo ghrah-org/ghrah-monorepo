@@ -50,6 +50,7 @@ export {
 export {
   type ChatEntry,
   type ChatEntryKind,
+  contentBlocksFromData,
   type FileChange,
   type FileChangeScope,
   projectNodeToChatEntries,
@@ -57,6 +58,8 @@ export {
   type RoomLogProjectionScope,
   rebuildChatEntriesFromChain,
   roomLogToChatEntries,
+  textFromBlocks,
+  withTextContent,
 } from "./projection.js";
 export {
   type AgentKey,

@@ -43,6 +43,69 @@ describe("useChatStore", () => {
     expect(store.entries[0].projectId).toBe("p2");
   });
 
+  it("addPendingEntry carries blocks and prepends the text block", () => {
+    const store = useChatStore();
+    const entry = store.addPendingEntry(
+      pending({
+        blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+      }),
+    );
+    expect(entry.blocks).toEqual([
+      { type: "text", text: "hello" },
+      { type: "image", base64: "aGk=", mime_type: "image/png" },
+    ]);
+  });
+
+  it("image-only pending matches an empty-content echo and clears", () => {
+    const store = useChatStore();
+    store.addPendingEntry(
+      pending({
+        content: "",
+        blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+      }),
+    );
+    store.onRoomLogAppended(
+      log({
+        data: {
+          message: "",
+          content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+        },
+      }),
+      "p1",
+    );
+    expect(store.entries).toHaveLength(0);
+    expect(store.blockLossRooms.has("r1")).toBe(false);
+  });
+
+  it("flags block loss when the echo carries no media blocks", () => {
+    const store = useChatStore();
+    store.addPendingEntry(
+      pending({
+        content: "",
+        blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+      }),
+    );
+    store.onRoomLogAppended(log({ data: { message: "" } }), "p1");
+    expect(store.entries).toHaveLength(0);
+    expect(store.blockLossRooms.has("r1")).toBe(true);
+    store.clearBlockLoss("r1");
+    expect(store.blockLossRooms.has("r1")).toBe(false);
+  });
+
+  it("marks the matching pending with the same media block count", () => {
+    const store = useChatStore();
+    store.addPendingEntry(
+      pending({
+        content: "",
+        blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+      }),
+    );
+    store.addPendingEntry(pending({ content: "" }));
+    store.markPendingError({ projectId: "p1", roomId: "r1" }, "", "failed", 1);
+    expect(store.entries[0]).toMatchObject({ pending: false, error: "failed" });
+    expect(store.entries[1].pending).toBe(true);
+  });
+
   it("marks only the exact pending entry as failed", () => {
     const store = useChatStore();
     store.addPendingEntry(pending());

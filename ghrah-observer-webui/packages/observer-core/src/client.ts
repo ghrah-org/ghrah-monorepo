@@ -11,6 +11,7 @@ import {
   ClientType,
   type CommandResultPayload,
   CommandType,
+  type ContentBlock,
   generateRequestId,
   type RoomSubjectType,
   ServerClient,
@@ -204,7 +205,12 @@ export class ObserverClient extends ServerClient {
     target: AgentTarget,
     content: string,
     sender = "user",
-    options: { timeout?: number | null; metadata?: Record<string, unknown> | null } = {},
+    options: {
+      timeout?: number | null;
+      metadata?: Record<string, unknown> | null;
+      /** 入站内容块；与 content 并存时 content 仍是人类可读正文。 */
+      contentBlocks?: ContentBlock[] | null;
+    } = {},
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = {
       project_id: target.projectId,
@@ -215,6 +221,9 @@ export class ObserverClient extends ServerClient {
     };
     if (options.timeout != null) payload.timeout = options.timeout;
     if (options.metadata != null) payload.metadata = options.metadata;
+    if (options.contentBlocks != null && options.contentBlocks.length > 0) {
+      payload.content_blocks = options.contentBlocks;
+    }
     const msg: ServerMessage = {
       type: CommandType.SEND_MESSAGE,
       payload,

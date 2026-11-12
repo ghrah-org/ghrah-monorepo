@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import { InputContentBlockSchema } from "@ghrah/protocol";
 import type { ActionNode, ContentBlock, RoomLogEntryPayload } from "@ghrah/protocol";
 
 export type ChatEntryKind =
@@ -65,13 +66,42 @@ export interface RoomLogProjectionScope {
 
 const FILE_CHANGE_ABILITIES = new Set(["write_file", "edit_file", "delete_file"]);
 
-function _extractText(blocks: ContentBlock[] | undefined): string {
+/** 从内容块里取可见正文（仅 text 块），供 content 回退与 pending 匹配。 */
+export function textFromBlocks(blocks: ContentBlock[] | undefined): string {
   if (!blocks) return "";
   const parts: string[] = [];
   for (const block of blocks) {
     if (block.type === "text") parts.push(block.text);
   }
   return parts.join(" ").trim();
+}
+
+/**
+ * 解析 RoomLog data.content_blocks。坏块逐个跳过，不把整条消息判坏；
+ * 空数组/缺省/非数组一律视为「没有块」，由调用方回退正文。
+ */
+export function contentBlocksFromData(data: Record<string, unknown>): ContentBlock[] | undefined {
+  const raw = data.content_blocks;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const blocks: ContentBlock[] = [];
+  for (const item of raw) {
+    const parsed = InputContentBlockSchema.safeParse(item);
+    if (parsed.success) blocks.push(parsed.data);
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+/**
+ * 正文与块并存时，把正文补成前置 text 块（块里已有 text 时不重复）。
+ * 这样聊天富块模板只渲染 blocks 也不会丢正文；纯块消息保持无 text 块。
+ */
+export function withTextContent(
+  blocks: ContentBlock[] | undefined,
+  content: string,
+): ContentBlock[] | undefined {
+  if (!blocks || blocks.length === 0) return blocks;
+  if (!content || blocks.some((block) => block.type === "text")) return blocks;
+  return [{ type: "text", text: content }, ...blocks];
 }
 
 function _blockArg(block: ContentBlock, key: string): string {
@@ -94,7 +124,10 @@ function _roomEntryKind(entry: RoomLogEntryPayload, ability: string): ChatEntryK
 /**
  * RoomLog entry → ChatEntry。chat 的按 Room 投影（数据源 = rooms store 的 logs）。
  * data 约定（map 信封，协议层不约束）：`{message: string, targets?: string[],
- * ability?: string}`——message 为 content（缺时回退 JSON.stringify(data)）；
+ * ability?: string, content_blocks?: unknown[]}`——message 为正文；content_blocks
+ * 来自 MM metadata 回读，解析后填入 `entry.blocks`。纯块消息（message 缺省/空）
+ * 不再把 data 的 JSON 兜底当成正文；正文与块并存时正文补成前置 text 块，
+ * 避免只在富块模板里渲染块而丢正文。
  * targets 非空 = 定向这些 agent，缺省/空 = 整室广播；ability 为产生该条目的
  * 能力名（RoomFilter 链过滤落账时携带），用于把 ``end_task`` 结果投影成
  * 结束态条目而不是普通会话回复。
@@ -105,7 +138,16 @@ export function roomLogToChatEntries(
 ): ChatEntry {
   const data = entry.data ?? {};
   const message = data.message;
-  const content = typeof message === "string" ? message : JSON.stringify(data);
+  const rawBlocks = contentBlocksFromData(data);
+  const hasBlocks = rawBlocks !== undefined && rawBlocks.length > 0;
+  const messageText = typeof message === "string" ? message : "";
+  // 纯块消息：正文只回退到块内文本（通常为空），绝不回退 JSON.stringify(data)。
+  const content = hasBlocks
+    ? messageText || textFromBlocks(rawBlocks)
+    : typeof message === "string"
+      ? message
+      : JSON.stringify(data);
+  const blocks = withTextContent(rawBlocks, content);
   const rawTargets = data.targets;
   const targets =
     Array.isArray(rawTargets) && rawTargets.every((t) => typeof t === "string")
@@ -131,6 +173,7 @@ export function roomLogToChatEntries(
     from: entry.author,
     to: entry.room_id,
     content,
+    blocks,
     kind: _roomEntryKind(entry, ability),
     timestamp: new Date(entry.timestamp * 1000).toISOString(),
     nodeId: entry.id,
@@ -167,7 +210,7 @@ export function projectNodeToChatEntries(node: ActionNode): ChatEntry[] {
 
     if (role === "user") {
       if (source.startsWith("human:") || source === "human") {
-        const text = _extractText(blocks);
+        const text = textFromBlocks(blocks);
         if (text) {
           push({
             from: source.startsWith("human:") ? source.slice("human:".length) || "user" : "user",
@@ -211,7 +254,7 @@ export function projectNodeToChatEntries(node: ActionNode): ChatEntry[] {
       }
       // R4: conversation reply (AI TextBlock when ability conversation)
       if (abilityNames.includes("conversation")) {
-        const text = _extractText(blocks);
+        const text = textFromBlocks(blocks);
         if (text) {
           push({
             from: agentName,

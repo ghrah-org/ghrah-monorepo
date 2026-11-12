@@ -5,9 +5,9 @@
 // @vitest-environment happy-dom
 
 import type { RoomMember } from "@ghrah/protocol";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import MessageInput from "./message-input.vue";
 
 function memberList(agents: string[]): RoomMember[] {
@@ -44,24 +44,26 @@ describe("MessageInput", () => {
     await wrapper.find("form").trigger("submit");
     const sendEvents = wrapper.emitted("send");
     expect(sendEvents).toBeTruthy();
-    expect(sendEvents![0]).toEqual([[], "hello room"]);
+    expect(sendEvents![0]).toEqual([[], "hello room", []]);
   });
 
   it("chip 多选：emits selected targets", async () => {
     const wrapper = mountInput();
-    const chips = wrapper.findAll('button[type="button"]');
+    const chips = wrapper
+      .findAll('button[type="button"]')
+      .filter((button) => button.text().startsWith("@"));
     expect(chips.map((c) => c.text())).toEqual(["@frontend", "@backend"]);
     await chips[0].trigger("click");
     await wrapper.find("textarea").setValue("hi");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "hi"]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "hi", []]);
   });
 
   it("@前导解析：targets 合并、content 剥离 mention", async () => {
     const wrapper = mountInput();
     await wrapper.find("textarea").setValue("@frontend 看一下这个");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "看一下这个"]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "看一下这个", []]);
   });
 
   it("@补全下拉：候选来自 room 成员，点选并入 targets", async () => {
@@ -72,14 +74,14 @@ describe("MessageInput", () => {
     await items[0].trigger("mousedown");
     await wrapper.find("textarea").setValue("go");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "go"]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "go", []]);
   });
 
   it("未知 @name 不算 target，content 保留原文", async () => {
     const wrapper = mountInput();
     await wrapper.find("textarea").setValue("@ghost hello");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([[], "@ghost hello"]);
+    expect(wrapper.emitted("send")![0]).toEqual([[], "@ghost hello", []]);
   });
 
   it("clears input and targets after submit", async () => {
@@ -106,9 +108,12 @@ describe("MessageInput", () => {
     expect(wrapper.find('button[type="submit"]').attributes("disabled")).toBeDefined();
   });
 
-  it("无成员时不渲染 chips", () => {
+  it("无成员时不渲染 target chips（附件按钮仍保留）", () => {
     const wrapper = mountInput({ members: memberList([]) });
-    expect(wrapper.findAll('button[type="button"]')).toHaveLength(0);
+    const chips = wrapper
+      .findAll('button[type="button"]')
+      .filter((button) => button.text().startsWith("@"));
+    expect(chips).toHaveLength(0);
   });
 
   it("renders member names but emits stable IDs for chips and mentions", async () => {
@@ -125,7 +130,7 @@ describe("MessageInput", () => {
     expect(wrapper.find('button[type="button"]').text()).toBe("@shuoxi");
     await wrapper.find("textarea").setValue("@shuoxi 下午好");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([["stable-shuoxi"], "下午好"]);
+    expect(wrapper.emitted("send")![0]).toEqual([["stable-shuoxi"], "下午好", []]);
   });
 
   it("Enter 触发发送，Shift+Enter 保留换行不发送", async () => {
@@ -133,7 +138,7 @@ describe("MessageInput", () => {
     const textarea = wrapper.find("textarea");
     await textarea.setValue("first line");
     await textarea.trigger("keydown", { key: "Enter" });
-    expect(wrapper.emitted("send")![0]).toEqual([[], "first line"]);
+    expect(wrapper.emitted("send")![0]).toEqual([[], "first line", []]);
 
     await textarea.setValue("first line\nsecond");
     await textarea.trigger("keydown", { key: "Enter", shiftKey: true });
@@ -146,7 +151,7 @@ describe("MessageInput", () => {
     const textarea = wrapper.find("textarea");
     await textarea.setValue("with modifier");
     await textarea.trigger("keydown", { key: "Enter", ctrlKey: true });
-    expect(wrapper.emitted("send")![0]).toEqual([[], "with modifier"]);
+    expect(wrapper.emitted("send")![0]).toEqual([[], "with modifier", []]);
     await textarea.setValue("with meta");
     await textarea.trigger("keydown", { key: "Enter", metaKey: true });
     expect(wrapper.emitted("send")).toHaveLength(2);
@@ -163,5 +168,83 @@ describe("MessageInput", () => {
   it("renders key hint below input", () => {
     const wrapper = mountInput();
     expect(wrapper.text()).toContain("Enter to send · Shift+Enter for newline");
+  });
+
+  function pngFile(name = "shot.png"): File {
+    const binary = Uint8Array.from(atob("aGk="), (char) => char.charCodeAt(0));
+    return new File([binary], name, { type: "image/png" });
+  }
+
+  function selectFiles(wrapper: ReturnType<typeof mountInput>, files: File[]) {
+    const element = wrapper.find('input[type="file"]').element as HTMLInputElement;
+    Object.defineProperty(element, "files", { configurable: true, value: files });
+    return wrapper.find('input[type="file"]').trigger("change");
+  }
+
+  it("选择图片后显示缩略图 chip，允许只有块没有文字", async () => {
+    const wrapper = mountInput();
+    await selectFiles(wrapper, [pngFile()]);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip img").exists()).toBe(true));
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("send")![0]).toEqual([
+      [],
+      "",
+      [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+    ]);
+    expect(wrapper.find(".attachment-chip").exists()).toBe(false);
+  });
+
+  it("粘贴图片进入附件；纯文本粘贴不拦截", async () => {
+    const wrapper = mountInput();
+    const textarea = wrapper.find("textarea");
+    const pasteWithFile = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteWithFile, "clipboardData", {
+      value: { files: [pngFile()], getData: () => "" },
+    });
+    textarea.element.dispatchEvent(pasteWithFile);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+
+    const pasteText = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteText, "clipboardData", {
+      value: { files: [], getData: () => "plain text" },
+    });
+    textarea.element.dispatchEvent(pasteText);
+    await flushPromises();
+    expect(wrapper.findAll(".attachment-chip")).toHaveLength(1);
+  });
+
+  it("拖拽图片进入附件", async () => {
+    const wrapper = mountInput();
+    const form = wrapper.find("form");
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { files: [pngFile()], types: ["Files"] },
+    });
+    form.element.dispatchEvent(drop);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+  });
+
+  it("不支持的附件被拒绝并提示，纯文本仍可发送 blocks=[]", async () => {
+    const wrapper = mountInput();
+    const text = new File(["hello"], "note.txt", { type: "text/plain" });
+    await selectFiles(wrapper, [text]);
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Unsupported image type"));
+    expect(wrapper.find(".attachment-chip").exists()).toBe(false);
+    await wrapper.find("textarea").setValue("still works");
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("send")![0]).toEqual([[], "still works", []]);
+  });
+
+  it("文字 + 图片：正文与块同时 emit", async () => {
+    const wrapper = mountInput();
+    await selectFiles(wrapper, [pngFile()]);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+    await wrapper.find("textarea").setValue("看这张图");
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("send")![0]).toEqual([
+      [],
+      "看这张图",
+      [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+    ]);
   });
 });

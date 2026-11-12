@@ -195,26 +195,38 @@ const roomMeta = computed(() => {
   });
 });
 
-async function handleSend(targets: string[], content: string) {
+async function handleSend(targets: string[], content: string, blocks: ContentBlock[] = []) {
   const projectId = props.projectId;
   const roomId = props.roomId;
   const currentRoom = room.value;
-  if (!roomId || !projectId || !currentRoom || !content) return;
+  if (!roomId || !projectId || !currentRoom) return;
+  if (!content && blocks.length === 0) return;
   const target = { projectId, roomId };
-  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets });
-  roomSend(roomId, content, targets)
+  const mediaBlockCount = blocks.filter((block) => block.type !== "text").length;
+  chat.clearBlockLoss(roomId);
+  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets, blocks });
+  roomSend(roomId, content, targets, blocks)
     .then((r) => {
-      if (r === null) chat.markPendingError(target, content, t("chat.sendFailedDisconnected"));
+      if (r === null)
+        chat.markPendingError(target, content, t("chat.sendFailedDisconnected"), mediaBlockCount);
       else if (!r.success)
-        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"));
+        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"), mediaBlockCount);
       else void refreshDeliveries();
     })
     .catch((e) =>
-      chat.markPendingError(target, content, t("chat.sendFailed", { msg: String(e ?? "") })),
+      chat.markPendingError(
+        target,
+        content,
+        t("chat.sendFailed", { msg: String(e ?? "") }),
+        mediaBlockCount,
+      ),
     );
   sticky.value = true;
   await nextTick(() => scrollToBottom());
 }
+
+/** 旧核会静默忽略 content_blocks：服务端回读没带回媒体块时给出可见提示。 */
+const blockLossNotice = computed(() => chat.blockLossRooms.has(props.roomId));
 
 function scrollToBottom() {
   if (messageContainer.value) {
@@ -512,6 +524,10 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       </template>
     </div>
 
+    <p v-if="blockLossNotice" class="chat-block-loss" role="status">
+      {{ t("chat.sendFailedNoBlocks") }}
+    </p>
+
     <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
 
     <RoomDetailDrawer
@@ -770,5 +786,15 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 :root.dark .markdown-body :deep(th),
 :root.dark .markdown-body :deep(td) {
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.chat-block-loss {
+  margin: 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-danger);
+  font-size: var(--font-ui-note);
 }
 </style>

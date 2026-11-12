@@ -200,6 +200,25 @@ describe("ObserverClient", () => {
 
       await expect(msgPromise).resolves.toBeDefined();
     });
+
+    it("passes content_blocks through send_message", async () => {
+      await connectClient(client, mockWs);
+      const blocks = [{ type: "image" as const, base64: "aGk=", mime_type: "image/png" }];
+      const msgPromise = client.sendMessage(AGENT_TARGET, "看图", "user", {
+        contentBlocks: blocks,
+      });
+      const parsed = JSON.parse(mockWs.sent[0]);
+      expect(parsed.payload.content).toBe("看图");
+      expect(parsed.payload.content_blocks).toEqual(blocks);
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          payload: { request_id: parsed.request_id, success: true, data: {} },
+          request_id: parsed.request_id,
+        }),
+      });
+      await expect(msgPromise).resolves.toBeDefined();
+    });
   });
 
   describe("sendAgentMessage", () => {
@@ -669,6 +688,18 @@ describe("ObserverClient", () => {
         author_type: "human",
         data: { message: "hello" },
       });
+    });
+
+    it("roomSend passes content_blocks inside the free-form data map", async () => {
+      await connectClient(client, mockWs);
+      const blocks = [
+        { type: "image" as const, base64: "aGk=", mime_type: "image/png" },
+        { type: "text" as const, text: "看图" },
+      ];
+      const parsed = await runRequest(
+        client.roomSend("r1", { message: "看图", content_blocks: blocks }),
+      );
+      expect(parsed.payload.data).toEqual({ message: "看图", content_blocks: blocks });
     });
   });
 

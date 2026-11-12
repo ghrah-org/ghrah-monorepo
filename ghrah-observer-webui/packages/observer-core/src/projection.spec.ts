@@ -296,6 +296,67 @@ describe("roomLogToChatEntries", () => {
     expect(e.content).toBe(JSON.stringify({ foo: 1 }));
   });
 
+  it("data.content_blocks → entry.blocks；纯块消息 content 不回退 JSON", () => {
+    const blocks = [
+      { type: "image", base64: "aGk=", mime_type: "image/png" },
+      { type: "text", text: "图纸" },
+    ];
+    const e = roomLogToChatEntries(
+      makeRoomEntry({ author: "user", author_type: "human", data: { content_blocks: blocks } }),
+    );
+    expect(e.blocks).toEqual(blocks);
+    expect(e.content).toBe("图纸");
+  });
+
+  it("纯图片块（无正文）content 为空字符串而不是 data 的 JSON", () => {
+    const e = roomLogToChatEntries(
+      makeRoomEntry({
+        author: "user",
+        author_type: "human",
+        data: { content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }] },
+      }),
+    );
+    expect(e.content).toBe("");
+    expect(e.blocks).toHaveLength(1);
+    expect(e.blocks?.[0]?.type).toBe("image");
+  });
+
+  it("正文与图片块并存时正文补成前置 text 块（不重复）", () => {
+    const e = roomLogToChatEntries(
+      makeRoomEntry({
+        author: "user",
+        author_type: "human",
+        data: {
+          message: "请识别这张图",
+          content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+        },
+      }),
+    );
+    expect(e.content).toBe("请识别这张图");
+    expect(e.blocks?.[0]).toEqual({ type: "text", text: "请识别这张图" });
+    expect(e.blocks).toHaveLength(2);
+  });
+
+  it("坏块逐个跳过：剩余合法块保留，全部坏则回退旧正文语义", () => {
+    const partial = roomLogToChatEntries(
+      makeRoomEntry({
+        data: {
+          content_blocks: [
+            { type: "image", base64: "aGk=", mime_type: "image/png" },
+            { type: "not-a-block" },
+          ],
+        },
+      }),
+    );
+    expect(partial.blocks).toHaveLength(1);
+
+    const broken = roomLogToChatEntries(
+      makeRoomEntry({ data: { content_blocks: [{ type: "nope" }] } }),
+    );
+    expect(broken.blocks).toBeUndefined();
+    expect(broken.content).toBe(JSON.stringify({ content_blocks: [{ type: "nope" }] }));
+  });
+
   it("data.targets 为 string[] 时投影到 targets", () => {
     const e = roomLogToChatEntries(
       makeRoomEntry({ data: { message: "hi", targets: ["frontend", "backend"] } }),

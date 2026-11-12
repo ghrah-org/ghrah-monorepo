@@ -407,9 +407,20 @@ export default {
     },
     sendFailedDisconnected: "Send failed: not connected",
     sendFailed: "Send failed: {msg}",
+    sendFailedNoBlocks:
+      "The server did not echo the attached image; the message may have been sent without it.",
+    attachment: {
+      remove: "Remove attachment",
+      tooLarge: "Image is too large (max 4 MiB after base64 encoding).",
+      unsupported: "Unsupported image type. Use PNG, JPEG, WebP, or GIF.",
+      totalTooLarge: "Too many images or total size exceeds 8 MiB.",
+      uploading: "Processing image…",
+      failed: "Could not read the image.",
+    },
     input: {
       toTarget: "To {'@'}{name}...",
       broadcast: "Message this room (broadcast); {'@'}name or chips to target...",
+      attach: "Attach image",
       send: "Send",
       hint: "Enter to send · Shift+Enter for newline",
     },
