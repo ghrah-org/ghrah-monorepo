@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { InputContentBlockSchema } from "@ghrah/protocol";
 import type { ActionNode, ContentBlock, RoomLogEntryPayload } from "@ghrah/protocol";
+import { type ChatBlock, parseChatBlock, textFromChatBlocks } from "./block-compat.js";
 
 export type ChatEntryKind =
   "human_input" | "conversation" | "send_message" | "broadcast" | "end_task";
@@ -23,7 +23,7 @@ export interface ChatEntry {
   from: string;
   to: string;
   content: string;
-  blocks?: ContentBlock[];
+  blocks?: ChatBlock[];
   kind: ChatEntryKind;
   timestamp: string;
   nodeId: string;
@@ -67,26 +67,21 @@ export interface RoomLogProjectionScope {
 const FILE_CHANGE_ABILITIES = new Set(["write_file", "edit_file", "delete_file"]);
 
 /** 从内容块里取可见正文（仅 text 块），供 content 回退与 pending 匹配。 */
-export function textFromBlocks(blocks: ContentBlock[] | undefined): string {
-  if (!blocks) return "";
-  const parts: string[] = [];
-  for (const block of blocks) {
-    if (block.type === "text") parts.push(block.text);
-  }
-  return parts.join(" ").trim();
+export function textFromBlocks(blocks: ChatBlock[] | undefined): string {
+  return textFromChatBlocks(blocks);
 }
 
 /**
  * 解析 RoomLog data.content_blocks。坏块逐个跳过，不把整条消息判坏；
  * 空数组/缺省/非数组一律视为「没有块」，由调用方回退正文。
  */
-export function contentBlocksFromData(data: Record<string, unknown>): ContentBlock[] | undefined {
+export function contentBlocksFromData(data: Record<string, unknown>): ChatBlock[] | undefined {
   const raw = data.content_blocks;
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
-  const blocks: ContentBlock[] = [];
+  const blocks: ChatBlock[] = [];
   for (const item of raw) {
-    const parsed = InputContentBlockSchema.safeParse(item);
-    if (parsed.success) blocks.push(parsed.data);
+    const parsed = parseChatBlock(item);
+    if (parsed) blocks.push(parsed);
   }
   return blocks.length > 0 ? blocks : undefined;
 }
@@ -96,9 +91,9 @@ export function contentBlocksFromData(data: Record<string, unknown>): ContentBlo
  * 这样聊天富块模板只渲染 blocks 也不会丢正文；纯块消息保持无 text 块。
  */
 export function withTextContent(
-  blocks: ContentBlock[] | undefined,
+  blocks: ChatBlock[] | undefined,
   content: string,
-): ContentBlock[] | undefined {
+): ChatBlock[] | undefined {
   if (!blocks || blocks.length === 0) return blocks;
   if (!content || blocks.some((block) => block.type === "text")) return blocks;
   return [{ type: "text", text: content }, ...blocks];

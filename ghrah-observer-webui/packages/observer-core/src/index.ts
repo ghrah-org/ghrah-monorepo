@@ -30,6 +30,24 @@ export {
   type HttpQueryValue,
   type HttpRequestOptions,
 } from "./http.js";
+export {
+  attachmentClient,
+  attachmentPath,
+  attachmentUrl,
+  createAttachmentClient,
+  DEFAULT_ATTACHMENT_TIMEOUT_MS,
+  MAX_ATTACHMENT_BYTES,
+  setAttachmentClientForTest,
+  uploadAttachment,
+  type AttachmentClient,
+  type AttachmentClientOptions,
+  type AttachmentUploadProgress,
+  type UploadAttachmentOptions,
+  type UploadBody,
+  type UploadedAttachment,
+  type UploadXhr,
+  type UploadXhrProgressEvent,
+} from "./attachments.js";
 export { type ConnectStoresOptions, connectStores } from "./bind.js";
 export { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 export {
@@ -47,6 +65,15 @@ export {
   type FrameBatcher,
   type ScheduleFn,
 } from "./frame-batcher.js";
+export {
+  type ChatBlock,
+  isVideoBlock,
+  parseChatBlock,
+  parseVideoBlock,
+  textFromChatBlocks,
+  type VideoBlockLike,
+  type VideoFrameBlockLike,
+} from "./block-compat.js";
 export {
   type ChatEntry,
   type ChatEntryKind,

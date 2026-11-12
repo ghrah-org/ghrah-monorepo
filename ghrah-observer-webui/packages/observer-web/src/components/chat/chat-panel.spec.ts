@@ -386,7 +386,58 @@ describe("ChatPanel", () => {
     rooms.onRoomLogAppended({ entry: echo });
     chat.onRoomLogAppended(echo, "p1");
     await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain("did not echo the attached image");
+    expect(wrapper.text()).toContain("did not echo the attached media");
+  });
+
+  it("渲染 video 块：attachment_id → <video src=附件 URL> + 封面帧", async () => {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "", {
+        content_blocks: [
+          {
+            type: "video",
+            attachment_id: "att-v1",
+            mime_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_s: 5,
+            width: 640,
+            height: 360,
+            frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+          },
+        ],
+      }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    const video = wrapper.find("video");
+    expect(video.exists()).toBe(true);
+    expect(video.attributes("src")).toContain("/api/v1/projects/p1/attachments/att-v1");
+    expect(video.attributes("poster")).toContain("data:image/jpeg;base64,RlJBTUU=");
+    expect(video.attributes("controls")).toBeDefined();
+  });
+
+  it("video 块缺 attachment_id/url 时回退封面帧并明确提示", async () => {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "", {
+        content_blocks: [
+          {
+            type: "video",
+            mime_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_s: 5,
+            frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+          },
+        ],
+      }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("video").exists()).toBe(false);
+    const img = wrapper.find(".block-video-fallback img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toContain("data:image/jpeg;base64,RlJBTUU=");
+    expect(wrapper.text()).toContain("Video unavailable");
   });
 });
 

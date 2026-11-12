@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ContentBlock, RoomLogEntryPayload } from "@ghrah/protocol";
+import type { RoomLogEntryPayload } from "@ghrah/protocol";
+import type { ChatBlock } from "../block-compat.js";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import {
@@ -30,7 +31,7 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     agentId?: string;
     roomId: string;
     targets?: string[];
-    blocks?: ContentBlock[];
+    blocks?: ChatBlock[];
   }): ChatEntry {
     const seq = ++pendingSeq;
     const blocks = withTextContent(partial.blocks, partial.content);

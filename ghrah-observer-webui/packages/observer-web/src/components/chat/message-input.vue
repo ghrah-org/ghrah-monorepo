@@ -5,13 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { ContentBlock, RoomMember } from "@ghrah/protocol";
+import type { ChatBlock } from "@ghrah/observer-core";
+import type { RoomMember } from "@ghrah/protocol";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AttachmentChip from "./attachment-chip.vue";
 import UiButton from "@/components/ui/button.vue";
 import UiTextField from "@/components/ui/text-field.vue";
-import { useAttachments } from "@/composables/useAttachments";
+import { type AttachmentDeps, useAttachments } from "@/composables/useAttachments";
 
 const { t } = useI18n();
 
@@ -19,13 +20,20 @@ const props = defineProps<{
   disabled?: boolean;
   /** 当前 room 的成员表（候选 target 上限）。 */
   members: RoomMember[];
+  /** 附件上传所属项目（视频走附件，需要项目作用域）。 */
+  projectId: string;
+  /** 测试/嵌入式注入点；正常渲染不传。 */
+  attachmentDeps?: AttachmentDeps;
 }>();
-const emit = defineEmits<{ send: [targets: string[], content: string, blocks: ContentBlock[]] }>();
+const emit = defineEmits<{ send: [targets: string[], content: string, blocks: ChatBlock[]] }>();
 
 const input = ref("");
 const inputEl = ref<{ element: HTMLTextAreaElement | null } | null>(null);
 const selectedTargets = ref<Set<string>>(new Set());
-const attachments = useAttachments();
+const attachments = useAttachments({
+  projectId: () => props.projectId,
+  deps: props.attachmentDeps,
+});
 const fileInput = ref<HTMLInputElement | null>(null);
 const dragging = ref(false);
 
@@ -115,7 +123,7 @@ const canSend = computed(
   () =>
     !props.disabled &&
     !attachments.busy.value &&
-    (input.value.trim().length > 0 || attachments.hasAttachments.value),
+    (input.value.trim().length > 0 || attachments.hasReadyBlocks.value),
 );
 
 function handleSubmit() {
@@ -202,6 +210,7 @@ const placeholder = computed(() =>
         :key="item.id"
         :attachment="item"
         @remove="attachments.remove(item.id)"
+        @retry="attachments.retry(item.id)"
       />
       <p
         v-for="(key, index) in attachments.errors.value"
@@ -231,7 +240,7 @@ const placeholder = computed(() =>
         ref="fileInput"
         class="chat-file-input"
         type="file"
-        accept="image/*"
+        accept="image/*,video/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.zip"
         multiple
         :disabled="props.disabled"
         @change="onFileChange"

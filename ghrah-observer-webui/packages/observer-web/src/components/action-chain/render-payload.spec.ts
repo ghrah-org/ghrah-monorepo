@@ -76,6 +76,20 @@ describe("renderContentBlock", () => {
       mime: "application/pdf",
       filename: "report.pdf",
     });
+
+    const video = renderContentBlock({
+      type: "video",
+      attachment_id: "att-v",
+      mime_type: "video/mp4",
+      filename: "clip.mp4",
+      frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+    });
+    expect(video).toMatchObject({
+      kind: "media-preview",
+      mime: "video/mp4",
+      filename: "clip.mp4",
+      base64: "RlJBTUU=",
+    });
   });
 
   it("renders tool_call arguments as kv-table with ability title", () => {

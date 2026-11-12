@@ -321,6 +321,37 @@ describe("roomLogToChatEntries", () => {
     expect(e.blocks?.[0]?.type).toBe("image");
   });
 
+  it("data.content_blocks 含 video 块时保留 attachment_id 与 frames", () => {
+    const e = roomLogToChatEntries(
+      makeRoomEntry({
+        author: "user",
+        author_type: "human",
+        data: {
+          content_blocks: [
+            {
+              type: "video",
+              attachment_id: "att-v",
+              mime_type: "video/mp4",
+              filename: "clip.mp4",
+              duration_s: 5,
+              width: 640,
+              height: 360,
+              frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+            },
+          ],
+        },
+      }),
+    );
+    expect(e.content).toBe("");
+    expect(e.blocks).toHaveLength(1);
+    const block = e.blocks?.[0];
+    expect(block?.type).toBe("video");
+    if (block?.type === "video") {
+      expect(block.attachment_id).toBe("att-v");
+      expect(block.frames).toHaveLength(1);
+    }
+  });
+
   it("正文与图片块并存时正文补成前置 text 块（不重复）", () => {
     const e = roomLogToChatEntries(
       makeRoomEntry({

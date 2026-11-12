@@ -77,6 +77,25 @@ describe("useChatStore", () => {
     expect(store.blockLossRooms.has("r1")).toBe(false);
   });
 
+  it("carries a video block through pending and clears on media echo", () => {
+    const store = useChatStore();
+    const video = {
+      type: "video" as const,
+      attachment_id: "att-v",
+      mime_type: "video/mp4",
+      filename: "clip.mp4",
+      duration_s: 5,
+      width: 640,
+      height: 360,
+      frames: [{ type: "image" as const, base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+    };
+    store.addPendingEntry(pending({ content: "", blocks: [video] }));
+    expect(store.entries[0].blocks).toEqual([video]);
+    store.onRoomLogAppended(log({ data: { message: "", content_blocks: [video] } }), "p1");
+    expect(store.entries).toHaveLength(0);
+    expect(store.blockLossRooms.has("r1")).toBe(false);
+  });
+
   it("flags block loss when the echo carries no media blocks", () => {
     const store = useChatStore();
     store.addPendingEntry(

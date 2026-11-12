@@ -5,8 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { ChatEntry } from "@ghrah/observer-core";
+import type { ChatBlock, ChatEntry } from "@ghrah/observer-core";
 import {
+  attachmentUrl,
+  isVideoBlock,
   roomLogToChatEntries,
   useAgentsStore,
   useChatStore,
@@ -195,7 +197,7 @@ const roomMeta = computed(() => {
   });
 });
 
-async function handleSend(targets: string[], content: string, blocks: ContentBlock[] = []) {
+async function handleSend(targets: string[], content: string, blocks: ChatBlock[] = []) {
   const projectId = props.projectId;
   const roomId = props.roomId;
   const currentRoom = room.value;
@@ -383,8 +385,19 @@ function fileLabel(block: Extract<ContentBlock, { type: "file" }>): string {
   return block.filename ?? "file";
 }
 
-function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "text" }> {
+function isText(block: ChatBlock): block is Extract<ContentBlock, { type: "text" }> {
   return block.type === "text";
+}
+
+function videoPoster(block: Extract<ChatBlock, { type: "video" }>): string {
+  const frame = block.frames?.[0];
+  if (!frame?.base64) return "";
+  return `data:${frame.mime_type ?? "image/jpeg"};base64,${frame.base64}`;
+}
+
+function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
+  if (block.attachment_id) return attachmentUrl(props.projectId, block.attachment_id);
+  return block.url ?? "";
 }
 </script>
 
@@ -472,6 +485,27 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
               >
                 📎 {{ fileLabel(block) }}
               </a>
+              <template v-else-if="isVideoBlock(block)">
+                <video
+                  v-if="videoSrc(block)"
+                  :src="videoSrc(block)"
+                  :poster="videoPoster(block) || undefined"
+                  controls
+                  preload="metadata"
+                  class="max-w-full rounded"
+                />
+                <div v-else class="block-video-fallback">
+                  <img
+                    v-if="videoPoster(block)"
+                    :src="videoPoster(block)"
+                    :alt="block.filename ?? t('chat.video')"
+                    class="max-w-full rounded"
+                  />
+                  <span class="block-video-error">
+                    {{ t("chat.videoUnavailable", { name: block.filename ?? t("chat.video") }) }}
+                  </span>
+                </div>
+              </template>
               <details v-else-if="block.type === 'tool_call'" class="block-tool">
                 <summary class="text-xs">🔧 {{ block.name }}</summary>
                 <pre class="text-xs whitespace-pre-wrap">{{ block.arguments }}</pre>
@@ -528,7 +562,13 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       {{ t("chat.sendFailedNoBlocks") }}
     </p>
 
-    <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
+    <MessageInput
+      v-if="room"
+      :disabled="!canChat"
+      :members="room.members"
+      :project-id="projectId"
+      @send="handleSend"
+    />
 
     <RoomDetailDrawer
       :open="detailOpen"
@@ -794,6 +834,17 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
+  color: var(--color-danger);
+  font-size: var(--font-ui-note);
+}
+
+.block-video-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.block-video-error {
   color: var(--color-danger);
   font-size: var(--font-ui-note);
 }

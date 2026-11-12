@@ -24,11 +24,19 @@ function memberList(agents: string[]): RoomMember[] {
 
 const DEFAULT_MEMBERS = memberList(["frontend", "backend"]);
 
-function mountInput(overrides: { members?: RoomMember[]; disabled?: boolean } = {}) {
+function mountInput(
+  overrides: {
+    members?: RoomMember[];
+    disabled?: boolean;
+    attachmentDeps?: import("@/composables/useAttachments").AttachmentDeps;
+  } = {},
+) {
   return mount(MessageInput, {
     props: {
       members: overrides.members ?? DEFAULT_MEMBERS,
       disabled: overrides.disabled ?? false,
+      projectId: "p1",
+      ...(overrides.attachmentDeps ? { attachmentDeps: overrides.attachmentDeps } : {}),
     },
   });
 }
@@ -226,9 +234,9 @@ describe("MessageInput", () => {
 
   it("不支持的附件被拒绝并提示，纯文本仍可发送 blocks=[]", async () => {
     const wrapper = mountInput();
-    const text = new File(["hello"], "note.txt", { type: "text/plain" });
+    const text = new File(["hello"], "icon.svg", { type: "image/svg+xml" });
     await selectFiles(wrapper, [text]);
-    await vi.waitFor(() => expect(wrapper.text()).toContain("Unsupported image type"));
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Unsupported file type"));
     expect(wrapper.find(".attachment-chip").exists()).toBe(false);
     await wrapper.find("textarea").setValue("still works");
     await wrapper.find("form").trigger("submit");
@@ -245,6 +253,80 @@ describe("MessageInput", () => {
       [],
       "看这张图",
       [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
+    ]);
+  });
+
+  it("accept 扩展为图片、视频与常见文件类型", () => {
+    const wrapper = mountInput();
+    const accept = wrapper.find('input[type="file"]').attributes("accept") ?? "";
+    expect(accept).toContain("image/*");
+    expect(accept).toContain("video/*");
+    expect(accept).toContain(".pdf");
+  });
+
+  it("小文件内联为 file 块并允许随文字发送", async () => {
+    const wrapper = mountInput({
+      attachmentDeps: {
+        readAsDataUrl: async () => "data:text/markdown;base64,ZmlsZQ==",
+      },
+    });
+    await selectFiles(wrapper, [new File(["file"], "notes.md", { type: "text/markdown" })]);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+    await wrapper.find("textarea").setValue("看这个文件");
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("send")![0]).toEqual([
+      [],
+      "看这个文件",
+      [
+        {
+          type: "file",
+          base64: "ZmlsZQ==",
+          mime_type: "text/markdown",
+          filename: "notes.md",
+        },
+      ],
+    ]);
+  });
+
+  it("视频抽帧 + 上传后 emit video 块", async () => {
+    const wrapper = mountInput({
+      attachmentDeps: {
+        probeVideo: async () => ({
+          durationS: 5,
+          width: 640,
+          height: 360,
+          frames: [{ type: "image" as const, base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+        }),
+        upload: async () => ({
+          attachmentId: "att-v",
+          size: 1024,
+          mimeType: "video/mp4",
+          filename: "clip.mp4",
+        }),
+      },
+    });
+    await selectFiles(wrapper, [
+      new File([Uint8Array.from([1])], "clip.mp4", { type: "video/mp4" }),
+    ]);
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+    expect(wrapper.find(".attachment-chip img").exists()).toBe(true);
+    expect(wrapper.text()).toContain("0:05");
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("send")![0]).toEqual([
+      [],
+      "",
+      [
+        {
+          type: "video",
+          attachment_id: "att-v",
+          mime_type: "video/mp4",
+          filename: "clip.mp4",
+          duration_s: 5,
+          width: 640,
+          height: 360,
+          frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+        },
+      ],
     ]);
   });
 });
