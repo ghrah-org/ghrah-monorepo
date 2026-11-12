@@ -355,10 +355,6 @@ class TestPayloadMap:
             CommandType.SUBSCRIBE,
             CommandType.UNSUBSCRIBE,
             CommandType.GET_AGENT_INFO,
-            CommandType.INIT_CLUSTER,
-            CommandType.SHUTDOWN_CLUSTER,
-            CommandType.CLUSTER_STATUS,
-            CommandType.LIST_CLUSTERS,
             CommandType.HITL_RESPONSE,
         }
         for ct in expected:
@@ -451,14 +447,12 @@ class TestCompactContextContracts:
                     "project_id": "p1",
                     "agent_id": "a1",
                     "agent_name": "writer",
-                    "cluster_id": "c1",
                 },
             }
         )
         assert isinstance(env.payload, AgentCompactContextPayload)
         narrowed = expect_payload(env, AgentCompactContextPayload)
         assert narrowed.agent_name == "writer"
-        assert narrowed.cluster_id == "c1"
 
     def test_context_usage_updated_envelope_round_trip(self):
         """事件载荷（pre_call 锚点口径 + None 真实值）收窄往返不丢字段。"""

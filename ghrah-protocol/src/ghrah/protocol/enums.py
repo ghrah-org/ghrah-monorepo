@@ -63,10 +63,6 @@ class CommandType(StrEnum):
     AGENT_RESET = "agent_reset"
 
     # ─── Supervisor 类（Observer → Subject → Core）───
-    INIT_CLUSTER = "init_cluster"
-    SHUTDOWN_CLUSTER = "shutdown_cluster"
-    CLUSTER_STATUS = "cluster_status"
-    LIST_CLUSTERS = "list_clusters"
 
     # ─── 订阅类（Observer 本地处理）───
     SUBSCRIBE = "subscribe"
