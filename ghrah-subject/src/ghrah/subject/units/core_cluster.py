@@ -29,6 +29,10 @@ from ghrah.subject.core_cluster.registry import (
     default_core_unit_factory,
 )
 from ghrah.subject.errors import StableError
+from ghrah.subject.room.content_blocks import (
+    CONTENT_TEXT_REQUIRED,
+    validate_content_blocks,
+)
 from ghrah.subject.runtime.service_keys import (
     ABILITY_ACCESS,
     CORE_CLUSTER_REGISTRY,
@@ -296,6 +300,16 @@ class CoreClusterRegistryUnit(SubjectUnit):
             if command == "delegate":
                 return await self._delegate(project, payload)
             agent = self._resolve_agent(project, payload, _TARGET_FIELDS[command])
+            # 直聊入站内容块：与 Room 通路同一套策略校验（稳定错误码），
+            # 且在 ensure_cluster（可能挂载 Core）之前拒绝，避免为坏消息挂载。
+            send_blocks: list[dict[str, Any]] | None = None
+            if command == "send_message":
+                send_blocks = validate_content_blocks(payload.get("content_blocks"))
+                if send_blocks is None and not str(payload.get("content") or "").strip():
+                    raise StableError(
+                        CONTENT_TEXT_REQUIRED,
+                        "content is required when content_blocks is empty",
+                    )
             cluster_id = str(agent["cluster_id"])
             if command in _NO_MOUNT_COMMANDS and not self.service.has_cluster(cluster_id):
                 return self._no_mount_result(command, project, agent)
@@ -305,6 +319,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 project_root_locator=str(project["project_root_locator"]),
             )
             core_payload = dict(payload)
+            if send_blocks is not None:
+                core_payload["content_blocks"] = send_blocks
             core_payload["project_id"] = project["project_id"]
             core_payload["agent_id"] = agent["agent_id"]
             target_field = _TARGET_FIELDS[command]

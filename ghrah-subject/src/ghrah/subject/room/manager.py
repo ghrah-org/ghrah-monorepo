@@ -37,8 +37,13 @@ from ghrah.protocol.types import (
 )
 from pydantic import ValidationError
 
+from ghrah.subject.errors import StableError
 from ghrah.subject.project.errors import ProjectArchivedError
 from ghrah.subject.project.paths import ProjectPaths
+from ghrah.subject.room.content_blocks import (
+    CONTENT_TEXT_REQUIRED,
+    validate_content_blocks,
+)
 from ghrah.subject.room.models import (
     RoomLogRecord,
     RoomRecord,
@@ -58,11 +63,13 @@ logger = logging.getLogger(__name__)
 OnEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 ProjectExists = Callable[[str], Awaitable[bool]]
 ProjectLookup = Callable[[str], Awaitable[dict[str, Any] | None]]
-Deliver = Callable[[str, str, str, str], Awaitable[dict[str, Any]]]
-"""deliver(target, sender, content, room_id) → command_result。
+Deliver = Callable[[str, str, str, str, list[dict[str, Any]] | None], Awaitable[dict[str, Any]]]
+"""deliver(target, sender, content, room_id, blocks) → command_result。
 
 room_id 随投递写入消息 metadata（AgentMessage.metadata.room_id）→ 链节点
-messages_delta，供回复归属推导（Room Filter）消费。
+messages_delta，供回复归属推导（Room Filter）消费。``blocks`` 为经校验的
+入站内容块（``None`` 表示纯文本消息）；实现方需把它带进 Core 投递载荷，
+否则图片等非文本内容会在投递平面丢失。
 """
 
 __all__ = ["RoomManager"]
@@ -121,6 +128,8 @@ class RoomManager:
             if missing:
                 return _err(f"{missing[0]} required")
             return _err(f"invalid payload: {e}")
+        except StableError as exc:
+            return _err_code(exc.code, exc.detail)
         except RoomArchivedError:
             return _err("resource_archived")
         except ProjectArchivedError:
@@ -417,6 +426,19 @@ class RoomManager:
         error = self._validate_targets(room, p.data.get("targets"))
         if error is not None:
             return _err(error)
+        # 入站内容块：形状/类型/数量/体积（稳定错误码），并归一化后透传给
+        # publish / append_log / 投递闭包，避免下游各自重复解析。
+        data = dict(p.data)
+        blocks = validate_content_blocks(data.pop("content_blocks", None))
+        if blocks is not None:
+            data["content_blocks"] = blocks
+        elif "message" in data and not str(data.get("message") or "").strip():
+            # 显式给了 message 但正文为空、又没有块：是空消息而非非消息类事件。
+            return _err_code(
+                CONTENT_TEXT_REQUIRED,
+                "content is required when content_blocks is empty",
+            )
+        p = p.model_copy(update={"data": data})
         if not p.data.get("mm_message_id") and self._publish is not None:
             return await self._publish(room, p)
         result = await self.append_log(
@@ -435,11 +457,17 @@ class RoomManager:
 
         投递对象：data.targets（已校验 ⊆ agent 成员）优先；缺省整室 agent
         成员；恒排除作者。不阻塞 room_send 回执，失败仅记日志不重试。
+        纯块消息（正文为空、只有 content_blocks）同样投递。
         """
         if self._deliver is None:
             return
         message = p.data.get("message")
-        if not isinstance(message, str) or not message:
+        content = message if isinstance(message, str) else ""
+        raw_blocks = p.data.get("content_blocks")
+        blocks: list[dict[str, Any]] | None = (
+            raw_blocks if isinstance(raw_blocks, list) and raw_blocks else None
+        )
+        if not content and blocks is None:
             logger.warning(
                 "room_send: skip delivery (no message) room=%s author=%s",
                 p.room_id,
@@ -450,7 +478,13 @@ class RoomManager:
         for target in targets:
             try:
                 asyncio.get_running_loop().create_task(
-                    self._deliver_one(target, p.room_id, sender=p.author, content=message)
+                    self._deliver_one(
+                        target,
+                        p.room_id,
+                        sender=p.author,
+                        content=content,
+                        blocks=blocks,
+                    )
                 )
             except RuntimeError:
                 logger.warning(
@@ -470,9 +504,19 @@ class RoomManager:
             targets = list(agent_members)
         return [t for t in targets if t != p.author]
 
-    async def _deliver_one(self, target: str, room_id: str, *, sender: str, content: str) -> None:
+    async def _deliver_one(
+        self,
+        target: str,
+        room_id: str,
+        *,
+        sender: str,
+        content: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> None:
         try:
-            result = await self._deliver(target, sender, content, room_id)  # type: ignore[misc]
+            result = await self._deliver(  # type: ignore[misc]
+                target, sender, content, room_id, blocks
+            )
         except Exception:
             logger.exception("room delivery failed: target=%s sender=%s", target, sender)
             return
@@ -528,8 +572,19 @@ class RoomManager:
         if record.room_id not in rooms:
             raise ValueError("Message does not belong to this Room")
         data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
+        # MM metadata 顶层的 content_blocks 是人类消息块的权威副本（投递平面
+        # 也从这里还原块）；日志引用只持有消息 id，回读时把块复制进 data。
+        metadata_blocks = metadata.get("content_blocks")
+        blocks: list[dict[str, Any]] | None = (
+            metadata_blocks if isinstance(metadata_blocks, list) and metadata_blocks else None
+        )
+        if blocks is not None:
+            data["content_blocks"] = blocks
         if metadata.get("room_has_message", True):
             data["message"] = row[0]
+        elif blocks is not None:
+            # 纯块消息：正文留空，不把受理时的兜底 JSON 当正文回显。
+            data.pop("message", None)
         if metadata.get("targets"):
             data["targets"] = metadata["targets"]
         data["deliveries"] = [

@@ -305,6 +305,58 @@ class TestRoomRealEndToEnd:
             await manager.dispatch_pending()
             assert actor._message_history == history_before
 
+    async def test_human_room_send_image_blocks_reach_agent(self, tmp_path: Path) -> None:
+        """房间发图端到端：room_send 带块 → MM 落库/投递 → Agent 收到 image block。"""
+        async with _stack(tmp_path) as ctx:
+            project_id = await _make_project(ctx)
+            room = _data(
+                await bridge_command(
+                    ctx, "room_create", {"project_id": project_id, "name": "image"}
+                )
+            )["room"]
+            agent_id = await _spawn_agent(ctx, project_id, "planner")
+            join = await bridge_command(
+                ctx,
+                "room_join",
+                {
+                    "room_id": room["room_id"],
+                    "subject": "planner",
+                    "subject_type": "agent",
+                },
+            )
+            assert join["success"], join.get("error")
+
+            blocks = [{"type": "image", "base64": "aGVsbG8=", "mime_type": "image/png"}]
+            send = await bridge_command(
+                ctx,
+                "room_send",
+                {
+                    "room_id": room["room_id"],
+                    "author": "human:yuki",
+                    "author_type": "human",
+                    "data": {"content_blocks": blocks, "targets": [agent_id]},
+                },
+            )
+            assert send["success"], send.get("error")
+            # 纯块消息：日志条目不带兜底 JSON 正文
+            entry = send["data"]["entry"]
+            assert entry["data"]["content_blocks"] == blocks
+            assert "message" not in entry["data"]
+
+            project = _data(await bridge_command(ctx, "project_get", {"project_id": project_id}))[
+                "project"
+            ]
+            registry = ctx.get("core_cluster_registry")
+            supervisor = registry.get_handle(project["cluster_ids"][0])._unit.supervisor
+            actor = supervisor._registry.get_info("planner").actor_handle
+            manager = registry.get_message_manager(project_id)
+            await manager.dispatch_pending()
+
+            received = actor._message_history[0]
+            assert received.content == ""
+            assert received.content_blocks == blocks
+            assert received.metadata.get("room_id") == room["room_id"]
+
     async def test_room_filter_appends_conversation_reply(self, tmp_path: Path) -> None:
         """合成事件：白名单 conversation 结果 + room 上下文 → 落 RoomLog。
 

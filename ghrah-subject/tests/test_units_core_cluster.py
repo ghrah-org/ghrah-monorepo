@@ -478,6 +478,86 @@ class TestProjectRuntimeStateGuards:
             await registry.stop()
             await ctx.__aexit__(None, None, None)
 
+    async def test_send_message_rejects_invalid_blocks_before_mount(self, tmp_path: Path) -> None:
+        """直聊内容块在 ensure_cluster 之前校验：稳定错误码且不为坏消息挂载 Core。"""
+        ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("active"))
+        try:
+            base = {
+                "project_id": PROJECT_ID,
+                "agent_id": "agent-1",
+                "target": "coder",
+            }
+            cases = [
+                (
+                    {**base, "content": "hi", "content_blocks": "blocks"},
+                    "content_blocks_malformed",
+                ),
+                (
+                    {**base, "content": "hi", "content_blocks": [{"type": "video", "url": "x"}]},
+                    "unsupported_block_type",
+                ),
+                (
+                    {
+                        **base,
+                        "content": "hi",
+                        "content_blocks": [
+                            {
+                                "type": "image",
+                                "base64": "A" * (4 * 1024 * 1024 + 1),
+                                "mime_type": "image/png",
+                            }
+                        ],
+                    },
+                    "content_block_too_large",
+                ),
+                (
+                    {
+                        **base,
+                        "content": "hi",
+                        "content_blocks": [{"type": "text", "text": "x"}] * 9,
+                    },
+                    "content_blocks_total_too_large",
+                ),
+                ({**base, "content": "   "}, "content_text_required"),
+            ]
+            for payload, expected in cases:
+                result = await unit.handle_command(
+                    "send_message", payload, CommandContext.internal()
+                )
+                assert result["success"] is False, payload
+                assert result["error"] == expected, (payload, result)
+                assert result["error_detail"], result
+            assert created == []
+            assert not registry.has_cluster("c1")
+        finally:
+            await registry.stop()
+            await ctx.__aexit__(None, None, None)
+
+    async def test_send_message_passes_normalized_blocks_to_core_unit(self, tmp_path: Path) -> None:
+        """合法块原样（规范化后）进入 CoreUnit 的 send_message 命令载荷。"""
+        ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("active"))
+        try:
+            blocks = [{"type": "image", "base64": "aGVsbG8=", "mime_type": "image/png"}]
+            result = await unit.handle_command(
+                "send_message",
+                {
+                    "project_id": PROJECT_ID,
+                    "agent_id": "agent-1",
+                    "target": "coder",
+                    "content": "看图",
+                    "content_blocks": blocks,
+                },
+                CommandContext.internal(),
+            )
+            assert result["success"], result
+            [fake] = created
+            [(command, payload)] = fake.commands
+            assert command == "send_message"
+            assert payload["content_blocks"] == blocks
+        finally:
+            await registry.stop()
+            await ctx.__aexit__(None, None, None)
+
     async def test_stopped_project_reads_and_terminate_without_mount(self, tmp_path: Path) -> None:
         ctx, unit, registry, created = await self._boot_guard(tmp_path, self._project("stopped"))
         try:

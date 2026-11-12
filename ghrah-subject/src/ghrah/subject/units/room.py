@@ -25,6 +25,14 @@ from ghrah.subject.units._commands import ROOM_COMMANDS
 
 __all__ = ["RoomUnit"]
 
+# ``SendMessagePayload`` 的 ``content_blocks`` wire 字段属于协议切片（K1）。
+# 字段就绪时投递走 wire 字段；无论是否就绪，都额外内联一份
+# ``metadata.content_blocks``：MessageManager 在 ``_accept_input`` 里把它并进
+# 持久化 metadata，并在投递时按 metadata 还原 ``AgentMessage.content_blocks``，
+# 因此「字段未就绪」与「旧 Core 未转发字段」两种情况下块都不会丢。
+# 待协议字段全链路稳定后，可只保留 wire 字段并删掉 metadata 兜底。
+_SEND_MESSAGE_SUPPORTS_CONTENT_BLOCKS = "content_blocks" in SendMessagePayload.model_fields
+
 
 class RoomUnit(SubjectUnit):
     """Owns RoomStore + RoomManager and room command/event routes.
@@ -83,7 +91,13 @@ class RoomUnit(SubjectUnit):
                 return None
             return (result.get("data") or {}).get("project")
 
-        async def deliver(target: str, sender: str, content: str, room_id: str) -> dict[str, Any]:
+        async def deliver(
+            target: str,
+            sender: str,
+            content: str,
+            room_id: str,
+            blocks: list[dict[str, Any]] | None = None,
+        ) -> dict[str, Any]:
             """按 room.project_id + agent_id 找 cluster，并直达对应 CoreUnit。"""
             if self._store is None:
                 return {"success": False, "data": None, "error": "RoomUnit not initialized"}
@@ -123,20 +137,25 @@ class RoomUnit(SubjectUnit):
                     "error": f"agent {reason} in room project: {target}",
                 }
             agent, handle = resolved[0]
-            return await handle.send_message(
-                SendMessagePayload(
-                    project_id=room.project_id,
-                    agent_id=str(agent.get("agent_id") or target),
-                    target=str(agent["name"]),
-                    content=content,
-                    sender=sender,
-                    metadata={
-                        "room_id": room_id,
-                        "project_id": room.project_id,
-                        "agent_id": str(agent.get("agent_id") or target),
-                    },
-                )
-            )
+            metadata: dict[str, Any] = {
+                "room_id": room_id,
+                "project_id": room.project_id,
+                "agent_id": str(agent.get("agent_id") or target),
+            }
+            payload_fields: dict[str, Any] = {
+                "project_id": room.project_id,
+                "agent_id": str(agent.get("agent_id") or target),
+                "target": str(agent["name"]),
+                "content": content,
+                "sender": sender,
+                "metadata": metadata,
+            }
+            if blocks:
+                # metadata 副本是 MessageManager 落库/还原块的兜底来源（见模块常量注释）
+                metadata["content_blocks"] = blocks
+                if _SEND_MESSAGE_SUPPORTS_CONTENT_BLOCKS:
+                    payload_fields["content_blocks"] = blocks
+            return await handle.send_message(SendMessagePayload(**payload_fields))
 
         async def publish(room: Any, payload: Any) -> dict[str, Any]:
             """先持久受理 Room 人类消息，再由 MM 唯一投影入口写引用日志。"""
@@ -161,7 +180,19 @@ class RoomUnit(SubjectUnit):
                 manager = cluster_registry.get_message_manager(room.project_id)
             from ghrah.communication import MessageKind
 
-            meta = {"room_ids": [room.room_id], "room_id": room.room_id, "room_projection": True}
+            meta: dict[str, Any] = {
+                "room_ids": [room.room_id],
+                "room_id": room.room_id,
+                "room_projection": True,
+            }
+            raw_blocks = payload.data.get("content_blocks")
+            blocks: list[dict[str, Any]] | None = (
+                raw_blocks if isinstance(raw_blocks, list) and raw_blocks else None
+            )
+            if blocks is not None:
+                # 顶层副本：MessageManager 投递时按它还原 AgentMessage.content_blocks；
+                # room_data 里再留一份供 Room 日志/回显使用。
+                meta["content_blocks"] = blocks
             key = f"room:{room.room_id}:{payload.data.get('request_id') or uuid4().hex}"
             content = str(payload.data.get("message") or "")
             has_message = bool(content.strip())
@@ -170,10 +201,17 @@ class RoomUnit(SubjectUnit):
             }
             meta["room_has_message"] = has_message
             if not has_message:
-                content = json.dumps(payload.data, ensure_ascii=False)
+                if blocks is None:
+                    # 既有语义：非消息类 room 事件把 data 序列化为正文。
+                    content = json.dumps(payload.data, ensure_ascii=False)
+                else:
+                    # 纯块消息：正文留空，不把 data（含 base64）序列化进正文。
+                    content = ""
             if str(payload.author_type.value) == "human":
                 targets = (
-                    RoomManager._resolve_delivery_targets(room, payload) if has_message else []
+                    RoomManager._resolve_delivery_targets(room, payload)
+                    if has_message or blocks is not None
+                    else []
                 )
                 message = await manager.send_external(
                     sender=payload.author,

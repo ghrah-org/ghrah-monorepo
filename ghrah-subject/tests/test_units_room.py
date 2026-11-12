@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import SubjectConfig
+from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
 from ghrah.subject.units import mount_builtin_units
@@ -301,3 +304,117 @@ async def test_room_delivery_routes_agent_id_to_owning_cluster(tmp_path: Path) -
         }
     finally:
         await unit.stop()
+
+
+IMAGE_BLOCK: dict[str, Any] = {
+    "type": "image",
+    "base64": "aGVsbG8=",
+    "mime_type": "image/png",
+}
+
+
+def _mm_rows(project: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """只读 Core MM 表：取 (content, metadata) 行（本测试仅一条消息）。"""
+    db_path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("SELECT content, metadata FROM mm_messages").fetchall()
+    finally:
+        conn.close()
+    return [(row[0], json.loads(row[1])) for row in rows]
+
+
+async def test_human_room_send_with_image_blocks_persists_and_reads_back(
+    tmp_path: Path,
+) -> None:
+    """房间发图链路：room_send → MM metadata 顶层 content_blocks → 日志回读带块。"""
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        project_id = await _make_project(ctx)
+        project = _data(await _dispatch(ctx, "project_get", {"project_id": project_id}))["project"]
+        room = _data(
+            await _dispatch(ctx, "room_create", {"project_id": project_id, "name": "image"})
+        )["room"]
+
+        entry = _data(
+            await _dispatch(
+                ctx,
+                "room_send",
+                {
+                    "room_id": room["room_id"],
+                    "author": "human:yuki",
+                    "author_type": "human",
+                    "data": {"content_blocks": [IMAGE_BLOCK]},
+                },
+            )
+        )["entry"]
+        assert entry["data"]["content_blocks"] == [IMAGE_BLOCK]
+        # 纯块消息：正文留空，不把 data 序列化成正文
+        assert "message" not in entry["data"]
+
+        # MM 落库：块在 metadata 顶层（投递平面按此还原），正文为空
+        [(content, metadata)] = _mm_rows(project)
+        assert content == ""
+        assert metadata["content_blocks"] == [IMAGE_BLOCK]
+        assert metadata["room_has_message"] is False
+        assert metadata["room_data"]["content_blocks"] == [IMAGE_BLOCK]
+
+        # 日志回读（_hydrate_reference）从权威复制块
+        log = _data(await _dispatch(ctx, "room_get_log", {"room_id": room["room_id"]}))
+        assert log["count"] == 1
+        assert log["entries"][0]["data"]["content_blocks"] == [IMAGE_BLOCK]
+        assert "message" not in log["entries"][0]["data"]
+
+
+async def test_room_send_rejects_invalid_blocks_before_persisting(tmp_path: Path) -> None:
+    """校验失败不落库：MM 表无消息、Room 日志无条目。"""
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        project_id = await _make_project(ctx)
+        project = _data(await _dispatch(ctx, "project_get", {"project_id": project_id}))["project"]
+        room = _data(
+            await _dispatch(ctx, "room_create", {"project_id": project_id, "name": "image"})
+        )["room"]
+
+        result = await _dispatch(
+            ctx,
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"content_blocks": [{"type": "image"}]},
+            },
+        )
+        assert result["success"] is False
+        assert result["error"] == "content_blocks_malformed"
+        assert _mm_rows(project) == []
+        log = _data(await _dispatch(ctx, "room_get_log", {"room_id": room["room_id"]}))
+        assert log["count"] == 0
+
+
+async def test_non_message_room_event_keeps_json_fallback_content(tmp_path: Path) -> None:
+    """回归：无 message、无块的非消息类 room 事件仍按 data 的 JSON 序列化受理。"""
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        project_id = await _make_project(ctx)
+        project = _data(await _dispatch(ctx, "project_get", {"project_id": project_id}))["project"]
+        room = _data(
+            await _dispatch(ctx, "room_create", {"project_id": project_id, "name": "events"})
+        )["room"]
+
+        data = {"event": "presence"}
+        await _dispatch(
+            ctx,
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": data,
+            },
+        )
+        [(content, metadata)] = _mm_rows(project)
+        assert content == json.dumps(data, ensure_ascii=False)
+        assert metadata["room_has_message"] is False
+        assert "content_blocks" not in metadata

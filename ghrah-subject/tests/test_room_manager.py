@@ -10,8 +10,12 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 from typing import Any
+
+from ghrah.protocol.types import RoomSubjectType
 
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.room.store import RoomStore
@@ -645,7 +649,13 @@ async def _delivery_manager(
             ],
         }
 
-    async def deliver(target: str, sender: str, content: str, room_id: str) -> dict[str, Any]:
+    async def deliver(
+        target: str,
+        sender: str,
+        content: str,
+        room_id: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         deliveries.append((target, sender, content))
         return {"success": True, "data": {"content": "ok"}, "error": None}
 
@@ -753,7 +763,13 @@ async def test_delivery_failure_does_not_affect_room_send(tmp_path: Path) -> Non
     store = RoomStore(tmp_path / "rooms.db")
     await store.start()
 
-    async def deliver(target: str, sender: str, content: str, room_id: str) -> dict[str, Any]:
+    async def deliver(
+        target: str,
+        sender: str,
+        content: str,
+        room_id: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         deliveries.append((target, sender, content))
         if target == "bad":
             raise RuntimeError("boom")
@@ -776,5 +792,337 @@ async def test_delivery_failure_does_not_affect_room_send(tmp_path: Path) -> Non
         assert result["data"]["entry"]["seq"] == 1
         await _drain_delivery_tasks()
         assert deliveries == [("bad", "human:yuki", "x")]
+    finally:
+        await m.store.stop()
+
+
+# ─── 入站内容块（content_blocks）：受理、投递、日志回读 ───
+
+IMAGE_BLOCK: dict[str, Any] = {
+    "type": "image",
+    "base64": "aGVsbG8=",
+    "mime_type": "image/png",
+}
+
+
+async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Path) -> None:
+    """纯块消息：空正文受理成功；日志 data 与投递闭包都拿到校验后的块。"""
+    deliveries: list[tuple[str, str, str, list[dict[str, Any]] | None]] = []
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def deliver(
+        target: str,
+        sender: str,
+        content: str,
+        room_id: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        deliveries.append((target, sender, content, blocks))
+        return {"success": True, "data": {"content": "ok"}, "error": None}
+
+    m = RoomManager(store, deliver=deliver)
+    try:
+        room = await _make_room(m)
+        await _join(m, room["room_id"], "architect", "agent")
+
+        result = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"content_blocks": [IMAGE_BLOCK]},
+            },
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["content_blocks"] == [IMAGE_BLOCK]
+        # 纯块消息不把兜底 JSON 当正文
+        assert "message" not in entry["data"]
+
+        await _drain_delivery_tasks()
+        assert deliveries == [("architect", "human:yuki", "", [IMAGE_BLOCK])]
+    finally:
+        await m.store.stop()
+
+
+async def test_room_send_text_with_blocks_keeps_both(tmp_path: Path) -> None:
+    deliveries: list[tuple[str, str, str, list[dict[str, Any]] | None]] = []
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def deliver(
+        target: str,
+        sender: str,
+        content: str,
+        room_id: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        deliveries.append((target, sender, content, blocks))
+        return {"success": True, "data": {}, "error": None}
+
+    m = RoomManager(store, deliver=deliver)
+    try:
+        room = await _make_room(m)
+        await _join(m, room["room_id"], "architect", "agent")
+        result = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"message": "看图", "content_blocks": [IMAGE_BLOCK]},
+            },
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["message"] == "看图"
+        assert entry["data"]["content_blocks"] == [IMAGE_BLOCK]
+        await _drain_delivery_tasks()
+        assert deliveries == [("architect", "human:yuki", "看图", [IMAGE_BLOCK])]
+    finally:
+        await m.store.stop()
+
+
+async def test_room_send_rejects_malformed_blocks_with_stable_code(tmp_path: Path) -> None:
+    """非法块在受理前被拒：稳定错误码 + 不落日志、不投递。"""
+    deliveries: list[Any] = []
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def deliver(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        deliveries.append(args)
+        return {"success": True, "data": {}, "error": None}
+
+    m = RoomManager(store, deliver=deliver)
+    try:
+        room = await _make_room(m)
+        cases = [
+            ({"content_blocks": "blocks"}, "content_blocks_malformed"),
+            ({"content_blocks": [{"type": "video", "url": "x"}]}, "unsupported_block_type"),
+            ({"message": "x", "content_blocks": [{"type": "image"}]}, "content_blocks_malformed"),
+            (
+                {"message": "x", "content_blocks": [{"type": "text", "text": "x"}] * 9},
+                "content_blocks_total_too_large",
+            ),
+            (
+                {
+                    "content_blocks": [
+                        {
+                            "type": "image",
+                            "base64": "A" * (4 * 1024 * 1024 + 1),
+                            "mime_type": "image/png",
+                        }
+                    ]
+                },
+                "content_block_too_large",
+            ),
+        ]
+        for data, expected in cases:
+            result = await m.handle_command(
+                "room_send",
+                {
+                    "room_id": room["room_id"],
+                    "author": "human:yuki",
+                    "author_type": "human",
+                    "data": data,
+                },
+            )
+            assert result["success"] is False, (data, result)
+            assert result["error"] == expected, (data, result)
+            assert result["error_detail"], result
+        await _drain_delivery_tasks()
+        assert deliveries == []
+        log = _data(await m.handle_command("room_get_log", {"room_id": room["room_id"]}))
+        assert log["count"] == 0
+    finally:
+        await m.store.stop()
+
+
+async def test_room_send_blank_message_without_blocks_requires_text(tmp_path: Path) -> None:
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+    m = RoomManager(store)
+    try:
+        room = await _make_room(m)
+        result = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"message": "   "},
+            },
+        )
+        assert result["success"] is False
+        assert result["error"] == "content_text_required"
+    finally:
+        await m.store.stop()
+
+
+async def test_room_send_non_message_event_without_message_still_accepted(tmp_path: Path) -> None:
+    """既有语义保留：无 message 键、无块的非消息条目仍可落账（不投递）。"""
+    deliveries: list[Any] = []
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def deliver(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        deliveries.append(args)
+        return {"success": True, "data": {}, "error": None}
+
+    m = RoomManager(store, deliver=deliver)
+    try:
+        room = await _make_room(m)
+        await _join(m, room["room_id"], "architect", "agent")
+        result = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:yuki",
+                "author_type": "human",
+                "data": {"event": "presence"},
+            },
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["event"] == "presence"
+        await _drain_delivery_tasks()
+        assert deliveries == []
+    finally:
+        await m.store.stop()
+
+
+def _write_mm_db(root: Path, messages: list[dict[str, Any]]) -> None:
+    """在 Project Root 下造一份最小 MM sqlite（供 ``_hydrate_reference`` 只读）。"""
+    db_dir = root / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_dir / "action-chains.sqlite3") as conn:
+        conn.execute(
+            "CREATE TABLE mm_messages ("
+            "message_id TEXT PRIMARY KEY, sender_id TEXT, content TEXT, metadata TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE mm_deliveries ("
+            "delivery_id TEXT, message_id TEXT, recipient_id TEXT, state TEXT, "
+            "error TEXT, blocked_reason TEXT, seq INTEGER)"
+        )
+        for message in messages:
+            conn.execute(
+                "INSERT INTO mm_messages VALUES (?, ?, ?, ?)",
+                (
+                    message["message_id"],
+                    message["sender_id"],
+                    message["content"],
+                    json.dumps(message["metadata"], ensure_ascii=False),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO mm_deliveries VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"delivery:{message['message_id']}",
+                    message["message_id"],
+                    "architect",
+                    "delivered",
+                    None,
+                    None,
+                    1,
+                ),
+            )
+        conn.commit()
+
+
+async def _hydrate_manager(tmp_path: Path, root: Path) -> RoomManager:
+    store = RoomStore(tmp_path / "rooms.db")
+    await store.start()
+
+    async def project_get(project_id: str) -> dict[str, Any] | None:
+        return {
+            "project_id": project_id,
+            "project_root_locator": str(root),
+            "archived_at": None,
+            "agents": [{"agent_id": "architect", "name": "architect", "cluster_id": "c1"}],
+        }
+
+    return RoomManager(store, project_get=project_get)
+
+
+async def test_hydrate_reference_copies_blocks_from_mm_metadata(tmp_path: Path) -> None:
+    """Room 日志只持消息引用；回读时把 MM metadata 顶层的块复制进 data。"""
+    root = tmp_path / "root"
+    m = await _hydrate_manager(tmp_path, root)
+    try:
+        room = await _make_room(m)
+        _write_mm_db(
+            root,
+            [
+                {
+                    "message_id": "m-blocks",
+                    "sender_id": "human:yuki",
+                    "content": "",
+                    "metadata": {
+                        "room_ids": [room["room_id"]],
+                        "room_id": room["room_id"],
+                        "room_projection": True,
+                        "room_data": {"message": ""},
+                        "room_has_message": False,
+                        "content_blocks": [IMAGE_BLOCK],
+                    },
+                }
+            ],
+        )
+        result = await m.append_log(
+            room["room_id"],
+            author="human:yuki",
+            author_type=RoomSubjectType.HUMAN,
+            data={"mm_message_id": "m-blocks"},
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["content_blocks"] == [IMAGE_BLOCK]
+        assert entry["data"]["via"] == "message_manager"
+        # 纯块消息不把受理时的兜底 JSON 当正文
+        assert "message" not in entry["data"]
+        assert entry["data"]["deliveries"] == [
+            {
+                "delivery_id": "delivery:m-blocks",
+                "recipient_id": "architect",
+                "state": "delivered",
+                "error": None,
+                "blocked_reason": None,
+            }
+        ]
+    finally:
+        await m.store.stop()
+
+
+async def test_hydrate_reference_keeps_plain_text_message(tmp_path: Path) -> None:
+    """回归：无块消息的正文仍从 MM 权威读通，不被块逻辑影响。"""
+    root = tmp_path / "root"
+    m = await _hydrate_manager(tmp_path, root)
+    try:
+        room = await _make_room(m)
+        _write_mm_db(
+            root,
+            [
+                {
+                    "message_id": "m-text",
+                    "sender_id": "human:yuki",
+                    "content": "纯文本",
+                    "metadata": {
+                        "room_ids": [room["room_id"]],
+                        "room_id": room["room_id"],
+                        "room_projection": True,
+                        "room_data": {"message": "纯文本"},
+                        "room_has_message": True,
+                    },
+                }
+            ],
+        )
+        result = await m.append_log(
+            room["room_id"],
+            author="human:yuki",
+            author_type=RoomSubjectType.HUMAN,
+            data={"mm_message_id": "m-text"},
+        )
+        entry = _data(result)["entry"]
+        assert entry["data"]["message"] == "纯文本"
+        assert "content_blocks" not in entry["data"]
     finally:
         await m.store.stop()
