@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setAbilityControlClientFactory } from "../ability-client.js";
 import type { AbilityControlClient, AbilityMcpProbeOptions } from "../ability-control.js";
-import type { HttpAbortSignal } from "../http.js";
+import { HttpError, type HttpAbortSignal } from "../http.js";
 import { useAbilityPackagesStore } from "./ability-packages.js";
 
 const builtin = AbilityApiStatusSchema.parse({
@@ -102,8 +102,27 @@ describe("useAbilityPackagesStore", () => {
     const record = store.versionProfile("ghrah", "fs", "0.1.0");
     expect(record?.failed).toBe(true);
     expect(record?.errorMessage).toBe("network down");
+    expect(record?.errorCode).toBeNull();
     expect(record?.profile).toEqual(profile);
     expect(record?.loading).toBe(false);
+  });
+
+  it("keeps the HTTP error code when a version profile cannot be read", async () => {
+    const packageVersion = vi.fn(async () => {
+      throw new HttpError({
+        code: "not_found",
+        status: 404,
+        message: "missing /home/secret",
+      });
+    });
+    setAbilityControlClientFactory(() => ({ packageVersion }) as unknown as AbilityControlClient);
+    const store = useAbilityPackagesStore();
+    store.status = statusWith({ packages_read: true });
+    await store.loadVersionProfile("ghrah", "fs", "0.1.0");
+    const record = store.versionProfile("ghrah", "fs", "0.1.0");
+    expect(record?.failed).toBe(true);
+    expect(record?.errorCode).toBe("not_found");
+    expect(record?.profile).toBeNull();
   });
 
   it("stores an ok=false probe as an observation and skips a closed gate", async () => {

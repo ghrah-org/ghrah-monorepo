@@ -13,6 +13,7 @@ import { ref, triggerRef } from "vue";
 
 import { abilityControlClient } from "../ability-client.js";
 import type { AbilityMcpProbeOptions } from "../ability-control.js";
+import { HttpError } from "../http.js";
 
 /** 状态端点不带项目路径；这里只为满足客户端的标识校验。 */
 const STATUS_PROJECT = "local";
@@ -29,6 +30,8 @@ export interface VersionProfileRecord {
   loading: boolean;
   failed: boolean;
   errorMessage: string | null;
+  /** 传输失败时的 `HttpError.code`；界面只按这个码显示固定文案。 */
+  errorCode: string | null;
   loadedAt: number | null;
 }
 
@@ -46,6 +49,10 @@ function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "request failed";
 }
 
+function failureCode(error: unknown): string | null {
+  return error instanceof HttpError ? error.code : null;
+}
+
 function blankProfile(key: string): VersionProfileRecord {
   return {
     key,
@@ -53,6 +60,7 @@ function blankProfile(key: string): VersionProfileRecord {
     loading: false,
     failed: false,
     errorMessage: null,
+    errorCode: null,
     loadedAt: null,
   };
 }
@@ -114,16 +122,18 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
   function ensureProfile(key: string): VersionProfileRecord {
     const existing = versionProfiles.value.get(key);
     if (existing) return existing;
-    const created = blankProfile(key);
-    versionProfiles.value.set(key, created);
+    versionProfiles.value.set(key, blankProfile(key));
+    const created = versionProfiles.value.get(key);
+    if (!created) return blankProfile(key);
     return created;
   }
 
   function ensureProbe(key: string): ProbeRecord {
     const existing = probes.value.get(key);
     if (existing) return existing;
-    const created = blankProbe(key);
-    probes.value.set(key, created);
+    probes.value.set(key, blankProbe(key));
+    const created = probes.value.get(key);
+    if (!created) return blankProbe(key);
     return created;
   }
 
@@ -233,6 +243,7 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
     entry.loading = true;
     entry.failed = false;
     entry.errorMessage = null;
+    entry.errorCode = null;
     publishProfiles();
     try {
       const view = await abilityControlClient(STATUS_PROJECT).packageVersion(
@@ -244,10 +255,12 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
       entry.profile = view;
       entry.loadedAt = Date.now();
       entry.failed = false;
+      entry.errorCode = null;
     } catch (error) {
       if (profileGeneration.get(key) !== current) return;
       entry.failed = true;
       entry.errorMessage = errorText(error);
+      entry.errorCode = failureCode(error);
     } finally {
       if (profileGeneration.get(key) === current) entry.loading = false;
       publishProfiles();
