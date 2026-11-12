@@ -1,0 +1,1213 @@
+[
+  {
+    "name": "agent.create.json",
+    "schema": "RuntimeAgentCreate",
+    "valid": true,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped"
+    }
+  },
+  {
+    "name": "agent.json",
+    "schema": "RuntimeAgentResource",
+    "valid": true,
+    "body": {
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "scope_ref": "example",
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped",
+      "incarnation_id": null,
+      "config_revision": 1,
+      "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+      "resolved_digest": "sha256:example",
+      "capability": {
+        "tree_revision": 1,
+        "tree_digest": "sha256:example",
+        "pending_changes": 0
+      },
+      "current_delivery": null,
+      "last_error": null,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "agents.page.summary.json",
+    "schema": "RuntimeAgentsPage",
+    "valid": true,
+    "body": {
+      "items": [
+        {
+          "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "scope_ref": "example",
+          "external_ref": "example:worker",
+          "state": "stopped",
+          "config_revision": 1,
+          "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+          "prompt": {
+            "digest": "sha256:example",
+            "size": 28
+          },
+          "capability": {
+            "tree_revision": 1,
+            "tree_digest": "sha256:example",
+            "pending_changes": 0
+          },
+          "current_delivery": null,
+          "last_error": null,
+          "etag": "\"rev-1\"",
+          "created_at": "2026-11-12T00:00:00.000Z",
+          "updated_at": "2026-11-12T00:00:00.000Z"
+        }
+      ],
+      "next_cursor": null,
+      "has_more": false
+    }
+  },
+  {
+    "name": "agent.state.result.json",
+    "schema": "RuntimeStateTransitionResult",
+    "valid": true,
+    "body": {
+      "agent": {
+        "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "scope_ref": "example",
+        "external_ref": "example:worker",
+        "config": {
+          "model": {
+            "endpoint_name": "your-endpoint",
+            "model_overrides": null
+          },
+          "prompt": {
+            "system_prompt": "You are a helpful assistant.",
+            "template_ref": null
+          },
+          "context_policy": {
+            "max_iterations": 10,
+            "communication_timeout": 300.0,
+            "window": null,
+            "overrides": null
+          },
+          "ability_request": {
+            "surface": {
+              "mode": "auto",
+              "static": [],
+              "max_static": null
+            },
+            "packages": [
+              {
+                "package": "ghrah.core",
+                "origin": "builtin",
+                "whole_container": false,
+                "operations": [
+                  {
+                    "key": "conversation",
+                    "visible": true,
+                    "available": true
+                  }
+                ],
+                "skills": []
+              }
+            ],
+            "mcp_refs": []
+          },
+          "permission_request": {
+            "auto_approve": [],
+            "require_approval_by_default": true,
+            "safe_extra_commands": [],
+            "safe_extra_sub_commands": null
+          }
+        },
+        "state": "stopped",
+        "incarnation_id": null,
+        "config_revision": 1,
+        "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+        "resolved_digest": "sha256:example",
+        "capability": {
+          "tree_revision": 1,
+          "tree_digest": "sha256:example",
+          "pending_changes": 0
+        },
+        "current_delivery": null,
+        "last_error": null,
+        "created_at": "2026-11-12T00:00:00.000Z",
+        "updated_at": "2026-11-12T00:00:00.000Z"
+      },
+      "recovered": null
+    }
+  },
+  {
+    "name": "meta.json",
+    "schema": "RuntimeMeta",
+    "valid": true,
+    "body": {
+      "contract": "v1",
+      "capabilities": [
+        {
+          "name": "runtime.lifecycle",
+          "version": 1
+        }
+      ],
+      "server_time": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "status.json",
+    "schema": "RuntimeSystemStatus",
+    "valid": true,
+    "body": {
+      "phase": "ready",
+      "ready": true,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00.000Z",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "problem.conflict.json",
+    "schema": "RuntimeProblem",
+    "valid": true,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "detail": "external_ref is already bound to a different configuration",
+      "code": "CONFLICT",
+      "retryable": false
+    }
+  },
+  {
+    "name": "problem.precondition.json",
+    "schema": "RuntimeProblem",
+    "valid": true,
+    "body": {
+      "type": "https://ghrah.org/problems/precondition_failed",
+      "title": "Precondition Failed",
+      "status": 412,
+      "code": "PRECONDITION_FAILED",
+      "retryable": false,
+      "details": {
+        "current_etag": "\"rev-12\""
+      }
+    }
+  },
+  {
+    "name": "problem.method.json",
+    "schema": "RuntimeStandardProblem",
+    "valid": true,
+    "body": {
+      "type": "about:blank",
+      "title": "Method Not Allowed",
+      "status": 405,
+      "retryable": false
+    }
+  },
+  {
+    "name": "state.put.json",
+    "schema": "RuntimeStateTransition",
+    "valid": true,
+    "body": {
+      "state": "running"
+    }
+  },
+  {
+    "name": "message.create.json",
+    "schema": "RuntimeMessageCreate",
+    "valid": true,
+    "body": {
+      "text": "Hello",
+      "kind": "user",
+      "metadata": {}
+    }
+  },
+  {
+    "name": "message.accepted.json",
+    "schema": "RuntimeMessageAccepted",
+    "valid": true,
+    "body": {
+      "message_id": "msg_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "delivery_id": "dlv_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "resource_url": "/v1/deliveries/dlv_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    }
+  },
+  {
+    "name": "delivery.json",
+    "schema": "RuntimeDeliveryView",
+    "valid": true,
+    "body": {
+      "delivery_id": "dlv_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "message_id": "msg_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "state": "queued",
+      "branch_id": null,
+      "iteration": null,
+      "blocked_reason": null,
+      "last_node_id": null,
+      "attempts": 0,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "operation.json",
+    "schema": "RuntimeOperation",
+    "valid": true,
+    "body": {
+      "operation_id": "op_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "kind": "apply_config",
+      "state": "succeeded",
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z",
+      "resource_url": "/v1/agents/agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "problem": null
+    }
+  },
+  {
+    "name": "event.json",
+    "schema": "RuntimeEvent",
+    "valid": true,
+    "body": {
+      "event_id": "evt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "seq": 1,
+      "type": "agent.updated",
+      "scope_ref": "example",
+      "occurred_at": "2026-11-12T00:00:00.000Z",
+      "resource": {
+        "kind": "agent",
+        "id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "url": "/v1/agents/agt_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+      },
+      "resource_etag": "\"rev-12\""
+    }
+  },
+  {
+    "name": "timeline.page.json",
+    "schema": "RuntimeTimelinePage",
+    "valid": true,
+    "body": {
+      "items": [
+        {
+          "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "session_id": "session-example",
+          "branch_id": "branch-example",
+          "parent_id": null,
+          "iteration": 1,
+          "seq": 1,
+          "kind": "iteration",
+          "created_at": "2026-11-12T00:00:00.000Z",
+          "ability_names": [],
+          "outcome": "success",
+          "summary": {
+            "text": "Completed",
+            "truncated": false
+          },
+          "payload_ref": {
+            "schema_version": 1,
+            "size": 97
+          }
+        }
+      ],
+      "next_cursor": null,
+      "has_more": false,
+      "snapshot_cursor": "opaque-example-snapshot",
+      "watermark_seq": 1
+    }
+  },
+  {
+    "name": "node.json",
+    "schema": "RuntimeNodeView",
+    "valid": true,
+    "body": {
+      "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "session_id": "session-example",
+      "branch_id": "branch-example",
+      "parent_id": null,
+      "iteration": 1,
+      "seq": 1,
+      "kind": "iteration",
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "schema_version": 1,
+      "payload": {
+        "messages_delta": [],
+        "messages_snapshot": null,
+        "action_results": null,
+        "metadata": null,
+        "usage": null
+      },
+      "size": 97
+    }
+  },
+  {
+    "name": "unknown response fields",
+    "schema": "RuntimeMeta",
+    "valid": true,
+    "body": {
+      "contract": "v1",
+      "capabilities": [
+        {
+          "name": "runtime.lifecycle",
+          "version": 1
+        }
+      ],
+      "server_time": "2026-11-12T00:00:00.000Z",
+      "future_field": {
+        "value": 1
+      }
+    }
+  },
+  {
+    "name": "future lifecycle phase",
+    "schema": "RuntimeSystemStatus",
+    "valid": true,
+    "body": {
+      "phase": "recovering",
+      "ready": false,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00.000Z",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "inconsistent ready",
+    "schema": "RuntimeSystemStatus",
+    "valid": false,
+    "body": {
+      "phase": "ready",
+      "ready": false,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00.000Z",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "non-failed error",
+    "schema": "RuntimeSystemStatus",
+    "valid": false,
+    "body": {
+      "phase": "ready",
+      "ready": true,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00.000Z",
+      "contract": "v1",
+      "error": {
+        "type": "https://ghrah.org/problems/conflict",
+        "title": "Conflict",
+        "status": 409,
+        "detail": "external_ref is already bound to a different configuration",
+        "code": "CONFLICT",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "invalid calendar date",
+    "schema": "RuntimeSystemStatus",
+    "valid": false,
+    "body": {
+      "phase": "ready",
+      "ready": true,
+      "boot_id": "example-boot",
+      "since": "2026-02-30T00:00:00.000Z",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "timestamp without milliseconds",
+    "schema": "RuntimeSystemStatus",
+    "valid": false,
+    "body": {
+      "phase": "ready",
+      "ready": true,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00Z",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "non-UTC timestamp",
+    "schema": "RuntimeSystemStatus",
+    "valid": false,
+    "body": {
+      "phase": "ready",
+      "ready": true,
+      "boot_id": "example-boot",
+      "since": "2026-11-12T00:00:00.000+08:00",
+      "contract": "v1",
+      "error": null
+    }
+  },
+  {
+    "name": "boolean version",
+    "schema": "RuntimeMeta",
+    "valid": false,
+    "body": {
+      "contract": "v1",
+      "capabilities": [
+        {
+          "name": "runtime.lifecycle",
+          "version": true
+        }
+      ],
+      "server_time": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "nested additive capability",
+    "schema": "RuntimeMeta",
+    "valid": true,
+    "body": {
+      "contract": "v1",
+      "capabilities": [
+        {
+          "name": "runtime.lifecycle",
+          "version": 1,
+          "future": true
+        }
+      ],
+      "server_time": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "omitted optional detail",
+    "schema": "RuntimeProblem",
+    "valid": true,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "code": "CONFLICT",
+      "retryable": false
+    }
+  },
+  {
+    "name": "explicit null detail",
+    "schema": "RuntimeProblem",
+    "valid": false,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "detail": null,
+      "code": "CONFLICT",
+      "retryable": false
+    }
+  },
+  {
+    "name": "explicit null details",
+    "schema": "RuntimeProblem",
+    "valid": false,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "detail": "external_ref is already bound to a different configuration",
+      "code": "CONFLICT",
+      "retryable": false,
+      "details": null
+    }
+  },
+  {
+    "name": "future error code",
+    "schema": "RuntimeProblem",
+    "valid": true,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "detail": "external_ref is already bound to a different configuration",
+      "code": "FUTURE_ERROR",
+      "retryable": false
+    }
+  },
+  {
+    "name": "missing domain code",
+    "schema": "RuntimeProblem",
+    "valid": false,
+    "body": {
+      "type": "https://ghrah.org/problems/conflict",
+      "title": "Conflict",
+      "status": 409,
+      "detail": "external_ref is already bound to a different configuration",
+      "retryable": false
+    }
+  },
+  {
+    "name": "invalid standard status",
+    "schema": "RuntimeStandardProblem",
+    "valid": false,
+    "body": {
+      "type": "about:blank",
+      "title": "Method Not Allowed",
+      "status": 409,
+      "retryable": false
+    }
+  },
+  {
+    "name": "unknown request field",
+    "schema": "RuntimeMessageCreate",
+    "valid": false,
+    "body": {
+      "text": "Hello",
+      "kind": "user",
+      "metadata": {},
+      "scope_ref": "forged"
+    }
+  },
+  {
+    "name": "null message metadata",
+    "schema": "RuntimeMessageCreate",
+    "valid": false,
+    "body": {
+      "text": "Hello",
+      "kind": "user",
+      "metadata": null
+    }
+  },
+  {
+    "name": "missing message kind",
+    "schema": "RuntimeMessageCreate",
+    "valid": false,
+    "body": {
+      "text": "Hello",
+      "metadata": {}
+    }
+  },
+  {
+    "name": "future input kind",
+    "schema": "RuntimeMessageCreate",
+    "valid": false,
+    "body": {
+      "text": "Hello",
+      "kind": "future_kind",
+      "metadata": {}
+    }
+  },
+  {
+    "name": "future target state",
+    "schema": "RuntimeStateTransition",
+    "valid": false,
+    "body": {
+      "state": "busy"
+    }
+  },
+  {
+    "name": "future delivery state",
+    "schema": "RuntimeDeliveryView",
+    "valid": true,
+    "body": {
+      "delivery_id": "dlv_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "message_id": "msg_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "state": "retrying",
+      "branch_id": null,
+      "iteration": null,
+      "blocked_reason": null,
+      "last_node_id": null,
+      "attempts": 0,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "invalid opaque id",
+    "schema": "RuntimeDeliveryView",
+    "valid": false,
+    "body": {
+      "delivery_id": "dlv_OOOOOOOOOOOOOOOOOOOOOOOOOO",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "message_id": "msg_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "state": "queued",
+      "branch_id": null,
+      "iteration": null,
+      "blocked_reason": null,
+      "last_node_id": null,
+      "attempts": 0,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "negative attempts",
+    "schema": "RuntimeDeliveryView",
+    "valid": false,
+    "body": {
+      "delivery_id": "dlv_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "message_id": "msg_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "state": "queued",
+      "branch_id": null,
+      "iteration": null,
+      "blocked_reason": null,
+      "last_node_id": null,
+      "attempts": -1,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "inconsistent pagination",
+    "schema": "RuntimeTimelinePage",
+    "valid": false,
+    "body": {
+      "items": [
+        {
+          "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "session_id": "session-example",
+          "branch_id": "branch-example",
+          "parent_id": null,
+          "iteration": 1,
+          "seq": 1,
+          "kind": "iteration",
+          "created_at": "2026-11-12T00:00:00.000Z",
+          "ability_names": [],
+          "outcome": "success",
+          "summary": {
+            "text": "Completed",
+            "truncated": false
+          },
+          "payload_ref": {
+            "schema_version": 1,
+            "size": 97
+          }
+        }
+      ],
+      "next_cursor": null,
+      "has_more": true,
+      "snapshot_cursor": "opaque-example-snapshot",
+      "watermark_seq": 1
+    }
+  },
+  {
+    "name": "missing next cursor",
+    "schema": "RuntimeTimelinePage",
+    "valid": false,
+    "body": {
+      "items": [
+        {
+          "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "session_id": "session-example",
+          "branch_id": "branch-example",
+          "parent_id": null,
+          "iteration": 1,
+          "seq": 1,
+          "kind": "iteration",
+          "created_at": "2026-11-12T00:00:00.000Z",
+          "ability_names": [],
+          "outcome": "success",
+          "summary": {
+            "text": "Completed",
+            "truncated": false
+          },
+          "payload_ref": {
+            "schema_version": 1,
+            "size": 97
+          }
+        }
+      ],
+      "has_more": false,
+      "snapshot_cursor": "opaque-example-snapshot",
+      "watermark_seq": 1
+    }
+  },
+  {
+    "name": "valid next page",
+    "schema": "RuntimeTimelinePage",
+    "valid": true,
+    "body": {
+      "items": [
+        {
+          "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "session_id": "session-example",
+          "branch_id": "branch-example",
+          "parent_id": null,
+          "iteration": 1,
+          "seq": 1,
+          "kind": "iteration",
+          "created_at": "2026-11-12T00:00:00.000Z",
+          "ability_names": [],
+          "outcome": "success",
+          "summary": {
+            "text": "Completed",
+            "truncated": false
+          },
+          "payload_ref": {
+            "schema_version": 1,
+            "size": 97
+          }
+        }
+      ],
+      "next_cursor": "opaque-next",
+      "has_more": true,
+      "snapshot_cursor": "opaque-example-snapshot",
+      "watermark_seq": 1
+    }
+  },
+  {
+    "name": "future event type",
+    "schema": "RuntimeEvent",
+    "valid": true,
+    "body": {
+      "event_id": "evt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "seq": 1,
+      "type": "future.updated",
+      "scope_ref": "example",
+      "occurred_at": "2026-11-12T00:00:00.000Z",
+      "resource": {
+        "kind": "agent",
+        "id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "url": "/v1/agents/agt_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+      },
+      "resource_etag": "\"rev-12\""
+    }
+  },
+  {
+    "name": "agent scope cannot come from body",
+    "schema": "RuntimeAgentCreate",
+    "valid": false,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped",
+      "scope_ref": "forged"
+    }
+  },
+  {
+    "name": "unknown nested input",
+    "schema": "RuntimeAgentCreate",
+    "valid": false,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null,
+          "future": true
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped"
+    }
+  },
+  {
+    "name": "nested additive config response",
+    "schema": "RuntimeAgentResource",
+    "valid": true,
+    "body": {
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "scope_ref": "example",
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null,
+          "future": true
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped",
+      "incarnation_id": null,
+      "config_revision": 1,
+      "assembly_digest": "sha256:0c523b9bd9cd35f1371906f51c293eab1ba5dd4e877ff745ea1529e6fe0df1b2",
+      "resolved_digest": "sha256:example",
+      "capability": {
+        "tree_revision": 1,
+        "tree_digest": "sha256:example",
+        "pending_changes": 0
+      },
+      "current_delivery": null,
+      "last_error": null,
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "updated_at": "2026-11-12T00:00:00.000Z"
+    }
+  },
+  {
+    "name": "full assembly requires explicit null",
+    "schema": "RuntimeAgentCreate",
+    "valid": false,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant."
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped"
+    }
+  },
+  {
+    "name": "removed ability source mode",
+    "schema": "RuntimeAgentCreate",
+    "valid": false,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": [],
+          "source_mode": "builtin"
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": null
+        }
+      },
+      "state": "stopped"
+    }
+  },
+  {
+    "name": "ordered subcommand JSON arrays",
+    "schema": "RuntimeAgentCreate",
+    "valid": true,
+    "body": {
+      "external_ref": "example:worker",
+      "config": {
+        "model": {
+          "endpoint_name": "your-endpoint",
+          "model_overrides": null
+        },
+        "prompt": {
+          "system_prompt": "You are a helpful assistant.",
+          "template_ref": null
+        },
+        "context_policy": {
+          "max_iterations": 10,
+          "communication_timeout": 300.0,
+          "window": null,
+          "overrides": null
+        },
+        "ability_request": {
+          "surface": {
+            "mode": "auto",
+            "static": [],
+            "max_static": null
+          },
+          "packages": [
+            {
+              "package": "ghrah.core",
+              "origin": "builtin",
+              "whole_container": false,
+              "operations": [
+                {
+                  "key": "conversation",
+                  "visible": true,
+                  "available": true
+                }
+              ],
+              "skills": []
+            }
+          ],
+          "mcp_refs": []
+        },
+        "permission_request": {
+          "auto_approve": [],
+          "require_approval_by_default": true,
+          "safe_extra_commands": [],
+          "safe_extra_sub_commands": [
+            [
+              "git",
+              [
+                "status"
+              ]
+            ]
+          ]
+        }
+      },
+      "state": "stopped"
+    }
+  }
+]

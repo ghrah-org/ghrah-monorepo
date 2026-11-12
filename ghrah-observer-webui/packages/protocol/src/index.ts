@@ -376,19 +376,4 @@ export {
 } from "./payloads.js";
 export * from "./payloads/entity.js";
 export * from "./ability-tree.js";
-export * from "./ability-control.js";
-export * from "./agent-control.js";
-export * from "./agentconf-control.js";
-
-export {
-  ActionDescriptorSchema,
-  ContractDescriptorSchema,
-  DiscoveredActionSchema,
-  DiscoveredResourceSchema,
-  CatalogSnapshotSchema,
-  type ActionDescriptor,
-  type ContractDescriptor,
-  type DiscoveredAction,
-  type DiscoveredResource,
-  type CatalogSnapshot,
-} from "./scheme.js";
+export * from "./runtime.generated.js";

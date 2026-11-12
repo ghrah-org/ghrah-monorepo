@@ -1,0 +1,10 @@
+{
+  "type": "https://ghrah.org/problems/precondition_failed",
+  "title": "Precondition Failed",
+  "status": 412,
+  "code": "PRECONDITION_FAILED",
+  "retryable": false,
+  "details": {
+    "current_etag": "\"rev-12\""
+  }
+}
