@@ -59,13 +59,22 @@ function versionIdentity(key: string): { namespace: string; name: string; versio
 function listedVersionKeys(): Set<string> {
   const keys = new Set<string>();
   for (const group of packages.groups?.groups ?? []) {
-    if (!group.namespace || !group.name) continue;
+    const name = groupName(group);
+    if (!group.namespace || !name) continue;
     for (const version of group.versions) {
       if (!version.version) continue;
-      keys.add(abilityPackageVersionKey(group.namespace, group.name, version.version));
+      keys.add(abilityPackageVersionKey(group.namespace, name, version.version));
     }
   }
   return keys;
+}
+
+/**
+ * 请求路径里的 name 段：退化身份（只有 namespace）在服务端落盘为
+ * `<namespace>/<namespace>`，详情接口也按两段寻址，所以这里补齐同名字段。
+ */
+function groupName(group: { name: string | null; namespace: string | null }): string {
+  return group.name ?? group.namespace ?? "";
 }
 
 function onToggle(identity: { namespace: string; name: string; version: string }): void {
@@ -145,17 +154,17 @@ onUnmounted(() => packages.setSettingsVisible(false));
         :title="group.title || group.full_name || t('assembly.versions.unreadable')"
         :full-name="group.full_name"
         :namespace="group.namespace"
-        :name="group.name"
+        :name="groupName(group)"
         :versions="group.versions"
         :expanded-keys="expanded"
         @toggle="onToggle"
       >
         <template #detail="{ version }">
           <AbilityPackageDetail
-            v-if="group.namespace && group.name && version.version"
-            :record="packages.versionProfile(group.namespace, group.name, version.version)"
+            v-if="group.namespace && groupName(group) && version.version"
+            :record="packages.versionProfile(group.namespace, groupName(group), version.version)"
             :mcp-probe-enabled="packages.status?.features.mcp_probe === true"
-            @retry="onRetry(group.namespace, group.name, version.version)"
+            @retry="onRetry(group.namespace, groupName(group), version.version)"
           />
         </template>
       </AbilityPackageCard>
