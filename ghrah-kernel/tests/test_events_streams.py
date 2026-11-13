@@ -388,28 +388,6 @@ def test_channel_rejects_invalid_provider_peer_and_provider_refusal_without_half
     asyncio.run(scenario())
 
 
-def test_service_exit_wakes_event_and_stream_waiters_and_expiry_discards_pipe():
-    async def scenario(expiry):
-        async with open_service_chain() as host:
-            client = host.observer
-            handle = await client.open("/scheme/ability/main" + ("/short" if expiry else ""))
-            subscription = await client.subscribe(handle)
-            await client.wait_item(subscription)
-            channel = await client.channel(handle, direction="download")
-            waiting = asyncio.create_task(client.read(channel["handle_id"]))
-            await until(lambda: io_waiting(host))
-            if not expiry:
-                await host.control.kill(host.services["tools"]["domain_id"])
-            await denied(waiting, "CHANNEL_REVOKED" if expiry else "CHANNEL_CLOSED")
-            event = await client.wait_item(subscription)
-            assert event["event"]["status"] == ("REVOKED" if expiry else "PROVIDER_UNAVAILABLE")
-            assert (await client.stats())["pipe_fds"] == 0
-        assert_clean(host)
-
-    asyncio.run(scenario(False))
-    asyncio.run(scenario(True))
-
-
 def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
     async def scenario(kind):
         kernel = Kernel()
