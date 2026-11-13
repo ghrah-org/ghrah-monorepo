@@ -49,6 +49,21 @@ jobs:
           done
           uv run --isolated --no-project --with 'ghrah-kernel[agent]' "${agent_wheel_args[@]}" python -I scripts/verify_agent_install.py
 
+  kernel-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      # 聚焦验证原生 pipe2 与无 pipe2/容量 fcntl 的 Unix 分支。
+      - run: uv run pytest ghrah-kernel -q -W error -o faulthandler_timeout=30
+
   windows-portability:
     runs-on: windows-latest
     steps:

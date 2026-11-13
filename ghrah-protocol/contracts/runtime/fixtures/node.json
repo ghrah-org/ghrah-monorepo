@@ -1,0 +1,20 @@
+{
+  "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "session_id": "session-example",
+  "branch_id": "branch-example",
+  "parent_id": null,
+  "iteration": 1,
+  "seq": 1,
+  "kind": "iteration",
+  "created_at": "2026-11-12T00:00:00.000Z",
+  "schema_version": 1,
+  "payload": {
+    "messages_delta": [],
+    "messages_snapshot": null,
+    "action_results": null,
+    "metadata": null,
+    "usage": null
+  },
+  "size": 97
+}

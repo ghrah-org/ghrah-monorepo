@@ -1,0 +1,29 @@
+{
+  "items": [
+    {
+      "node_id": "nod_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "agent_id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "session_id": "session-example",
+      "branch_id": "branch-example",
+      "parent_id": null,
+      "iteration": 1,
+      "seq": 1,
+      "kind": "iteration",
+      "created_at": "2026-11-12T00:00:00.000Z",
+      "ability_names": [],
+      "outcome": "success",
+      "summary": {
+        "text": "Completed",
+        "truncated": false
+      },
+      "payload_ref": {
+        "schema_version": 1,
+        "size": 97
+      }
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "snapshot_cursor": "opaque-example-snapshot",
+  "watermark_seq": 1
+}

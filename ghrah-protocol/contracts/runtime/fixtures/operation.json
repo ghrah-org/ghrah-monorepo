@@ -1,0 +1,9 @@
+{
+  "operation_id": "op_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "kind": "apply_config",
+  "state": "succeeded",
+  "created_at": "2026-11-12T00:00:00.000Z",
+  "updated_at": "2026-11-12T00:00:00.000Z",
+  "resource_url": "/v1/agents/agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "problem": null
+}

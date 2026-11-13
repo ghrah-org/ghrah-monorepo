@@ -1,0 +1,13 @@
+{
+  "event_id": "evt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "seq": 1,
+  "type": "agent.updated",
+  "scope_ref": "example",
+  "occurred_at": "2026-11-12T00:00:00.000Z",
+  "resource": {
+    "kind": "agent",
+    "id": "agt_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "url": "/v1/agents/agt_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+  },
+  "resource_etag": "\"rev-12\""
+}

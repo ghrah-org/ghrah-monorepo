@@ -1,0 +1,8 @@
+{
+  "type": "https://ghrah.org/problems/conflict",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "external_ref is already bound to a different configuration",
+  "code": "CONFLICT",
+  "retryable": false
+}
