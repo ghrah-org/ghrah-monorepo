@@ -33,6 +33,27 @@ def digest_bytes(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+# 包生成器登记的结构化文本。text/* 之外，这两类仍按 UTF-8 完整加载。
+_LOADABLE_STRUCTURED_TEXT = frozenset({"application/json", "application/yaml"})
+
+
+def is_loadable_text(media_type: str) -> bool:
+    """判断媒体类型是否按 UTF-8 文本完整加载。
+
+    ``text/*`` 以及包生成器登记的结构化文本（``application/json``、
+    ``application/yaml``）可注入模型。``application/octet-stream`` 与其他类型
+    保持分块二进制，不作为文本加载。``;`` 后的参数不参与判断，类型名大小写不敏感。
+
+    Args:
+        media_type: 内容描述上的媒体类型，可带参数。
+
+    Returns:
+        该类型可以完整解码为 UTF-8 文本时为真。
+    """
+    base = media_type.split(";", 1)[0].strip().lower()
+    return base.startswith("text/") or base in _LOADABLE_STRUCTURED_TEXT
+
+
 def relative_path(path: str) -> str:
     """拒绝绝对路径、上级路径、反斜杠和不规范片段。"""
     if (
@@ -291,7 +312,7 @@ class ContentChunk:
         """文本块尽量以 UTF-8 表达，二进制或跨字符边界的块保持无损。"""
         encoding = "base64"
         content = base64.b64encode(self.data).decode("ascii")
-        if self.description.media_type.startswith("text/"):
+        if is_loadable_text(self.description.media_type):
             try:
                 content = self.data.decode("utf-8")
                 encoding = "utf-8"

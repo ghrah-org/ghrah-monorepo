@@ -20,9 +20,12 @@ from ghrah.protocol.ability_control import (
     AbilityApiStatus,
     AbilityChangesPage,
     AbilityInstancesView,
+    AbilityMcpProbeRequest,
+    AbilityMcpProbeView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import (
@@ -40,11 +43,13 @@ from ghrah.protocol.views.core import (
     AgentTemplateSpec,
     AgentView,
     BranchView,
+    BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
     DeliveryView,
     HistoryView,
     MailboxSummaryView,
+    MessageReplyView,
     MessageView,
     NodeView,
     PublishedMessageView,
@@ -125,6 +130,9 @@ class SessionOperations(Protocol):
         agent_id: AgentId,
         name: str | None = None,
         system_prompt: str | None = None,
+        origin_session_id: str | None = None,
+        origin_node_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SessionId:
         """新建会话并返回其 id。"""
         ...
@@ -162,6 +170,7 @@ class BranchOperations(Protocol):
         name: str,
         from_node_id: str | None = None,
         parent_branch_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> BranchId:
         """从某节点（或当前头）分叉出新分支并返回其 id。"""
         ...
@@ -223,12 +232,13 @@ class MailboxOperations(Protocol):
         self,
         *,
         sender_id: str,
+        recipient_ids: Sequence[str] = (),
         content: str,
         kind: str,
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
     ) -> PublishedMessageView:
-        """发布一条通知类消息（无收件人投递语义，用于日志投影）。"""
+        """发布通知类消息，可指定收件人。"""
         ...
 
     async def recover_room_projections(self) -> int:
@@ -289,6 +299,18 @@ class AbilityOperations(Protocol):
 
     async def package_detail(self, *, namespace: str, name: str) -> AbilityPackageDetailView:
         """单个能力包详情（全局）；不存在抛 ``NOT_FOUND``。"""
+        ...
+
+    async def package_version_profile(
+        self, *, namespace: str, name: str, version: str
+    ) -> AbilityPackageVersionProfileView:
+        """读取单个能力包版本的画像。"""
+        ...
+
+    async def package_mcp_probe(
+        self, *, namespace: str, name: str, version: str, request: AbilityMcpProbeRequest
+    ) -> AbilityMcpProbeView:
+        """只读探测指定能力包版本声明的 MCP 服务。"""
         ...
 
     async def package_groups(
@@ -387,12 +409,14 @@ class MessageOperations(Protocol):
         agent_id: AgentId,
         target: str,
         content: str,
+        sender: str = "user",
+        timeout: float | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> MessageId:
-        """以某 Agent 身份向目标发送一条消息。"""
+    ) -> MessageReplyView:
+        """向指定 Agent 发送消息并等待回复。"""
         ...
 
-    async def broadcast(self, *, content: str, sender: str = "") -> list[MessageId]:
+    async def broadcast(self, *, content: str, sender: str = "user") -> BroadcastRepliesView:
         """向项目内全部 Agent 广播。"""
         ...
 
@@ -403,8 +427,8 @@ class MessageOperations(Protocol):
         to_agent_id: AgentId,
         content: str,
         timeout: float | None = None,
-    ) -> DeliveryId:
-        """把一个任务委派给另一个 Agent。"""
+    ) -> MessageReplyView:
+        """把一个任务委派给另一个 Agent 并等待回复。"""
         ...
 
 
@@ -463,6 +487,10 @@ class CorePort(Protocol):
 
     @property
     def manifests(self) -> ManifestOperations: ...
+
+    async def stop_project(self) -> None:
+        """停止绑定项目的 Core 单元并释放写侧资源。"""
+        ...
 
     def project(self, project_id: str) -> CorePort:
         """返回绑定了项目作用域的端口视图。

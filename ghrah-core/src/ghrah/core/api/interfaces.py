@@ -16,9 +16,12 @@ from ghrah.protocol.ability_control import (
     AbilityApiStatus,
     AbilityChangesPage,
     AbilityInstancesView,
+    AbilityMcpProbeRequest,
+    AbilityMcpProbeView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import (
@@ -33,8 +36,6 @@ from ghrah.protocol.views.common import (
     AckView,
     AgentIdView,
     BranchIdView,
-    DeliveryIdView,
-    MessageIdView,
     NodeIdView,
     Page,
     SessionIdView,
@@ -46,12 +47,13 @@ from ghrah.protocol.views.core import (
     AgentTemplateSpec,
     AgentView,
     BranchListView,
+    BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
     DeliveryView,
     HistoryView,
     MailboxSummaryView,
-    MessageIdListView,
+    MessageReplyView,
     MessageView,
     NodeView,
     PublishedMessageView,
@@ -204,6 +206,7 @@ class MailboxPublishNotificationRequest(BaseModel):
 
     project_id: str
     sender_id: str
+    recipient_ids: list[str] = Field(default_factory=list)
     content: str
     kind: str = "notification"
     idempotency_key: str
@@ -332,6 +335,9 @@ class SessionsCreateRequest(BaseModel):
     agent_id: str
     name: str | None = None
     system_prompt: str | None = None
+    origin_session_id: str | None = None
+    origin_node_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionsActivateRequest(BaseModel):
@@ -375,6 +381,7 @@ class BranchesCreateRequest(BaseModel):
     name: str
     from_node_id: str | None = None
     parent_branch_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BranchesActivateRequest(BaseModel):
@@ -419,6 +426,8 @@ class MessagesAppendRequest(BaseModel):
     agent_id: str
     target: str
     content: str
+    sender: str = "user"
+    timeout: float | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -429,7 +438,7 @@ class MessagesBroadcastRequest(BaseModel):
 
     project_id: str
     content: str
-    sender: str = ""
+    sender: str = "user"
 
 
 class MessagesDelegateRequest(BaseModel):
@@ -474,6 +483,18 @@ class AbilitiesPackageDetailRequest(BaseModel):
 
     namespace: str
     name: str
+
+
+class AbilitiesPackageVersionRequest(AbilitiesPackageDetailRequest):
+    """指定能力包版本的全局请求。"""
+
+    version: str
+
+
+class AbilitiesPackageMcpProbeRequest(AbilitiesPackageVersionRequest):
+    """指定能力包版本的 MCP 探测请求。"""
+
+    request: AbilityMcpProbeRequest
 
 
 class AbilitiesPackageGroupsRequest(BaseModel):
@@ -597,6 +618,17 @@ CORE_INTERFACES = InterfaceRegistry(
             AbilitiesPackageDetailRequest,
             AbilityPackageDetailView,
         ),
+        Capability(
+            "abilities.package_version_profile",
+            AbilitiesPackageVersionRequest,
+            AbilityPackageVersionProfileView,
+        ),
+        Capability(
+            "abilities.package_mcp_probe",
+            AbilitiesPackageMcpProbeRequest,
+            AbilityMcpProbeView,
+        ),
+        Capability(
         Interface(
             "abilities.package_groups",
             AbilitiesPackageGroupsRequest,
@@ -629,6 +661,33 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("messages.append", MessagesAppendRequest, MessageIdView),
         Interface("messages.broadcast", MessagesBroadcastRequest, MessageIdListView),
         Interface("messages.delegate", MessagesDelegateRequest, DeliveryIdView),
+        Capability("abilities.instances", AbilitiesInstancesRequest, AbilityInstancesView),
+        Capability("abilities.content", AbilitiesContentRequest, ContentReadResult),
+        Capability("abilities.status", AbilitiesStatusRequest, AbilityApiStatus),
+        Capability("abilities.grant", AbilitiesGrantRequest, AbilityTreeChangeResult),
+        Capability("abilities.revoke", AbilitiesRevokeRequest, AbilityTreeChangeResult),
+        Capability("abilities.enable_tool", AbilitiesEnableToolRequest, AbilityTreeChangeResult),
+        Capability("abilities.disable_tool", AbilitiesDisableToolRequest, AbilityTreeChangeResult),
+        Capability("agents.create", AgentCreateRequest, AgentIdView),
+        Capability("agents.create_from_template", AgentCreateFromTemplateRequest, AgentIdView),
+        Capability("agents.get", AgentGetRequest, AgentView),
+        Capability("agents.list", AgentListRequest, Page[str]),
+        Capability("agents.delete", AgentDeleteRequest, AckView),
+        Capability("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),
+        Capability("agents.tools", AgentRuntimeRequest, ToolListView),
+        Capability("agents.compact", AgentRuntimeRequest, AckView),
+        Capability("agents.reset", AgentRuntimeRequest, AckView),
+        Capability("sessions.create", SessionsCreateRequest, SessionIdView),
+        Capability("sessions.activate", SessionsActivateRequest, AckView),
+        Capability("sessions.archive", SessionsArchiveRequest, AckView),
+        Capability("sessions.delete", SessionsDeleteRequest, AckView),
+        Capability("branches.create", BranchesCreateRequest, BranchIdView),
+        Capability("branches.activate", BranchesActivateRequest, AckView),
+        Capability("branches.archive", BranchesArchiveRequest, AckView),
+        Capability("branches.delete", BranchesDeleteRequest, AckView),
+        Capability("messages.append", MessagesAppendRequest, MessageReplyView),
+        Capability("messages.broadcast", MessagesBroadcastRequest, BroadcastRepliesView),
+        Capability("messages.delegate", MessagesDelegateRequest, MessageReplyView),
     )
 )
 """Core 能力的唯一权威枚举。

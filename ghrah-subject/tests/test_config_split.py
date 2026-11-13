@@ -28,6 +28,7 @@ from ghrah.subject.config import (
     ManifestConfig,
     PersistenceConfig,
     PluginTrustConfig,
+    ProjectConfig,
     SandboxUnitConfig,
     SubjectConfig,
     TransportKindConfig,
@@ -279,6 +280,38 @@ class TestFromEnv:
         )
         config = SubjectConfig.from_env()
         assert config.project.default_root_locator_template == "/srv/ghrah/projects/{project_id}"
+
+    def test_from_env_project_bootstrap_locator_derived(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """未显式给 locator 时，从 workspace_root 派生默认项目工作区。"""
+        monkeypatch.setenv("GHRAH_SUBJECT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        monkeypatch.delenv("GHRAH_SUBJECT_PROJECT_BOOTSTRAP_WORKSPACE_LOCATOR", raising=False)
+
+        config = SubjectConfig.from_env()
+        assert config.project.bootstrap_workspace_locator == str(
+            tmp_path / "ws" / "projects" / "default"
+        )
+
+    def test_from_env_project_bootstrap_locator_explicit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "GHRAH_SUBJECT_PROJECT_BOOTSTRAP_WORKSPACE_LOCATOR", "/srv/ghrah/ws/default"
+        )
+
+        config = SubjectConfig.from_env()
+        assert config.project.bootstrap_workspace_locator == "/srv/ghrah/ws/default"
+
+    def test_project_slice_empty_locator_derived(self, tmp_path: Path) -> None:
+        """显式传入空 locator 的切片也要派生，避免 from_env 路径漏配。"""
+        config = SubjectConfig(
+            workspace_root=str(tmp_path / "ws"),
+            project_slice=ProjectConfig(bootstrap_workspace_locator=""),
+        )
+        assert config.project.bootstrap_workspace_locator == str(
+            tmp_path / "ws" / "projects" / "default"
+        )
 
     def test_from_env_sandbox_timeout_fallback_to_core(
         self, monkeypatch: pytest.MonkeyPatch

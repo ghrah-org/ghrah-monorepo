@@ -5,42 +5,34 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import { useAbilityPackagesStore } from "@ghrah/observer-core";
-import { computed, onMounted, onUnmounted } from "vue";
+import { abilityPackageVersionKey, useAbilityPackagesStore } from "@ghrah/observer-core";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import AbilityPackageCard from "@/components/config/ability-package-card.vue";
+import AbilityPackageDetail from "@/components/config/ability-package-detail.vue";
 import UiButton from "@/components/ui/button.vue";
 
 defineEmits<{ dirtyChange: [dirty: boolean] }>();
 const packages = useAbilityPackagesStore();
 const { t } = useI18n();
+const expanded = ref(new Set<string>());
 
 const legacy = computed(
   () => packages.status?.legacy_deprecated === true || packages.status?.ability_source === "legacy",
 );
+const pending = computed(() => packages.loadedAt === null && !packages.failed);
 const statusLabel = computed(() => {
-  if (!packages.status) return t("assembly.statusUnavailable");
+  if (!packages.status) {
+    return packages.failed ? t("assembly.statusUnavailable") : t("assembly.loading");
+  }
   if (legacy.value) return t("assembly.statusLegacy");
   if (packages.status.features.tree) return t("assembly.statusBuiltin");
   return t("assembly.statusUnavailable");
 });
 const showEmpty = computed(() => {
-  if (packages.loading || packages.groupsFailed) return false;
+  if (pending.value || packages.loading || packages.groupsFailed || packages.failed) return false;
   return !packages.groups || packages.groups.groups.length === 0;
 });
-
-function originText(origin: "builtin" | "installed" | null): string {
-  if (origin === "builtin") return t("assembly.catalog.origin.builtin");
-  if (origin === "installed") return t("assembly.catalog.origin.installed");
-  return t("assembly.catalog.origin.missing");
-}
-
-function problemText(problem: string): string {
-  if (problem === "definition_missing") return t("assembly.versions.missingDefinition");
-  if (problem.startsWith("definition_unreadable")) {
-    return t("assembly.versions.unreadableDefinition");
-  }
-  return problem;
-}
 
 function groupKey(
   fullName: string | null,
@@ -48,6 +40,67 @@ function groupKey(
 ): string {
   if (fullName) return fullName;
   return versions.map((version) => `${version.origin ?? ""}:${version.version ?? ""}`).join("|");
+}
+
+function versionIdentity(key: string): { namespace: string; name: string; version: string } | null {
+  const at = key.lastIndexOf("@");
+  if (at <= 0) return null;
+  const fullName = key.slice(0, at);
+  const version = key.slice(at + 1);
+  const dot = fullName.indexOf(".");
+  if (dot <= 0 || !version) return null;
+  return {
+    namespace: fullName.slice(0, dot),
+    name: fullName.slice(dot + 1),
+    version,
+  };
+}
+
+function listedVersionKeys(): Set<string> {
+  const keys = new Set<string>();
+  for (const group of packages.groups?.groups ?? []) {
+    if (!group.namespace || !group.name) continue;
+    for (const version of group.versions) {
+      if (!version.version) continue;
+      keys.add(abilityPackageVersionKey(group.namespace, group.name, version.version));
+    }
+  }
+  return keys;
+}
+
+function onToggle(identity: { namespace: string; name: string; version: string }): void {
+  const key = abilityPackageVersionKey(identity.namespace, identity.name, identity.version);
+  const next = new Set(expanded.value);
+  if (next.delete(key)) {
+    expanded.value = next;
+    return;
+  }
+  next.add(key);
+  expanded.value = next;
+  const record = packages.versionProfile(identity.namespace, identity.name, identity.version);
+  const cachedAt = record?.loadedAt;
+  if (record?.loading || (cachedAt !== null && cachedAt !== undefined)) return;
+  void packages.loadVersionProfile(identity.namespace, identity.name, identity.version);
+}
+
+function onRetry(namespace: string, name: string, version: string): void {
+  void packages.loadVersionProfile(namespace, name, version);
+}
+
+async function refresh(): Promise<void> {
+  const open = expanded.value;
+  await packages.load();
+  if (packages.failed) return;
+  const live = packages.groups ? listedVersionKeys() : null;
+  const next = new Set<string>();
+  for (const key of open) {
+    if (live && !live.has(key)) continue;
+    const identity = versionIdentity(key);
+    if (!identity) continue;
+    next.add(key);
+    void packages.loadVersionProfile(identity.namespace, identity.name, identity.version);
+  }
+  expanded.value = next;
 }
 
 onMounted(() => packages.setSettingsVisible(true));
@@ -61,14 +114,14 @@ onUnmounted(() => packages.setSettingsVisible(false));
         <h2>{{ t("assembly.catalog.title") }}</h2>
         <p>{{ statusLabel }}</p>
       </div>
-      <UiButton type="button" variant="secondary" @click="packages.load()">
+      <UiButton type="button" variant="secondary" @click="refresh()">
         {{ t("assembly.catalog.refresh") }}
       </UiButton>
     </header>
     <p v-if="packages.status?.reason" class="ability-note">
       {{ t("assembly.reason", { reason: packages.status.reason }) }}
     </p>
-    <p v-if="packages.loading" class="ability-state">{{ t("assembly.loading") }}</p>
+    <p v-if="pending || packages.loading" class="ability-state">{{ t("assembly.loading") }}</p>
     <p v-if="packages.failed" class="ability-state ability-state-alert" role="alert">
       {{ t("assembly.loadFailed") }}
     </p>
@@ -86,34 +139,26 @@ onUnmounted(() => packages.setSettingsVisible(false));
       {{ t("assembly.catalog.groupsFailed") }}
     </p>
     <ul v-if="packages.groups?.groups.length" class="ability-groups">
-      <li
+      <AbilityPackageCard
         v-for="group in packages.groups.groups"
         :key="groupKey(group.full_name, group.versions)"
-        class="ability-group"
+        :title="group.title || group.full_name || t('assembly.versions.unreadable')"
+        :full-name="group.full_name"
+        :namespace="group.namespace"
+        :name="group.name"
+        :versions="group.versions"
+        :expanded-keys="expanded"
+        @toggle="onToggle"
       >
-        <h3>{{ group.title || group.full_name || t("assembly.versions.unreadable") }}</h3>
-        <p v-if="group.full_name" class="ability-note">
-          <code>{{ group.full_name }}</code>
-        </p>
-        <ul class="ability-versions">
-          <li
-            v-for="(version, index) in group.versions"
-            :key="`${version.origin ?? ''}:${version.version ?? index}`"
-            class="ability-version"
-          >
-            <span>{{ version.version }}</span>
-            <span>{{ originText(version.origin) }}</span>
-            <span v-if="version.lock_state">
-              {{ t("assembly.catalog.lock", { state: version.lock_state }) }}
-            </span>
-            <span v-if="version.member_count != null">
-              {{ t("assembly.catalog.members", { count: version.member_count }) }}
-            </span>
-            <span v-if="version.shadowed_builtin">{{ t("assembly.catalog.shadowed") }}</span>
-            <span v-if="version.problem">{{ problemText(version.problem) }}</span>
-          </li>
-        </ul>
-      </li>
+        <template #detail="{ version }">
+          <AbilityPackageDetail
+            v-if="group.namespace && group.name && version.version"
+            :record="packages.versionProfile(group.namespace, group.name, version.version)"
+            :mcp-probe-enabled="packages.status?.features.mcp_probe === true"
+            @retry="onRetry(group.namespace, group.name, version.version)"
+          />
+        </template>
+      </AbilityPackageCard>
     </ul>
     <p v-if="showEmpty" class="ability-state ability-state-empty">
       {{ t("assembly.catalog.empty") }}
@@ -185,47 +230,13 @@ onUnmounted(() => packages.setSettingsVisible(false));
   text-align: center;
 }
 
-.ability-groups,
-.ability-versions {
+.ability-groups {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.ability-group {
-  min-width: 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.ability-group h3 {
-  margin: 0;
-  color: var(--color-text);
-  font-size: var(--font-ui-body);
-  font-weight: 600;
-}
-
-.ability-versions {
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.ability-version {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  color: var(--color-text-muted);
-  font-size: var(--font-ui-note);
-}
-
-.ability-group code {
-  font-size: var(--font-ui-code);
 }
 </style>

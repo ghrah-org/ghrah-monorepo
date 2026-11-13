@@ -11,14 +11,21 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from ghrah.protocol.ability_control import (
+    AbilityContentResourceView,
+    AbilityExecutionView,
     AbilityInstancesView,
     AbilityInstanceVersionView,
     AbilityInstanceView,
+    AbilityMcpMemberView,
+    AbilityMcpSnapshotView,
+    AbilityNamedResourceView,
+    AbilityOperationMemberView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupAgentView,
@@ -27,14 +34,23 @@ from ghrah.protocol.ability_control import (
     AbilityPackageGroupVersionView,
     AbilityPackageGroupView,
     AbilityPackageVersionDetail,
+    AbilityPackageVersionProfileView,
     AbilityPackageVersionRow,
+    AbilitySkillMemberView,
     AbilityUnboundVersionView,
     AbilityVerifyView,
 )
 
 from ghrah.ability.access import AccessError
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
-from ghrah.ability.loading.ability_schema import AbilityDefinition
+from ghrah.ability.loading.ability_schema import (
+    V1_SEMVER_PATTERN,
+    AbilityDefinition,
+    ContentResource,
+    ExecutionSpec,
+    OperationDefinition,
+    SkillDefinition,
+)
 from ghrah.ability.package.installer import AbilityInstaller, InstallerError
 
 _IDENTITY = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -730,3 +746,344 @@ async def build_package_groups(
         agent_id=agent_id,
         groups=[_group_view(groups[key], scope, aliases) for key in ordered],
     )
+
+
+# --------------------------------------------------------------- 版本画像
+
+
+class _ContentPathError(ValueError):
+    """定义面声明的内容路径不是包内相对路径，不能进响应。"""
+
+
+def _relative_content_path(path: str) -> str:
+    """把声明路径收窄为包内相对路径。
+
+    画像只输出相对路径：绝对路径、盘符、``..`` 与空段一律判为非法，
+    避免把安装根或包目录带进响应。
+    """
+    candidate = path.replace("\\", "/")
+    if not candidate or candidate.startswith("/") or re.match(r"^[A-Za-z]:", candidate):
+        raise _ContentPathError(path)
+    if any(part in ("", ".", "..") for part in candidate.split("/")):
+        raise _ContentPathError(path)
+    return candidate
+
+
+def _content_view(
+    path: str, media_type: str, size: int | None = None, digest: str | None = None
+) -> AbilityContentResourceView:
+    """内容资源视图；``path`` 必须是包内相对路径。"""
+    return AbilityContentResourceView(
+        path=_relative_content_path(path), media_type=media_type, size=size, digest=digest
+    )
+
+
+def _named_resource_views(
+    resources: Mapping[str, ContentResource],
+) -> list[AbilityNamedResourceView]:
+    """技能附件视图，按附件键升序。"""
+    return [
+        AbilityNamedResourceView(
+            key=key,
+            path=_relative_content_path(resource.path),
+            media_type=resource.media_type,
+            size=resource.size,
+            digest=resource.digest,
+        )
+        for key, resource in sorted(resources.items())
+    ]
+
+
+def _execution_view(execution: ExecutionSpec) -> AbilityExecutionView:
+    """执行约束视图；只读镜像定义面。"""
+    return AbilityExecutionView(
+        mode=execution.mode,
+        timeout_ms=execution.timeout_ms,
+        cancellation=execution.cancellation,
+        on_revoke=execution.on_revoke,
+        retry=execution.retry,
+    )
+
+
+def _operation_member_view(key: str, operation: OperationDefinition) -> AbilityOperationMemberView:
+    """一个可执行成员的只读裁切；``entry`` 是包内相对路径。"""
+    mcp = None
+    if operation.mcp is not None:
+        mcp = AbilityMcpMemberView(server=operation.mcp.server, tool=operation.mcp.tool)
+    entry = None
+    if operation.entry is not None:
+        entry = _content_view(
+            operation.entry.path,
+            operation.entry.media_type,
+            operation.entry.size,
+            operation.entry.digest,
+        )
+    return AbilityOperationMemberView(
+        key=key,
+        title=operation.title,
+        description=operation.description,
+        input_schema=operation.input_schema,
+        output_schema=operation.output_schema,
+        effects=list(operation.effects),
+        tags=list(operation.tags),
+        resources=operation.resources,
+        permissions=operation.permissions,
+        expose=operation.expose,
+        execution=_execution_view(operation.execution),
+        mcp=mcp,
+        entry=entry,
+    )
+
+
+def _skill_member_view(key: str, skill: SkillDefinition) -> AbilitySkillMemberView:
+    """一个技能成员的只读裁切；正文与附件都是包内相对路径。"""
+    return AbilitySkillMemberView(
+        key=key,
+        title=skill.title,
+        description=skill.description,
+        tags=list(skill.tags),
+        body=_content_view(skill.body.path, skill.body.media_type),
+        assets=_named_resource_views(skill.assets),
+        references=_named_resource_views(skill.references),
+        scripts=_named_resource_views(skill.scripts),
+    )
+
+
+def _member_views(
+    definition: AbilityDefinition,
+) -> tuple[list[AbilityOperationMemberView], list[AbilitySkillMemberView]]:
+    """成员视图，工具与技能都按键升序。"""
+    operations = [
+        _operation_member_view(key, definition.operations[key])
+        for key in sorted(definition.operations)
+    ]
+    skills = [_skill_member_view(key, definition.skills[key]) for key in sorted(definition.skills)]
+    return operations, skills
+
+
+def _strip_install_paths(text: str | None, *, install_root: str | None) -> str | None:
+    """裁掉安装域文本里的安装根前缀；响应里不得出现包目录绝对路径。"""
+    if not text:
+        return None
+    if install_root:
+        base = str(Path(install_root))
+        text = text.replace(base + os.sep, "").replace(base, "[package]")
+    return text or None
+
+
+def _safe_verify_view(
+    installer: AbilityInstaller, full_name: str, version: str, *, install_root: str | None
+) -> AbilityVerifyView:
+    """复用既有校验；失败按 ``InstallerError`` 转失败视图，不把整页变 500。"""
+    try:
+        view = _verify_view(installer, full_name, version)
+    except InstallerError as exc:
+        return AbilityVerifyView(
+            ok=False,
+            code=exc.code,
+            message=_strip_install_paths(exc.message, install_root=install_root),
+        )
+    return view.model_copy(
+        update={"message": _strip_install_paths(view.message, install_root=install_root)}
+    )
+
+
+def _mcp_snapshot_view(definition: AbilityDefinition, raw: Any) -> AbilityMcpSnapshotView | None:
+    """已安装 MCP 包的安装快照健康；来源包不得伪造。"""
+    if definition.origin != "mcp" or not isinstance(raw, dict) or not raw:
+        return None
+    server = (definition.mcp or {}).get("server")
+    fetched_at = raw.get("fetched_at")
+    if not isinstance(server, str) or not server:
+        return None
+    if not isinstance(fetched_at, str) or not fetched_at:
+        return None
+    stale = raw.get("stale")
+    last_error = raw.get("last_error")
+    return AbilityMcpSnapshotView(
+        server=server,
+        fetched_at=fetched_at,
+        stale=stale if isinstance(stale, bool) else False,
+        last_error=last_error if isinstance(last_error, str) else None,
+    )
+
+
+def _builtin_profile(
+    definition: AbilityDefinition, *, namespace: str, name: str
+) -> AbilityPackageVersionProfileView:
+    """内置版本的画像：不校验、不探测，不返回 MCP 快照。"""
+    try:
+        operations, skills = _member_views(definition)
+    except (TypeError, ValueError) as exc:
+        raise CatalogError("unavailable", f"内置能力定义不可投影：{exc}") from exc
+    return AbilityPackageVersionProfileView(
+        namespace=namespace,
+        name=name,
+        full_name=f"{namespace}.{name}",
+        version=definition.identity.version,
+        origin="builtin",
+        definition_origin=definition.origin,
+        title=definition.title,
+        description=definition.description,
+        lock_state="builtin",
+        problem=None,
+        shadowed_builtin=False,
+        verify=None,
+        mcp=None,
+        operations=operations,
+        skills=skills,
+    )
+
+
+def _installed_profile(
+    installer: AbilityInstaller,
+    payload: dict[str, Any],
+    *,
+    namespace: str,
+    name: str,
+    version: str,
+    builtin: AbilityDefinition | None,
+    install_root: str | None,
+) -> AbilityPackageVersionProfileView:
+    """已安装版本的画像；定义不可读时降级为 200 的可解释问题。"""
+    full_name = f"{namespace}.{name}"
+    definition = _definition_from_payload(payload)
+    raw_problem = payload.get("problem")
+    problem = _strip_install_paths(
+        raw_problem if isinstance(raw_problem, str) else None, install_root=install_root
+    )
+    raw_lock_state = payload.get("lock_state")
+    lock_state = raw_lock_state if isinstance(raw_lock_state, str) and raw_lock_state else "missing"
+    title: str | None = None
+    description: str | None = None
+    definition_origin: Literal["source", "mcp"] | None = None
+    verify: AbilityVerifyView | None = None
+    mcp: AbilityMcpSnapshotView | None = None
+    operations: list[AbilityOperationMemberView] = []
+    skills: list[AbilitySkillMemberView] = []
+    if definition is None:
+        problem = _problem(problem, "definition_unreadable")
+    else:
+        try:
+            operations, skills = _member_views(definition)
+        except TypeError, ValueError:
+            problem = _problem(problem, "definition_unreadable")
+        else:
+            definition_origin = definition.origin
+            title = definition.title
+            description = definition.description
+            verify = _safe_verify_view(installer, full_name, version, install_root=install_root)
+            mcp = _mcp_snapshot_view(definition, payload.get("mcp"))
+    return AbilityPackageVersionProfileView(
+        namespace=namespace,
+        name=name,
+        full_name=full_name,
+        version=version,
+        origin="installed",
+        definition_origin=definition_origin,
+        title=title,
+        description=description,
+        lock_state=lock_state,
+        problem=problem,
+        shadowed_builtin=builtin is not None,
+        verify=verify,
+        mcp=mcp,
+        operations=operations,
+        skills=skills,
+    )
+
+
+def validate_package_version(namespace: str, name: str, version: str) -> str:
+    """校验身份和版本，返回安装存储使用的完整包名。"""
+    if not valid_identity_segment(namespace) or not valid_identity_segment(name):
+        raise CatalogError("invalid_request", "能力包身份不合法")
+    if not V1_SEMVER_PATTERN.fullmatch(version):
+        raise CatalogError("invalid_request", "能力包版本必须是 SemVer core 三段")
+    return f"{namespace}.{name}"
+
+
+def read_installed_version(
+    install_root: str | None, full_name: str, version: str
+) -> dict[str, Any]:
+    """按已校验的身份读取安装记录，错误信息不包含本机路径。"""
+    missing = f"未找到已安装能力包：{full_name}@{version}"
+    if not install_root:
+        raise CatalogError("not_found", missing)
+    try:
+        payload = AbilityInstaller(Path(install_root)).show(full_name, version)
+    except InstallerError as exc:
+        if exc.code == "not_installed":
+            raise CatalogError("not_found", missing) from exc
+        raise CatalogError("unavailable", f"读取已安装能力包失败（{exc.code}）") from exc
+    except OSError as exc:
+        raise CatalogError("unavailable", "已安装能力包目录不可读") from exc
+    if not isinstance(payload, dict):
+        raise CatalogError("unavailable", "已安装能力包数据不完整")
+    return payload
+
+
+def build_version_profile(
+    install_root: str | None, namespace: str, name: str, version: str
+) -> AbilityPackageVersionProfileView:
+    """读取一个能力包版本的只读画像。
+
+    已安装版本优先于同版本内置（并标记 ``shadowed_builtin``）；已安装定义
+    不可读时降级为 200 画像（``problem`` 非空、成员为空），不把整页变 500。
+    安装根不存在或不可读时，内置版本仍可读；只有版本完全不存在才 ``not_found``。
+
+    Args:
+        install_root: 发行版级安装存储根；``None`` 表示只读内置树。
+        namespace: 包身份第一段（须符合身份字符集）。
+        name: 包身份第二段（须符合身份字符集）。
+        version: 版本（须是 SemVer core 三段）。
+
+    Returns:
+        版本画像；``path`` 一律包内相对路径。
+
+    Raises:
+        CatalogError: ``invalid_request`` / ``not_found`` / ``unavailable``。
+    """
+    full_name = validate_package_version(namespace, name, version)
+
+    try:
+        definitions = load_ability_definitions()
+    except Exception as exc:
+        raise CatalogError("unavailable", f"内置能力目录不可读：{exc}") from exc
+    builtin = next(
+        (
+            definition
+            for definition in definitions.values()
+            if definition.identity.full_name == full_name and definition.identity.version == version
+        ),
+        None,
+    )
+
+    payload: dict[str, Any] | None = None
+    installer: AbilityInstaller | None = None
+    if install_root:
+        root = Path(install_root)
+        if _install_root_available(root):
+            installer = AbilityInstaller(root)
+            try:
+                payload = read_installed_version(install_root, full_name, version)
+            except CatalogError as exc:
+                if exc.code != "not_found" and builtin is None:
+                    raise
+        elif builtin is None:
+            if root.exists() or root.is_symlink():
+                raise CatalogError("unavailable", "已安装能力目录不可读")
+            raise CatalogError("not_found", f"未找到能力包版本：{full_name}@{version}")
+
+    if payload is not None and installer is not None:
+        return _installed_profile(
+            installer,
+            payload,
+            namespace=namespace,
+            name=name,
+            version=version,
+            builtin=builtin,
+            install_root=install_root,
+        )
+    if builtin is not None:
+        return _builtin_profile(builtin, namespace=namespace, name=name)
+    raise CatalogError("not_found", f"未找到能力包版本：{full_name}@{version}")

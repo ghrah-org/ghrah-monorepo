@@ -39,30 +39,14 @@ __all__ = ["build_core_port"]
 
 async def _close_all(*closers: Callable[[], Awaitable[None]]) -> None:
     """依次关闭各读表层与运行时（一个失败不影响其余）。"""
+    errors: list[Exception] = []
     for closer in closers:
-        await closer()
-
-
-def _default_ability_store_factory(
-    registry: RuntimeRegistry, resolve_db_path: DbPathResolver
-) -> Any:
-    """Core 自持启动授权关系库：run 权威来自本注册表。"""
-
-    async def factory(project_id: str) -> Any:
-        from ghrah.ability.access import AbilityAccessStore
-
-        path = Path(resolve_db_path(project_id))
-        return await AbilityAccessStore.open(
-            path,
-            project_id,
-            operators=frozenset({"deployment"}),
-            runs=lambda agent: registry.run_id_for(project_id, agent),
-            # 进程启动即「停机核对」：上一进程异常退出留下的 pending 占位在此回收，
-            # 否则同一主体永远无法重新 spawn（conflict）。
-            reclaim_stale=True,
-        )
-
-    return factory
+        try:
+            await closer()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise ExceptionGroup("failed to close Core port", errors)
 
 
 def _default_manager_factory(resolve_db_path: DbPathResolver) -> ManagerFactory:
@@ -70,12 +54,8 @@ def _default_manager_factory(resolve_db_path: DbPathResolver) -> ManagerFactory:
 
     async def factory(project_id: str) -> Any:
         from ghrah.communication import MessageManager
-        from ghrah.context.persistence.sqlite_backend import SqliteBackend
 
         path = Path(resolve_db_path(project_id))
-        async with SqliteBackend(path) as backend:
-            # 打开连接即完成 schema 初始化，不加载任何 checkpoint。
-            await backend.has_checkpoint("bootstrap")
         manager = MessageManager(
             path,
             project_id=project_id,
@@ -83,7 +63,7 @@ def _default_manager_factory(resolve_db_path: DbPathResolver) -> ManagerFactory:
             session_routing=True,
             allow_persisted_agents=True,
         )
-        await manager.open()
+        await manager.open(prepare_context=True)
         return manager
 
     return factory
@@ -116,7 +96,11 @@ def build_core_port(
     manager_factory: ManagerFactory | None = None,
     manifest_resolver: ManifestResolver | None = None,
     install_root: str | None = None,
+    agentconf_db_path: str | None = None,
+    grant_policy: Any = None,
     config_hook: ConfigHook | None = None,
+    emit: Callable[[str, dict[str, Any]], None] | None = None,
+    serial: Callable[..., Awaitable[Any]] | None = None,
 ) -> CoreFacade:
     """构造一个未绑定项目的 Core 端口。
 
@@ -127,7 +111,11 @@ def build_core_port(
         manager_factory: 消息管理器工厂；缺省按项目链库打开一个
         manifest_resolver: manifest 解析源；缺省不提供（能力返回 FAILED_PRECONDITION）
         install_root: 能力包安装根；缺省时包目录读面报告「不可用」
+        agentconf_db_path: MCP 探测使用的受信配置库路径
+        grant_policy: 部署显式配置的启动授权策略
         config_hook: 单元创建前的异步配置钩子（注入 ability_store 等）
+        emit: 宿主事件投影回调
+        serial: 宿主命令入口，由 Core 的受限桥转发
 
     Returns:
         可直接 ``ctx.provide(CORE_PORT, ...)`` 的端口实现
@@ -143,6 +131,8 @@ def build_core_port(
         manager_factory=manager_factory or _default_manager_factory(resolve_db_path),
         manifest_resolver=manifest_resolver,
         config_hook=config_hook,
+        emit=emit,
+        serial=serial,
     )
     # 能力关系库的运行时态来自活动单元：离线时 run 为 None，视图据此拒绝。
     abilities = AbilityReadStore(
@@ -150,10 +140,14 @@ def build_core_port(
         resolve_run=registry.run_id_for,
         resolve_tools=registry.tools_for,
         install_root=install_root,
+        agentconf_db_path=agentconf_db_path,
+        grant_policy=grant_policy,
+        reclaim_stale=True,
     )
-    registry.set_ability_store_factory(_default_ability_store_factory(registry, resolve_db_path))
+    registry.set_ability_store_factory(abilities.project_store)
     runtime = CoreRuntime(build_handlers(chain, mailbox, abilities, registry))
     return CoreFacade(
         runtime=runtime,
-        closer=lambda: _close_all(chain.aclose, abilities.aclose, registry.aclose),
+        stop_project=registry.stop,
+        closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose),
     )

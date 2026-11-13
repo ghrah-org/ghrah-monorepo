@@ -423,6 +423,28 @@ class MessageIdListView(BaseModel):
     message_ids: list[str] = Field(default_factory=list)
 
 
+class MessageReplyView(BaseModel):
+    """一条同步消息的回复。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+
+
+class BroadcastReplyView(MessageReplyView):
+    """广播中一名实际回复的 Agent。"""
+
+    responder: str
+
+
+class BroadcastRepliesView(BaseModel):
+    """广播收到的回复。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    responses: list[BroadcastReplyView]
+
+
 class AgentStatus(BaseModel):
     """Agent 的一次性状态快照——不是对象句柄。"""
 

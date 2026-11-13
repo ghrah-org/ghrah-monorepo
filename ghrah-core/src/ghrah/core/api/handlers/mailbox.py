@@ -92,6 +92,7 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
 
     async def publish_external(request: MailboxPublishExternalRequest) -> PublishedMessageView:
         """以外部（人）身份发布消息：写入消息表并投递给收件人。"""
+        await registry.ensure(request.project_id)
         manager = _manager(registry, request.project_id, "mailbox.publish_external")
         record = await manager.send_external(
             sender=request.sender,
@@ -105,13 +106,14 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
     async def publish_notification(
         request: MailboxPublishNotificationRequest,
     ) -> PublishedMessageView:
-        """发布通知类消息（无收件人投递）。"""
+        """发布通知类消息，并按指定收件人投递。"""
         from ghrah.communication import MessageKind
 
+        await registry.ensure(request.project_id)
         manager = _manager(registry, request.project_id, "mailbox.publish_notification")
         record = await manager.send(
             sender_id=request.sender_id,
-            recipient_ids=(),
+            recipient_ids=tuple(request.recipient_ids),
             content=request.content,
             kind=MessageKind(request.kind),
             idempotency_key=request.idempotency_key,
@@ -121,6 +123,7 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
 
     async def recover_room_projections(request: MailboxRecoverProjectionsRequest) -> AckView:
         """补齐缺失的 Room 投影日志。"""
+        await registry.ensure(request.project_id)
         manager = _manager(registry, request.project_id, "mailbox.recover_room_projections")
         await manager.recover_room_projections()
         return AckView(ok=True)

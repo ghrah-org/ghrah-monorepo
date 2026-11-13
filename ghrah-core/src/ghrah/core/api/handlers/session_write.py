@@ -117,6 +117,9 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
                 "agent_name": name,
                 "name": request.name,
                 "system_prompt": request.system_prompt,
+                "origin_session_id": request.origin_session_id,
+                "origin_node_id": request.origin_node_id,
+                "metadata": request.metadata,
             },
         )
         data = _ok_or_raise(result, "sessions.create")
@@ -184,6 +187,7 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
                 "name": request.name,
                 "from_node_id": request.from_node_id,
                 "parent_branch_id": request.parent_branch_id,
+                "metadata": request.metadata,
             },
         )
         data = _ok_or_raise(result, "branches.create")

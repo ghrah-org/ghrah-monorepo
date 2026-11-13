@@ -13,8 +13,7 @@ from typing import Any
 
 from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
-from ghrah.protocol.views.common import DeliveryIdView, MessageIdView
-from ghrah.protocol.views.core import MessageIdListView
+from ghrah.protocol.views.core import BroadcastRepliesView, MessageReplyView
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
@@ -28,15 +27,6 @@ from ghrah.core.units.registry import RuntimeRegistry
 __all__ = ["make_message_handlers"]
 
 
-def _pick(data: dict[str, Any], *keys: str) -> str:
-    """从结果里按候选键取第一个非空字符串。"""
-    for key in keys:
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
-
-
 def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
     """构造 ``messages`` 分组处理器。
 
@@ -47,34 +37,33 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         能力名到处理器的映射
     """
 
-    async def append(request: MessagesAppendRequest) -> MessageIdView:
-        """以某 Agent 身份发送一条消息。"""
-        sender = await resolve_agent_name(registry, request.project_id, request.agent_id)
+    async def append(request: MessagesAppendRequest) -> MessageReplyView:
+        """将请求投递给指定 Agent，保留调用者身份。"""
         result = await registry.handle_command(
             project_id=request.project_id,
             command="send_message",
             payload={
                 "project_id": request.project_id,
                 "agent_id": request.agent_id,
-                "sender": sender,
+                "sender": request.sender,
+                "timeout": request.timeout,
                 "target": request.target,
                 "content": request.content,
                 "metadata": request.metadata,
             },
         )
-        data = _ok_or_raise(result, "messages.append")
-        message_id = _pick(data, "message_id", "id")
-        if not message_id:
+        if not result.get("success") and result.get("error") == "source_ability_missing":
             raise CoreApiError(
                 Problem.make(
-                    ProblemCode.INTERNAL,
+                    ProblemCode.FAILED_PRECONDITION,
                     capability="messages.append",
-                    detail="unit returned no message_id",
-                ),
+                    detail=result["error_detail"],
+                    details={"reason": "source_ability_missing", "data": result.get("data")},
+                )
             )
-        return MessageIdView(message_id=message_id)
+        return MessageReplyView.model_validate(_ok_or_raise(result, "messages.append"))
 
-    async def broadcast(request: MessagesBroadcastRequest) -> MessageIdListView:
+    async def broadcast(request: MessagesBroadcastRequest) -> BroadcastRepliesView:
         """向项目内全部 Agent 广播。"""
         result = await registry.handle_command(
             project_id=request.project_id,
@@ -86,11 +75,18 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
             },
         )
         data = _ok_or_raise(result, "messages.broadcast")
-        raw = data.get("message_ids") or data.get("deliveries") or []
-        ids = [str(item) for item in raw if str(item)]
-        return MessageIdListView(message_ids=ids)
+        replies = BroadcastRepliesView.model_validate(data)
+        if not replies.responses:
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.FAILED_PRECONDITION,
+                    capability="messages.broadcast",
+                    detail="no Agent replied to broadcast",
+                )
+            )
+        return replies
 
-    async def delegate(request: MessagesDelegateRequest) -> DeliveryIdView:
+    async def delegate(request: MessagesDelegateRequest) -> MessageReplyView:
         """把一个任务委派给另一个 Agent。"""
         from_name = await resolve_agent_name(registry, request.project_id, request.from_agent_id)
         to_name = await resolve_agent_name(registry, request.project_id, request.to_agent_id)
@@ -107,17 +103,7 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                 "timeout": request.timeout,
             },
         )
-        data = _ok_or_raise(result, "messages.delegate")
-        delivery_id = _pick(data, "delivery_id", "id")
-        if not delivery_id:
-            raise CoreApiError(
-                Problem.make(
-                    ProblemCode.INTERNAL,
-                    capability="messages.delegate",
-                    detail="unit returned no delivery_id",
-                ),
-            )
-        return DeliveryIdView(delivery_id=delivery_id)
+        return MessageReplyView.model_validate(_ok_or_raise(result, "messages.delegate"))
 
     return {
         "messages.append": append,

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hmac
+import importlib.util
 import logging
 from typing import Any
 
@@ -19,7 +20,11 @@ from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from ghrah.protocol.ability_control import AbilityApiFeatures, AbilityApiStatus
+from ghrah.protocol.ability_control import (
+    AbilityApiFeatures,
+    AbilityApiStatus,
+    AbilityMcpProbeRequest,
+)
 from ghrah.protocol.ability_tree import (
     BindToolRequest,
     GrantAbilityRequest,
@@ -32,7 +37,6 @@ from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.service_keys import (
-    ABILITY_ACCESS,
     CORE_PORT_SERVICE,
     OBSERVER_ENDPOINT,
     OBSERVER_EVENT_BUS,
@@ -116,13 +120,20 @@ def _authorized(request: Request, config: SubjectConfig) -> bool:
     return hmac.compare_digest(header[len("Bearer ") :], token)
 
 
+def _mcp_probe_ready() -> bool:
+    """检查可选的 MCP SDK 是否可用。"""
+    try:
+        return importlib.util.find_spec("mcp") is not None
+    except ImportError, ValueError:
+        return False
+
+
 def build_ability_control_router(
     *,
     config: SubjectConfig,
     project_store: Any,
     core_port: Any = None,
     event_bus: Any = None,
-    access: Any = None,
 ) -> APIRouter:
     """构造管理面路由。
 
@@ -180,6 +191,10 @@ def build_ability_control_router(
         except ApiError as error:
             problem = error.problem
             raw = getattr(problem.code, "value", str(problem.code))
+            if problem.details and problem.details.get("reason") == "definition_not_mcp":
+                raise AbilityApiError(
+                    "invalid_change", problem.detail, detail=problem.details, status=409
+                ) from error
             code = PROBLEM_TO_HTTP.get(str(raw), "internal")
             raise AbilityApiError(
                 code,
@@ -216,6 +231,7 @@ def build_ability_control_router(
             versions_write=False,
             packages_read=ready,
             packages_install=False,
+            mcp_probe=ready and core_port is not None and _mcp_probe_ready(),
             surface_write=False,
         )
         payload = AbilityApiStatus(
@@ -430,6 +446,37 @@ def build_ability_control_router(
 
     router.add_api_route("/ability-packages/{namespace}/{name}", _package_detail, methods=["GET"])
 
+    @router.get("/ability-packages/{namespace}/{name}/versions/{version}")
+    async def _package_version_profile(
+        namespace: str, name: str, version: str, _: None = Depends(_ensure_catalog)
+    ) -> dict[str, Any]:
+        profile = await _call(
+            _global_port().abilities.package_version_profile(
+                namespace=namespace, name=name, version=version
+            )
+        )
+        return _jsonable(profile)
+
+    @router.post("/ability-packages/{namespace}/{name}/versions/{version}/mcp/probe")
+    async def _package_mcp_probe(
+        namespace: str,
+        name: str,
+        version: str,
+        body: AbilityMcpProbeRequest,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        if not _authorized(request, config):
+            raise AbilityApiError("access_denied", "非回环请求需要有效 Bearer token")
+        if not _mcp_probe_ready():
+            raise AbilityApiError("capability_unavailable", "MCP 探测未启用：缺少 MCP SDK")
+        view = await _call(
+            _global_port().abilities.package_mcp_probe(
+                namespace=namespace, name=name, version=version, request=body
+            )
+        )
+        return _jsonable(view)
+
     async def _instances(
         project_id: str,
         request: Request,
@@ -543,7 +590,6 @@ class AbilityControlUnit(SubjectUnit):
                     CORE_PORT_SERVICE,
                     PROJECT_STORE,
                     OBSERVER_EVENT_BUS,
-                    ABILITY_ACCESS,
                 }
             ),
             routes=RouteSpec(),
@@ -566,13 +612,11 @@ class AbilityControlUnit(SubjectUnit):
         project_store = ctx.get(PROJECT_STORE.name)
         core_port = ctx.get(CORE_PORT_SERVICE.name)
         event_bus = ctx.get(OBSERVER_EVENT_BUS.name)
-        access = ctx.get(ABILITY_ACCESS.name)
         router = build_ability_control_router(
             config=self._config,
             project_store=project_store,
             core_port=core_port,
             event_bus=event_bus,
-            access=access,
         )
         app.add_middleware(
             CORSMiddleware,

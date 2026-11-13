@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fixture from "../../protocol/src/__fixtures__/ability-tree.json";
 import { AbilityConflictError, createAbilityControlClient } from "./ability-control.js";
-import { HttpClient, type HttpFetch, type HttpFetchResponse } from "./http.js";
+import { HttpClient, HttpError, type HttpFetch, type HttpFetchResponse } from "./http.js";
 
 function jsonResponse(body: unknown, status = 200): HttpFetchResponse {
   return {
@@ -140,5 +140,135 @@ describe("AbilityControlClient", () => {
       }),
     );
     await expect(client.agentPackageGroups(agentId)).rejects.toThrow("target mismatch");
+  });
+
+  it("reads a package version and rejects a mismatched or loose payload", async () => {
+    const body = {
+      namespace: "ghrah",
+      name: "fs",
+      full_name: "ghrah.fs",
+      version: "0.1.0",
+      origin: "builtin",
+      lock_state: "builtin",
+    };
+    const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(jsonResponse(body));
+    const client = clientWith(fetchImpl);
+    await expect(client.packageVersion("ghrah", "fs", "0.1.0")).resolves.toMatchObject({
+      full_name: "ghrah.fs",
+      format: "ghrah.ability-control.package-version.v1",
+    });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, { method: string }];
+    expect(init.method).toBe("GET");
+    expect(url).toContain("/api/v1/ability-packages/ghrah/fs/versions/0.1.0");
+
+    fetchImpl.mockResolvedValueOnce(
+      jsonResponse({ ...body, name: "other", full_name: "ghrah.other" }),
+    );
+    await expect(client.packageVersion("ghrah", "fs", "0.1.0")).rejects.toThrow("target mismatch");
+
+    fetchImpl.mockResolvedValueOnce(jsonResponse({ ...body, root: "/tmp/ability" }));
+    await expect(client.packageVersion("ghrah", "fs", "0.1.0")).rejects.toThrow();
+  });
+
+  it("rejects illegal package identity before sending a version request", async () => {
+    const fetchImpl = vi.fn<HttpFetch>();
+    const client = clientWith(fetchImpl);
+    await expect(client.packageVersion("Ghrah", "fs", "0.1.0")).rejects.toThrow(
+      "Invalid package identity",
+    );
+    await expect(client.packageVersion("ghrah", "fs", "1.2")).rejects.toThrow(
+      "Invalid package version",
+    );
+    await expect(client.packageVersion("ghrah", "../fs", "0.1.0")).rejects.toThrow(
+      "Invalid package identity",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("posts a probe with the frozen defaults and a strict response", async () => {
+    const body = {
+      namespace: "mcp",
+      name: "local",
+      version: "0.1.0",
+      server: "notes",
+      ok: true,
+      phase: "list_tools",
+      elapsed_ms: 4,
+      tool_count: 0,
+      resource_count: 0,
+      error: null,
+    };
+    const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(jsonResponse(body));
+    const client = clientWith(fetchImpl);
+    await expect(client.probePackageMcp("mcp", "local", "0.1.0")).resolves.toMatchObject({
+      server: "notes",
+      ok: true,
+      format: "ghrah.ability-control.mcp-probe.v1",
+    });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, { method: string; body?: string }];
+    expect(init.method).toBe("POST");
+    expect(url).toContain("/api/v1/ability-packages/mcp/local/versions/0.1.0/mcp/probe");
+    expect(JSON.parse(init.body ?? "")).toEqual({ timeout_ms: 5000, include_resources: false });
+
+    await client.probePackageMcp("mcp", "local", "0.1.0", {
+      timeoutMs: 2000,
+      includeResources: true,
+    });
+    expect(JSON.parse(fetchImpl.mock.calls[1]?.[1].body ?? "")).toEqual({
+      timeout_ms: 2000,
+      include_resources: true,
+    });
+
+    fetchImpl.mockResolvedValueOnce(jsonResponse({ ...body, version: "0.2.0" }));
+    await expect(client.probePackageMcp("mcp", "local", "0.1.0")).rejects.toThrow(
+      "target mismatch",
+    );
+    fetchImpl.mockResolvedValueOnce(jsonResponse({ ...body, url: "http://secret" }));
+    await expect(client.probePackageMcp("mcp", "local", "0.1.0")).rejects.toThrow();
+  });
+
+  it("rejects an out-of-range probe timeout before sending", async () => {
+    const fetchImpl = vi.fn<HttpFetch>();
+    const client = clientWith(fetchImpl);
+    await expect(
+      client.probePackageMcp("mcp", "local", "0.1.0", { timeoutMs: 999 }),
+    ).rejects.toThrow();
+    await expect(
+      client.probePackageMcp("mcp", "local", "0.1.0", { timeoutMs: 10001 }),
+    ).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("aborts a probe at timeoutMs plus 3000", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<HttpFetch>(
+        (_url, init) =>
+          new Promise<HttpFetchResponse>((_resolve, reject) => {
+            init.signal.addEventListener("abort", () => {
+              reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            });
+          }),
+      );
+      const client = clientWith(fetchImpl);
+      let error: unknown;
+      const pending = client.probePackageMcp("mcp", "local", "0.1.0", { timeoutMs: 5000 }).then(
+        () => {
+          error = new Error("probe resolved");
+        },
+        (caught: unknown) => {
+          error = caught;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(7999);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(error).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(error).toBeInstanceOf(HttpError);
+      expect((error as HttpError).status).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

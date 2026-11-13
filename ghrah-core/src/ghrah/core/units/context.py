@@ -10,6 +10,7 @@ CoreUnit 对宿主的要求极窄——实测只用到 ``emit`` / ``provide`` / 
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 __all__ = ["UnitContext"]
@@ -22,7 +23,15 @@ class UnitContext:
         request_id: 当前请求标识（单元用于日志关联）
     """
 
-    def __init__(self, request_id: str = "core-runtime") -> None:
+    def __init__(
+        self,
+        request_id: str = "core-runtime",
+        *,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+        serial: Callable[..., Awaitable[Any]] | None = None,
+    ) -> None:
+        self._publish = emit
+        self.serial = serial
         self._request_id = request_id
         self._values: dict[str, Any] = {}
         self._events: list[tuple[str, dict[str, Any]]] = []
@@ -42,7 +51,10 @@ class UnitContext:
         """
         merged: dict[str, Any] = dict(payload or {})
         merged.update(extra)
-        self._events.append((event, merged))
+        if self._publish is None:
+            self._events.append((event, merged))
+        else:
+            self._publish(event, merged)
 
     def provide(self, key: str, value: Any, **extra: Any) -> None:
         """登记单元对外提供的服务。
