@@ -44,8 +44,11 @@ function problemText(problem: string): string {
 function identity(
   version: AbilityPackageGroupVersionView,
 ): { namespace: string; name: string; version: string } | null {
-  if (!props.namespace || !props.name || !version.version) return null;
-  return { namespace: props.namespace, name: props.name, version: version.version };
+  // 退化身份（只声明 namespace、没有 name）在服务端以 <namespace>/<namespace>
+  // 落盘，请求路径同样要用 namespace 补齐 name，否则这类包点不开详情。
+  const name = props.name ?? props.namespace;
+  if (!props.namespace || !name || !version.version) return null;
+  return { namespace: props.namespace, name, version: version.version };
 }
 
 function versionKey(version: AbilityPackageGroupVersionView): string | null {

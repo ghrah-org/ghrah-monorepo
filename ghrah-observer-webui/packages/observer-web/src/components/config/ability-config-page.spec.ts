@@ -199,6 +199,62 @@ describe("AbilityConfigPage", () => {
     wrapper.unmount();
   });
 
+  it("opens a namespace-only package by reusing the namespace as the name segment", async () => {
+    const degenerateGroups = {
+      format: "ghrah.ability-control.package-groups.v1",
+      scope: "distribution",
+      installed_available: true,
+      project_id: null,
+      agent_id: null,
+      groups: [
+        {
+          namespace: "research",
+          name: null,
+          full_name: "research",
+          title: "research",
+          versions: [
+            {
+              version: "0.1.0",
+              origin: "installed",
+              lock_state: "ok",
+              problem: null,
+              shadowed_builtin: false,
+              member_count: 1,
+              project: null,
+              agent: null,
+            },
+          ],
+        },
+      ],
+    };
+    const profile = AbilityPackageVersionProfileViewSchema.parse({
+      namespace: "research",
+      name: "research",
+      full_name: "research.research",
+      version: "0.1.0",
+      origin: "installed",
+      definition_origin: "source",
+      lock_state: "ok",
+      title: "research",
+    });
+    const packageVersion = vi.fn(async () => profile);
+    setAbilityControlClientFactory(
+      () =>
+        ({
+          status: async () => status("builtin", true, true),
+          packageGroups: async () => degenerateGroups,
+          packageVersion,
+        }) as never,
+    );
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    expect(wrapper.text()).toContain("research");
+    await wrapper.get("button[aria-expanded='false']").trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledWith("research", "research", "0.1.0");
+    wrapper.unmount();
+  });
+
   it("explains a legacy source without offering install", async () => {
     setAbilityControlClientFactory(
       () => ({ status: async () => status("legacy", false) }) as never,

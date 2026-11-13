@@ -192,6 +192,10 @@ class Processes:
             domain.expected_stop = True
             if domain.state not in ("stopped", "failed"):
                 domain.state = "stopping"
+            # 先终结本域流，再发终止信号：进程一退出管道就 EOF，若 terminal 还没落，
+            # 在途 read 会偶发返回 eof=True，与 monitor 里的 domain_closed 抢跑。
+            # stop() 幂等，monitor 之后重复调用无副作用。
+            self.kernel.streams.domain_closed(domain.domain_id)
             try:
                 if force:
                     domain.forced = True
