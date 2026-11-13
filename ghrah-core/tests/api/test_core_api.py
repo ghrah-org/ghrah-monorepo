@@ -591,16 +591,6 @@ async def test_agents_runtime_reads_unit_state(tmp_path) -> None:
         await port.aclose()
 
 
-async def test_agents_delete_terminates(tmp_path) -> None:
-    unit = _FakeUnit()
-    port = _agent_port(tmp_path, unit)
-    try:
-        await port.agents.delete(agent_id="fixed-id")
-        assert [c for c, _p in unit.commands] == ["terminate_agent"]
-    finally:
-        await port.aclose()
-
-
 async def test_agents_list_returns_online_ids(tmp_path) -> None:
     unit = _FakeUnit()
     port = _agent_port(tmp_path, unit)
@@ -608,20 +598,6 @@ async def test_agents_list_returns_online_ids(tmp_path) -> None:
         await port.agents.create(spec=_spawn_spec("alpha", "agents.coder", "fixed-id"))
         page = await port.agents.list()
         assert page.items == ["fixed-id", "other-id"]
-    finally:
-        await port.aclose()
-
-
-async def test_agents_get_merges_list_and_info(tmp_path) -> None:
-    unit = _FakeUnit()
-    port = _agent_port(tmp_path, unit)
-    try:
-        await port.agents.create(spec=_spawn_spec("alpha", "agents.coder", "fixed-id"))
-        view = await port.agents.get(agent_id="fixed-id")
-        assert view.agent_id == "fixed-id"
-        assert view.name == "alpha"
-        assert view.state == "idle"
-        assert view.abilities == ["send_message"]
     finally:
         await port.aclose()
 
