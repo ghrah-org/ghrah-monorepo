@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import AckView, AgentIdView, Page
 from ghrah.protocol.views.core import (
@@ -24,7 +24,9 @@ from ghrah.protocol.views.core import (
     ToolView,
 )
 
-from ghrah.core.api.capabilities import (
+from ghrah.core.api.errors import CoreApiError
+from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
+from ghrah.core.api.interfaces import (
     AgentCreateFromTemplateRequest,
     AgentCreateRequest,
     AgentDeleteRequest,
@@ -32,8 +34,6 @@ from ghrah.core.api.capabilities import (
     AgentListRequest,
     AgentRuntimeRequest,
 )
-from ghrah.core.api.errors import CoreApiError
-from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_agent_handlers"]

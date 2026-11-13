@@ -5,18 +5,18 @@
 
 from __future__ import annotations
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import NodeIdView
 from ghrah.protocol.views.core import ChainMetaView, HistoryView, SessionCatalogView
 
-from ghrah.core.api.capabilities import (
+from ghrah.core.api.errors import CoreApiError
+from ghrah.core.api.interfaces import (
     SessionsCatalogRequest,
     SessionsHeadRequest,
     SessionsHistoryRequest,
     SessionsMetaRequest,
 )
-from ghrah.core.api.errors import CoreApiError
 from ghrah.core.read.chain import ChainReadStore
 
 __all__ = ["make_session_handlers"]

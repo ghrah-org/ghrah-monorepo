@@ -11,14 +11,14 @@ from contextlib import contextmanager
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from ghrah.protocol.capability import (
-    Capability,
-    CapabilityRegistry,
-    CapabilityRuntime,
-    Handler,
-)
 from ghrah.protocol.corpus import JsonShapeError
 from ghrah.protocol.errors import ApiError
+from ghrah.protocol.interface import (
+    Handler,
+    Interface,
+    InterfaceRegistry,
+    InterfaceRuntime,
+)
 from ghrah.protocol.problem import Problem, ProblemCode
 
 
@@ -65,10 +65,10 @@ def _translate(capability: str) -> Iterator[None]:
         ) from exc
 
 
-_REGISTRY = CapabilityRegistry(
+_REGISTRY = InterfaceRegistry(
     (
-        Capability("demo.ping", _Ping, _Pong),
-        Capability("demo.ratio", _Ping, _Ratio),
+        Interface("demo.ping", _Ping, _Pong),
+        Interface("demo.ratio", _Ping, _Ratio),
     )
 )
 
@@ -81,8 +81,8 @@ async def _ratio(request: _Ping) -> _Ratio:
     return _Ratio(ratio=1.5)
 
 
-def _runtime(handlers: dict[str, Handler] | None = None) -> CapabilityRuntime:
-    return CapabilityRuntime(
+def _runtime(handlers: dict[str, Handler] | None = None) -> InterfaceRuntime:
+    return InterfaceRuntime(
         registry=_REGISTRY,
         handlers=handlers or {"demo.ping": _ping, "demo.ratio": _ratio},
         translator=_translate,
@@ -95,7 +95,7 @@ def _runtime(handlers: dict[str, Handler] | None = None) -> CapabilityRuntime:
 
 def test_registry_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="duplicate capability name"):
-        CapabilityRegistry((Capability("a.b", _Ping, _Pong), Capability("a.b", _Ping, _Pong)))
+        InterfaceRegistry((Interface("a.b", _Ping, _Pong), Interface("a.b", _Ping, _Pong)))
 
 
 def test_registry_get_and_names() -> None:
@@ -166,7 +166,7 @@ async def test_invoke_enforces_json_shape() -> None:
 
 
 async def test_default_error_factory_is_api_error() -> None:
-    runtime = CapabilityRuntime(
+    runtime = InterfaceRuntime(
         registry=_REGISTRY,
         handlers={"demo.ping": _ping, "demo.ratio": _ratio},
         translator=_translate,

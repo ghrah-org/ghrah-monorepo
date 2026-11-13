@@ -7,15 +7,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ghrah.protocol.capability import CapabilityRuntime, Handler
+from ghrah.protocol.interface import Handler, InterfaceRuntime
 
-from ghrah.core.api.capabilities import CORE_CAPABILITIES
 from ghrah.core.api.errors import CoreApiError, translate
+from ghrah.core.api.interfaces import CORE_INTERFACES
 
 __all__ = ["CoreRuntime"]
 
 
-class CoreRuntime(CapabilityRuntime):
+class CoreRuntime(InterfaceRuntime):
     """Core 内部能力的唯一入口。
 
     Args:
@@ -24,7 +24,7 @@ class CoreRuntime(CapabilityRuntime):
 
     def __init__(self, handlers: Mapping[str, Handler]) -> None:
         super().__init__(
-            registry=CORE_CAPABILITIES,
+            registry=CORE_INTERFACES,
             handlers=handlers,
             translator=translate,
             error_factory=CoreApiError,

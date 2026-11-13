@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.views.common import AckView
 from ghrah.protocol.views.core import DeliveryView
 
-from ghrah.core.api.capabilities import (
+from ghrah.core.api.interfaces import (
     DeliveriesGetRequest,
     DeliveriesResumeRequest,
     DeliveriesRetryRequest,

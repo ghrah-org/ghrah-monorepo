@@ -31,7 +31,7 @@
 
 ```
 ghrah-monorepo/
-├── ghrah-protocol/        19 个 py / 2669 行   wire 契约（唯一权威）
+├── ghrah-protocol/        39 个 py / 5646 行   wire 契约 + 模块端口契约（唯一权威）
 ├── ghrah-scheme/           9 个 py / 1891 行   契约格式（local-contract / catalog）
 ├── ghrah-core/           169 个 py / 27354 行  认知层：循环、能力、上下文、协议抽象
 ├── ghrah-subject/         82 个 py / 12799 行  效果层：HTTP/WS 服务、store、unit 装配
@@ -153,7 +153,7 @@ scheme/
 | 4 | 单次执行：建上下文 → `execute_ability` | `:536-588`（上下文 `:568-584`、`:586`） |
 | 5 | 结果转成工具消息入历史 | `agents/base.py:1516-1536`（`ChatMessage.tool` `:1526-1534`、`add_messages` `:1536`） |
 | 6 | 提交迭代 → 发 `ActionChainUpdatedEvent` | `agents/base.py:1418-1429`（await_reply 分支）/ 普通路径 `:842-882` |
-| 7 | 事件落库（写侧）与投影（读侧） | 写：`core/context/manager.py:875`（`commit_iteration_async`）；读：`subject/ledger/chain.py:42-51` |
+| 7 | 事件落库（写侧）与投影（读侧） | 写：`core/context/manager.py:875`（`commit_iteration_async`）；读：经 `CorePort.sessions.history`（`core/read/chain.py`） |
 
 `units/ledger.py:5-9` 明确：**旧的"事件驱动落库"面已死、已删除**。现在 Subject 只是只读投影，经 `get_chain_history` 重建。
 
@@ -163,7 +163,12 @@ scheme/
 
 顶层只有一行转发：`protocol/__init__.py:8` 的 `from ghrah.protocol.types import *`。门面 `types.py:23-27` 再导出 enums/envelope/factories/payloads/routing；`types.py:31` 定义 `Message = Envelope`。
 
-19 个文件：`__init__`、`enums`、`envelope`、`factories`、`routing`、`scheme`、`types` + `payloads/{__init__,agent,entity,manifest,persist,plugin,project,room,session,system,task,workspace}`。
+39 个文件，分两块职责：
+
+- **模块能力端口契约**（跨模块调用的唯一形状）：`interface.py`（`Capability` / `InterfaceRegistry` / `InterfaceRuntime` 骨架）、`ports/{__init__,core,keys}.py`（`CorePort` + 10 个分组 + `CORE_PORT`/`SUBJECT_PORT` 注入键）、`views/{__init__,common,core}.py`（`Page`/`Operation`/7 个出参信封/Core 资源视图）、`problem.py`（`Problem` + 13 个 `ProblemCode`）、`errors.py`（`ApiError` 基类）、`corpus.py`（契约回归 + JSON 强制）、`events.py`。
+- **wire 契约**（观察端与既有命令面）：`__init__`、`types`（转发门面）、`enums`、`envelope`、`factories`、`routing`、`scheme`、`ability_control`、`ability_tree`、`agent_control`、`agentconf_control`、`runtime*`，以及 `payloads/{__init__,agent,entity,manifest,persist,plugin,project,room,session,system,task,workspace}`。
+
+判据：**跨模块调用只看 `ports/` 与 `views/`，不再新增 wire payload**；`payloads/` 只服务观察端下发与历史命令面。
 
 `Envelope`（`protocol/envelope.py:142`）字段：`type: str`（`:161`）、`payload: Any`（`:162`）、`request_id`（`:163`）、`timestamp`（`:164`）、`client_type`（`:165`）、`seq_id`（`:166`）；辅助方法 `known_type`（`:177`）、`as_command_type`（`:181`）；`PAYLOAD_MAP` 在 `:200` 之后按 `type` 注册 payload 模型。
 
@@ -173,12 +178,14 @@ scheme/
 
 工具契约面在独立模块 `protocol/scheme.py`：`ActionDescriptor`（`:18`，input/output/mutating/cancellable）、`ContractDescriptor`（`:29`）、`fingerprint()`（`:45`）、`DiscoveredAction`（`:55`）、`DiscoveredResource`（`:67`）、`CatalogSnapshot`（`:80`）。
 
-### 5.2 工具面：两套入口，只有一套在生产用
+### 5.2 工具面：生产链路是 `ToolSurfaceRuntime`
 
 | 入口 | 位置 | 生产使用 |
 | --- | --- | --- |
-| `load_tool_list()`（从 `ability.yaml` 建 schema） | `scheme/loading/tool_list.py:107` | **零调用**（仅 `tests/scheme/loading/test_tool_list.py` 与 `plans/selfcheck/query_all_abilities.py:78`、`:578`） |
-| `Ability.bind_tool()`（各实现自己声明） | 声明 `core/ability_protocol.py:41`；实现如 `scheme/ability/core/operations/list_abilities.py:116`、`conversation.py:106`、`end_task.py:132`、`load_skill.py:112`、`cluster/operations/spawn_agent.py:95` | **生产链路** |
+| `ToolSurfaceRuntime.refresh()`（每轮从能力关系库重建工具面） | `ghrah-core/src/ghrah/ability/surface/runtime.py:46`；装配 `agents/builder.py:372`；每轮刷新 `agents/base.py:1373` | **生产链路** |
+| `Ability.bind_tool()`（各实现自己声明） | 声明 `core/ability_protocol.py:41`；实现如 `scheme/ability/core/operations/list_abilities.py:116`、`conversation.py:106`、`end_task.py:132`、`load_skill.py:112`、`cluster/operations/spawn_agent.py:95` | 注册期静态收集；surface 未装配或抛错时回退；另供 surface 的控制成员取 `extras` |
+
+`ghrah-core/src/ghrah/scheme/loading/tool_list.py` 在当前树中**不存在**（`load_tool_list` 符号全仓无匹配）；对工具面形状的唯一权威是 `ToolSurfaceRuntime`。
 
 真实链路：`bind_tool()` → `agents/base.py:212` `register_ability` 收进 `_bound_tools` → `base.py:426`、`:454` 的 `self._llm.configure_tools(self._bound_tools)` → `chat/format/__init__.py:84` → `openai.py:93`（`api_kwargs["tools"] = self._format_tools(...)`）、`:95`（`client.chat.completions.create(**api_kwargs)`），`_format_tools` 在 `openai.py:222`；Anthropic 同构于 `anthropic.py:90` → `:97`。
 
@@ -248,7 +255,7 @@ scheme/* 内部：
 | `scheme/execution/*` import `scheme/loading/*`（除 `ability_build.py`） | 执行面不应知道"能力怎么被发现"；`ability_build.py:36` 是唯一例外（它就属装配层） |
 | `scheme/*` import `ghrah.core.unit` | 会形成 core ↔ scheme 环；unit 通过 `create_ability` 反向调用 |
 | `ghrah-core` import `ghrah-subject` | 分层倒置（认知层不得依赖效果层） |
-| `ghrah-protocol` import 其他仓内包 | 它是 wire 契约的唯一权威，必须零内部依赖 |
+| `ghrah-protocol` import 其他仓内包 | 它是 wire 契约的唯一权威，应保持叶子。**存在一条已核实例外**：`ghrah-protocol` 依赖 `ghrah-plugin`，`payloads/plugin.py:15` 的 `PluginNegotiateResultPayload` 直接继承 `ghrah-plugin` 的 `NegotiationResult`（`payloads/plugin.py:33`）。代价是 3 个可发布 PyPI 包全部传递依赖一个没有发布通道的包，且 TS 侧只能手抄同名字段（`packages/protocol/src/payloads/plugin.ts:8`）。新增反向依赖不得再开第二条 |
 | `scheme/ability/<包>/operations/*.py` import `loading/*` | 实现脚本只依赖 `execution/base`、`permissions/*`、`types/*`；装配由外部完成 |
 
 `scheme/ability_build.py:33` 引 `ghrah.core.ability_protocol`，`execution/context.py:17` 引 `ghrah.core.supervisor_protocol`——这是 core 提供"协议（Protocol 类）"、scheme 实现它，不是反向依赖。
@@ -301,7 +308,7 @@ scheme/* 内部：
 | "日志实现在 `ghrah-core/src/ghrah/logging/`" | 该目录不存在；唯一实现在 `subject/logging_setup.py` |
 | "装配链统一调 `load_tool_list()`" | 生产零调用；实际走 `bind_tool()`（§5.2） |
 | "`ability_protocol` 在 `ghrah-protocol` 包里" | 在 `ghrah-core/src/ghrah/core/ability_protocol.py` |
-| "`action_chain_updated` 事件驱动落 ledger" | 已废（`subject/units/ledger.py:5-9`、`subject/ledger/chain.py:12`）；现在只是只读投影 |
+| "`action_chain_updated` 事件驱动落 ledger" | 已废：写侧整体移除，Subject 侧不再持有数据库连接；读侧经 `CorePort`（`subject/units/ledger.py`） |
 | "full profile 挂 15 个 unit，含 `ability_bridge`" | 无该文件，实际 14（`05` §3.5） |
 | "存在全局能力注册表 / 挂载表" | 只有 manifest 解析 + `RegistryProtocol` 抽象（`core/ability_protocol.py:49`） |
 | "协议有 wire 版本常量" | 不存在（§5.1） |
