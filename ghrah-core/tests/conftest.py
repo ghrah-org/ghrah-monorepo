@@ -5,13 +5,31 @@
 from __future__ import annotations
 
 import secrets
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 from _mock_mcp import MockMcpEndpoint, start_mock_server
+from aiosqlite import core as _aiosqlite_core
 
 from ghrah.core.config import AgentConfig
+
+
+class _DaemonThread(threading.Thread):
+    """daemon 版线程：不阻塞解释器退出。"""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        kwargs["daemon"] = True
+        super().__init__(*args, **kwargs)
+
+
+# aiosqlite 的工作线程默认是非 daemon（`aiosqlite/core.py` 里 `from threading import Thread`）。
+# 用例漏关连接时，pytest 打印完 summary 后主线程会永久停在
+# `threading._shutdown()` 的 join 上：进程不退出、CI 步计时一直涨。
+# 这里只把测试进程里的该线程降级为 daemon，保证跑完必退；
+# 连接泄漏本身仍按用例逐个修（见各测试的 store/backend 清理）。
+_aiosqlite_core.Thread = _DaemonThread
 
 
 @pytest.fixture
