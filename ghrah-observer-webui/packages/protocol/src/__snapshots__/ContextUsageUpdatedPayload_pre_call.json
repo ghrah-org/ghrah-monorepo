@@ -1,7 +1,6 @@
 {
   "project_id": "",
   "agent_id": "",
-  "cluster_id": "",
   "agent_name": "agent-1",
   "phase": "pre_call",
   "occupied_tokens": null,

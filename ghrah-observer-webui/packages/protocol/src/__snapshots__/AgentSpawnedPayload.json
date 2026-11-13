@@ -1,6 +1,5 @@
 {
   "project_id": "proj-001",
-  "cluster_id": "cluster-1",
   "name": "agent-1",
   "agent_id": "agent-001",
   "incarnation_id": "inc-001",

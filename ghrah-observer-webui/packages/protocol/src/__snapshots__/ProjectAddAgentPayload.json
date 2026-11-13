@@ -2,7 +2,6 @@
   "project_id": "proj-001",
   "agent": {
     "name": "frontend-dev",
-    "cluster_id": "cluster-1",
     "manifest_ref": "ghrah/frontend",
     "instance_manifest_path": ".ghrah/agents/frontend-dev.yaml",
     "system_prompt": "You are the frontend developer.",

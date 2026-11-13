@@ -279,7 +279,6 @@ export function connectStores(
           {
             project_id: target.projectId,
             agent_id: target.agentId,
-            cluster_id: "",
             agent_name: target.agentName ?? "",
             phase: "post_call",
             occupied_tokens:

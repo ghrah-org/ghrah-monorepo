@@ -74,9 +74,7 @@ class DesiredStateRecord(BaseModel):
         result: list[AgentSpec] = []
         for project in self.projects:
             for agent in project.agents:
-                identity = agent.agent_id or (
-                    f"legacy:{project.project_id}:{agent.cluster_id}:{agent.name}"
-                )
+                identity = agent.agent_id or (f"legacy:{project.project_id}:{agent.name}")
                 if identity in seen:
                     continue
                 seen.add(identity)

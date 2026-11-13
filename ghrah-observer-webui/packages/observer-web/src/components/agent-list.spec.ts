@@ -31,7 +31,6 @@ function spawn(name: string): AgentSpawnedPayload {
     type: "agent_spawned",
     project_id: "p1",
     agent_id: `${name}-id`,
-    cluster_id: "cluster",
     incarnation_id: "incarnation",
     recovery_mode: "fresh",
     name,
@@ -65,7 +64,6 @@ function usagePayload(
   return {
     project_id: "p1",
     agent_id: "architect-id",
-    cluster_id: "cluster",
     agent_name: "architect",
     phase: "post_call",
     occupied_tokens: 4096,

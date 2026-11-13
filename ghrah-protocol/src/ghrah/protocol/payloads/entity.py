@@ -153,7 +153,6 @@ class AgentEntityCreatePayload(EntityModel):
 
     project_id: Identifier
     name: Identifier
-    cluster_id: Identifier
     start: bool
     endpoint_name: Identifier | None = None
     model_overrides: dict[str, Any] | None = None

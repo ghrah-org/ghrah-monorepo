@@ -76,7 +76,6 @@ class SupervisorActor:
     def __init__(
         self,
         default_timeout: float = 300.0,
-        cluster_id: str | None = None,
         event_publisher: EventPublisher | None = None,
         room_bridge: Any | None = None,
         max_cluster_members: int = 20,
@@ -92,7 +91,6 @@ class SupervisorActor:
 
         Args:
             default_timeout: Agent 间通信默认超时（秒）
-            cluster_id: 集群标识
             event_publisher: 事件发布器
             room_bridge: Room 桥（duck-typed）
             max_cluster_members: 集群成员上限（spawn 时超限 raise，
@@ -126,7 +124,6 @@ class SupervisorActor:
         self._builtin_abilities = builtin_abilities
         self.ability_materializer = ability_materializer
         self._event_publisher = event_publisher
-        self._cluster_id = cluster_id
         # RoomBridgeProtocol | None（send 工具用；duck-typed，避免反向依赖）
         self.room_bridge = room_bridge
         # duck-typed ManifestStoreProtocol | None（装配期显式注入）
@@ -162,7 +159,6 @@ class SupervisorActor:
         self._max_cluster_members = max_cluster_members
         logger.info(
             f"SupervisorActor initialized"
-            f"{' cluster_id=' + cluster_id if cluster_id else ''}"
             f" default_timeout={default_timeout}"
             f" max_cluster_members={max_cluster_members}"
         )
@@ -521,14 +517,14 @@ class SupervisorActor:
         return [info.to_dict() for info in agents]
 
     def get_cluster_context(self) -> dict[str, Any]:
-        """返回集群上下文（供 [Cluster Context] 注入段渲染）。
+        """返回协作群上下文（供 [Cluster Context] 注入段渲染）。
 
         成员/描述截断上限：注入段是 prompt 上下文的固定开销，
-        超大集群取前 N 个成员即失去可读性，截断是诚实行为
+        超大协作群取前 N 个成员即失去可读性，截断是诚实行为
         （完整清单 agent 可经 query_agents 获取）。
 
         Returns:
-            ``{"cluster_id": str, "members": [{"name", "description", "tags"}]}``
+            ``{"members": [{"name", "description", "tags"}]}``
         """
         members = []
         for info in self._registry.list_agents()[:_MAX_CONTEXT_MEMBERS]:
@@ -539,10 +535,7 @@ class SupervisorActor:
                     "tags": list(info.tags),
                 }
             )
-        return {
-            "cluster_id": self._cluster_id or "",
-            "members": members,
-        }
+        return {"members": members}
 
     async def prepare_message(
         self,

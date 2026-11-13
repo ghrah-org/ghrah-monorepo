@@ -44,7 +44,6 @@ class AgentSpecSchema(EndpointReferenceModel):
 
     agent_id: str = ""
     name: str
-    cluster_id: str
     endpoint_name: str | None = None
     model_overrides: dict[str, Any] | None = None
     manifest_ref: str = ""
@@ -71,7 +70,7 @@ class ProjectInfoPayload(BaseModel):
     """Project 信息基类载荷。
 
     对齐 ghrah-subject project/models.ProjectRecord，用于 project_get/project_list
-    结果项及 PROJECT_* 事件回执。version/archived_at/deleted_at/cluster_ids/workspaces/
+    结果项及 PROJECT_* 事件回执。version/archived_at/deleted_at/workspaces/
     project_root_locator 为 Subject 独占内部状态 Root；workspaces 为 Agent 工作资源。
     Project 内部存储位置统一由 ``project_root_locator`` 派生。
     """
@@ -82,7 +81,6 @@ class ProjectInfoPayload(BaseModel):
     project_root_locator: str = ""
     shell_cwd: str = ""
     manifest_ref: str = ""
-    cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMountSchema] = Field(default_factory=list)
     agents: list[AgentSpecSchema] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)

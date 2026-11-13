@@ -142,7 +142,7 @@ async function run() {
           <select v-model="link.source">
             <option value="" disabled>{{ t("communication.choose") }}</option>
             <option v-for="agent in agents" :key="agent.agent_id" :value="agent.agent_id">
-              {{ agent.name }} · {{ agent.cluster_id }} · {{ agent.agent_id }}
+              {{ agent.name }} · {{ agent.agent_id }}
             </option>
           </select>
         </label>
@@ -156,7 +156,7 @@ async function run() {
               :value="agent.agent_id"
               :disabled="agent.agent_id === link.source"
             >
-              {{ agent.name }} · {{ agent.cluster_id }} · {{ agent.agent_id }}
+              {{ agent.name }} · {{ agent.agent_id }}
             </option>
           </select>
         </label>

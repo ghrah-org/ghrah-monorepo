@@ -100,7 +100,6 @@ def _render_cluster_context_section(cluster_context: dict[str, Any]) -> str:
 
     形状（截断上限已在 SupervisorActor.get_cluster_context 侧落实）：
         [Cluster Context]
-        cluster_id: <id>
         members:
         - name: <name> | description: <desc> | tags: [a, b]
 
@@ -110,9 +109,8 @@ def _render_cluster_context_section(cluster_context: dict[str, Any]) -> str:
     Returns:
         渲染后的 prompt 段（不含尾随空行，由拼接方决定间距）
     """
-    cluster_id = cluster_context.get("cluster_id", "")
     members = cluster_context.get("members", [])
-    lines = ["[Cluster Context]", f"cluster_id: {cluster_id or 'unknown'}"]
+    lines = ["[Cluster Context]"]
     if members:
         lines.append("members:")
         for m in members:
@@ -122,7 +120,7 @@ def _render_cluster_context_section(cluster_context: dict[str, Any]) -> str:
                 f"- name: {m.get('name', '')} | description: {m.get('description', '')}{tag_part}"
             )
     else:
-        lines.append("members: (empty cluster)")
+        lines.append("members: (empty)")
     return "\n".join(lines)
 
 

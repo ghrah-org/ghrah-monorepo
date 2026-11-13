@@ -131,7 +131,6 @@ class SessionInfoPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     session_id: str
     agent_name: str
     name: str = "Session 1"
@@ -153,7 +152,6 @@ class SessionCreatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session: SessionInfoPayload
 
@@ -163,7 +161,6 @@ class SessionActivatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session: SessionInfoPayload
 
@@ -173,7 +170,6 @@ class SessionArchivedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session_id: str
 
@@ -183,7 +179,6 @@ class SessionDeletedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session_id: str
 
@@ -193,7 +188,6 @@ class SessionListResultPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     active_session_id: str = ""
     sessions: list[SessionInfoPayload]
@@ -218,7 +212,6 @@ class BranchEventPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     branch: BranchInfoPayload
 
@@ -228,7 +221,6 @@ class BranchLifecyclePayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session_id: str
     branch_id: str
@@ -239,7 +231,6 @@ class BranchListResultPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     session_id: str
     active_branch_id: str = ""

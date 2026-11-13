@@ -252,11 +252,14 @@ class AbilityAccessStore:
         project_id: str,
         operators: frozenset[str],
         runs: Callable[[str], str | None],
+        *,
+        reclaim_stale: bool = False,
     ) -> None:
         self._db = db
         self.project_id = TypeAdapter(TreeId).validate_python(project_id)
         self._operators = operators
         self._runs = runs
+        self._reclaim_stale = reclaim_stale
         self._lock = asyncio.Lock()
         self._startup_context: ContextVar[tuple[str, str, asyncio.Task[Any] | None] | None] = (
             ContextVar("ability_startup", default=None)
@@ -301,6 +304,7 @@ class AbilityAccessStore:
         operators: frozenset[str],
         runs: Callable[[str], str | None],
         read_limit: int = 65536,
+        reclaim_stale: bool = False,
     ) -> AbilityAccessStore:
         """显式初始化项目表；不修改既有上下文 schema 或启动 Agent。"""
         if type(read_limit) is not int or not 1 <= read_limit <= 65536:
@@ -339,7 +343,7 @@ class AbilityAccessStore:
             except BaseException:
                 await db.rollback()
                 raise
-            store = cls(db, project_id, operators, runs)
+            store = cls(db, project_id, operators, runs, reclaim_stale=reclaim_stale)
             store.read_limit = read_limit
             return store
         except BaseException:
@@ -463,8 +467,21 @@ class AbilityAccessStore:
         token = uuid4().hex
         snapshots: dict[str, list[dict[str, Any]]] = {}
         async with self._tx(write=True):
-            if await self._row("ability_registrations", "agent=?", agent):
-                raise AccessError("conflict")
+            row = await self._row("ability_registrations", "agent=?", agent)
+            if row is not None:
+                if not self._reclaim_stale:
+                    raise AccessError("conflict")
+                # 显式回收：宿主进程已重启（本进程内没有该主体的活 Actor），
+                # 上一进程异常退出留下的 pending 占位必须释放，否则永远无法重启。
+                logger.warning(
+                    "ability registration: 回收残留占位 agent=%s state=%s",
+                    agent,
+                    row["state"],
+                )
+                await self._db.execute(
+                    "DELETE FROM ability_registrations WHERE project=? AND agent=?",
+                    (self.project_id, agent),
+                )
             for table, key in (
                 ("ability_agents", "id"),
                 ("ability_grants", "agent"),

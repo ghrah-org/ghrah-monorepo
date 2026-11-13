@@ -27,6 +27,7 @@ from typing import Any
 
 import aiosqlite
 
+from ghrah.context.node import ContextNode
 from ghrah.context.persistence.backend import PersistenceBackend
 from ghrah.context.persistence.catalog import ContextChainMeta
 from ghrah.context.persistence.changes import ContextChanges
@@ -253,6 +254,9 @@ class SqliteBackend(PersistenceBackend):
             self._db.row_factory = aiosqlite.Row
             try:
                 await self._db.execute("PRAGMA query_only=ON")
+                # schema 校验用一次性读事务，校验完必须结束：WAL 下未结束的读事务
+                # 会把快照钉在连接建立时刻，之后所有读取都看不到新提交
+                # （链历史因此永远缺「启动之后」写入的节点）。
                 await self._db.execute("BEGIN")
                 table = await (
                     await self._db.execute(
@@ -281,6 +285,11 @@ class SqliteBackend(PersistenceBackend):
             except BaseException:
                 await self.close()
                 raise
+            finally:
+                # 结束校验事务，让后续每次读取都拿到最新已提交快照。
+                db = self._db
+                if db is not None and db.in_transaction:
+                    await db.execute("COMMIT")
             return
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -654,6 +663,31 @@ class SqliteBackend(PersistenceBackend):
             return set()
         cursor = await db.execute("SELECT id FROM nodes WHERE agent_name = ?", (agent_name,))
         return {row["id"] for row in await cursor.fetchall()}
+
+    async def load_node(self, agent_name: str, node_id: str) -> ContextNode | None:
+        """按节点 ID 读取单个节点（不加载整条链）。
+
+        供 API 读面的「单节点」端点使用：事件只带资源引用后，
+        消费方需要一次精确读取，不能为此加载整个 checkpoint。
+
+        Args:
+            agent_name: Agent 分区键（实际写入的是稳定 Agent ID）
+            node_id: 节点标识
+
+        Returns:
+            反序列化后的节点；不存在或库无 schema 时返回 ``None``
+        """
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return None
+        cursor = await db.execute(
+            f"SELECT {_NODE_COLUMNS} FROM nodes WHERE agent_name = ? AND id = ?",
+            (agent_name, node_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return deserialize_node(self._row_to_dict(row))
 
     async def delete_checkpoint(self, agent_name: str) -> None:
         """在单个事务中删除指定 Agent 的完整 v2 checkpoint。"""

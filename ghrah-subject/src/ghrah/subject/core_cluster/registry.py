@@ -121,11 +121,9 @@ class CoreUnitHandle:
             return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
         if payload.project_id != self._project_id:
             return {"success": False, "error": "cluster_project_mismatch"}
-        if payload.cluster_id and payload.cluster_id != self._cluster_id:
-            return {"success": False, "error": "cluster_id_mismatch"}
         return await self._dispatch("spawn_agent", payload.model_dump(mode="json"))
 
-    def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
+    async def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
         """查询本集群中的实体运行状态，不懒启动。"""
         if not self._alive:
             return {
@@ -197,6 +195,9 @@ class CoreUnitHandle:
         await self._registry.shutdown_cluster(self._cluster_id)
 
     async def _dispatch(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # Core 的载荷模型已不含 cluster 概念（且 extra="forbid"）；这里统一剥掉
+        # Subject 内部仍在使用的 cluster_id，避免契约漂移传导到每一次命令。
+        payload = {key: value for key, value in payload.items() if key != "cluster_id"}
         result = await self._unit.handle_command(command, payload, _INTERNAL_CMD_CTX)
         if not isinstance(result, dict):
             return {"success": False, "error": f"Unexpected result for {command}"}
@@ -319,6 +320,13 @@ class CoreClusterRegistry:
             )
             logger.info("CoreClusterRegistry: mounted cluster '%s'", cluster_id)
             return handle
+
+    def locator_for(self, project_id: str) -> str | None:
+        """按项目取已挂载单元的项目根定位符（供 Core 端口的库路径解析）。"""
+        for entry in self._clusters.values():
+            if entry.project_id == project_id:
+                return entry.project_root_locator
+        return None
 
     def get_handle(self, cluster_id: str) -> CoreUnitHandle:
         """取已挂载 handle；不存在 raise KeyError。"""
@@ -544,6 +552,10 @@ def default_core_unit_factory(
                 managers.pop(project_id)
 
     def factory(cluster_id: str, project_id: str, project_root_locator: str) -> Any:
+        return create_core_unit(build_config(project_id, project_root_locator))
+
+    def build_config(project_id: str, project_root_locator: str) -> Any:
+        """按项目构造 CoreUnitConfig（供旧工厂与端口装配共用）。"""
         if not project_root_locator:
             raise ValueError("project_root_locator required")
         core_db_path = str(ProjectPaths.from_locator(project_root_locator).action_chain_db_path)
@@ -557,7 +569,6 @@ def default_core_unit_factory(
             return await shell_cwd_lookup(project_id)
 
         core_config = CoreUnitConfig(
-            cluster_id=cluster_id,
             project_id=project_id,
             hitl_timeout=config.core.command_timeout,
             workspace_root=config.workspace_root,
@@ -580,9 +591,14 @@ def default_core_unit_factory(
             mcp=config.mcp,
             llm_factory=llm_factory,
             host_command_grants=_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
+            # 启动授权策略：把 manifest 声明的能力包转成授权事实。
+            ability_grant_policy=config.ability_grant_policy,
+            # Room 投影器：房间状态归 Subject，Core 只回调。
+            room_projector=room_projector,
         )
-        return create_core_unit(core_config)
+        return core_config
 
     factory.prepare = prepare
     factory.release = release
+    factory.build_config = build_config
     return factory

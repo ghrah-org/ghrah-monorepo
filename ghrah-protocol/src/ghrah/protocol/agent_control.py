@@ -61,7 +61,6 @@ class AgentSpecificationSummary(TreeModel):
 
     agent_id: str
     name: str
-    cluster_id: str
     endpoint_name: str | None = None
     prompt: AgentPromptSummary
     desired_state: Literal["running", "stopped"]
@@ -114,7 +113,6 @@ class AgentCreateRequest(TreeModel):
 
     expected_revision: int = Field(ge=0)
     name: str = Field(min_length=1)
-    cluster_id: str = Field(min_length=1)
     endpoint_name: str | None = None
     system_prompt: str = ""
     desired_state: Literal["running", "stopped"] = "stopped"

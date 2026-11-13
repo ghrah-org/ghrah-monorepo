@@ -69,6 +69,13 @@ _PROJECT_AGENT_COMMANDS = frozenset(
     }
 )
 
+
+def _room_missing(error: str) -> bool:
+    """房间不存在属永久条件，不重试（删除是 Subject 的权威决定）。"""
+    text = error.strip().lower()
+    return text.startswith("room not found") or "room_not_found" in text
+
+
 _TARGET_FIELDS = {
     "terminate_agent": "name",
     "send_message": "target",
@@ -168,6 +175,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 显式 unit_factory 优先，本参数被忽略（工厂自持全部 CoreUnitConfig）。
         self._llm_factory = llm_factory
         self._registry: CoreClusterRegistry | None = None
+        self._transport: Any | None = None
         self._ctx: Any | None = None
         self._meta = UnitMeta(
             name="core_cluster_registry",
@@ -181,7 +189,10 @@ class CoreClusterRegistryUnit(SubjectUnit):
         return self._meta
 
     @property
-    def service(self) -> CoreClusterRegistry:
+    def service(self) -> Any:
+        """当前主干传输层：命令路由走 Core 能力端口。"""
+        if self._transport is not None:
+            return self._transport
         if self._registry is None:
             raise RuntimeError("CoreClusterRegistryUnit has not been initialized.")
         return self._registry
@@ -208,8 +219,23 @@ class CoreClusterRegistryUnit(SubjectUnit):
                             "data": {"mm_message_id": message.message_id},
                         },
                     )
-                    if not isinstance(result, dict) or not result.get("success"):
-                        raise RuntimeError(str(result))
+                    if isinstance(result, dict) and result.get("success"):
+                        continue
+                    error = (
+                        str((result or {}).get("error") or "")
+                        if isinstance(result, dict)
+                        else str(result)
+                    )
+                    if _room_missing(error):
+                        # 房间删除是 Subject 的权威决定；历史消息的 room_ids 是不可变
+                        # 事实，重放投影不得复活已删除的房间，也不该当作可重试错误。
+                        logger.info(
+                            "room projection skipped (room deleted): %s -> %s",
+                            message.message_id,
+                            room_id,
+                        )
+                        continue
+                    raise RuntimeError(error or str(result))
 
             registry_holder: list[CoreClusterRegistry] = []
 
@@ -250,14 +276,65 @@ class CoreClusterRegistryUnit(SubjectUnit):
             registry_holder.append(registry)
         registry.bind(ctx)
         self._registry = registry
-        ctx.provide(CORE_CLUSTER_REGISTRY.name, registry)
         ctx.provide(ABILITY_ACCESS.name, _AbilityAccessService(registry))
+        # Core 能力端口的唯一装配点：库路径按项目定位符解析，
+        # 未挂载的项目返回不可用——端口自身会以 NOT_FOUND 表达。
+        from ghrah.core.wiring import build_core_port
+        from ghrah.protocol.ports.keys import CORE_PORT
+
+        from ghrah.subject.project.paths import ProjectPaths
+
+        def resolve_db_path(project_id: str) -> str:
+            locator = None
+            if self._transport is not None:
+                locator = self._transport.locator_for(project_id)
+            if not locator:
+                locator = registry.locator_for(project_id)
+            if not locator:
+                return ""
+            return str(ProjectPaths.from_locator(locator).action_chain_db_path)
+
+        def _config_factory(project_id: str) -> Any:
+            """Core 单元配置：复用 legacy 工厂的项目级装配（含 manifest_store）。"""
+            locator = None
+            if self._transport is not None:
+                locator = self._transport.locator_for(project_id)
+            if not locator:
+                locator = registry.locator_for(project_id)
+            if not locator:
+                raise ValueError(f"project locator unavailable: {project_id}")
+            build = getattr(self._unit_factory, "build_config", None)
+            if build is None:
+                raise ValueError("core unit factory 未提供 build_config")
+            return build(project_id, locator)
+
+        core_port = build_core_port(
+            resolve_db_path=resolve_db_path,
+            install_root=self._config.ability.install_root,
+            config_factory=_config_factory,
+        )
+        ctx.provide(CORE_PORT, core_port)
+        # 主干接线：命令路由改走 Core 能力端口。旧 registry 仍保留（未退役），
+        # 但不再提供为服务——出问题时回退只需把下一行换回 registry。
+        from ghrah.subject.runtime.port_transport import PortClusterTransport
+
+        self._transport = PortClusterTransport(core_port)
+        ctx.provide(CORE_CLUSTER_REGISTRY.name, self._transport)
 
     async def start(self) -> None:
-        # CoreUnit 实例按需懒挂载（ensure_cluster），无启动期动作。
-        pass
+        # 单元生命周期归 Core 端口；这里只预热项目定位符。
+        # 必须放在 start：init 阶段 project unit 尚未 provide store。
+        try:
+            store = self._ctx.get(PROJECT_STORE.name) if self._ctx is not None else None
+            if store is not None and self._transport is not None:
+                for record in await store.list(archived=None):
+                    self._transport.remember_locator(record.project_id, record.project_root_locator)
+        except Exception:  # pragma: no cover - 预热失败不阻断启动
+            logger.warning("project locator prefill failed", exc_info=True)
 
     async def stop(self) -> None:
+        if self._transport is not None:
+            await self._transport.stop()
         if self._registry is not None:
             await self._registry.stop()
 
@@ -296,7 +373,14 @@ class CoreClusterRegistryUnit(SubjectUnit):
             if command == "delegate":
                 return await self._delegate(project, payload)
             agent = self._resolve_agent(project, payload, _TARGET_FIELDS[command])
-            cluster_id = str(agent["cluster_id"])
+            cluster_id = str(project["project_id"])
+            # 先登记定位符：Core 的库路径由项目定位符推导，未挂载单元也要能解析。
+            remember = getattr(self.service, "remember_locator", None)
+            if remember is not None:
+                remember(
+                    str(project["project_id"]),
+                    str(project["project_root_locator"]),
+                )
             if command in _NO_MOUNT_COMMANDS and not self.service.has_cluster(cluster_id):
                 return self._no_mount_result(command, project, agent)
             handle = await self.service.ensure_cluster(
@@ -317,7 +401,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                         "project_id": project["project_id"],
                         "agent_id": agent["agent_id"],
                         "agent_name": agent["name"],
-                        "cluster_id": agent["cluster_id"],
                     }
                 )
             return result
@@ -369,7 +452,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
             "project_id": project["project_id"],
             "agent_id": agent["agent_id"],
             "agent_name": agent["name"],
-            "cluster_id": agent["cluster_id"],
         }
         if command == "terminate_agent":
             return {"success": True, "data": {**identity, "terminated": True}}
@@ -424,14 +506,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 合法的不同 name 并发 spawn 不应因陈旧 version 快照被误拒；
         # 重试中同名重复由 add_agent 的 name 唯一性校验正常拦截。
         for attempt in range(3):
-            cluster_id = str(payload.get("cluster_id") or "")
-            cluster_ids = [str(value) for value in project.get("cluster_ids") or []]
-            if not cluster_id:
-                if len(cluster_ids) != 1:
-                    raise ValueError("cluster_id required")
-                cluster_id = cluster_ids[0]
-            if cluster_id not in cluster_ids:
-                raise ValueError("cluster_project_mismatch")
+            # 单元按项目唯一：运行键就是 project_id，不需要再校验集群归属。
             result = await manager.handle_command(
                 "project_add_agent",
                 {
@@ -442,7 +517,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                         "endpoint_name": config.get("endpoint_name"),
                         "model_overrides": config.get("model_overrides"),
                         "name": name,
-                        "cluster_id": cluster_id,
                         "manifest_ref": str(payload.get("manifest_ref") or ""),
                         "system_prompt": str(config.get("system_prompt") or ""),
                     },
@@ -469,7 +543,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 "name": data.get("agent_name", name),
                 "agent_id": data.get("agent_id", ""),
                 "project_id": project["project_id"],
-                "cluster_id": cluster_id,
                 "runtime_pending": bool(data.get("runtime_pending")),
                 "runtime_error": data.get("runtime_error"),
             },
@@ -478,11 +551,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
 
     async def _list(self, project: dict[str, Any]) -> dict[str, Any]:
         running: dict[str, dict[str, Any]] = {}
-        for cluster_id in project.get("cluster_ids") or []:
+        for cluster_id in (str(project["project_id"]),):
             try:
-                handle = self.service.get_handle(str(cluster_id))
+                handle = self.service.get_handle(cluster_id)
             except KeyError:
-                # has_cluster→get_handle 之间 cluster 可能被并发 shutdown。
+                # has_cluster→get_handle 之间单元可能被并发 shutdown。
                 continue
             for item in await handle.list_agents(str(project["project_id"])):
                 identity = str(item.get("agent_id") or "")
@@ -492,15 +565,12 @@ class CoreClusterRegistryUnit(SubjectUnit):
         for spec in project.get("agents") or []:
             item = dict(spec)
             runtime = running.get(str(spec.get("agent_id") or ""))
-            item["runtime_state"] = (
-                runtime.get("state", "running") if runtime is not None else "stopped"
-            )
+            item["runtime_state"] = "running" if runtime is not None else "stopped"
             if runtime is not None:
                 item.update(runtime)
             item.update(
                 {
                     "project_id": project["project_id"],
-                    "cluster_id": spec.get("cluster_id", ""),
                     "agent_id": spec.get("agent_id", ""),
                     "name": spec.get("name", ""),
                 }
@@ -510,8 +580,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
 
     async def _broadcast(self, project: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         responses: dict[str, Any] = {}
-        cluster_ids = {str(agent.get("cluster_id") or "") for agent in project.get("agents") or []}
-        for cluster_id in sorted(cluster_ids - {""}):
+        for cluster_id in (str(project["project_id"]),):
             handle = await self.service.ensure_cluster(
                 cluster_id,
                 project_id=str(project["project_id"]),
@@ -532,10 +601,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
         target = next((agent for agent in agents if agent.get("agent_id") == to_id), None)
         if source is None or target is None:
             raise ValueError("agent_project_mismatch")
-        if source.get("cluster_id") != target.get("cluster_id"):
-            raise ValueError("cross_cluster_delegate_unsupported")
         handle = await self.service.ensure_cluster(
-            str(source["cluster_id"]),
+            str(project["project_id"]),
             project_id=str(project["project_id"]),
             project_root_locator=str(project["project_root_locator"]),
         )

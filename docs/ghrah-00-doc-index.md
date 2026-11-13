@@ -15,13 +15,14 @@
 | 1.0 | 2026-10-29 | 首版。16 份旧文档重写为 7 份权威文档（外加本索引）；本仓 `docs/` 原有的 4 份 `2026-10-26-*` 移入 `archive/` |
 | 2.0 | 2026-10-29 | 迁入 `ghrah-monorepo/docs/`；`ARCHITECTURE.md` §6.2/§6.6/§6.7/§6.8 按定义面口径改写并回链本套文档；`docs/2026-10-26-*` 四份迁入 `archive/` |
 | 2.1 | 2026-10-29 | 接入 `ghrah-scheme` 第一代包文档：系统模型、资源与权限、运行时 API、Ability API、开发方法和实现状态；新增文档以 `acf06fe` 与当日工作区单独校准 |
+| 2.2 | 2026-11-12 | 新增 `ghrah-08-capability-port.md`：Core 侧 50 项能力已实现，补齐 Core ↔ Subject 的调用边界与按功能点时序图，并登记 `ARCHITECTURE.md` §4.4 / §7 / §10 的 `ActionChainLedger` 直读描述已过期 |
 
 ## 1. 这个目录是什么
 
 `docs/` 是本仓技术文档的总入口，平台与能力子系统说明集中于此；包级手册可由本索引链接到包内文档。当前分三层：
 
 - **平台层**：[ARCHITECTURE.md](ARCHITECTURE.md)——13 章 + 3 个附录，讲 6 个 Python 包、TS 侧、协议、上下文、插件、HITL、部署全景。**它是全仓的事实基线。**
-- **能力子系统层**：本索引 + `ghrah-01` ~ `ghrah-07` 共 8 份——把 ARCHITECTURE §6 那一章展开到"改得动代码"的粒度：逐字段契约、开发手册、排障、历史判决。
+- **能力子系统层**：本索引 + `ghrah-01` ~ `ghrah-08` 共 9 份——把 ARCHITECTURE §6 那一章展开到"改得动代码"的粒度：逐字段契约、开发手册、排障、历史判决、跨模块调用边界。
 - **Scheme 包文档层**：[ghrah-scheme](../ghrah-scheme/README.md) 及其六篇基础技术文档和文件资源切片指南——说明资源树、权限关系、当前控制平面 API，以及逻辑／Scheme／UI 并行开发方法。目标模型与现状明确分开，不将新设计冒充已完成迁移。
 
 三条硬约定：
@@ -51,6 +52,7 @@
 | GHRAH-OPS-005 | [ghrah-05-build-startup-and-troubleshooting.md](ghrah-05-build-startup-and-troubleshooting.md) | 13 步启动链、命令面、端口、日志落点、数据落盘、启动期硬失败原文、前端、排障手册 | 起服务；服务起不来；日志找不到；端口/宿主配置 |
 | GHRAH-MAP-006 | [ghrah-06-code-map.md](ghrah-06-code-map.md) | 仓库结构与包边界、文件职责速查、一次能力调用的七步链、协议层与前端下发、依赖方向、新文件放哪 | 找文件；判断改动该落在哪个包；避免循环依赖 |
 | GHRAH-ADR-007 | [ghrah-07-history-and-decisions.md](ghrah-07-history-and-decisions.md) | 旧件逐份判决、8 条关键决策（D-1~D-8）、5 条教训、未处理的文档债务 | 想知道"某概念为什么没了"；评审新设计前避免重走弯路 |
+| GHRAH-DESIGN-008 | [ghrah-08-capability-port.md](ghrah-08-capability-port.md) | Core ↔ Subject 的调用边界：六条不变量落点、50 项能力总表、装配与作用域注入、**按功能点拆开的时序图**（列表/创建/链读取/Room/投递/能力面/运行控制/错误） | 排查"这条跨模块链路断在哪"；新增能力；改模块边界 |
 
 依赖关系：`02` 与 `04` 都以 `01` 的契约为前提；`06` 是 `01`/`03`/`04`/`05` 的坐标索引；`07` 与其余正交（只解释历史）。平台层与子系统层是**引用关系而非重复**：ARCHITECTURE §6 给骨架与口径，更细的 `file:line` 在子系统文档里；两者冲突时以子系统文档为准并回改 §6。
 
@@ -98,6 +100,8 @@
 | 技能扫描 / lock / 注入 | `ghrah-04` §4–§9、`ARCHITECTURE.md` §6.8 |
 | 启动脚本、端口、日志路径 | `ghrah-05` §1–§5 |
 | 新增顶层包或改依赖方向 | `ghrah-06` §2、§7、`ARCHITECTURE.md` §2 |
+| 新增/删除 Core 能力，或改 `ports/core.py` | `ghrah-08` §3 总表与 §5 对应时序图、`ghrah-06` §7 |
+| 改跨模块调用路径（谁调谁、经不经端口） | `ghrah-08` 全文、`ARCHITECTURE.md` §4.4 / §10 |
 | `ghrah.scheme` API、生命周期或 Scheme 产品树语义 | [包文档入口](../ghrah-scheme/README.md)所列的相应专题及实现状态；跨语言描述格式仍同步 Python／TS |
 | 推翻了某条既有决策 | `ghrah-07` §3 追加 `D-n` 并标"已否决"，**不要**直接删旧条目 |
 
@@ -112,6 +116,7 @@
 以下问题**已知且未处理**，读文档时自行打折，明细见 `ghrah-07` §5：
 
 - `ARCHITECTURE.md` 只有 §6 做过 10-28 重构后的逐行校准；§1–§5、§7–§13 仍是 2026-10-27 的状态，引用具体行号前回源码核对。`ARCHITECTURE.html` 更旧。
+- `ARCHITECTURE.md` §4.4 / §7 / §10 仍写"Subject 用 `ActionChainLedger` 直读 Core sqlite"——该实现已于 2026-11-12 删除，读取改经 `sessions.history` 能力。现状以 `ghrah-08` §5.3 为准。
 - `scheme/loading/ability_catalog.py:20` 的 docstring 提到不存在的 `load_all_builtin_manifests.cache_clear()`，与同文件 `:405`「无缓存」自相矛盾。
 - 技能侧**两套实现并存**：`ghrah-core/src/ghrah/skills/` 与 `ghrah.scheme.loading` 各一套，`ghrah-subject` 的 `SkillUnit` 仍用旧的那套（写 schema=1 lock，Core 读 schema=2 时不认）。见 `ghrah-04` §3、§12。
 - `ghrah-observer-webui` 已有可注入的 Scheme 能力面板和契约替身，但尚未挂载到生产页面或接通认证传输；不能据此声称现有产品 UI 已能查看和操作能力树。

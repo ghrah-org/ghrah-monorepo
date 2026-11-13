@@ -20,7 +20,14 @@ from uuid import uuid4
 from ghrah.plugin.assembly import PluginAssembly
 from ghrah.protocol.payloads.model import EndpointReferenceModel
 from ghrah.protocol.types import ProjectStatus, RecoveryAction
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 __all__ = [
     "PROJECT_TRANSITIONS",
@@ -123,7 +130,6 @@ class AgentSpec(EndpointReferenceModel):
     Attributes:
         agent_id: 跨 Room/cluster 稳定不变的业务身份（UUID hex）。
         name: agent 名（cluster 内唯一）。
-        cluster_id: 所属 Core 集群 id（须在 project.cluster_ids 内）。
         manifest_ref: Subject 级模板库引用（~/.ghrah/manifests）。
         instance_manifest_path: 实例 manifest 落点（default workspace 内
             ``.ghrah/agents/<name>.yaml``）。
@@ -135,7 +141,6 @@ class AgentSpec(EndpointReferenceModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    cluster_id: str
     agent_id: str = ""
     endpoint_name: str | None = None
     model_overrides: dict[str, Any] | None = None
@@ -231,6 +236,27 @@ class ProjectRecord(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_cluster_fields(cls, data: Any) -> Any:
+        """读取旧记录时剥离已退役的集群字段（集群概念已删除）。
+
+        旧库里 ``cluster_ids`` 是顶层列、``cluster_id`` 在每个 agent 上；两者
+        都不再是模型字段。这里只做读侧归一化，不回写、不产生第二权威。
+        """
+        if not isinstance(data, dict):
+            return data
+        cleaned = {k: v for k, v in data.items() if k != "cluster_ids"}
+        agents = cleaned.get("agents")
+        if isinstance(agents, list):
+            cleaned["agents"] = [
+                {k: v for k, v in agent.items() if k != "cluster_id"}
+                if isinstance(agent, dict)
+                else agent
+                for agent in agents
+            ]
+        return cleaned
+
     project_id: str
     name: str
     description: str = ""
@@ -238,7 +264,6 @@ class ProjectRecord(BaseModel):
     # 空字符串表示 execute_command 不覆盖进程 cwd。
     shell_cwd: str = ""
     manifest_ref: str = ""
-    cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMount] = Field(default_factory=list)
     agents: list[AgentSpec] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)
@@ -285,7 +310,7 @@ class ProjectRecord(BaseModel):
         """输出 ``ProjectInfoPayload`` 形态 dict。
 
         recovery 为 ``RecoveryAction.value`` 字符串，时间戳 ISO str，含
-        version/archived_at/deleted_at/cluster_ids/workspaces/agents/task_ids。
+        version/archived_at/deleted_at/workspaces/agents/task_ids。
         ``isolation`` 已纳入 ``ProjectInfoPayload``，Observer 可对运行时实际返回的
         隔离配置进行强类型读取。``config``（内部装配语义）不进 wire。
         """
@@ -301,7 +326,7 @@ def make_project_record(
     recovery: RecoverySpec | None = None,
 ) -> ProjectRecord:
     """创建新 project 记录：生成 project_id（uuid4 hex）、status=ACTIVE、
-    created_at=updated_at=now(UTC)、空 cluster_ids/workspaces/agents/task_ids。"""
+    created_at=updated_at=now(UTC)、空 workspaces/agents/task_ids。"""
     now = datetime.now(UTC)
     return ProjectRecord(
         project_id=uuid4().hex,

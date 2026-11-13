@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from _shared import (  # type: ignore[import-not-found]
-    default_cluster_id,
     port_or_failure,
     project_id_or_failure,
     receipt_to_result,
@@ -59,7 +58,6 @@ async def execute(call: Any, services: Any) -> ActionResult:
     args = dict(call.arguments)
     agent = AgentSpecSchema(
         name=str(args.get("name") or ""),
-        cluster_id=default_cluster_id(services),
         manifest_ref=str(args.get("manifest_ref") or ""),
         endpoint_name=args.get("endpoint_name"),
         system_prompt=str(args.get("system_prompt") or ""),

@@ -16,7 +16,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
-from ghrah.ability.access import AccessError
 from ghrah.protocol.agent_control import (
     AgentAbilitySummary,
     AgentAdminView,
@@ -31,6 +30,7 @@ from ghrah.protocol.agent_control import (
     AgentSpecPatch,
     AgentSummaryView,
 )
+from ghrah.protocol.errors import ApiError
 from ghrah.protocol.payloads.entity import AgentEntityPayload
 from pydantic import ValidationError
 
@@ -39,12 +39,13 @@ from ghrah.subject.project.models import AgentSpec, ProjectRecord
 from ghrah.subject.project.store import ConcurrentModificationError
 from ghrah.subject.runtime.service_keys import (
     ABILITY_ACCESS,
+    CORE_PORT_SERVICE,
     OBSERVER_ENDPOINT,
     PROJECT_MANAGER,
     PROJECT_STORE,
 )
 from ghrah.subject.unit.base import RouteSpec, SubjectUnit, UnitMeta
-from ghrah.subject.units.ability_control import AbilityApiError, _authorized, _surface_view
+from ghrah.subject.units.ability_control import AbilityApiError, _authorized
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,6 @@ def _summary_spec(project: ProjectRecord, agent: AgentSpec) -> AgentSpecificatio
     return AgentSpecificationSummary(
         agent_id=agent.agent_id,
         name=agent.name,
-        cluster_id=agent.cluster_id,
         endpoint_name=agent.endpoint_name,
         prompt=_prompt(agent.system_prompt or ""),
         desired_state=agent.desired_state,
@@ -120,6 +120,7 @@ def build_agent_control_router(
     project_store: Any,
     projects: Any,
     access: Any,
+    core_port: Any = None,
 ) -> APIRouter:
     """构造 Agent 资源路由。认证与能力管理面相同。"""
     router = APIRouter(prefix="/api/v1")
@@ -164,27 +165,16 @@ def build_agent_control_router(
     ) -> tuple[AgentAbilitySummary | None, str | None]:
         if not builtin:
             return None, "能力来源不是 builtin，授权摘要不可用"
+        if core_port is None:
+            return None, "Core 能力端口不可用"
         try:
-            handle = await access.acquire(project.project_id, project.project_root_locator)
-            store, operator = handle.store, handle.operator
-            try:
-                revision = await store.agent_revision(operator, agent_id)
-            except AccessError as error:
-                if getattr(error, "code", None) == "not_found":
-                    return AgentAbilitySummary(revision=0, state="unassembled"), None
-                return None, getattr(error, "code", None) or "unavailable"
-            grants: list[Any] = []
-            assembled = True
-            try:
-                grants = await store.grants(operator, agent_id)
-            except AccessError:
-                assembled = False
-            view = None
-            try:
-                view = await store.view(operator, agent_id)
-            except AccessError:
-                view = None
-            runtime = await access.agent_tool_snapshot(project.project_id, agent_id)
+            port = core_port.project(project.project_id)
+            view = await port.abilities.admin(agent_id=agent_id)
+        except ApiError as error:
+            code = str(getattr(error.problem.code, "value", error.problem.code))
+            if code == "NOT_FOUND":
+                return AgentAbilitySummary(revision=0, state="unassembled"), None
+            return None, code.lower()
         except AbilityApiError:
             raise
         except Exception as exc:
@@ -192,22 +182,16 @@ def build_agent_control_router(
             return None, str(exc)
         reasons: list[str] = []
         respawn = False
-        if not assembled:
-            state = "unassembled"
-        elif view is not None or runtime is not None:
-            state = "running"
-            names = runtime if isinstance(runtime, tuple) else None
-            surface = _surface_view(view, names)
-            if surface.pending_respawn.added:
+        state = view.lifecycle.state
+        if state == "running":
+            if view.surface.pending_respawn.added:
                 respawn = True
                 reasons.append("新增授权/放宽可见面需下次启动生效")
-        else:
-            state = "stopped"
-            if grants:
-                reasons.append("Agent 未运行；启动后按关系库重新装配工具表")
+        elif state == "stopped" and view.grants:
+            reasons.append("Agent 未运行；启动后按关系库重新装配工具表")
         return (
             AgentAbilitySummary(
-                revision=revision,
+                revision=view.revision,
                 state=state,  # type: ignore[arg-type]
                 requires_respawn=respawn,
                 pending_reasons=reasons,
@@ -380,7 +364,6 @@ def build_agent_control_router(
                 "expected_version": change.expected_revision,
                 "agent": {
                     "name": change.name,
-                    "cluster_id": change.cluster_id,
                     "endpoint_name": change.endpoint_name,
                     "system_prompt": change.system_prompt,
                     "desired_state": change.desired_state,
@@ -520,7 +503,15 @@ class AgentControlUnit(SubjectUnit):
         self._router: APIRouter | None = None
         self._meta = UnitMeta(
             name="agent_control",
-            requires=frozenset({OBSERVER_ENDPOINT, PROJECT_MANAGER, PROJECT_STORE, ABILITY_ACCESS}),
+            requires=frozenset(
+                {
+                    OBSERVER_ENDPOINT,
+                    PROJECT_MANAGER,
+                    PROJECT_STORE,
+                    ABILITY_ACCESS,
+                    CORE_PORT_SERVICE,
+                }
+            ),
             routes=RouteSpec(),
         )
 
@@ -541,6 +532,7 @@ class AgentControlUnit(SubjectUnit):
             project_store=ctx.get(PROJECT_STORE.name),
             projects=ctx.get(PROJECT_MANAGER.name),
             access=ctx.get(ABILITY_ACCESS.name),
+            core_port=ctx.get(CORE_PORT_SERVICE.name),
         )
         endpoint.app.include_router(router)
         self._router = router
