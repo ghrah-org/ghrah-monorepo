@@ -19,7 +19,14 @@ jobs:
       # protocol 与 scheme 保持 strict 零错误；既有包不在本次扩展类型门禁。
       - run: cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol
       - run: cd ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.scheme
-      - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel
+      # 诊断用：跑完打印标记，区分「pytest 自己没退」与「pytest 已退但进程/管道被占」；
+      # timeout-minutes 防止挂住时耗到作业级上限，快速失败并保留日志。
+      - name: Python 全量测试
+        timeout-minutes: 25
+        run: |
+          uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel \
+            -o faulthandler_timeout=120
+          echo "::notice::pytest 已返回，退出码 $?"
       - name: 契约漂移检查
         run: uv run python scripts/export_ability_contracts.py --check
       - name: Kernel 独立安装与真实命名服务
