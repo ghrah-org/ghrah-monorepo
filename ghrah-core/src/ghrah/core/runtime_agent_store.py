@@ -50,6 +50,17 @@ class RuntimeAgentStore:
         await self.db.execute("PRAGMA foreign_keys=ON")
         try:
             await self.db.executescript(_SCHEMA)
+            columns = await (await self.db.execute("PRAGMA table_info(runtime_agents)")).fetchall()
+            names = {column[1] for column in columns}
+            for name, declaration in (
+                ("config_revision", "INTEGER NOT NULL DEFAULT 1"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+                ("deleted_at", "TEXT"),
+            ):
+                if name not in names:
+                    await self.db.execute(
+                        f"ALTER TABLE runtime_agents ADD COLUMN {name} {declaration}"
+                    )
             identities = await (
                 await self.db.execute("SELECT agent_id FROM runtime_agents")
             ).fetchall()
@@ -142,7 +153,8 @@ class RuntimeAgentStore:
         """按受信作用域读取定义。"""
         return await (
             await self.connection().execute(
-                "SELECT * FROM runtime_agents WHERE scope_ref=? AND agent_id=?",
+                "SELECT * FROM runtime_agents "
+                "WHERE scope_ref=? AND agent_id=? AND deleted_at IS NULL",
                 (self.scope_ref, agent_id),
             )
         ).fetchone()
@@ -179,7 +191,9 @@ class RuntimeAgentStore:
         try:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
-                "INSERT INTO runtime_agents VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO runtime_agents("
+                "agent_id,scope_ref,external_ref,config,assembly_digest,created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     record["agent_id"],
                     self.scope_ref,
@@ -204,12 +218,45 @@ class RuntimeAgentStore:
             await db.rollback()
             raise
 
+    async def replace_config(
+        self, agent_id: str, config: dict[str, Any], digest: str, revision: int
+    ) -> bool:
+        """按资源修订条件写入完整配置；与创建共用唯一权威表。"""
+        db = self.connection()
+        cursor = await db.execute(
+            "UPDATE runtime_agents "
+            "SET config=?,assembly_digest=?,config_revision=config_revision+1,updated_at=? "
+            "WHERE scope_ref=? AND agent_id=? AND config_revision=? AND deleted_at IS NULL",
+            (
+                json.dumps(config, ensure_ascii=False),
+                digest,
+                runtime_now(),
+                self.scope_ref,
+                agent_id,
+                revision,
+            ),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+    async def delete(self, agent_id: str, revision: int) -> bool:
+        """保留删除墓碑与创建回执，防止幂等重放复活已删除的身份。"""
+        db = self.connection()
+        cursor = await db.execute(
+            "UPDATE runtime_agents SET deleted_at=?,updated_at=? WHERE scope_ref=? AND agent_id=? "
+            "AND config_revision=? AND deleted_at IS NULL",
+            (runtime_now(), runtime_now(), self.scope_ref, agent_id, revision),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
     async def page(self, after: str, limit: int) -> list[aiosqlite.Row]:
         """按稳定 ID 排序读摘要页，额外读取一条判断是否有下一页。"""
         return list(
             await (
                 await self.connection().execute(
-                    "SELECT * FROM runtime_agents WHERE scope_ref=? AND agent_id>? "
+                    "SELECT * FROM runtime_agents "
+                    "WHERE scope_ref=? AND agent_id>? AND deleted_at IS NULL "
                     "ORDER BY agent_id LIMIT ?",
                     (self.scope_ref, after, limit + 1),
                 )

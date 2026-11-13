@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import { runtimeZh } from "./runtime";
+
 export default {
+  runtime: runtimeZh,
   schemeAbilities: {
     content: "获授 Skill 内容",
     version: "版本：{version}",

@@ -25,6 +25,7 @@ license-files = ["LICENSES/*"]
 [project.scripts]
 ghrah-subject = "ghrah.subject.app:main"
 ghrah-subject-server = "ghrah.subject.server.app:main"
+ghrah-subject-runtime = "ghrah.subject.runtime_http:main"
 subject = "ghrah.subject.cli:main"
 
 [project.entry-points."ghrah.subject.units"]

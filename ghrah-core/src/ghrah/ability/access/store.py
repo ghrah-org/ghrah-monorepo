@@ -723,6 +723,32 @@ class AbilityAccessStore:
             ) as cursor:
                 return tuple(row[0] for row in await cursor.fetchall())
 
+    async def tool_bindings(self, actor: AccessIdentity, agent: str) -> tuple[BoundToolNode, ...]:
+        """读取持久工具选择，不要求活跃运行实例，也不重建默认选择。"""
+        self._require_operator(actor)
+        async with self._tx():
+            rows = await (
+                await self._db.execute(
+                    "SELECT name,alias,member,grant_revision,revision FROM ability_tools "
+                    "WHERE project=? AND agent=? ORDER BY name",
+                    (self.project_id, agent),
+                )
+            ).fetchall()
+            return tuple(BoundToolNode.model_validate(dict(row)) for row in rows)
+
+    async def has_admin_changes(self, actor: AccessIdentity, agent: str) -> bool:
+        """从既有审计判断是否经过管理员维护，不保存第二份配置标记。"""
+        self._require_operator(actor)
+        async with self._tx():
+            row = await (
+                await self._db.execute(
+                    "SELECT 1 FROM ability_changes "
+                    "WHERE project=? AND agent=? AND source='admin' LIMIT 1",
+                    (self.project_id, agent),
+                )
+            ).fetchone()
+            return row is not None
+
     async def grants(self, actor: AccessIdentity, agent: str) -> list[GrantRecord]:
         """读取 Agent 的全部获授事实快照；不要求运行实例已存在。
 

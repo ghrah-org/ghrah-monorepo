@@ -113,6 +113,7 @@ async function main(): Promise<void> {
   let httpServer: MockHttpServer | undefined;
   if (opts.httpPort !== null) {
     httpServer = createMockHttpServer({
+      state,
       port: opts.httpPort,
       packages: opts.packages,
       logger: (l) => console.log(`[mock] ${l}`),

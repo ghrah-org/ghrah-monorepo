@@ -534,6 +534,61 @@ class StartupGrantMaterializer:
             self._content_services.setdefault(agent, []).append(provider)
         return provider
 
+    async def materialize_stored(
+        self, *, agent: str, resolved: ResolvedAgent
+    ) -> StartupMaterialization:
+        """仅从管理员维护的权威授权和工具选择恢复，不执行启动策略写回。"""
+        validate_agent_id(agent)
+        control, _ = self._split(self._source.definitions(), resolved.abilities)
+        versions = {
+            version.digest: version for version in await self._store.list_versions(self._actor)
+        }
+        instances = []
+        desired = {}
+        for record in await self._store.grants(self._actor, agent):
+            instance = await self._store.instance(record.instance_id)
+            version = versions[instance["digest"]]
+            definition = version.definition()
+            instances.append(
+                GrantInstance(
+                    alias=record.alias,
+                    package=definition.identity.full_name,
+                    instance_id=record.instance_id,
+                    version_digest=version.digest,
+                    definition=definition.model_dump(mode="json"),
+                    allowed_roots=record.roots,
+                )
+            )
+            desired[record.alias] = stored_facts(
+                list(record.members), list(record.content), record.axes
+            )
+        bindings = tuple(
+            StartupToolBinding(tool.alias, tool.member, tool.name)
+            for tool in await self._store.tool_bindings(self._actor, agent)
+        )
+        abilities = self._instantiate(
+            agent, control, instances, desired, bindings, {}, agent_name=resolved.config.name
+        )
+        abilities.ability_content = self.content_provider(agent)
+        from ghrah.ability.surface.runtime import RunScriptTool, ToolSurfaceRuntime
+
+        surface = ToolSurfaceRuntime(
+            store=self._store,
+            source=self._source,
+            agent=agent,
+            table=abilities,
+            config=resolved.surface,
+            thresholds=self._surface_thresholds,
+            search_limit=self._surface_search_limit,
+            loaded_limit=self._surface_loaded_limit,
+        )
+        abilities.tool_surface = surface
+        abilities.append(RunScriptTool(surface))
+        self._surface_services.setdefault(agent, []).append(surface)
+        return StartupMaterialization(
+            abilities, bindings, await self._store.agent_revision(self._actor, agent), (), ()
+        )
+
     async def materialize(self, *, agent: str, resolved: ResolvedAgent) -> StartupMaterialization:
         """执行一次启动物化。
 

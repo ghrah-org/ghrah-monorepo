@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,16 @@ from ghrah.protocol.runtime_agents import (
     RuntimeStateTransitionResult,
 )
 from ghrah.protocol.runtime_digest import assembly_digest
+from ghrah.protocol.runtime_management import (
+    RuntimeAbilitiesView,
+    RuntimeAbilityCatalog,
+    RuntimeAbilityChanges,
+    RuntimeAbilityInstance,
+    RuntimeAbilityInstanceCreate,
+    RuntimeAgentPatch,
+    RuntimeGrantRequest,
+    RuntimeToolRequest,
+)
 from ghrah.protocol.runtime_resources import (
     RuntimeDeliveryView,
     RuntimeEvent,
@@ -62,6 +73,14 @@ MODELS = (
     RuntimeAgentSummary,
     RuntimeAgentsPage,
     RuntimeStateTransitionResult,
+    RuntimeAgentPatch,
+    RuntimeAbilitiesView,
+    RuntimeAbilityCatalog,
+    RuntimeAbilityChanges,
+    RuntimeAbilityInstance,
+    RuntimeAbilityInstanceCreate,
+    RuntimeGrantRequest,
+    RuntimeToolRequest,
 )
 
 
@@ -495,14 +514,22 @@ def artifacts() -> dict[Path, str]:
             value = expression(schemas[name])
             lines.extend(
                 (
-                    f"export const {name}Schema = {value};",
-                    f"export type {name} = z.infer<typeof {name}Schema>;",
+                    f"{'export ' if name.startswith('Runtime') else ''}"
+                    f"const {name}Schema = {value};",
+                    f"export type {name} = z.infer<typeof {name}Schema>;"
+                    if name.startswith("Runtime")
+                    else "",
                 )
             )
             emitted.add(name)
 
     for model in MODELS:
         emit(model.__name__)
+    lines.append(
+        "export const RuntimeAgentCreateExample = "
+        + json.dumps(fixtures()["agent.create.json"].model_dump(mode="json"), ensure_ascii=False)
+        + " as const;"
+    )
     problem_ref = {"$ref": "#/components/schemas/RuntimeProblem"}
     standard_ref = {"$ref": "#/components/schemas/RuntimeStandardProblem"}
     paths: dict[str, Any] = {}
@@ -581,7 +608,7 @@ def artifacts() -> dict[Path, str]:
                     "schema": {"type": "string", "maxLength": 128, "pattern": r"^[\x21-\x7e]+$"},
                 }
             )
-        if method == "put":
+        if method in {"put", "patch", "delete"}:
             operation["parameters"].append(
                 {"in": "header", "name": "If-Match", "required": True, "schema": {"type": "string"}}
             )
@@ -600,8 +627,31 @@ def artifacts() -> dict[Path, str]:
         {"in": "query", "name": "cursor", "schema": {"type": "string"}},
     ]
     paths["/v1/agents/{agent_id}"] = {
-        "get": resource_operation("get", None, "RuntimeAgentResource")
+        "get": resource_operation("get", None, "RuntimeAgentResource"),
+        "patch": resource_operation("patch", "RuntimeAgentPatch", "RuntimeAgentResource"),
+        "delete": resource_operation("delete", None, "RuntimeAgentResource", "204"),
     }
+    paths["/v1/agents/{agent_id}"]["delete"]["responses"]["204"] = {
+        "description": "Deleted; historical records and idempotency tombstone are retained"
+    }
+    paths["/v1/abilities"] = {"get": resource_operation("get", None, "RuntimeAbilityCatalog")}
+    paths["/v1/ability-instances"] = {
+        "post": resource_operation("post", "RuntimeAbilityInstanceCreate", "RuntimeAbilityInstance")
+    }
+    paths["/v1/agents/{agent_id}/abilities"] = {
+        "get": resource_operation("get", None, "RuntimeAbilitiesView")
+    }
+    paths["/v1/agents/{agent_id}/abilities/changes"] = {
+        "get": resource_operation("get", None, "RuntimeAbilityChanges")
+    }
+    for kind, parameter, model in (
+        ("grants", "alias", "RuntimeGrantRequest"),
+        ("tools", "tool_name", "RuntimeToolRequest"),
+    ):
+        paths[f"/v1/agents/{{agent_id}}/abilities/{kind}/{{{parameter}}}"] = {
+            "put": resource_operation("put", model, "RuntimeAbilitiesView"),
+            "delete": resource_operation("delete", None, "RuntimeAbilitiesView"),
+        }
     paths["/v1/agents/{agent_id}/state"] = {
         "put": resource_operation("put", "RuntimeStateTransition", "RuntimeStateTransitionResult")
     }
@@ -658,18 +708,17 @@ def artifacts() -> dict[Path, str]:
     }
     for route, methods in paths.items():
         if "{" in route:
-            parameter = next(
-                name for name in ("agent_id", "delivery_id", "node_id") if "{" + name + "}" in route
-            )
+            parameters = re.findall(r"\{([^}]+)\}", route)
             for operation in methods.values():
-                operation["parameters"].append(
-                    {
-                        "in": "path",
-                        "name": parameter,
-                        "required": True,
-                        "schema": {"type": "string"},
-                    }
-                )
+                for parameter in parameters:
+                    operation["parameters"].append(
+                        {
+                            "in": "path",
+                            "name": parameter,
+                            "required": True,
+                            "schema": {"type": "string"},
+                        }
+                    )
     for methods in paths.values():
         for operation in methods.values():
             for code in (

@@ -15,11 +15,13 @@ Subject 侧今后退化为透传。
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityBoundToolView,
+    AbilityChangeView,
     AbilityGrantPolicyView,
     AbilityGrantView,
     AbilityLifecycleView,
@@ -33,6 +35,15 @@ from ghrah.protocol.views.core import ContentReadResult
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.content import ContentReadRequest
 from ghrah.ability.surface.projection import project_grants
+
+
+def build_change_view(row: dict[str, Any]) -> AbilityChangeView:
+    """解码审计 JSON 并移除内部作用域列，生成协议规定的派生读面。"""
+    data = {name: row[name] for name in AbilityChangeView.model_fields if name in row}
+    if isinstance(data.get("actor"), str):
+        data["actor"] = json.loads(data["actor"])
+    return AbilityChangeView.model_validate(data)
+
 
 __all__ = ["build_admin_view", "read_content"]
 

@@ -353,7 +353,7 @@ function subscriptionEquals(a: SubscribePayload, b: SubscribePayload): boolean {
 }
 
 function arrayEquals(a: string[] | null | undefined, b: string[] | null | undefined): boolean {
-  const normA = a == null ? null : [...a].sort().join("");
-  const normB = b == null ? null : [...b].sort().join("");
+  const normA = a == null ? null : JSON.stringify([...a].sort());
+  const normB = b == null ? null : JSON.stringify([...b].sort());
   return normA === normB;
 }

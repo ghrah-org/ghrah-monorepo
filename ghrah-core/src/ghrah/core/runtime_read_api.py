@@ -236,7 +236,8 @@ class RuntimeReadAPI:
         row = await (
             await self.store.connection().execute(
                 "SELECT n.* FROM nodes n JOIN runtime_agents a ON a.agent_id=n.agent_name "
-                "WHERE n.id=? AND a.scope_ref=? AND n.runtime_node_seq IS NOT NULL",
+                "WHERE n.id=? AND a.scope_ref=? AND a.deleted_at IS NULL "
+                "AND n.runtime_node_seq IS NOT NULL",
                 (raw_id, self.store.scope_ref),
             )
         ).fetchone()

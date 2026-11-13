@@ -397,7 +397,9 @@ class CoreRuntime:
         if principal.scope_ref != self.config.scope_ref:
             return self._problem(403, "ACCESS_DENIED", path, "Scope does not match")
         resource_path = urlsplit(path).path
-        if resource_path.startswith(("/v1/agents", "/v1/deliveries", "/v1/nodes")):
+        if resource_path.startswith(
+            ("/v1/agents", "/v1/deliveries", "/v1/nodes", "/v1/abilities", "/v1/ability-instances")
+        ):
             return await self._dispatch_agent_api(method, path, headers, body)
         if resource_path == "/v1/commands":
             return await self._dispatch_command(method, path, body, principal)
@@ -422,6 +424,8 @@ class CoreRuntime:
                     [
                         RuntimeCapability(name="runtime.agents.conversation", version=1),
                         RuntimeCapability(name="runtime.timeline", version=1),
+                        RuntimeCapability(name="runtime.agents.management", version=1),
+                        RuntimeCapability(name="runtime.abilities.management", version=1),
                     ]
                     if self.config.enabled_agent_api
                     else []

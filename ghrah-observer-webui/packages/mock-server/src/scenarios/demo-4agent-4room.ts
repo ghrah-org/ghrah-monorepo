@@ -67,6 +67,8 @@ export const demoScenario: Scenario = {
       ({ state, apply }) =>
         apply(CommandType.SPAWN_AGENT, {
           project_id: projectId(state),
+          manifest_ref: "mock.agent",
+          abilities: [{ ability_type: "send_message", params: {} }],
           config: {
             name: "architect",
             agent_id: AGENT_IDS.architect,
@@ -80,6 +82,8 @@ export const demoScenario: Scenario = {
       ({ state, apply }) =>
         apply(CommandType.SPAWN_AGENT, {
           project_id: projectId(state),
+          manifest_ref: "mock.agent",
+          abilities: [{ ability_type: "send_message", params: {} }],
           config: {
             name: "frontend",
             agent_id: AGENT_IDS.frontend,
@@ -92,6 +96,8 @@ export const demoScenario: Scenario = {
       ({ state, apply }) =>
         apply(CommandType.SPAWN_AGENT, {
           project_id: projectId(state),
+          manifest_ref: "mock.agent",
+          abilities: [{ ability_type: "send_message", params: {} }],
           config: {
             name: "backend",
             agent_id: AGENT_IDS.backend,
@@ -104,6 +110,8 @@ export const demoScenario: Scenario = {
       ({ state, apply }) =>
         apply(CommandType.SPAWN_AGENT, {
           project_id: projectId(state),
+          manifest_ref: "mock.agent",
+          abilities: [{ ability_type: "send_message", params: {} }],
           config: {
             name: "tester",
             agent_id: AGENT_IDS.tester,

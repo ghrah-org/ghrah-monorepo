@@ -6,6 +6,12 @@ import {
   type AbilityDefinitionPayload,
   type ActionNode,
   AgentCompactContextPayloadSchema,
+  AgentEntityCreatePayloadSchema,
+  AgentEntityListPayloadSchema,
+  AgentEntityPayloadSchema,
+  AgentSnapshotSchema,
+  AgentSpecPatchSchema,
+  AgentConfigPayloadSchema,
   type AgentConfigPayload,
   AgentResetPayloadSchema,
   BranchActivatePayloadSchema,
@@ -24,6 +30,8 @@ import {
   PluginNegotiatePayloadSchema,
   type PythonHalfInfo,
   ProjectCreatePayloadSchema,
+  ProjectAddAgentPayloadSchema,
+  ProjectRemoveAgentPayloadSchema,
   ProjectDeletePayloadSchema,
   ProjectIdPayloadSchema,
   type ProjectInfoPayload,
@@ -50,6 +58,7 @@ import {
   type SessionInfoPayload,
   SessionListPayloadSchema,
   SpawnAgentPayloadSchema,
+  SendMessagePayloadSchema,
   TaskClaimListPayloadSchema,
   type TaskClaimPayload,
   TaskCreatePayloadSchema,
@@ -59,7 +68,7 @@ import {
   TaskListPayloadSchema,
   TerminateAgentPayloadSchema,
 } from "@ghrah/protocol";
-import { ZodError, type z } from "zod";
+import { ZodError, z } from "zod";
 
 export interface CommandOutcome {
   success: boolean;
@@ -107,6 +116,7 @@ interface AgentRecord {
   config: AgentConfigPayload;
   abilities: AbilityDefinitionPayload[];
   runtimeState: "running" | "stopped";
+  incarnationId: string | null;
 }
 
 interface AgentActionState {
@@ -116,6 +126,12 @@ interface AgentActionState {
   sessions: Map<string, SessionInfoPayload>;
   branches: Map<string, BranchInfoPayload>;
   nodes: Map<string, ActionNode>;
+}
+
+interface DirectMessage {
+  projectId: string;
+  message: { message_id: string; sender_id: string; content: string; reply_to: string | null };
+  deliveries: Array<MockDeliveryRecord & { consumed_node_id: string | null }>;
 }
 
 export interface PendingHitl {
@@ -143,6 +159,15 @@ function agentKey(projectId: string, agentId: string): string {
   return `${projectId}\u0000${agentId}`;
 }
 
+const MockSendAbilitySchema = z.object({
+  name: z.literal("send_message"),
+  args: z.object({
+    target: z.string().min(1),
+    content: z.string(),
+    fire_and_forget: z.boolean().optional().default(false),
+  }),
+});
+
 /**
  * 模拟 Subject 状态机。命令/事件面严格对齐「Room Unit 形态契约」：
  * 同 payload schema、同事件名、同 seq 分配语义（room 内 seq 单点分配、单调递增）。
@@ -155,6 +180,7 @@ export class MockState {
   readonly tasks = new Map<string, TaskInfoPayload>();
   readonly pendingHitl = new Map<string, PendingHitl>();
   readonly actionStates = new Map<string, AgentActionState>();
+  private readonly _directMessages: DirectMessage[] = [];
   /** 场景声明的 Python 半清单（mock 协商数据源，非权威）。 */
   pythonHalves: PythonHalfInfo[] = [];
   /** 归因种子：claims（含内嵌 evidence 的冻结副本）与独立 evidence 表投影。 */
@@ -170,7 +196,6 @@ export class MockState {
   private readonly _deliveryIntervalMs: number;
   private readonly _simulateDeliveries: boolean;
   private readonly _chainTimers = new Map<string, ReturnType<typeof setInterval>>();
-  private readonly _chainIterations = new Map<string, number>();
   /** room log entry.id → 该条消息对各 agent 的投递记录（读通时注入 data.deliveries）。 */
   private readonly _deliveries = new Map<string, MockDeliveryRecord[]>();
   private readonly _deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -203,6 +228,52 @@ export class MockState {
 
   handleCommand(commandType: string, rawPayload: Record<string, unknown>): CommandOutcome {
     switch (commandType) {
+      case CommandType.AGENT_ENTITY_CREATE:
+        return this._parse(AgentEntityCreatePayloadSchema, rawPayload, (payload) => {
+          if (payload.ability_types) return fail("abilities_managed_by_access_store");
+          if (payload.manifest_ref !== "mock.agent") return fail("manifest_not_found");
+          const result = this.spawnAgent(
+            payload.project_id,
+            AgentConfigPayloadSchema.parse({
+              name: payload.name,
+              endpoint_name: payload.endpoint_name,
+              model_overrides: payload.model_overrides,
+              system_prompt: payload.system_prompt,
+            }),
+            [{ ability_type: "send_message", params: {} }],
+            { start: payload.start, manifestRef: payload.manifest_ref },
+          );
+          if (!result.success) return result;
+          const data = result.data as { agent_id: string };
+          return this._entity({
+            project_id: payload.project_id,
+            agent_id: data.agent_id,
+            operation: { type: "snapshot" },
+          });
+        });
+      case CommandType.AGENT_ENTITY_LIST:
+        return this._parse(AgentEntityListPayloadSchema, rawPayload, (payload) => {
+          const project = this.projects.get(payload.project_id);
+          if (!project || project.archived_at) return fail("project_unavailable");
+          return ok({
+            agents: this._agentsForProject(payload.project_id).map((agent) =>
+              this._snapshot(project, agent),
+            ),
+            available_ability_types: [],
+            model_config_names: ["mock-model"],
+          });
+        });
+      case CommandType.AGENT_ENTITY:
+        return this._parse(AgentEntityPayloadSchema, rawPayload, (payload) =>
+          this._entity(payload),
+        );
+      case CommandType.SEND_MESSAGE:
+        return this._parse(SendMessagePayloadSchema, rawPayload, (payload) =>
+          this._sendMessage(payload),
+        );
+      case CommandType.REGISTER_ABILITY:
+      case CommandType.UNREGISTER_ABILITY:
+        return fail("legacy_ability_registration_disabled");
       // Room
       case CommandType.ROOM_CREATE:
         return this._parse(RoomCreatePayloadSchema, rawPayload, (p) => this._roomCreate(p));
@@ -331,8 +402,56 @@ export class MockState {
       // Agent / Core
       case CommandType.SPAWN_AGENT:
         return this._parse(SpawnAgentPayloadSchema, rawPayload, (p) =>
-          this.spawnAgent(p.project_id, p.config, p.abilities ?? []),
+          this.spawnAgent(p.project_id, p.config, p.abilities ?? [], {
+            start: true,
+            manifestRef: p.manifest_ref ?? "",
+          }),
         );
+      case CommandType.PROJECT_ADD_AGENT:
+        return this._parse(ProjectAddAgentPayloadSchema, rawPayload, (payload) => {
+          const project = this.projects.get(payload.project_id);
+          if (!project) return fail("project_unavailable");
+          if (payload.expected_version != null && project.version !== payload.expected_version)
+            return fail("agent_specification_conflict");
+          if (payload.agent.desired_state === "running" && !payload.agent.manifest_ref)
+            return fail("agent_manifest_required");
+          return this.spawnAgent(
+            payload.project_id,
+            AgentConfigPayloadSchema.parse({
+              name: payload.agent.name,
+              endpoint_name: payload.agent.endpoint_name,
+              system_prompt: payload.agent.system_prompt,
+            }),
+            [],
+            {
+              start: payload.agent.desired_state === "running",
+              manifestRef: payload.agent.manifest_ref,
+            },
+          );
+        });
+      case CommandType.PROJECT_REMOVE_AGENT:
+        return this._parse(ProjectRemoveAgentPayloadSchema, rawPayload, (payload) => {
+          const project = this.projects.get(payload.project_id);
+          const key = agentKey(payload.project_id, payload.agent_id);
+          const agent = this.agents.get(key);
+          if (!project || project.archived_at) return fail("project_unavailable");
+          if (!agent || agent.name !== payload.agent_name) return fail("agent_not_found");
+          if (payload.expected_version != null && project.version !== payload.expected_version)
+            return fail("agent_specification_conflict");
+          if (agent.runtimeState === "running")
+            this.terminateAgent(payload.project_id, payload.agent_id, agent.name);
+          this.agents.delete(key);
+          project.agents = project.agents.filter((spec) => spec.agent_id !== payload.agent_id);
+          project.version += 1;
+          project.updated_at = isoNow();
+          this.emit(EventType.PROJECT_AGENT_REMOVED, {
+            project,
+            project_id: payload.project_id,
+            agent_id: payload.agent_id,
+            agent_name: payload.agent_name,
+          });
+          return ok({ agent_id: payload.agent_id });
+        });
       case CommandType.TERMINATE_AGENT:
         return this._parse(TerminateAgentPayloadSchema, rawPayload, (p) =>
           this.terminateAgent(p.project_id, p.agent_id, p.name),
@@ -462,6 +581,363 @@ export class MockState {
       }
       throw err;
     }
+  }
+
+  private _snapshot(project: ProjectInfoPayload, agent: AgentRecord) {
+    const state = this.actionStates.get(agentKey(project.project_id, agent.agentId));
+    return AgentSnapshotSchema.parse({
+      identity: { project_id: project.project_id, agent_id: agent.agentId },
+      specification: project.agents.find((spec) => spec.agent_id === agent.agentId),
+      specification_revision: project.version,
+      runtime: {
+        availability: agent.runtimeState === "running" ? "online" : "offline",
+        incarnation_id: agent.runtimeState === "running" ? agent.incarnationId : null,
+        busy: agent.runtimeState === "running" ? false : null,
+      },
+      context: {
+        availability: "available",
+        active_session_id: state?.activeSessionId || null,
+        session_count: state?.sessions.size ?? 0,
+        branch_count: state?.branches.size ?? 0,
+      },
+      mailbox: { availability: "available" },
+      abilities: {
+        configured_types: project.agents.find((spec) => spec.agent_id === agent.agentId)?.abilities,
+        available_types: [],
+        loaded_names:
+          agent.runtimeState === "running"
+            ? agent.abilities.map((ability) => ability.ability_type)
+            : null,
+        model_config_names: ["mock-model"],
+        runtime_availability: agent.runtimeState === "running" ? "online" : "offline",
+      },
+      observed_at: isoNow(),
+    });
+  }
+
+  /** 更新持久规格；当前运行实例在显式重启前保留原配置。 */
+  patchAgentSpecification(
+    projectId: string,
+    agentId: string,
+    raw: Record<string, unknown>,
+  ): CommandOutcome {
+    return this._parse(AgentSpecPatchSchema, raw, (change) => {
+      const project = this.projects.get(projectId);
+      if (!project || project.archived_at) return fail("project_unavailable");
+      const spec = project.agents.find((item) => item.agent_id === agentId);
+      if (!spec) return fail("agent_not_found");
+      if (project.version !== change.expected_revision) return fail("agent_specification_conflict");
+      if (!("endpoint_name" in raw) && !("system_prompt" in raw)) return fail("invalid_request");
+      if ("endpoint_name" in raw && change.endpoint_name && change.endpoint_name !== "mock-model")
+        return fail("model_configuration_invalid");
+      if ("system_prompt" in raw && typeof change.system_prompt !== "string")
+        return fail("invalid_request");
+      if ("endpoint_name" in raw) spec.endpoint_name = change.endpoint_name || null;
+      if ("system_prompt" in raw) spec.system_prompt = change.system_prompt!;
+      project.version += 1;
+      project.updated_at = isoNow();
+      this.emit(EventType.PROJECT_UPDATED, { project });
+      return ok({ agent_id: agentId });
+    });
+  }
+
+  private _entity(payload: z.output<typeof AgentEntityPayloadSchema>): CommandOutcome {
+    const project = this.projects.get(payload.project_id);
+    if (!project || project.archived_at) return fail("project_unavailable");
+    const key = agentKey(payload.project_id, payload.agent_id);
+    const agent = this.agents.get(key);
+    const spec = project.agents.find((item) => item.agent_id === payload.agent_id);
+    if (!agent || !spec) return fail("agent_not_found");
+    const op = payload.operation;
+    const state = this.actionStates.get(key)!;
+    const scope = {
+      project_id: payload.project_id,
+      agent_id: payload.agent_id,
+      agent_name: agent.name,
+    };
+    if (op.type === "snapshot") return ok(this._snapshot(project, agent));
+    if (op.type === "abilities.list") return ok(this._snapshot(project, agent).abilities);
+    if (op.type === "context.list_sessions") {
+      return ok({
+        active_session_id: state.activeSessionId || null,
+        sessions: [...state.sessions.values()].filter((item) => item.lifecycle !== "deleted"),
+        branches: [...state.branches.values()].filter((item) => item.lifecycle !== "deleted"),
+      });
+    }
+    if (op.type === "context.get_history") return this._chainHistory({ ...scope, ...op });
+    if (op.type === "context.create_session" || op.type === "context.activate_session") {
+      if (project.status !== "active" || agent.runtimeState !== "running")
+        return fail("agent_not_running");
+      const outcome =
+        op.type === "context.create_session"
+          ? this._sessionCreate({
+              ...scope,
+              ...op,
+              system_prompt: op.system_prompt ?? agent.config.system_prompt,
+            })
+          : this._sessionActivate({ ...scope, ...op });
+      return outcome.success ? ok({ session: outcome.data }) : outcome;
+    }
+    if (op.type === "mailbox.list_inbox" || op.type === "mailbox.list_outbox") {
+      const inbox = op.type === "mailbox.list_inbox";
+      const messages = this._directMessages
+        .filter((item) => item.projectId === payload.project_id)
+        .map((item, index) => ({ ...item, seq: index + 1 }))
+        .filter((item) =>
+          inbox
+            ? item.deliveries.some((delivery) => delivery.recipient_id === payload.agent_id)
+            : item.message.sender_id === payload.agent_id,
+        )
+        .filter((item) => op.before_seq == null || item.seq < op.before_seq)
+        .reverse();
+      const page = messages.slice(0, op.limit);
+      return ok({
+        items: page.map(({ message, deliveries }) => ({
+          message,
+          deliveries: inbox
+            ? deliveries.filter((delivery) => delivery.recipient_id === payload.agent_id)
+            : deliveries,
+        })),
+        next_before_seq: messages.length > page.length ? page.at(-1)!.seq : null,
+      });
+    }
+    if (op.type === "mailbox.get_message") {
+      const item = this._directMessages.find(
+        (item) =>
+          item.projectId === payload.project_id &&
+          item.message.message_id === op.message_id &&
+          (item.message.sender_id === payload.agent_id ||
+            item.deliveries.some((delivery) => delivery.recipient_id === payload.agent_id)),
+      );
+      return item
+        ? ok({ message: item.message, deliveries: item.deliveries })
+        : fail("message_not_found");
+    }
+    if (op.type === "mailbox.retry" || op.type === "mailbox.resume") {
+      if (project.status !== "active" || agent.runtimeState !== "running")
+        return fail("agent_not_running");
+      const delivery = this._directMessages
+        .filter((item) => item.projectId === payload.project_id)
+        .flatMap((item) => item.deliveries)
+        .find(
+          (item) => item.delivery_id === op.delivery_id && item.recipient_id === payload.agent_id,
+        );
+      return fail(delivery ? "invalid_delivery_state" : "delivery_not_found");
+    }
+    if (
+      "expected_revision" in op &&
+      op.expected_revision != null &&
+      op.expected_revision !== project.version
+    )
+      return fail("agent_specification_conflict");
+    if (
+      "expected_incarnation_id" in op &&
+      op.expected_incarnation_id != null &&
+      op.expected_incarnation_id !== agent.incarnationId
+    )
+      return fail("agent_incarnation_conflict");
+    if (op.type === "abilities.configure") return fail("abilities_managed_by_access_store");
+    if (op.type === "model.configure") {
+      if (agent.runtimeState !== "stopped") return fail("agent_must_be_stopped");
+      if (spec.manifest_ref) return fail("model_managed_by_manifest");
+      if (op.endpoint_name !== "mock-model") return fail("model_configuration_invalid");
+      spec.endpoint_name = op.endpoint_name;
+      if (op.model_overrides !== null) spec.model_overrides = op.model_overrides;
+    } else if (op.type === "start") {
+      if (project.status !== "active") return fail("project_not_active");
+      if (agent.runtimeState === "running") return ok(this._snapshot(project, agent));
+      if (!spec.manifest_ref) return fail("agent_manifest_required");
+      agent.runtimeState = "running";
+      agent.incarnationId = uuid();
+      agent.config = {
+        ...agent.config,
+        endpoint_name: spec.endpoint_name,
+        system_prompt: spec.system_prompt,
+      };
+      if (!state.activeSessionId) {
+        const session = this._newSession(state, agent.name, { systemPrompt: spec.system_prompt });
+        state.activeSessionId = session.session_id;
+      }
+      spec.desired_state = "running";
+      this._setAgentSpecRuntime(project, agent.agentId, "running");
+      this.emit(EventType.AGENT_SPAWNED, this._agentEvent(agent));
+      if (this._simulateChains) this._startChainSimulation(key);
+    } else if (op.type === "stop") {
+      spec.desired_state = "stopped";
+      const result = this.terminateAgent(payload.project_id, payload.agent_id, agent.name);
+      if (!result.success) return result;
+    } else return fail("unsupported_entity_operation");
+    if (op.type !== "stop") project.version += 1;
+    project.updated_at = isoNow();
+    this.emit(EventType.PROJECT_UPDATED, { project });
+    if (op.type === "start")
+      this.emit(EventType.ABILITY_TREE_CHANGED, {
+        project_id: payload.project_id,
+        agent_id: payload.agent_id,
+        reason: "runtime",
+      });
+    return ok(this._snapshot(project, agent));
+  }
+
+  private _sendMessage(payload: z.output<typeof SendMessagePayloadSchema>): CommandOutcome {
+    const project = this.projects.get(payload.project_id);
+    if (!project || project.archived_at || project.status !== "active")
+      return fail("project_not_active");
+    const source = this.agents.get(agentKey(payload.project_id, payload.agent_id));
+    if (!source || source.name !== payload.target) return fail("agent_identity_mismatch");
+    if (source.runtimeState !== "running") return fail("agent_not_running");
+    let recipient = source;
+    let senderId = payload.sender;
+    let content = payload.content;
+    const parsedExecute = MockSendAbilitySchema.safeParse(payload.metadata?.execute_ability);
+    if (payload.metadata?.execute_ability !== undefined && !parsedExecute.success)
+      return fail("invalid_request");
+    const execute = parsedExecute.success ? parsedExecute.data : undefined;
+    if (execute !== undefined) {
+      if (execute.name !== "send_message") return fail("mock_capability_unavailable");
+      if (!source.abilities.some((ability) => ability.ability_type === "send_message"))
+        return fail("source_ability_missing");
+      const target = execute.args?.target;
+      if (typeof target !== "string" || typeof execute.args?.content !== "string")
+        return fail("invalid_request");
+      const destination = this.agents.get(agentKey(payload.project_id, target));
+      if (!destination) return fail("agent_not_found");
+      if (destination.runtimeState !== "running") return fail("agent_not_running");
+      recipient = destination;
+      senderId = source.agentId;
+      content = execute.args.content;
+      const sourceState = this.actionStates.get(agentKey(payload.project_id, source.agentId))!;
+      const sourceSession = sourceState.sessions.get(sourceState.activeSessionId)!;
+      if (
+        sourceSession.lifecycle !== "open" ||
+        sourceState.branches.get(sourceSession.active_branch_id)?.lifecycle !== "open"
+      )
+        return fail("context_not_open");
+    }
+    const key = agentKey(payload.project_id, recipient.agentId);
+    const state = this.actionStates.get(key)!;
+    const session = state.sessions.get(state.activeSessionId)!;
+    const branch = state.branches.get(session.active_branch_id)!;
+    if (session.lifecycle !== "open" || branch.lifecycle !== "open")
+      return fail("context_not_open");
+    const reply = `[mock:${recipient.name}] ${content}`;
+    const node: ActionNode = {
+      id: uuid(),
+      parent_id: branch.head_node_id,
+      agent_name: recipient.name,
+      timestamp: isoNow(),
+      iteration: session.iteration_count + 1,
+      ability_names: ["conversation"],
+      agent_state: {},
+      messages_delta: [
+        {
+          role: "user",
+          content_blocks: [{ type: "text", text: content }],
+          source: execute ? `agent:${senderId}` : `human:${senderId}`,
+          metadata: {},
+        },
+        { role: "ai", content_blocks: [{ type: "text", text: reply }], metadata: {} },
+      ],
+      is_snapshot: false,
+      action_results: [],
+      metadata: {},
+      session_id: session.session_id,
+      created_on_branch_id: branch.branch_id,
+    };
+    state.nodes.set(node.id, node);
+    branch.head_node_id = node.id;
+    session.iteration_count += 1;
+    session.message_count += 2;
+    const messageId = uuid();
+    this._directMessages.push({
+      projectId: payload.project_id,
+      message: { message_id: messageId, sender_id: senderId, content, reply_to: null },
+      deliveries: [
+        {
+          delivery_id: uuid(),
+          recipient_id: recipient.agentId,
+          state: "completed",
+          error: null,
+          blocked_reason: null,
+          consumed_node_id: node.id,
+        },
+      ],
+    });
+    this.emit(EventType.ACTION_CHAIN_UPDATED, {
+      project_id: payload.project_id,
+      agent_id: recipient.agentId,
+      agent_name: recipient.name,
+      node,
+      branch,
+    });
+    const responseData = {
+      message_id: messageId,
+      ...(execute?.args.fire_and_forget ? {} : { response: reply }),
+      fire_and_forget: execute?.args.fire_and_forget ?? false,
+    };
+    if (execute && source.agentId !== recipient.agentId) {
+      const sourceState = this.actionStates.get(agentKey(payload.project_id, source.agentId))!;
+      const sourceSession = sourceState.sessions.get(sourceState.activeSessionId)!;
+      const sourceBranch = sourceState.branches.get(sourceSession.active_branch_id)!;
+      const sourceNode: ActionNode = {
+        ...node,
+        id: uuid(),
+        parent_id: sourceBranch.head_node_id,
+        agent_name: source.name,
+        iteration: sourceSession.iteration_count + 1,
+        ability_names: ["send_message"],
+        session_id: sourceSession.session_id,
+        created_on_branch_id: sourceBranch.branch_id,
+        messages_delta: [
+          {
+            role: "user",
+            content_blocks: [{ type: "text", text: payload.content }],
+            source: `human:${payload.sender}`,
+            metadata: {},
+          },
+          {
+            role: "ai",
+            content_blocks: [
+              { type: "tool_call", id: uuid(), name: "send_message", arguments: execute.args },
+            ],
+            metadata: {},
+          },
+        ],
+        action_results: [
+          {
+            ability_name: "send_message",
+            action_result: { outcome: "success", data: responseData },
+          },
+        ],
+      };
+      sourceState.nodes.set(sourceNode.id, sourceNode);
+      sourceBranch.head_node_id = sourceNode.id;
+      sourceSession.iteration_count += 1;
+      sourceSession.message_count += sourceNode.messages_delta.length;
+      this.emit(EventType.ACTION_CHAIN_UPDATED, {
+        project_id: payload.project_id,
+        agent_id: source.agentId,
+        agent_name: source.name,
+        node: sourceNode,
+        branch: sourceBranch,
+      });
+    }
+    this.emit(EventType.AGENT_RESPONSE, {
+      project_id: payload.project_id,
+      agent_id: recipient.agentId,
+      sender: recipient.name,
+      recipient: payload.sender,
+      content: reply,
+    });
+    return ok({
+      content: execute
+        ? JSON.stringify({
+            outcome: "success",
+            data: responseData,
+          })
+        : reply,
+      message_id: messageId,
+    });
   }
 
   // ─── Room ───
@@ -972,6 +1448,10 @@ export class MockState {
       this._hitlTimers.delete(promiseId);
       this.pendingHitl.delete(promiseId);
     }
+    for (let index = this._directMessages.length - 1; index >= 0; index -= 1) {
+      if (this._directMessages[index].projectId === projectId)
+        this._directMessages.splice(index, 1);
+    }
     this.projects.delete(projectId);
     this.emit(EventType.PROJECT_DELETED, { project });
     return ok({
@@ -1158,6 +1638,7 @@ export class MockState {
   private _getAgentInfo(p: { project_id: string; agent_id: string; name: string }): CommandOutcome {
     const agent = this.agents.get(agentKey(p.project_id, p.agent_id));
     if (!agent) return fail(`agent not found: ${p.agent_id}`);
+    if (agent.name !== p.name) return fail("agent_identity_mismatch");
     const key = agentKey(p.project_id, p.agent_id);
     const cumulative = this._cumulativeUsage.get(key) ?? { input: 0, output: 0, cache_read: 0 };
     const context_usage =
@@ -1181,7 +1662,12 @@ export class MockState {
     return ok({
       name: agent.name,
       state: { name: agent.name, initialized: true, runtime_state: agent.runtimeState },
-      abilities: [],
+      abilities:
+        agent.runtimeState === "running"
+          ? agent.abilities.map((ability) => ability.ability_type)
+          : agent.abilities,
+      available_ability_types: [],
+      runtime_state: agent.runtimeState,
       context_usage,
       project_id: p.project_id,
       agent_id: p.agent_id,
@@ -1491,11 +1977,13 @@ export class MockState {
     projectId: string,
     config: AgentConfigPayload,
     abilities: AbilityDefinitionPayload[] = [],
+    options: { start: boolean; manifestRef: string } = { start: true, manifestRef: "" },
   ): CommandOutcome {
+    if (!config.name.trim()) return fail("invalid_request");
     const project = this.projects.get(projectId);
     if (!project) return fail(`project not found: ${projectId}`);
     if (project.archived_at != null) return fail("resource_archived");
-    if (project.status !== "active") return fail("project_not_active");
+    if (options.start && project.status !== "active") return fail("project_not_active");
     if (project.agents.some((agent) => agent.name === config.name)) {
       return fail("agent_name_exists");
     }
@@ -1509,7 +1997,8 @@ export class MockState {
       name: config.name,
       config: normalizedConfig,
       abilities,
-      runtimeState: "running",
+      runtimeState: options.start ? "running" : "stopped",
+      incarnationId: options.start ? uuid() : null,
     };
     this.agents.set(key, record);
     const actionState: AgentActionState = {
@@ -1520,32 +2009,36 @@ export class MockState {
       branches: new Map(),
       nodes: new Map(),
     };
-    const session = this._newSession(actionState, config.name, {
-      systemPrompt: config.system_prompt,
-    });
-    actionState.activeSessionId = session.session_id;
+    if (options.start) {
+      const session = this._newSession(actionState, config.name, {
+        systemPrompt: config.system_prompt,
+      });
+      actionState.activeSessionId = session.session_id;
+      // 演示数据：每个 Agent 附带一个归档 Session（含归档 Branch），
+      // 供 UI 验证 lifecycle 展示与"非活跃 Session 仍有域 active Branch"。
+      const archivedSession = this._newSession(actionState, config.name, {
+        name: "Archived worklog",
+        systemPrompt: config.system_prompt,
+      });
+      archivedSession.lifecycle = "archived";
+      const archivedBranch = [...actionState.branches.values()].find(
+        (item) => item.session_id === archivedSession.session_id,
+      );
+      if (archivedBranch) archivedBranch.lifecycle = "archived";
+    }
     this.actionStates.set(key, actionState);
-    // 演示数据：每个 Agent 附带一个归档 Session（含归档 Branch），
-    // 供 UI 验证 lifecycle 展示与"非活跃 Session 仍有域 active Branch"。
-    const archivedSession = this._newSession(actionState, config.name, {
-      name: "Archived worklog",
-      systemPrompt: config.system_prompt,
-    });
-    archivedSession.lifecycle = "archived";
-    const archivedBranch = [...actionState.branches.values()].find(
-      (item) => item.session_id === archivedSession.session_id,
-    );
-    if (archivedBranch) archivedBranch.lifecycle = "archived";
     project.agents.push({
       agent_id: agentId,
       name: config.name,
-      manifest_ref: "",
+      manifest_ref: options.manifestRef,
+      endpoint_name: config.endpoint_name,
+      model_overrides: config.model_overrides,
       instance_manifest_path: "",
       system_prompt: config.system_prompt,
       abilities: null,
-      desired_state: "running",
+      desired_state: options.start ? "running" : "stopped",
       path_grants: [],
-      runtime_status: "running",
+      runtime_status: record.runtimeState,
       runtime_error: "",
     });
     project.version += 1;
@@ -1555,9 +2048,9 @@ export class MockState {
       agent_name: config.name,
       agent_id: agentId,
     });
-    this.emit(EventType.AGENT_SPAWNED, this._agentEvent(record));
-    if (this._simulateChains) this._startChainSimulation(key);
-    return ok({ ...this._agentEvent(record), runtime_state: "running" });
+    if (options.start) this.emit(EventType.AGENT_SPAWNED, this._agentEvent(record));
+    if (options.start && this._simulateChains) this._startChainSimulation(key);
+    return ok({ ...this._agentEvent(record), runtime_state: record.runtimeState });
   }
 
   terminateAgent(projectId: string, agentId: string, name: string): CommandOutcome {
@@ -1574,6 +2067,12 @@ export class MockState {
     }
     this._stopChainSimulation(key);
     this.emit(EventType.AGENT_TERMINATED, this._agentEvent(record));
+    record.incarnationId = null;
+    this.emit(EventType.ABILITY_TREE_CHANGED, {
+      project_id: projectId,
+      agent_id: agentId,
+      reason: "runtime",
+    });
     return ok(this._agentEvent(record));
   }
 
@@ -1596,20 +2095,19 @@ export class MockState {
   }
 
   private _startChainSimulation(key: string): void {
-    this._chainIterations.set(key, 0);
-    this._cumulativeUsage.set(key, { input: 0, output: 0, cache_read: 0 });
+    if (!this._cumulativeUsage.has(key))
+      this._cumulativeUsage.set(key, { input: 0, output: 0, cache_read: 0 });
     const timer = setInterval(() => {
       const agent = this.agents.get(key);
       if (agent?.runtimeState !== "running") {
         this._stopChainSimulation(key);
         return;
       }
-      const iteration = (this._chainIterations.get(key) ?? 0) + 1;
-      this._chainIterations.set(key, iteration);
       const state = this.actionStates.get(key);
       if (!state) return;
       const session = state.sessions.get(state.activeSessionId);
       if (!session) return;
+      const iteration = session.iteration_count + 1;
       let branch = state.branches.get(session.active_branch_id);
       if (!branch) return;
       // 占用模拟：8192 预算下 2000 + (iteration % 8) * 900 锯齿爬升，触顶回落模拟 compact 重置
@@ -1734,7 +2232,6 @@ export class MockState {
     const timer = this._chainTimers.get(key);
     if (timer != null) clearInterval(timer);
     this._chainTimers.delete(key);
-    this._chainIterations.delete(key);
   }
 
   private _agentsForProject(projectId: string): AgentRecord[] {
@@ -1758,7 +2255,7 @@ export class MockState {
       agent_id: agent.agentId,
       name: agent.name,
       config: agent.config,
-      incarnation_id: "mock",
+      incarnation_id: agent.incarnationId ?? "",
       recovery_mode: "",
     };
   }

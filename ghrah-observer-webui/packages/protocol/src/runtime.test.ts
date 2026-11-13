@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { ZodType } from "zod";
 import * as schemas from "./runtime.generated.js";
 
 const contracts = "../../../../ghrah-protocol/contracts/runtime/";
@@ -17,9 +18,9 @@ const cases = fixture("schema-cases.json") as ContractCase[];
 
 describe("Runtime resource contract", () => {
   it.each(cases)("$name", ({ schema, valid, body }) => {
-    const validator = schemas[(schema + "Schema") as keyof typeof schemas];
+    const validator = schemas[(schema + "Schema") as keyof typeof schemas] as unknown;
     expect(validator, schema).toBeDefined();
-    expect(validator.safeParse(body).success).toBe(valid);
+    expect((validator as ZodType).safeParse(body).success).toBe(valid);
   });
 
   it("accepts the transitional command fixture and rejects undeclared commands", () => {

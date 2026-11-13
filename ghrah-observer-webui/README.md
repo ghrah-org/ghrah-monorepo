@@ -8,6 +8,10 @@ ghrah 观察端 WebUI 与 VS Code 扩展（Vue 3 + Vite + pnpm workspace）。
 - `packages/observer-core` — `@ghrah/observer-core`，WS 客户端 + Pinia stores + 投影逻辑
 - `packages/observer-web` — `@ghrah/observer-web`，Vue 3 Web 前端（私有，不发布）
 - `packages/mock-server` — `@ghrah/mock-server`，协议层 mock 服务器（开发/测试用）
+
+Mock 启动、交互流程和覆盖边界见 [mock-server README](packages/mock-server/README.md)。
+在根目录运行 `pnpm dev --mock` 启动，`pnpm test:mock` 执行协议、投影与浏览器联调。
+
 - `vscode-extension` — VS Code 扩展（Marketplace 发布）
 
 ## 环境要求
