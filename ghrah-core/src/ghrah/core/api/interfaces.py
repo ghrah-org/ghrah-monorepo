@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Core 能力清单与请求信封。
+"""Core 接口清单与请求信封。
 
 请求信封里的 ``project_id`` 由装配层注入，消费方传不进来——
 所以信封是模块内部形状，不进契约包。
@@ -31,7 +31,7 @@ from ghrah.protocol.ability_tree import (
     RevokeAbilityRequest,
     UnbindToolRequest,
 )
-from ghrah.protocol.capability import Capability, CapabilityRegistry
+from ghrah.protocol.interface import Interface, InterfaceRegistry
 from ghrah.protocol.views.common import (
     AckView,
     AgentIdView,
@@ -63,7 +63,7 @@ from ghrah.protocol.views.core import (
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
-    "CORE_CAPABILITIES",
+    "CORE_INTERFACES",
     "AbilitiesAdminRequest",
     "AbilitiesChangesRequest",
     "AbilitiesContentRequest",
@@ -486,13 +486,13 @@ class AbilitiesPackageDetailRequest(BaseModel):
 
 
 class AbilitiesPackageVersionRequest(AbilitiesPackageDetailRequest):
-    """指定能力包版本的全局请求。"""
+    """指定接口包版本的全局请求。"""
 
     version: str
 
 
 class AbilitiesPackageMcpProbeRequest(AbilitiesPackageVersionRequest):
-    """指定能力包版本的 MCP 探测请求。"""
+    """指定接口包版本的 MCP 探测请求。"""
 
     request: AbilityMcpProbeRequest
 
@@ -582,87 +582,87 @@ class AbilitiesDisableToolRequest(BaseModel):
     change: UnbindToolRequest
 
 
-CORE_CAPABILITIES = CapabilityRegistry(
+CORE_INTERFACES = InterfaceRegistry(
     (
-        Capability("nodes.get", NodeGetRequest, NodeView),
-        Capability("sessions.catalog", SessionsCatalogRequest, SessionCatalogView),
-        Capability("sessions.history", SessionsHistoryRequest, HistoryView),
-        Capability("sessions.head", SessionsHeadRequest, NodeIdView),
-        Capability("sessions.meta", SessionsMetaRequest, ChainMetaView),
-        Capability("branches.list", BranchesListRequest, BranchListView),
-        Capability("mailbox.summary", MailboxSummaryRequest, MailboxSummaryView),
-        Capability("mailbox.list", MailboxListRequest, Page[MessageView]),
-        Capability("mailbox.get", MailboxGetRequest, MessageView),
-        Capability("mailbox.publish_external", MailboxPublishExternalRequest, PublishedMessageView),
-        Capability(
+        Interface("nodes.get", NodeGetRequest, NodeView),
+        Interface("sessions.catalog", SessionsCatalogRequest, SessionCatalogView),
+        Interface("sessions.history", SessionsHistoryRequest, HistoryView),
+        Interface("sessions.head", SessionsHeadRequest, NodeIdView),
+        Interface("sessions.meta", SessionsMetaRequest, ChainMetaView),
+        Interface("branches.list", BranchesListRequest, BranchListView),
+        Interface("mailbox.summary", MailboxSummaryRequest, MailboxSummaryView),
+        Interface("mailbox.list", MailboxListRequest, Page[MessageView]),
+        Interface("mailbox.get", MailboxGetRequest, MessageView),
+        Interface("mailbox.publish_external", MailboxPublishExternalRequest, PublishedMessageView),
+        Interface(
             "mailbox.publish_notification",
             MailboxPublishNotificationRequest,
             PublishedMessageView,
         ),
-        Capability(
+        Interface(
             "mailbox.recover_room_projections",
             MailboxRecoverProjectionsRequest,
             AckView,
         ),
-        Capability("deliveries.get", DeliveriesGetRequest, DeliveryView),
-        Capability("deliveries.retry", DeliveriesRetryRequest, AckView),
-        Capability("deliveries.resume", DeliveriesResumeRequest, AckView),
-        Capability("rooms.recover", RoomsRecoverRequest, AckView),
-        Capability("manifests.resolve", ManifestsResolveRequest, AgentSpecView),
-        Capability("abilities.tree", AbilitiesTreeRequest, AbilityTreeView),
-        Capability("abilities.changes", AbilitiesChangesRequest, AbilityChangesPage),
-        Capability("abilities.admin", AbilitiesAdminRequest, AbilityAdminView),
-        Capability("abilities.packages", AbilitiesPackagesRequest, AbilityPackageCatalogView),
-        Capability(
+        Interface("deliveries.get", DeliveriesGetRequest, DeliveryView),
+        Interface("deliveries.retry", DeliveriesRetryRequest, AckView),
+        Interface("deliveries.resume", DeliveriesResumeRequest, AckView),
+        Interface("rooms.recover", RoomsRecoverRequest, AckView),
+        Interface("manifests.resolve", ManifestsResolveRequest, AgentSpecView),
+        Interface("abilities.tree", AbilitiesTreeRequest, AbilityTreeView),
+        Interface("abilities.changes", AbilitiesChangesRequest, AbilityChangesPage),
+        Interface("abilities.admin", AbilitiesAdminRequest, AbilityAdminView),
+        Interface("abilities.packages", AbilitiesPackagesRequest, AbilityPackageCatalogView),
+        Interface(
             "abilities.package_detail",
             AbilitiesPackageDetailRequest,
             AbilityPackageDetailView,
         ),
-        Capability(
+        Interface(
             "abilities.package_version_profile",
             AbilitiesPackageVersionRequest,
             AbilityPackageVersionProfileView,
         ),
-        Capability(
+        Interface(
             "abilities.package_mcp_probe",
             AbilitiesPackageMcpProbeRequest,
             AbilityMcpProbeView,
         ),
-        Capability(
+        Interface(
             "abilities.package_groups",
             AbilitiesPackageGroupsRequest,
             AbilityPackageGroupsView,
         ),
-        Capability("abilities.instances", AbilitiesInstancesRequest, AbilityInstancesView),
-        Capability("abilities.content", AbilitiesContentRequest, ContentReadResult),
-        Capability("abilities.status", AbilitiesStatusRequest, AbilityApiStatus),
-        Capability("abilities.grant", AbilitiesGrantRequest, AbilityTreeChangeResult),
-        Capability("abilities.revoke", AbilitiesRevokeRequest, AbilityTreeChangeResult),
-        Capability("abilities.enable_tool", AbilitiesEnableToolRequest, AbilityTreeChangeResult),
-        Capability("abilities.disable_tool", AbilitiesDisableToolRequest, AbilityTreeChangeResult),
-        Capability("agents.create", AgentCreateRequest, AgentIdView),
-        Capability("agents.create_from_template", AgentCreateFromTemplateRequest, AgentIdView),
-        Capability("agents.get", AgentGetRequest, AgentView),
-        Capability("agents.list", AgentListRequest, Page[str]),
-        Capability("agents.delete", AgentDeleteRequest, AckView),
-        Capability("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),
-        Capability("agents.tools", AgentRuntimeRequest, ToolListView),
-        Capability("agents.compact", AgentRuntimeRequest, AckView),
-        Capability("agents.reset", AgentRuntimeRequest, AckView),
-        Capability("sessions.create", SessionsCreateRequest, SessionIdView),
-        Capability("sessions.activate", SessionsActivateRequest, AckView),
-        Capability("sessions.archive", SessionsArchiveRequest, AckView),
-        Capability("sessions.delete", SessionsDeleteRequest, AckView),
-        Capability("branches.create", BranchesCreateRequest, BranchIdView),
-        Capability("branches.activate", BranchesActivateRequest, AckView),
-        Capability("branches.archive", BranchesArchiveRequest, AckView),
-        Capability("branches.delete", BranchesDeleteRequest, AckView),
-        Capability("messages.append", MessagesAppendRequest, MessageReplyView),
-        Capability("messages.broadcast", MessagesBroadcastRequest, BroadcastRepliesView),
-        Capability("messages.delegate", MessagesDelegateRequest, MessageReplyView),
+        Interface("abilities.instances", AbilitiesInstancesRequest, AbilityInstancesView),
+        Interface("abilities.content", AbilitiesContentRequest, ContentReadResult),
+        Interface("abilities.status", AbilitiesStatusRequest, AbilityApiStatus),
+        Interface("abilities.grant", AbilitiesGrantRequest, AbilityTreeChangeResult),
+        Interface("abilities.revoke", AbilitiesRevokeRequest, AbilityTreeChangeResult),
+        Interface("abilities.enable_tool", AbilitiesEnableToolRequest, AbilityTreeChangeResult),
+        Interface("abilities.disable_tool", AbilitiesDisableToolRequest, AbilityTreeChangeResult),
+        Interface("agents.create", AgentCreateRequest, AgentIdView),
+        Interface("agents.create_from_template", AgentCreateFromTemplateRequest, AgentIdView),
+        Interface("agents.get", AgentGetRequest, AgentView),
+        Interface("agents.list", AgentListRequest, Page[str]),
+        Interface("agents.delete", AgentDeleteRequest, AckView),
+        Interface("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),
+        Interface("agents.tools", AgentRuntimeRequest, ToolListView),
+        Interface("agents.compact", AgentRuntimeRequest, AckView),
+        Interface("agents.reset", AgentRuntimeRequest, AckView),
+        Interface("sessions.create", SessionsCreateRequest, SessionIdView),
+        Interface("sessions.activate", SessionsActivateRequest, AckView),
+        Interface("sessions.archive", SessionsArchiveRequest, AckView),
+        Interface("sessions.delete", SessionsDeleteRequest, AckView),
+        Interface("branches.create", BranchesCreateRequest, BranchIdView),
+        Interface("branches.activate", BranchesActivateRequest, AckView),
+        Interface("branches.archive", BranchesArchiveRequest, AckView),
+        Interface("branches.delete", BranchesDeleteRequest, AckView),
+        Interface("messages.append", MessagesAppendRequest, MessageReplyView),
+        Interface("messages.broadcast", MessagesBroadcastRequest, BroadcastRepliesView),
+        Interface("messages.delegate", MessagesDelegateRequest, MessageReplyView),
     )
 )
-"""Core 能力的唯一权威枚举。
+"""Core 接口的唯一权威枚举。
 
 它是 mypy 之外的第二道契约（运行时可查）、契约测试的分母、parity 测试的比对对象。
 """

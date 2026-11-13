@@ -18,11 +18,12 @@ from ghrah.protocol.ability_control import (
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import AbilityTreeView
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.core import ContentReadResult
 
-from ghrah.core.api.capabilities import (
+from ghrah.core.api.errors import CoreApiError
+from ghrah.core.api.interfaces import (
     AbilitiesAdminRequest,
     AbilitiesChangesRequest,
     AbilitiesContentRequest,
@@ -39,7 +40,6 @@ from ghrah.core.api.capabilities import (
     AbilitiesStatusRequest,
     AbilitiesTreeRequest,
 )
-from ghrah.core.api.errors import CoreApiError
 from ghrah.core.read.ability import AbilityReadStore
 
 __all__ = ["make_ability_handlers"]

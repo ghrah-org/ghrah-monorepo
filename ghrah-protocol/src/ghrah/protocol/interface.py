@@ -8,9 +8,9 @@
 
 分层：
 
-- :class:`Capability` —— 一条能力的声明（名字 + 请求信封 + 出参 DTO）；
-- :class:`CapabilityRegistry` —— 有序、名字唯一、可枚举的清单；
-- :class:`CapabilityRuntime` —— 模块内唯一运行时入口，按序做四件事：
+- :class:`Interface` —— 一条能力的声明（名字 + 请求信封 + 出参 DTO）；
+- :class:`InterfaceRegistry` —— 有序、名字唯一、可枚举的清单；
+- :class:`InterfaceRuntime` —— 模块内唯一运行时入口，按序做四件事：
   查表 → 校验入参 → 转交 → 校出参并强制 JSON。
 """
 
@@ -28,9 +28,9 @@ from ghrah.protocol.errors import ApiError
 from ghrah.protocol.problem import Problem, ProblemCode
 
 __all__ = [
-    "Capability",
-    "CapabilityRegistry",
-    "CapabilityRuntime",
+    "Interface",
+    "InterfaceRegistry",
+    "InterfaceRuntime",
     "ErrorFactory",
     "Handler",
     "Translator",
@@ -47,7 +47,7 @@ type ErrorFactory = Callable[[Problem], ApiError]
 
 
 @dataclass(frozen=True, slots=True)
-class Capability:
+class Interface:
     """一条能力的声明。
 
     Attributes:
@@ -61,7 +61,7 @@ class Capability:
     response: type[BaseModel]
 
 
-class CapabilityRegistry:
+class InterfaceRegistry:
     """有序、名字唯一、可枚举的能力清单。
 
     Args:
@@ -71,13 +71,13 @@ class CapabilityRegistry:
         ValueError: 名字重复
     """
 
-    def __init__(self, capabilities: tuple[Capability, ...]) -> None:
+    def __init__(self, capabilities: tuple[Interface, ...]) -> None:
         self._by_name = {capability.name: capability for capability in capabilities}
         if len(self._by_name) != len(capabilities):
             raise ValueError("duplicate capability name")
         self._ordered = capabilities
 
-    def get(self, name: str) -> Capability:
+    def get(self, name: str) -> Interface:
         """按名字取声明。
 
         Args:
@@ -101,11 +101,11 @@ class CapabilityRegistry:
     def __len__(self) -> int:
         return len(self._ordered)
 
-    def __iter__(self) -> Iterator[Capability]:
+    def __iter__(self) -> Iterator[Interface]:
         return iter(self._ordered)
 
 
-class CapabilityRuntime:
+class InterfaceRuntime:
     """模块内唯一运行时入口。
 
     Args:
@@ -121,7 +121,7 @@ class CapabilityRuntime:
     def __init__(
         self,
         *,
-        registry: CapabilityRegistry,
+        registry: InterfaceRegistry,
         handlers: Mapping[str, Handler],
         translator: Translator,
         error_factory: ErrorFactory = ApiError,
@@ -159,7 +159,7 @@ class CapabilityRuntime:
 
     # ── 三段强制 ──
 
-    def _require(self, name: str) -> Capability:
+    def _require(self, name: str) -> Interface:
         """查表；未知能力是代码缺陷，仍以统一异常族暴露。"""
         try:
             return self._registry.get(name)
@@ -168,7 +168,7 @@ class CapabilityRuntime:
                 Problem.make(ProblemCode.INTERNAL, capability="invoke", detail=str(exc)),
             ) from exc
 
-    def _validate_request(self, capability: Capability, payload: Mapping[str, Any]) -> Any:
+    def _validate_request(self, capability: Interface, payload: Mapping[str, Any]) -> Any:
         """按声明的请求信封校验入参。"""
         try:
             return capability.request.model_validate(dict(payload))
@@ -182,7 +182,7 @@ class CapabilityRuntime:
                 ),
             ) from exc
 
-    def _validate_response(self, capability: Capability, result: Any) -> dict[str, Any]:
+    def _validate_response(self, capability: Interface, result: Any) -> dict[str, Any]:
         """校出参并强制 JSON 可往返。
 
         这是「只说 DTO」这条铁律唯一的强制点：只有这里把一切看成 dict。

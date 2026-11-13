@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.core import AgentSpecView
 
-from ghrah.core.api.capabilities import ManifestsResolveRequest
 from ghrah.core.api.errors import CoreApiError
+from ghrah.core.api.interfaces import ManifestsResolveRequest
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_manifest_handlers"]

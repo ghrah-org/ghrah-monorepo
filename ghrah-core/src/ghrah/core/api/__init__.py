@@ -8,9 +8,9 @@
 ```
 adapters → 无内部依赖（只认存储与 DTO）
 errors   → adapters, protocol.problem
-capabilities → protocol.capability, protocol.views
-runtime  → capabilities, errors, protocol.capability
-handlers → adapters, capabilities, errors
+interfaces → protocol.interface, protocol.views
+runtime  → interfaces, errors, protocol.interface
+handlers → adapters, interfaces, errors
 facade   → runtime, protocol.ports
 wiring   → 全部
 ```
@@ -20,10 +20,10 @@ wiring   → 全部
 
 from __future__ import annotations
 
-from ghrah.core.api.capabilities import CORE_CAPABILITIES
 from ghrah.core.api.errors import CoreApiError, translate
 from ghrah.core.api.facade import CoreFacade
 from ghrah.core.api.handlers import build_handlers
+from ghrah.core.api.interfaces import CORE_INTERFACES
 from ghrah.core.api.runtime import CoreRuntime, build_runtime
 from ghrah.core.read.chain import (
     ChainDatabaseUnavailableError,
@@ -31,7 +31,7 @@ from ghrah.core.read.chain import (
 )
 
 __all__ = [
-    "CORE_CAPABILITIES",
+    "CORE_INTERFACES",
     "ChainDatabaseUnavailableError",
     "ChainReadStore",
     "CoreApiError",

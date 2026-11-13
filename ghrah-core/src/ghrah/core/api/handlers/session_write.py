@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import AckView, BranchIdView, SessionIdView
 
-from ghrah.core.api.capabilities import (
+from ghrah.core.api.errors import CoreApiError, translate
+from ghrah.core.api.interfaces import (
     BranchesActivateRequest,
     BranchesArchiveRequest,
     BranchesCreateRequest,
@@ -25,7 +26,6 @@ from ghrah.core.api.capabilities import (
     SessionsCreateRequest,
     SessionsDeleteRequest,
 )
-from ghrah.core.api.errors import CoreApiError, translate
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_session_write_handlers"]

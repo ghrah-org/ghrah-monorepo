@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """能力处理器的汇总入口。
 
-键必须与 :data:`ghrah.core.api.capabilities.CORE_CAPABILITIES` 完全一致，
+键必须与 :data:`ghrah.core.api.interfaces.CORE_INTERFACES` 完全一致，
 否则 :class:`ghrah.core.api.runtime.CoreRuntime` 在构造时就会失败。
 """
 
 from __future__ import annotations
 
-from ghrah.protocol.capability import Handler
+from ghrah.protocol.interface import Handler
 
 from ghrah.core.api.handlers.abilities import make_ability_handlers
 from ghrah.core.api.handlers.agents import make_agent_handlers
