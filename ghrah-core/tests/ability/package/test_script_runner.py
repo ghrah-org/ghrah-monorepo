@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _helpers import symlink_or_skip
 from ghrah.protocol.ability_tree import GrantAbilityRequest, MemberAxes, SkillReadScope
 
 from ghrah.ability.access import AbilityAccessStore, AccessIdentity
@@ -354,7 +355,7 @@ async def test_script_outside_package_root_is_denied_before_spawn(tmp_path) -> N
     outside = tmp_path / "outside.py"
     outside.write_text(SUCCESS, encoding="utf-8")
     script.unlink()
-    script.symlink_to(outside)
+    symlink_or_skip(script, outside)
     calls: list[Any] = []
     try:
         linked = await _run(db, tmp_path, spawner=_forbid(calls))

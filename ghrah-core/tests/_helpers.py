@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from ghrah.ability.execution.base import ActionOutcome, ActionResult
 from ghrah.ability.execution.execution_services import (
@@ -82,6 +85,18 @@ class ToolScriptedLLM(ScriptedLLM):
         if self._rounds:
             return LLMResponse(content_blocks=list(self._rounds.pop(0)))
         return LLMResponse(content_blocks=[TextBlock(text=self._final_text)])
+
+
+def symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    """建符号链接；平台不支持时跳过当前用例。
+
+    Windows 未开启开发者模式或非管理员会抛 ``WinError 1314``，此时该类用例
+    无法验证「链接逃逸被拒」的语义，跳过而不是失败。
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - 平台相关
+        pytest.skip(f"当前平台不支持创建符号链接：{exc}")
 
 
 def make_node(**overrides) -> ContextNode:
