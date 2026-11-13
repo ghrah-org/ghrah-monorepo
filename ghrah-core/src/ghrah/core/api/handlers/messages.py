@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.core import BroadcastRepliesView, MessageReplyView
