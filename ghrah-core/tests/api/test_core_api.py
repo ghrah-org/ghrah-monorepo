@@ -31,8 +31,8 @@ from ghrah.core.api import (
 )
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
-from ghrah.core.runtime.registry import RuntimeRegistry
 from ghrah.core.unit import CoreUnitConfig
+from ghrah.core.units.registry import RuntimeRegistry
 from ghrah.core.wiring import build_core_port
 
 AGENT_ID = "agt-1"

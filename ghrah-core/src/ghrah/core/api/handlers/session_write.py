@@ -26,7 +26,7 @@ from ghrah.core.api.capabilities import (
     SessionsDeleteRequest,
 )
 from ghrah.core.api.errors import CoreApiError, translate
-from ghrah.core.runtime.registry import RuntimeRegistry
+from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_session_write_handlers"]
 

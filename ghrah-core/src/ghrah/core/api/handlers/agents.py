@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """``agents`` 分组的处理器。
 
-所有操作都经 :class:`ghrah.core.runtime.RuntimeRegistry` 转交给项目单元——
+所有操作都经 :class:`ghrah.core.units.RuntimeRegistry` 转交给项目单元——
 Agent 的真实生命周期由 CoreUnit 承载，本层只做协议转换与错误映射。
 """
 
@@ -34,7 +34,7 @@ from ghrah.core.api.capabilities import (
 )
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
-from ghrah.core.runtime.registry import RuntimeRegistry
+from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_agent_handlers"]
 

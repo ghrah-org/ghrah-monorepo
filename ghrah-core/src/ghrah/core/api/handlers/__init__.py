@@ -24,7 +24,7 @@ from ghrah.core.api.handlers.sessions import make_session_handlers
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.chain import ChainReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
-from ghrah.core.runtime.registry import RuntimeRegistry
+from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["build_handlers"]
 

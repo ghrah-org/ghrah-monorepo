@@ -24,7 +24,8 @@ from ghrah.core.api.runtime import CoreRuntime
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.chain import ChainReadStore, DbPathResolver
 from ghrah.core.read.mailbox import MailboxReadStore
-from ghrah.core.runtime.registry import (
+from ghrah.core.unit import CoreUnitConfig
+from ghrah.core.units.registry import (
     ConfigFactory,
     ConfigHook,
     ManagerFactory,
@@ -32,7 +33,6 @@ from ghrah.core.runtime.registry import (
     RuntimeRegistry,
     UnitFactory,
 )
-from ghrah.core.unit import CoreUnitConfig
 
 __all__ = ["build_core_port"]
 

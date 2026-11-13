@@ -17,7 +17,7 @@ from ghrah.protocol.views.core import AgentSpecView
 
 from ghrah.core.api.capabilities import ManifestsResolveRequest
 from ghrah.core.api.errors import CoreApiError
-from ghrah.core.runtime.registry import RuntimeRegistry
+from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_manifest_handlers"]
 

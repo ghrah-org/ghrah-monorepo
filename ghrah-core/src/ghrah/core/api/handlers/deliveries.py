@@ -16,7 +16,7 @@ from ghrah.core.api.capabilities import (
     RoomsRecoverRequest,
 )
 from ghrah.core.read.mailbox import MailboxReadStore
-from ghrah.core.runtime.registry import RuntimeRegistry
+from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_delivery_handlers"]
 

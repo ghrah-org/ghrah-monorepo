@@ -25,8 +25,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ghrah.core.runtime.context import UnitContext
 from ghrah.core.unit import CoreUnitConfig, create_core_unit
+from ghrah.core.units.context import UnitContext
 
 __all__ = ["RuntimeHandle", "RuntimeRegistry"]
 
