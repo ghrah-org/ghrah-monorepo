@@ -40,6 +40,11 @@ README 的一句话概括最准确：
 
 > 认知（Core）、效果（Subject）、观察（Observer）三层分离的 agent 基础设施。
 
+**术语约定**：模块之间经端口互相调用的操作，本项目统一称**接口**（interface），
+代码落点为 `ghrah.protocol.interface`、`ghrah.core.api.interfaces`、`CORE_INTERFACES`；
+历史上曾称"能力 / 能力清单"，现已统一改名，旧称一律按"接口"理解。
+`ability`（能力包）是另一概念——被授权、被调用的实现单元，与"接口"不可混用。
+
 ### 1.2 三大支柱与三层分离
 
 | 层 | 包 | 一句话职责 | 是否内嵌 Core |

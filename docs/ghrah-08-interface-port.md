@@ -1,4 +1,4 @@
-# 模块能力端口设计说明
+# 模块接口与端口设计说明
 
 | 文档状态 | 发布 | 保密级别 | 内部 |
 | --- | --- | --- | --- |
@@ -12,7 +12,8 @@
 | 序号 | 变更日期 | 版本 | 变更位置 | 变更原因 | 修订人 | 审核人 | 批准人 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 2026-11-12 | 1.0 | 全文 | 建立初稿 | — | — | — |
-| 2 | 2026-11-13 | 2.0 | 全文 | 内容修订 | — | — | — |
+| 2 | 2026-11-13 | 2.0 | 全文 | 内容修订 |
+| 3 | 2026-11-13 | 2.1 | §1.4 | 端口层「能力」统一改称「接口」，新增术语约定 | — | — | — |
 
 校准基线：`ghrah-monorepo` @ `08983d7`（2026-11-13），工作区干净。
 
@@ -20,11 +21,11 @@
 
 ## 1.1 编写目的
 
-定义模块之间唯一的通信形态——**能力端口**——并给出 ghrah-core 的完整落地实例，使新增或修改一条跨模块能力时无需再读实现代码即可判断改哪里、怎么改；为模块边界评审提供可判定的判据（而不是靠约定）；把"跨模块只能走端口"从口头约定变成可执行的强制点。
+定义模块之间唯一的通信形态——**接口端口**——并给出 ghrah-core 的完整落地实例，使新增或修改一条跨模块接口时无需再读实现代码即可判断改哪里、怎么改；为模块边界评审提供可判定的判据（而不是靠约定）；把"跨模块只能走端口"从口头约定变成可执行的强制点。
 
 ## 1.2 文档范围
 
-本文覆盖：端口模型的三个抽象、代码布局与依赖方向、Core 的 50 条接口清单、`CorePort` 的方法签名、项目作用域模型、装配与生命周期、错误模型与翻译表、三条强制点、边界闸门的现状、Subject 侧的接入方式、新增能力的步骤、已知偏差。
+本文覆盖：端口模型的三个抽象、代码布局与依赖方向、Core 的 50 条接口清单、`CorePort` 的方法签名、项目作用域模型、装配与生命周期、错误模型与翻译表、三条强制点、边界闸门的现状、Subject 侧的接入方式、新增接口的步骤、已知偏差。
 
 本文**不替代**以下内容，各自有独立归属：能力的业务语义（一个能力内部做了什么）由能力系统与驱动循环的设计文档负责；存储表结构由持久层代码负责；Agent 运行时控制面（`ghrah.core.runtime` 的 `/v1/status`、`/v1/commands` 等路径式接口，用于进程内桥接与观测，与模块端口是两件事）不在本文范围内；`ghrah-kernel` 的信封式调用协议也不在本文范围内。
 
@@ -32,7 +33,7 @@
 
 | 角色 | 从本文取什么 |
 | --- | --- |
-| 要给模块加一条对外能力的人 | §4 总表确认归属、§5 签名写法、§12 步骤 |
+| 要给模块加一条对外接口的人 | §4 总表确认归属、§5 签名写法、§12 步骤 |
 | 要改跨模块调用的人 | §6 作用域、§7 装配、§11 Subject 接入 |
 | 做边界评审的人 | §2 模型、§9 强制点、§10 闸门、§13 偏差 |
 | 排查"这条链路断在哪"的人 | §8 错误码、§11 接入、§13 偏差 |
@@ -42,14 +43,21 @@
 | 术语或缩写 | 解释 |
 | --- | --- |
 | 模块 | 拥有自己的状态与权威的独立包，如 `ghrah-core`、`ghrah-subject` |
-| 能力 | 模块愿意让其它模块调用的一个操作，用点分名标识（`nodes.get`） |
-| 端口 | 模块能力的唯一对外集合，是一个 `Protocol`；消费方只认识它 |
-| 收敛点 | 模块内部唯一的能力入口，负责查表、校验、转交、校出参 |
+| 接口 | 模块愿意让其它模块调用的一个操作，用点分名标识（`nodes.get`）。本项目统一用「接口」，不再称「能力」 |
+| 端口 | 模块接口的唯一对外集合，是一个 `Protocol`；消费方只认识它 |
+| 收敛点 | 模块内部唯一的接口入口，负责查表、校验、转交、校出参 |
 | 门面 | 端口的实现对象，每应用实例一个，由装配根创建 |
-| 作用域 | 一条能力所属的项目边界；由门面的 `project(project_id)` 绑定 |
-| 出参信封 | 能力层统一返回的 DTO（如 `NodeIdView`），端口层拆壳成裸值 |
-| 契约包 | `ghrah-protocol`，存放端口协议、视图 DTO、错误码、能力骨架 |
+| 作用域 | 一条接口所属的项目边界；由门面的 `project(project_id)` 绑定 |
+| 出参信封 | 接口层统一返回的 DTO（如 `NodeIdView`），端口层拆壳成裸值 |
+| 契约包 | `ghrah-protocol`，存放端口协议、视图 DTO、错误码、接口骨架 |
 | 装配根 | 唯一允许同时认识多个模块的位置：创建门面、注入、关闭 |
+| 能力包（ability） | **与接口是两件事**：被授权、被调用的实现单元（`ghrah.ability.*`）。接口是端口暴露的调用面，能力包是实现体 |
+
+> **术语约定（必读）**：本项目端口层原先叫「能力 / 能力清单」，自 2026-11 起**统一称为「接口 / 接口清单」**，
+> 代码落点为 `ghrah.protocol.interface`、`ghrah.core.api.interfaces`、`CORE_INTERFACES`。
+> 「接口」只指端口暴露的调用面；`ability`（能力包、Skill 包）是另一个概念，指被授权调用的实现单元，
+> 两者不可混用——历史文档里出现的「端口能力」一律按「接口」理解。
+> 错误响应中的 `Problem.capability` 字段名为兼容保留，其值就是接口名。
 
 ## 1.5 参考资料
 
@@ -73,11 +81,11 @@
 | 分页 | 返回 `Page[T]` | 保留 |
 | 长动作 | 返回 `Operation` | 保留 |
 
-保留下来的不是传输细节，而是**资源命名纪律**：每个能力必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 50 条能力会退化成无法猜的 RPC 集合。
+保留下来的不是传输细节，而是**资源命名纪律**：每个接口必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 50 条接口会退化成无法猜的 RPC 集合。
 
 ## 2.2 三个抽象
 
-契约包用三个类型定义"一条能力"，与具体模块无关：
+契约包用三个类型定义"一条接口"，与具体模块无关：
 
 | 类型 | 职责 | 位置 |
 | --- | --- | --- |
@@ -115,7 +123,7 @@
 | `protocol/problem.py` | `Problem` + `ProblemCode`（13 个码，无状态码、无 type URI） |
 | `protocol/errors.py` | `ApiError` 基类：消费方 `except` 的公共父类 |
 | `protocol/corpus.py` | 契约回归录制 + `check_json_serializable` |
-| `protocol/events.py` | 事件信封（与能力端口分离的独立通道） |
+| `protocol/events.py` | 事件信封（与接口端口分离的独立通道） |
 
 ## 3.2 Core 侧（`ghrah-core`）
 
@@ -138,7 +146,7 @@ wiring       → 全部
 | `core/read/ability.py` | 能力关系库读面：`AbilityReadStore`、`AbilityConflictError`、`AbilityUnavailableError` |
 | `core/read/ability_catalog.py` | 能力包目录读面：`CatalogError`（带 `not_found`/`invalid_request`/`unavailable` 三值 code） |
 | `core/read/ability_admin.py` | 能力管理总览的装配读面 |
-| `core/api/interfaces.py` | `CORE_INTERFACES`：50 条能力的声明（名字 + 请求信封 + 出参） |
+| `core/api/interfaces.py` | `CORE_INTERFACES`：50 条接口的声明（名字 + 请求信封 + 出参） |
 | `core/api/handlers/` | 10 个处理器模块：`nodes`、`sessions`、`session_write`、`branches`、`mailbox`、`deliveries`、`manifests`、`abilities`、`agents`；`__init__.py` 的 `build_handlers(chain, mailbox, abilities, registry)` 汇总 |
 | `core/api/runtime.py` | `CoreRuntime(InterfaceRuntime)` + `build_runtime`：绑定 Core 的清单、翻译表、异常工厂 |
 | `core/api/errors.py` | `CoreApiError` + `translate()` 翻译表 |
@@ -151,7 +159,7 @@ wiring       → 全部
 
 如果 `CorePort` 定义在 `ghrah-core` 里，Subject 就必须 `from ghrah.core... import CorePort`——边界当场失效。所以端口协议、视图、错误基类、注入键只能住在第三方包；模块只提供实现。这条是**结构约束，不是风格偏好**。
 
-# 4 Core 能力面（50 项）
+# 4 Core 接口面（50 项）
 
 口径：以下 50 条是 `CORE_INTERFACES` 的登记项数（`len(CORE_INTERFACES) == 50`），分组数与端口上的属性数一致，均为 10。
 
@@ -238,9 +246,9 @@ wiring       → 全部
 
 ## 4.2 分组与请求信封的对应
 
-请求信封是按能力定义的 pydantic 模型，命名规律是 `<分组><动作>Request`（如 `SessionsCatalogRequest`；`NodeGetRequest` 等少数例外不带分组前缀）。除 2 条全局能力外，所有信封都带 `project_id: str`；不带的正是 `abilities.packages` 与 `abilities.package_detail`（这两条确实无项目维度）。
+请求信封是按接口定义的 pydantic 模型，命名规律是 `<分组><动作>Request`（如 `SessionsCatalogRequest`；`NodeGetRequest` 等少数例外不带分组前缀）。除 2 条全局能力外，所有信封都带 `project_id: str`；不带的正是 `abilities.packages` 与 `abilities.package_detail`（这两条确实无项目维度）。
 
-出参一律是 `views/` 里的 DTO，或 `Page[T]`；需要返回裸 id/计数的能力，能力层仍返回信封 DTO，由端口层拆壳（§5.3）。
+出参一律是 `views/` 里的 DTO，或 `Page[T]`；需要返回裸 id/计数的接口，能力层仍返回信封 DTO，由端口层拆壳（§5.3）。
 
 # 5 CorePort 的方法签名
 
@@ -325,11 +333,11 @@ class MailboxOperations(Protocol):
 - 出参只用 DTO、`Page[T]`、`Operation`、裸 id、`int`、`None`；
 - 每个方法一行 docstring 写明"什么时候抛什么码"。
 
-## 5.3 拆壳：能力层统一，端口层拆分
+## 5.3 拆壳：接口层统一，端口层拆分
 
-能力层的出参必须是 DTO（`invoke` 第 4 步强制），但端口层希望返回裸值。两层的桥是"出参信封"：
+接口层的出参必须是 DTO（`invoke` 第 4 步强制），但端口层希望返回裸值。两层的桥是"出参信封"：
 
-| 端口返回 | 能力层信封 | 拆壳位置 |
+| 端口返回 | 接口层信封 | 拆壳位置 |
 | --- | --- | --- |
 | `NodeId` | `NodeIdView.node_id` | `ghrah-core/src/ghrah/core/api/facade.py:270` |
 | `SessionId` | `SessionIdView.session_id` | 同文件 `:291` |
@@ -379,7 +387,7 @@ async def _call(self, capability: str, **kwargs: Any) -> dict[str, Any]:
 - **越权参数化不可能**：不存在"路径说 A、主体说 B"的分歧，只有绑定视图那一个来源；
 - **错误可读**：忘了 `project()` 得到的是 `FAILED_PRECONDITION` 且 detail 直接告诉怎么修。
 
-## 6.3 全局能力走 `_call_global`
+## 6.3 全局接口走 `_call_global`
 
 `abilities.packages`、`abilities.package_detail` 没有项目维度，走 `_call_global(capability, **kwargs)`，不注入 `project_id`，也不要求先 `project()`（`ghrah-core/src/ghrah/core/api/facade.py:224`）。判断标准是请求信封里**没有** `project_id` 字段——这两处的真相以 §4 总表的入参列为准。
 
@@ -565,12 +573,12 @@ ctx.provide(CORE_CLUSTER_REGISTRY.name, self._transport)
 
 命令到端口的转换在 `PortClusterTransport.dispatch(command, payload)`（`port_transport.py:305`）内完成；历史上 `ctx.serial` 的"返回 `None` 表示不归我管、传给下一个处理器"这条语义在端口侧没有等价物，多项目场景必须由调用方按 id 路由。
 
-# 12 新增一条能力的步骤
+# 12 新增一条接口的步骤
 
 1. **定分组与动作**：分组名要已是 `CorePort` 上的属性（新增分组要同时改 `CorePort`、`ports/__init__.py` 的再导出、门面的属性），动作名用动词。
 2. **定义请求信封**：在 `core/api/interfaces.py` 里加 `<分组><动作>Request`，除全局能力外必须含 `project_id: str`。
 3. **定出参**：返回 DTO 时直接用 `views/` 里的模型；返回裸 id/计数时用 `views/common.py` 的信封，端口层再拆壳。
-4. **登记能力**：往 `CORE_INTERFACES` 加 `Capability(name=..., request=..., response=...)`；顺序即枚举顺序。
+4. **登记接口**：往 `CORE_INTERFACES` 加 `Capability(name=..., request=..., response=...)`；顺序即枚举顺序。
 5. **写处理器**：在 `core/api/handlers/` 对应模块里加 `async def ...(request) -> ...`；处理器只认请求信封，不认作用域（已被注入）。
 6. **接进 `build_handlers`**：漏接会在启动时被"清单与处理器集合不一致"拦下，消息里给出差集。
 7. **加端口方法**：分组协议加签名 + 门面分组类里 `raw = await self._facade._call(name, **kwargs)` 然后 `Model.model_validate(raw)`（或拆壳）。
@@ -578,7 +586,7 @@ ctx.provide(CORE_CLUSTER_REGISTRY.name, self._transport)
 9. **录契约样本**：在 corpus 里录一条成功 + 一条失败，`check_json_serializable` 会同时校验形状。
 10. **更新本表**：§4 总表加一行；若是新分组，§5.2 也要加。
 
-判据：**新增能力不应该修改 `ghrah-protocol` 里除 `ports/`、`views/` 之外的任何文件**；如果动了 `interface.py`，说明骨架不成立，应先改骨架设计。
+判据：**新增接口不应该修改 `ghrah-protocol` 里除 `ports/`、`views/` 之外的任何文件**；如果动了 `interface.py`，说明骨架不成立，应先改骨架设计。
 
 # 13 已知偏差
 
