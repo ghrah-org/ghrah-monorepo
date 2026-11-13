@@ -31,7 +31,10 @@ initDarkMode();
 initFontScale();
 initConversationWidth();
 
-const app = createApp(App);
+const root = import.meta.env.VITE_GHRAH_RUNTIME_URL
+  ? Vue.defineAsyncComponent(() => import("./pages/runtime-workspace.vue"))
+  : App;
+const app = createApp(root);
 app.use(createPinia());
 app.use(i18n);
 app.mount("#app");

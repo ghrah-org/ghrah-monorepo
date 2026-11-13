@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+import { runtimeEn } from "./runtime";
+
 export default {
+  runtime: runtimeEn,
   schemeAbilities: {
     content: "Granted Skill content",
     version: "Version: {version}",

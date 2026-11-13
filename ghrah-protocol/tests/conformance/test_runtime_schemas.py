@@ -100,6 +100,12 @@ def test_openapi_only_lists_implemented_routes_and_marks_response_readonly():
         "/v1/deliveries/{delivery_id}",
         "/v1/agents/{agent_id}/timeline",
         "/v1/nodes/{node_id}",
+        "/v1/abilities",
+        "/v1/ability-instances",
+        "/v1/agents/{agent_id}/abilities",
+        "/v1/agents/{agent_id}/abilities/changes",
+        "/v1/agents/{agent_id}/abilities/grants/{alias}",
+        "/v1/agents/{agent_id}/abilities/tools/{tool_name}",
     }
     schemas = document["components"]["schemas"]
     assert schemas["RuntimeDeliveryView"]["readOnly"]

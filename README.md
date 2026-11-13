@@ -24,6 +24,9 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 
 模型连接通过 agentconf 0.4 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
 
+Runtime `/v1` 管理契约、Subject 验证宿主与既有 Observer 链路的当前边界见
+[Runtime 管理契约与验证链路交付说明](ghrah-subject/docs/runtime-management-contract.md)。
+
 ## 快速开始
 
 推荐借助九夏的工具链完成安装与部署，需要先安装uv:

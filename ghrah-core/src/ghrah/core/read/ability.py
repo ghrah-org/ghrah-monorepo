@@ -372,7 +372,9 @@ class AbilityReadStore:
             after_seq=after_seq,
             limit=limit,
         )
-        items = [AbilityChangeView.model_validate(row) for row in rows]
+        from ghrah.core.read.ability_admin import build_change_view
+
+        items = [build_change_view(row) for row in rows]
         return AbilityChangesPage(
             changes=items,
             next_after_seq=items[-1].seq if items else after_seq,

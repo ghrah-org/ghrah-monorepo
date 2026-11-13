@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMockHttpServer, type MockHttpServer } from "./http.js";
+import { MockState } from "./state.js";
+import { AgentSnapshotSchema, CommandType, EventType } from "@ghrah/protocol";
 
 const servers: MockHttpServer[] = [];
 
@@ -21,6 +23,160 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 describe("MockHttpServer", () => {
+  it("uses WS identities and runtime, emits changes, and restores revoked grants", async () => {
+    const state = new MockState();
+    const projectResult = state.handleCommand(CommandType.PROJECT_CREATE, { name: "http-shared" });
+    const projectId = (projectResult.data as { project: { project_id: string } }).project
+      .project_id;
+    const created = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+      project_id: projectId,
+      name: "worker",
+      manifest_ref: "mock.agent",
+      start: true,
+    });
+    const snapshot = AgentSnapshotSchema.parse(created.data);
+    const events: string[] = [];
+    state.emit = (type) => events.push(type);
+    const server = createMockHttpServer({ port: 0, state });
+    servers.push(server);
+    await server.start();
+    const base = `http://127.0.0.1:${server.port}`;
+    const agentBase = `${base}/api/v1/projects/${projectId}/agents/${snapshot.identity.agent_id}`;
+    expect((await fetch(`${base}/health`)).status).toBe(200);
+    expect(
+      (await fetch(`${base}/api/v1/projects/${projectId}/agents/unknown/ability-admin`)).status,
+    ).toBe(404);
+    const admin = await getJson<{ lifecycle: { state: string }; run_id: string }>(
+      `${agentBase}/ability-admin`,
+    );
+    expect(admin.lifecycle.state).toBe("running");
+    expect(admin.run_id).toBe(snapshot.runtime.incarnation_id);
+    expect(
+      (
+        await fetch(`${agentBase}/ability-tree/grants/ghrah-fs?expected_revision=1`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await fetch(`${agentBase}/ability-tree/grants/ghrah-fs`, {
+          method: "PUT",
+          body: JSON.stringify({ alias: "ghrah-fs", members: ["read_file"], expected_revision: 2 }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(events.filter((type) => type === EventType.ABILITY_TREE_CHANGED)).toHaveLength(2);
+    const restored = await getJson<{ abilities: unknown[] }>(`${agentBase}/ability-tree`);
+    expect(restored.abilities).toHaveLength(1);
+    const changes = await getJson<{ changes: Array<{ reason: string }> }>(
+      `${agentBase}/ability-changes`,
+    );
+    expect(changes.changes.map((change) => change.reason)).toEqual(["revoke", "grant"]);
+    const patchedResponse = await fetch(agentBase, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: snapshot.specification_revision,
+        system_prompt: "新提示词",
+      }),
+    });
+    expect(patchedResponse.status).toBe(200);
+    const patched = (await patchedResponse.json()) as {
+      effective: string;
+      specification: { project_version: number; prompt: { size_bytes: number } };
+    };
+    expect(patched.effective).toBe("next_start");
+    expect(patched.specification.prompt.size_bytes).toBe(12);
+    expect([...state.agents.values()][0].config.system_prompt).toBe("");
+    expect(
+      (
+        await fetch(agentBase, {
+          method: "PATCH",
+          body: JSON.stringify({
+            expected_revision: snapshot.specification_revision,
+            system_prompt: "stale",
+          }),
+        })
+      ).status,
+    ).toBe(409);
+    const stoppedResponse = await fetch(`${agentBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: patched.specification.project_version,
+        state: "stopped",
+      }),
+    });
+    expect(stoppedResponse.status).toBe(200);
+    const stopped = (await stoppedResponse.json()) as {
+      specification: { project_version: number };
+      runtime: { availability: string };
+    };
+    expect(stopped.runtime.availability).toBe("offline");
+    const restartedResponse = await fetch(`${agentBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: stopped.specification.project_version,
+        state: "running",
+      }),
+    });
+    expect(restartedResponse.status).toBe(200);
+    const restarted = (await restartedResponse.json()) as {
+      specification: { project_version: number };
+      ability: { requires_respawn: boolean };
+      runtime: { incarnation_id: string };
+    };
+    expect(restarted.runtime.incarnation_id).not.toBe(snapshot.runtime.incarnation_id);
+    expect(restarted.ability.requires_respawn).toBe(false);
+    expect([...state.agents.values()][0].config.system_prompt).toBe("新提示词");
+    const draftResponse = await fetch(`${base}/api/v1/projects/${projectId}/agents`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_revision: restarted.specification.project_version,
+        name: "draft",
+        endpoint_name: "mock-model",
+      }),
+    });
+    expect(draftResponse.status).toBe(201);
+    const draft = (await draftResponse.json()) as {
+      specification: { agent_id: string; project_version: number };
+    };
+    const draftBase = `${base}/api/v1/projects/${projectId}/agents/${draft.specification.agent_id}`;
+    expect(draftResponse.headers.get("location")).toBe(new URL(draftBase).pathname);
+    const list = await getJson<{ agents: Array<{ specification: Record<string, unknown> }> }>(
+      `${base}/api/v1/projects/${projectId}/agents`,
+    );
+    expect(list.agents).toHaveLength(2);
+    expect(list.agents[0].specification).not.toHaveProperty("system_prompt");
+    const draftStart = await fetch(`${draftBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: draft.specification.project_version,
+        state: "running",
+      }),
+    });
+    expect(draftStart.status).toBe(409);
+    expect(((await draftStart.json()) as { error: { code: string } }).error.code).toBe(
+      "agent_manifest_required",
+    );
+    expect(
+      (
+        await fetch(`${draftBase}?expected_revision=${draft.specification.project_version}`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await fetch(draftBase)).status).toBe(404);
+    state.dispose();
+  });
+
+  it("rejects startup when the HTTP port is occupied", async () => {
+    const first = createMockHttpServer({ port: 0, host: "127.0.0.1" });
+    servers.push(first);
+    await first.start();
+    const second = createMockHttpServer({ port: first.port, host: "127.0.0.1" });
+    servers.push(second);
+    await expect(second.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
+  });
   it("serves status, tree and admin projections", async () => {
     const base = await start();
     const status = await getJson<{ ability_source?: string; features?: { tree?: boolean } }>(

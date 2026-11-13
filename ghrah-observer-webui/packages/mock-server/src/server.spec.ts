@@ -97,6 +97,21 @@ afterEach(async () => {
 });
 
 describe("mock-server 协议层", () => {
+  it("unsubscribe distinguishes names with the same concatenation", async () => {
+    const client = await makeClient();
+    try {
+      await request(client, CommandType.SUBSCRIBE, { agent_names: ["ab", "c"] });
+      await request(client, CommandType.SUBSCRIBE, { agent_names: ["a", "bc"] });
+      await request(client, CommandType.UNSUBSCRIBE, { agent_names: ["ab", "c"] });
+      const events = collect(client, EventType.AGENT_SPAWNED);
+      server.broadcastEvent(EventType.AGENT_SPAWNED, { name: "ab" });
+      server.broadcastEvent(EventType.AGENT_SPAWNED, { name: "a" });
+      await request(client, CommandType.HEALTH_CHECK, {});
+      expect(events.map((event) => event.payload.name)).toEqual(["a"]);
+    } finally {
+      await client.disconnect();
+    }
+  });
   it("COMMAND_RESULT 回执：request_id 匹配 + success/data", async () => {
     const client = await makeClient();
     try {

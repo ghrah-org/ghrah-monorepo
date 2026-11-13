@@ -122,3 +122,4 @@ export { useTasksStore } from "./stores/tasks.js";
 export { getVisibleNodes } from "./visible-nodes.js";
 
 export { AgentEntity } from "./agent-entity.js";
+export * from "./runtime-client.js";

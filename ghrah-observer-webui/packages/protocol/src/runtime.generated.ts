@@ -141,3 +141,38 @@ export const RuntimeAgentsPageSchema = z.object({"items":z.array(RuntimeAgentSum
 export type RuntimeAgentsPage = z.infer<typeof RuntimeAgentsPageSchema>;
 export const RuntimeStateTransitionResultSchema = z.object({"agent":RuntimeAgentResourceSchema,"recovered":z.union([z.enum(["restored", "initialized"]),z.null()])}).strip().readonly();
 export type RuntimeStateTransitionResult = z.infer<typeof RuntimeStateTransitionResultSchema>;
+export const RuntimeAgentPatchSchema = z.object({"config":RuntimeAssemblyInputSchema}).strict();
+export type RuntimeAgentPatch = z.infer<typeof RuntimeAgentPatchSchema>;
+const MemberAxesSchema = z.object({"member":z.string().regex(new RegExp("^(operations/[a-z][a-z0-9_-]{0,63}|skill/[a-z][a-z0-9_-]{0,63}(/(assets|references|scripts)/[a-z][a-z0-9_-]{0,63})?)$")),"visible":z.boolean().optional(),"available":z.boolean().optional()}).strict();
+
+const AbilityGrantViewSchema = z.object({"alias":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"instance_id":z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")),"instance_revision":z.number().finite().int().min(0),"version_digest":z.string(),"definition_digest":z.string(),"members":z.array(z.string()).optional(),"content":z.array(z.string()).optional(),"roots":z.array(z.string()).optional(),"axes":z.array(MemberAxesSchema).optional(),"revision":z.number().finite().int().min(0),"source":z.enum(["admin", "deployment", "agent-default", "migration"])}).strict();
+
+const AbilityBoundToolViewSchema = z.object({"name":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"alias":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"member":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"grant_revision":z.number().finite().int().min(0),"revision":z.number().finite().int().min(0)}).strict();
+
+const AbilitySurfaceEntryViewSchema = z.object({"tool_name":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"member":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"package":z.string(),"static":z.boolean().optional(),"available":z.boolean().optional()}).strict();
+
+const AbilityPendingRespawnViewSchema = z.object({"added":z.array(z.string()).optional(),"removed":z.array(z.string()).optional()}).strict();
+
+const AbilitySurfaceViewSchema = z.object({"mode":z.enum(["auto", "static", "progressive"]).optional(),"static":z.array(z.string()).optional(),"effective":z.array(AbilitySurfaceEntryViewSchema).optional(),"current_runtime":z.union([z.array(z.string()),z.null()]).optional(),"pending_respawn":AbilityPendingRespawnViewSchema.optional()}).strict();
+
+export const RuntimeAbilitiesViewSchema = z.object({"agent_id":RuntimeAgentIdSchema,"revision":z.number().finite().int().min(0),"state":z.enum(["unassembled", "running", "stopped"]),"run_id":z.union([z.string(),z.null()]),"requires_respawn":z.boolean(),"grants":z.array(AbilityGrantViewSchema),"bound_tools":z.array(AbilityBoundToolViewSchema),"surface":AbilitySurfaceViewSchema}).strip().readonly();
+export type RuntimeAbilitiesView = z.infer<typeof RuntimeAbilitiesViewSchema>;
+const AbilityPackageVersionRowSchema = z.object({"namespace":z.string(),"name":z.union([z.string(),z.null()]).optional(),"full_name":z.string(),"title":z.union([z.string(),z.null()]).optional(),"origin":z.enum(["builtin", "installed"]),"version":z.string(),"member_count":z.union([z.number().finite().int().min(0),z.null()]).optional(),"lock_state":z.string(),"problem":z.union([z.string(),z.null()]).optional(),"shadowed_builtin":z.boolean().optional()}).strict();
+
+export const RuntimeAbilityCatalogSchema = z.object({"packages":z.array(AbilityPackageVersionRowSchema)}).strip().readonly();
+export type RuntimeAbilityCatalog = z.infer<typeof RuntimeAbilityCatalogSchema>;
+const AbilityChangeViewSchema = z.object({"seq":z.number().finite().int().min(0),"agent":z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")),"revision":z.number().finite().int().min(0),"reason":z.string(),"actor":z.record(z.string(),z.unknown()).optional(),"before_revision":z.number().finite().int().min(0),"version_digest":z.union([z.string(),z.null()]).optional(),"source":z.string(),"policy":z.union([z.string(),z.null()]).optional()}).strict();
+
+export const RuntimeAbilityChangesSchema = z.object({"changes":z.array(AbilityChangeViewSchema),"next_after_seq":z.number().finite().int().min(0),"has_more":z.boolean()}).strip().readonly();
+export type RuntimeAbilityChanges = z.infer<typeof RuntimeAbilityChangesSchema>;
+export const RuntimeAbilityInstanceSchema = z.object({"instance_id":z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")),"package":z.string(),"version_digest":z.string(),"revision":z.number().finite().int().min(1),"operations":z.array(z.string()),"skills":z.array(z.string())}).strip().readonly();
+export type RuntimeAbilityInstance = z.infer<typeof RuntimeAbilityInstanceSchema>;
+export const RuntimeAbilityInstanceCreateSchema = z.object({"package":z.string().min(1),"instance_id":z.union([z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")),z.null()]).optional(),"allowed_roots":z.array(z.string()).optional()}).strict();
+export type RuntimeAbilityInstanceCreate = z.infer<typeof RuntimeAbilityInstanceCreateSchema>;
+const SkillReadScopeSchema = z.object({"key":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"body":z.boolean().optional(),"assets":z.union([z.array(z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$"))),z.null()]).optional(),"references":z.union([z.array(z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$"))),z.null()]).optional(),"scripts":z.union([z.array(z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$"))),z.null()]).optional()}).strict();
+
+export const RuntimeGrantRequestSchema = z.object({"alias":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"instance_id":z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")),"members":z.array(z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$"))).optional(),"allowed_roots":z.array(z.string()).optional(),"skill":z.union([SkillReadScopeSchema,z.null()]).optional(),"skills":z.array(SkillReadScopeSchema).optional(),"whole_container":z.boolean().optional(),"axes":z.array(MemberAxesSchema).optional()}).strict();
+export type RuntimeGrantRequest = z.infer<typeof RuntimeGrantRequestSchema>;
+export const RuntimeToolRequestSchema = z.object({"alias":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"member":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$")),"tool_name":z.string().regex(new RegExp("^[a-z][a-z0-9_-]{0,63}$"))}).strict();
+export type RuntimeToolRequest = z.infer<typeof RuntimeToolRequestSchema>;
+export const RuntimeAgentCreateExample = {"external_ref": "example:worker", "config": {"model": {"endpoint_name": "your-endpoint", "model_overrides": null}, "prompt": {"system_prompt": "You are a helpful assistant.", "template_ref": null}, "context_policy": {"max_iterations": 10, "communication_timeout": 300.0, "window": null, "overrides": null}, "ability_request": {"surface": {"mode": "auto", "static": [], "max_static": null}, "packages": [{"package": "ghrah.core", "origin": "builtin", "whole_container": false, "operations": [{"key": "conversation", "visible": true, "available": true}, {"key": "session_info", "visible": true, "available": true}], "skills": []}], "mcp_refs": []}, "permission_request": {"auto_approve": [], "require_approval_by_default": true, "safe_extra_commands": [], "safe_extra_sub_commands": null}}, "state": "stopped"} as const;

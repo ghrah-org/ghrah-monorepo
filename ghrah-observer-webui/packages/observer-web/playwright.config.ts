@@ -55,7 +55,7 @@ export default defineConfig({
     },
     {
       // 用生产构建 + preview，保证截图对应真实产物；WS 地址在构建时注入。
-      command: `VITE_GHRAH_SUBJECT_WS_URL=ws://127.0.0.1:${MOCK_PORT}/ws ./node_modules/.bin/vite build --logLevel warn && ./node_modules/.bin/vite preview --port ${APP_PORT} --strictPort --host 127.0.0.1`,
+      command: `node ../../scripts/assemble-plugins.mjs && VITE_GHRAH_SUBJECT_WS_URL=ws://127.0.0.1:${MOCK_PORT}/ws VITE_GHRAH_SUBJECT_HTTP_URL=http://127.0.0.1:4114 ./node_modules/.bin/vite build --logLevel warn && ./node_modules/.bin/vite preview --port ${APP_PORT} --strictPort --host 127.0.0.1`,
       url: `http://127.0.0.1:${APP_PORT}`,
       cwd: import.meta.dirname,
       reuseExistingServer: false,

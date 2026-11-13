@@ -92,9 +92,8 @@ class RuntimeAgentAPI:
         return key
 
     @staticmethod
-    def _etag() -> str:
-        # 本入口尚不提供配置 PATCH，配置 revision 始终为 1；状态变化不改配置 ETag。
-        return '"rev-1"'
+    def _etag(row: Any = None) -> str:
+        return f'"rev-{row["config_revision"] if row is not None else 1}"'
 
     def _supported(self, config: RuntimeAssemblyInput) -> None:
         request = config.ability_request
@@ -219,7 +218,7 @@ class RuntimeAgentAPI:
                 "incarnation_id": self.supervisor.incarnation_id(row["agent_id"])
                 if running
                 else None,
-                "config_revision": 1,
+                "config_revision": row["config_revision"] if "config_revision" in row.keys() else 1,
                 "assembly_digest": row["assembly_digest"],
                 "resolved_digest": digest(
                     {
@@ -240,6 +239,7 @@ class RuntimeAgentAPI:
                 "created_at": row["created_at"],
                 "updated_at": max(
                     row["created_at"],
+                    row["updated_at"] if "updated_at" in row.keys() else "",
                     self._opened_at,
                     self._changed_at.get(row["agent_id"], ""),
                     delivery_time,
@@ -271,11 +271,10 @@ class RuntimeAgentAPI:
                 raise ResourceError(
                     409, "CONFLICT", "Idempotency-Key was used for a different request"
                 )
-            return RuntimeDispatchResponse(
-                201,
-                {**json.loads(previous["headers"]), "Idempotency-Replayed": "true"},
-                json.loads(previous["body"]),
-            )
+            previous_body = json.loads(previous["body"])
+            if await self.store.get(internal_id("agt", previous_body["agent_id"])) is None:
+                raise ResourceError(409, "CONFLICT", "This creation key refers to a deleted Agent")
+            return RuntimeDispatchResponse(201, {**json.loads(previous["headers"]), "Idempotency-Replayed": "true"}, previous_body)
         if await self.store.by_external_ref(request.external_ref) is not None:
             raise ResourceError(409, "CONFLICT", "external_ref already exists in this scope")
         record = {
@@ -301,12 +300,12 @@ class RuntimeAgentAPI:
         transition = RuntimeStateTransition.model_validate(body)
         if "if-match" not in headers:
             raise ResourceError(428, None, "If-Match is required")
-        if headers["if-match"] != self._etag():
+        if headers["if-match"] != self._etag(row):
             raise ResourceError(
                 412,
                 "PRECONDITION_FAILED",
                 "Configuration revision differs",
-                current_etag=self._etag(),
+                current_etag=self._etag(row),
             )
         agent_id = row["agent_id"]
         running = await self._registered(agent_id)
@@ -349,7 +348,8 @@ class RuntimeAgentAPI:
                             for name in ("conversation", "session_info")
                         ],
                     )
-                    materialization = await materializer.materialize(
+                    materialize = materializer.materialize_stored if await self.ability_store.has_admin_changes(self._actor, agent_id) else materializer.materialize
+                    materialization = await materialize(
                         agent=agent_id, resolved=resolved
                     )
                     await self.supervisor.spawn_agent(
@@ -510,7 +510,7 @@ class RuntimeAgentAPI:
                 RuntimeAgentSummary.model_validate(
                     {
                         **view,
-                        "etag": self._etag(),
+                        "etag": self._etag(row),
                         "prompt": {
                             "digest": "sha256:" + hashlib.sha256(prompt).hexdigest(),
                             "size": len(prompt),
@@ -541,11 +541,16 @@ class RuntimeAgentAPI:
         if route == "/v1/agents":
             allowed = "GET, POST"
         elif match:
-            allowed = {None: "GET", "/state": "PUT", "/messages": "POST", "/timeline": "GET"}[
+            allowed = {None: "GET, PATCH, DELETE", "/state": "PUT", "/messages": "POST", "/timeline": "GET"}[
                 match[2]
             ]
         elif delivery_match or node_match:
             allowed = "GET"
+        if "/abilities" in route or route in {"/v1/abilities", "/v1/ability-instances"}:
+            from ghrah.core.runtime_management_api import RuntimeManagementAPI
+
+            async with self._lock:
+                return await RuntimeManagementAPI(self).dispatch(method, route, query, headers or {}, body)
         if allowed is None:
             raise ResourceError(404, "NOT_FOUND", "Resource is not implemented")
         if method not in allowed.split(", "):
@@ -588,6 +593,10 @@ class RuntimeAgentAPI:
             row = await self.store.get(raw_agent_id)
             if row is None:
                 raise ResourceError(404, "NOT_FOUND", "Agent does not exist")
+            if method in {"PATCH", "DELETE"} and match[2] is None:
+                from ghrah.core.runtime_management_api import RuntimeManagementAPI
+
+                return await RuntimeManagementAPI(self).agent_change(method, row, headers, body)
             if match[2] == "/messages":
                 return await self._message(row, body, headers)
             view = (
@@ -595,4 +604,4 @@ class RuntimeAgentAPI:
                 if match[2] == "/state"
                 else await self._view(row)
             )
-            return RuntimeDispatchResponse(200, {**_JSON_HEADERS, "ETag": self._etag()}, view)
+            return RuntimeDispatchResponse(200, {**_JSON_HEADERS, "ETag": self._etag(row)}, view)
