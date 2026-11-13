@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from ghrah.protocol.errors import ApiError
 from ghrah.protocol.ports.keys import CORE_PORT
 from ghrah.protocol.views.core import AgentSpawnSpec, BranchListView
 
@@ -114,6 +115,7 @@ class PortMailbox:
         raw_kind = getattr(kind, "value", kind)
         view = await self._port.project(self.project_id).mailbox.publish_notification(
             sender_id=sender_id,
+            recipient_ids=list(recipient_ids),
             content=content,
             kind=str(raw_kind or "notification"),
             idempotency_key=idempotency_key,
@@ -294,13 +296,15 @@ class PortClusterHandle:
             return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
         if str(getattr(payload, "project_id", "")) != self.project_id:
             return {"success": False, "error": "cluster_project_mismatch"}
-        message_id = await self._port.messages.append(
+        reply = await self._port.messages.append(
             agent_id=payload.agent_id,
             target=payload.target,
             content=payload.content,
-            metadata=getattr(payload, "metadata", None),
+            sender=payload.sender,
+            timeout=payload.timeout,
+            metadata=payload.metadata,
         )
-        return {"success": True, "data": {"message_id": message_id}}
+        return {"success": True, "data": reply.model_dump(mode="json")}
 
     async def dispatch(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         """把 Core 命令名映射成能力调用（新旧命令表并存期间的主干入口）。"""
@@ -312,6 +316,19 @@ class PortClusterHandle:
             }
         try:
             data = await self._dispatch_command(command, payload)
+        except ApiError as exc:
+            problem = exc.problem
+            if problem.capability == "messages.append" and (
+                problem.details.get("reason") == "source_ability_missing"
+            ):
+                return {
+                    "success": False,
+                    "error": "source_ability_missing",
+                    "error_detail": problem.detail,
+                    "data": problem.details.get("data"),
+                }
+            logger.warning("dispatch %s failed: %s", command, exc)
+            return {"success": False, "data": None, "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 - 与旧路由一致：命令失败转 receipt
             logger.warning("dispatch %s failed: %s", command, exc)
             return {"success": False, "data": None, "error": str(exc)}
@@ -340,6 +357,9 @@ class PortClusterHandle:
                 agent_id=agent_id,
                 name=payload.get("name"),
                 system_prompt=payload.get("system_prompt"),
+                origin_session_id=payload.get("origin_session_id"),
+                origin_node_id=payload.get("origin_node_id"),
+                metadata=payload.get("metadata"),
             )
             return {"session_id": session_id}
         if command == "session_activate":
@@ -368,12 +388,16 @@ class PortClusterHandle:
             branch_id = await port.branches.create(
                 agent_id=agent_id,
                 session_id=str(payload.get("session_id") or ""),
-                name=payload.get("name"),
+                name=payload["name"],
+                from_node_id=payload.get("from_node_id"),
+                parent_branch_id=payload.get("parent_branch_id"),
+                metadata=payload.get("metadata"),
             )
             return {"branch_id": branch_id}
         if command == "branch_activate":
             await port.branches.activate(
                 agent_id=agent_id,
+                session_id=str(payload.get("session_id") or ""),
                 branch_id=str(payload.get("branch_id") or ""),
             )
             return {"branch_id": payload.get("branch_id")}
@@ -386,24 +410,43 @@ class PortClusterHandle:
         if command == "branch_archive":
             await port.branches.archive(
                 agent_id=agent_id,
+                session_id=str(payload.get("session_id") or ""),
                 branch_id=str(payload.get("branch_id") or ""),
             )
             return {"branch_id": payload.get("branch_id")}
         if command == "branch_delete":
             await port.branches.delete(
                 agent_id=agent_id,
+                session_id=str(payload.get("session_id") or ""),
                 branch_id=str(payload.get("branch_id") or ""),
             )
             return {"branch_id": payload.get("branch_id")}
 
         if command == "send_message":
-            message_id = await port.messages.append(
+            reply = await port.messages.append(
                 agent_id=agent_id,
                 target=str(payload.get("target") or ""),
                 content=str(payload.get("content") or ""),
+                sender=payload.get("sender", "user"),
+                timeout=payload.get("timeout"),
                 metadata=payload.get("metadata"),
             )
-            return {"message_id": message_id}
+            return reply.model_dump(mode="json")
+
+        if command == "broadcast_message":
+            reply = await port.messages.broadcast(
+                content=payload["content"], sender=payload.get("sender", "user")
+            )
+            return reply.model_dump(mode="json")
+
+        if command == "delegate":
+            reply = await port.messages.delegate(
+                from_agent_id=payload["from_agent_id"],
+                to_agent_id=payload["to_agent_id"],
+                content=payload["content"],
+                timeout=payload.get("timeout"),
+            )
+            return reply.model_dump(mode="json")
 
         if command in {"register_ability", "unregister_ability"}:
             return await self._dispatch_ability(command, agent_id, payload)
@@ -503,11 +546,16 @@ class PortClusterTransport:
 
     async def shutdown_cluster(self, cluster_id: str) -> None:
         """注销 cluster；Core 单元生命周期由端口自行收口。"""
-        self._clusters.pop(cluster_id, None)
+        entry = self._clusters.get(cluster_id)
+        if entry is not None:
+            await self._port.project(entry.project_id).stop_project()
+            self._clusters.pop(cluster_id, None)
 
     async def stop(self) -> None:
-        """注销全部 cluster。"""
+        """关闭 Core 端口持有的全部项目资源。"""
+        await self._port.aclose()
         self._clusters.clear()
+        self._locators.clear()
 
 
 def build_port_transport(transport_ctx: Any) -> PortClusterTransport:

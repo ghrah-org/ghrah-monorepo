@@ -38,7 +38,6 @@ from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.models import AgentSpec, ProjectRecord
 from ghrah.subject.project.store import ConcurrentModificationError
 from ghrah.subject.runtime.service_keys import (
-    ABILITY_ACCESS,
     CORE_PORT_SERVICE,
     OBSERVER_ENDPOINT,
     PROJECT_MANAGER,
@@ -119,7 +118,6 @@ def build_agent_control_router(
     config: SubjectConfig,
     project_store: Any,
     projects: Any,
-    access: Any,
     core_port: Any = None,
 ) -> APIRouter:
     """构造 Agent 资源路由。认证与能力管理面相同。"""
@@ -508,7 +506,6 @@ class AgentControlUnit(SubjectUnit):
                     OBSERVER_ENDPOINT,
                     PROJECT_MANAGER,
                     PROJECT_STORE,
-                    ABILITY_ACCESS,
                     CORE_PORT_SERVICE,
                 }
             ),
@@ -531,7 +528,6 @@ class AgentControlUnit(SubjectUnit):
             config=self._config,
             project_store=ctx.get(PROJECT_STORE.name),
             projects=ctx.get(PROJECT_MANAGER.name),
-            access=ctx.get(ABILITY_ACCESS.name),
             core_port=ctx.get(CORE_PORT_SERVICE.name),
         )
         endpoint.app.include_router(router)

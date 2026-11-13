@@ -93,6 +93,15 @@ def translate(capability: str) -> Iterator[None]:
             ),
         ) from exc
     except CatalogError as exc:
+        if exc.code == "invalid_change" and capability == "abilities.package_mcp_probe":
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.FAILED_PRECONDITION,
+                    capability=capability,
+                    detail=exc.message,
+                    details={"reason": "definition_not_mcp"},
+                ),
+            ) from exc
         mapping = {
             "not_found": ProblemCode.NOT_FOUND,
             "invalid_request": ProblemCode.INVALID_ARGUMENT,

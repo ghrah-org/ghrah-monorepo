@@ -17,9 +17,12 @@ from ghrah.protocol.ability_control import (
     AbilityApiStatus,
     AbilityChangesPage,
     AbilityInstancesView,
+    AbilityMcpProbeRequest,
+    AbilityMcpProbeView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import (
@@ -52,8 +55,6 @@ from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import (
     AgentIdView,
     BranchIdView,
-    DeliveryIdView,
-    MessageIdView,
     NodeIdView,
     Page,
     SessionIdView,
@@ -66,12 +67,13 @@ from ghrah.protocol.views.core import (
     AgentView,
     BranchListView,
     BranchView,
+    BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
     DeliveryView,
     HistoryView,
     MailboxSummaryView,
-    MessageIdListView,
+    MessageReplyView,
     MessageView,
     NodeView,
     PublishedMessageView,
@@ -101,10 +103,12 @@ class CoreFacade:
         runtime: CoreRuntime,
         project_id: str | None = None,
         closer: Callable[[], Awaitable[None]] | None = None,
+        stop_project: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._runtime = runtime
         self._project_id = project_id
         self._closer = closer
+        self._stop_project = stop_project
         self._nodes = _Nodes(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
@@ -184,9 +188,17 @@ class CoreFacade:
             runtime=self._runtime,
             project_id=project_id,
             closer=self._closer,
+            stop_project=self._stop_project,
         )
 
     # ── 生命周期 ──
+
+    async def stop_project(self) -> None:
+        """释放绑定项目的活动单元。"""
+        if self._project_id is None:
+            raise ValueError("call project(id) before stopping a project")
+        if self._stop_project is not None:
+            await self._stop_project(self._project_id)
 
     async def aclose(self) -> None:
         """释放内部资源（幂等；关闭任一视图等价于关闭共享连接池）。"""
@@ -294,6 +306,9 @@ class _Sessions:
         agent_id: AgentId,
         name: str | None = None,
         system_prompt: str | None = None,
+        origin_session_id: str | None = None,
+        origin_node_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SessionId:
         """新建会话。"""
         raw = await self._facade._call(
@@ -301,6 +316,9 @@ class _Sessions:
             agent_id=agent_id,
             name=name,
             system_prompt=system_prompt,
+            origin_session_id=origin_session_id,
+            origin_node_id=origin_node_id,
+            metadata=metadata or {},
         )
         return SessionIdView.model_validate(raw).session_id
 
@@ -345,6 +363,7 @@ class _Branches:
         name: str,
         from_node_id: str | None = None,
         parent_branch_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> BranchId:
         """分叉出新分支。"""
         raw = await self._facade._call(
@@ -354,6 +373,7 @@ class _Branches:
             name=name,
             from_node_id=from_node_id,
             parent_branch_id=parent_branch_id,
+            metadata=metadata or {},
         )
         return BranchIdView.model_validate(raw).branch_id
 
@@ -453,6 +473,7 @@ class _Mailbox:
         self,
         *,
         sender_id: str,
+        recipient_ids: Sequence[str] = (),
         content: str,
         kind: str = "notification",
         idempotency_key: str,
@@ -462,6 +483,7 @@ class _Mailbox:
         raw = await self._facade._call(
             "mailbox.publish_notification",
             sender_id=sender_id,
+            recipient_ids=list(recipient_ids),
             content=content,
             kind=kind,
             idempotency_key=idempotency_key,
@@ -541,26 +563,30 @@ class _Messages:
         agent_id: AgentId,
         target: str,
         content: str,
+        sender: str = "user",
+        timeout: float | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> MessageId:
+    ) -> MessageReplyView:
         """发送一条消息。"""
         raw = await self._facade._call(
             "messages.append",
             agent_id=agent_id,
             target=target,
             content=content,
+            sender=sender,
+            timeout=timeout,
             metadata=metadata,
         )
-        return MessageIdView.model_validate(raw).message_id
+        return MessageReplyView.model_validate(raw)
 
-    async def broadcast(self, *, content: str, sender: str = "") -> list[MessageId]:
+    async def broadcast(self, *, content: str, sender: str = "user") -> BroadcastRepliesView:
         """广播。"""
         raw = await self._facade._call(
             "messages.broadcast",
             content=content,
             sender=sender,
         )
-        return MessageIdListView.model_validate(raw).message_ids
+        return BroadcastRepliesView.model_validate(raw)
 
     async def delegate(
         self,
@@ -569,8 +595,8 @@ class _Messages:
         to_agent_id: AgentId,
         content: str,
         timeout: float | None = None,
-    ) -> DeliveryId:
-        """委派任务。"""
+    ) -> MessageReplyView:
+        """委派任务并等待回复。"""
         raw = await self._facade._call(
             "messages.delegate",
             from_agent_id=from_agent_id,
@@ -578,7 +604,7 @@ class _Messages:
             content=content,
             timeout=timeout,
         )
-        return DeliveryIdView.model_validate(raw).delivery_id
+        return MessageReplyView.model_validate(raw)
 
 
 class _Agents:
@@ -693,6 +719,28 @@ class _Abilities:
             name=name,
         )
         return AbilityPackageDetailView.model_validate(raw)
+
+    async def package_version_profile(
+        self, *, namespace: str, name: str, version: str
+    ) -> AbilityPackageVersionProfileView:
+        """读取单个能力包版本的画像。"""
+        raw = await self._facade._call_global(
+            "abilities.package_version_profile", namespace=namespace, name=name, version=version
+        )
+        return AbilityPackageVersionProfileView.model_validate(raw)
+
+    async def package_mcp_probe(
+        self, *, namespace: str, name: str, version: str, request: AbilityMcpProbeRequest
+    ) -> AbilityMcpProbeView:
+        """只读探测指定能力包版本声明的 MCP 服务。"""
+        raw = await self._facade._call_global(
+            "abilities.package_mcp_probe",
+            namespace=namespace,
+            name=name,
+            version=version,
+            request=request.model_dump(mode="json"),
+        )
+        return AbilityMcpProbeView.model_validate(raw)
 
     async def package_groups(
         self,

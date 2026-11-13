@@ -305,6 +305,7 @@ DESIRED_STATE_STORE = SubjectServiceKey[DesiredStateStore](
     "desired_state_store",
     DesiredStateStore,
 )
+RECOVERY_START = SubjectServiceKey[Any]("recovery_start")
 RECONCILIATION_SERVICE = SubjectServiceKey[ReconciliationService](
     "reconciliation_service",
     ReconciliationService,

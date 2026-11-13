@@ -20,6 +20,7 @@ export {
   type AbilityChangesQuery,
   type AbilityControlClient,
   type AbilityControlClientOptions,
+  type AbilityMcpProbeOptions,
 } from "./ability-control.js";
 export {
   deriveHttpBase,
@@ -85,7 +86,12 @@ export {
   replacementGrant,
   useAbilityAdminStore,
 } from "./stores/ability-admin.js";
-export { useAbilityPackagesStore } from "./stores/ability-packages.js";
+export {
+  abilityPackageVersionKey,
+  type ProbeRecord,
+  type VersionProfileRecord,
+  useAbilityPackagesStore,
+} from "./stores/ability-packages.js";
 export { type AgentInfo, type AgentListItem, useAgentsStore } from "./stores/agents.js";
 export { type BranchProjection, useBranchesStore } from "./stores/branches.js";
 export { useChangesStore } from "./stores/changes.js";

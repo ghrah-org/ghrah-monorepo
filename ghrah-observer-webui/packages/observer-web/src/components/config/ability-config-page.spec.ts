@@ -4,8 +4,8 @@
 
 // @vitest-environment happy-dom
 
-import { setAbilityControlClientFactory } from "@ghrah/observer-core";
-import { AbilityApiStatusSchema } from "@ghrah/protocol";
+import { HttpError, setAbilityControlClientFactory } from "@ghrah/observer-core";
+import { AbilityApiStatusSchema, AbilityPackageVersionProfileViewSchema } from "@ghrah/protocol";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,33 +27,50 @@ function status(source: "builtin" | "legacy", tree: boolean, packagesRead = fals
   });
 }
 
-const distributionGroups = {
-  format: "ghrah.ability-control.package-groups.v1",
-  scope: "distribution",
-  installed_available: false,
-  project_id: null,
-  agent_id: null,
-  groups: [
-    {
-      namespace: "sample",
-      name: "reader",
-      full_name: "sample.reader",
-      title: "Reader",
-      versions: [
-        {
-          version: "1",
-          origin: "builtin",
-          lock_state: "builtin",
-          problem: null,
-          shadowed_builtin: false,
-          member_count: 2,
-          project: null,
-          agent: null,
-        },
-      ],
-    },
-  ],
-};
+function groups(version = "1") {
+  return {
+    format: "ghrah.ability-control.package-groups.v1",
+    scope: "distribution",
+    installed_available: false,
+    project_id: null,
+    agent_id: null,
+    groups: [
+      {
+        namespace: "sample",
+        name: "reader",
+        full_name: "sample.reader",
+        title: "Reader",
+        versions: [
+          {
+            version,
+            origin: "builtin",
+            lock_state: "builtin",
+            problem: null,
+            shadowed_builtin: false,
+            member_count: 2,
+            project: null,
+            agent: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function versionProfile(version = "1.0.0") {
+  return AbilityPackageVersionProfileViewSchema.parse({
+    namespace: "sample",
+    name: "reader",
+    full_name: "sample.reader",
+    version,
+    origin: "builtin",
+    definition_origin: "source",
+    lock_state: "builtin",
+    title: "Reader",
+  });
+}
+
+const distributionGroups = groups();
 
 describe("AbilityConfigPage", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -89,7 +106,96 @@ describe("AbilityConfigPage", () => {
     expect(wrapper.text()).toContain("2 members");
     expect(wrapper.text()).not.toContain("No package list is shown.");
     expect(wrapper.find("form").exists()).toBe(false);
-    expect(wrapper.findAll("button").map((button) => button.text())).toEqual(["Refresh status"]);
+    expect(wrapper.findAll("button").map((button) => button.text())).toEqual([
+      "Refresh status",
+      "Details",
+    ]);
+    wrapper.unmount();
+  });
+
+  it("does not treat an unloaded catalog as empty or unavailable", async () => {
+    let release: (value: ReturnType<typeof status>) => void = () => undefined;
+    const read = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof status>>((resolve) => {
+          release = resolve;
+        }),
+    );
+    setAbilityControlClientFactory(() => ({ status: read }) as never);
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Loading ability assembly…");
+    expect(wrapper.text()).not.toContain("No package list is shown.");
+    expect(wrapper.text()).not.toContain("The package catalog is not available from this server.");
+    expect(wrapper.text()).not.toContain("Package management is not enabled.");
+    expect(wrapper.text()).not.toContain("Ability assembly is unavailable.");
+    release(status("builtin", true));
+    await flushPromises();
+    expect(wrapper.text()).toContain("The package catalog is not available from this server.");
+    wrapper.unmount();
+  });
+
+  it("loads an expanded version once and reloads it when the catalog is refreshed", async () => {
+    const profile = versionProfile();
+    const read = vi.fn(async () => status("builtin", true, true));
+    const packageGroups = vi.fn(async () => groups("1.0.0"));
+    const packageVersion = vi.fn(async () => profile);
+    setAbilityControlClientFactory(
+      () => ({ status: read, packageGroups, packageVersion }) as never,
+    );
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    await wrapper.get("button[aria-expanded='false']").trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledTimes(1);
+    expect(packageVersion).toHaveBeenCalledWith("sample", "reader", "1.0.0");
+    expect(wrapper.text()).toContain("This version declares no operations.");
+    expect(wrapper.text()).toContain("This version is not an MCP package.");
+    expect(wrapper.text()).toContain("No install verification is recorded for this version.");
+    expect(wrapper.findAll("button").some((button) => button.text() === "Test connection")).toBe(
+      false,
+    );
+    await wrapper.get("button[aria-expanded='true']").trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledTimes(1);
+    await wrapper.get("button[aria-expanded='false']").trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledTimes(1);
+    await wrapper.get("button").trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledTimes(2);
+    expect(wrapper.find("[aria-expanded='true']").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("retries a failed version without showing the transport message", async () => {
+    const profile = versionProfile();
+    const packageVersion = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new HttpError({ code: "not_found", status: 404, message: "missing /home/secret" }),
+      )
+      .mockResolvedValueOnce(profile);
+    setAbilityControlClientFactory(
+      () =>
+        ({
+          status: async () => status("builtin", true, true),
+          packageGroups: async () => groups("1.0.0"),
+          packageVersion,
+        }) as never,
+    );
+    const wrapper = mount(AbilityConfigPage);
+    await flushPromises();
+    await wrapper.get("button[aria-expanded='false']").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("This version is not in the distribution.");
+    expect(wrapper.text()).not.toContain("/home/secret");
+    const retry = wrapper.findAll("button").find((button) => button.text() === "Retry");
+    expect(retry).toBeTruthy();
+    await retry?.trigger("click");
+    await flushPromises();
+    expect(packageVersion).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain("This version declares no operations.");
     wrapper.unmount();
   });
 

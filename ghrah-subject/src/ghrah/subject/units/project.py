@@ -55,6 +55,7 @@ class ProjectUnit(SubjectUnit):
         self._desired_store: DesiredStateStore | None = None
         self._task_store: Any | None = None
         self._manager: ProjectManager | None = None
+        self._cluster_transport: Any | None = None
         self._meta = UnitMeta(
             name="project",
             requires=frozenset(
@@ -89,6 +90,7 @@ class ProjectUnit(SubjectUnit):
         task_mgr = ctx.get(TASK_MANAGER.name)
         self._task_store = ctx.get(TASK_STORE.name)
         cluster_transport = ctx.get(CORE_CLUSTER_REGISTRY.name)
+        self._cluster_transport = cluster_transport
         manifest_store = ctx.get(MANIFEST_STORE.name)
         self._manager = ProjectManager(
             self._store,
@@ -126,6 +128,11 @@ class ProjectUnit(SubjectUnit):
                     project.project_id, project.project_root_locator
                 )
                 await self._task_store.migrate_project(project.project_id)
+
+        remember = getattr(self._cluster_transport, "remember_locator", None)
+        if self._store is not None and remember is not None:
+            for project in await self._store.list(archived=None):
+                remember(project.project_id, project.project_root_locator)
 
     async def stop(self) -> None:
         if self._store is not None:

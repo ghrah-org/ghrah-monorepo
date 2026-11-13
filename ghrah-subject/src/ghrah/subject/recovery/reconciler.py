@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -278,11 +279,7 @@ class ReconciliationService:
 
     async def _reconcile_agents(self, project: ProjectRecord, report: ReconcileReport) -> None:
         """对账 agent：校验实例 manifest（os.path.exists）+ spawn 缺失 agent。"""
-        legacy_name_counts: dict[str, int] = {}
-        for agent in project.agents:
-            if not agent.agent_id:
-                legacy_name_counts[agent.name] = legacy_name_counts.get(agent.name, 0) + 1
-        ambiguous_legacy = {name for name, count in legacy_name_counts.items() if count > 1}
+        names = Counter(agent.name for agent in project.agents)
         for cluster_id in (project.project_id,):
             try:
                 handle = self._cluster_transport.get_handle(cluster_id)
@@ -313,17 +310,17 @@ class ReconciliationService:
             for agent in project.agents:
                 if agent.desired_state == "stopped":
                     continue
-                if not agent.agent_id and agent.name in ambiguous_legacy:
+                if names[agent.name] > 1:
                     report.agents_failed += 1
-                    error = "ambiguous legacy name has no stable agent_id"
+                    error = "duplicate Agent name after cluster retirement"
                     report.errors.append(
-                        f"project {project.project_id} cluster {cluster_id} agent "
-                        f"{agent.name}: {error}"
+                        f"project {project.project_id} agent {agent.name} "
+                        f"({agent.agent_id or 'missing id'}): {error}"
                     )
                     report.agent_results.append(
                         {
                             "project_id": project.project_id,
-                            "agent_id": "",
+                            "agent_id": agent.agent_id,
                             "agent_name": agent.name,
                             "outcome": "failed",
                             "error": error,

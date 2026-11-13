@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from ghrah.ability.access import AbilityAccessStore
-from ghrah.ability.content import ContentReadResult
+from ghrah.ability.content import ContentReadResult, is_loadable_text
 from ghrah.ability.contracts import operation_result_schema
 from ghrah.ability.versions import capture_ability_version, capture_file_version
 from ghrah.protocol.ability_tree import (
@@ -97,7 +97,7 @@ def fixtures() -> dict:
     def content_result(member: str) -> dict:
         entry = manifest[member]
         data = dict(content_version.blobs)[entry["digest"]]
-        text = entry["media_type"].startswith("text/")
+        text = is_loadable_text(entry["media_type"])
         return ContentReadResult(
             instance_id="reporting",
             version_digest=content_version.digest,

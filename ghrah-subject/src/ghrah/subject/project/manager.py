@@ -486,7 +486,7 @@ class ProjectManager:
         root_locator = self._root_locator_for(record.project_id, p.project_root_locator)
         project_paths = ProjectPaths.from_locator(root_locator)
         record = record.model_copy(update={"project_root_locator": root_locator})
-        cluster_id = uuid4().hex
+        cluster_id = record.project_id
         await self._check_create_paths(
             root_locator, [str(w["locator"]) for w in normalized_workspaces]
         )
@@ -1189,7 +1189,7 @@ class ProjectManager:
         root_locator = self._root_locator_for(record.project_id)
         project_paths = ProjectPaths.from_locator(root_locator)
         record = record.model_copy(update={"project_root_locator": root_locator})
-        cluster_id = "default"
+        cluster_id = record.project_id
         await self._check_create_paths(root_locator, [locator])
         receipt = None
         registered_id: str | None = None

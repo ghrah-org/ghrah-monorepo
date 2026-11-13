@@ -10,9 +10,11 @@ from ghrah.protocol.ability_control import (
     AbilityApiStatus,
     AbilityChangesPage,
     AbilityInstancesView,
+    AbilityMcpProbeView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import AbilityTreeView
@@ -30,7 +32,9 @@ from ghrah.core.api.capabilities import (
     AbilitiesInstancesRequest,
     AbilitiesPackageDetailRequest,
     AbilitiesPackageGroupsRequest,
+    AbilitiesPackageMcpProbeRequest,
     AbilitiesPackagesRequest,
+    AbilitiesPackageVersionRequest,
     AbilitiesRevokeRequest,
     AbilitiesStatusRequest,
     AbilitiesTreeRequest,
@@ -138,6 +142,21 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         """单个能力包详情。"""
         return await store.package_detail(namespace=request.namespace, name=request.name)
 
+    async def package_version_profile(
+        request: AbilitiesPackageVersionRequest,
+    ) -> AbilityPackageVersionProfileView:
+        return await store.package_version_profile(
+            namespace=request.namespace, name=request.name, version=request.version
+        )
+
+    async def package_mcp_probe(request: AbilitiesPackageMcpProbeRequest) -> AbilityMcpProbeView:
+        return await store.package_mcp_probe(
+            namespace=request.namespace,
+            name=request.name,
+            version=request.version,
+            request=request.request,
+        )
+
     async def package_groups(request: AbilitiesPackageGroupsRequest) -> AbilityPackageGroupsView:
         """能力包分组视图。"""
         return await store.package_groups(
@@ -161,6 +180,8 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         "abilities.disable_tool": disable_tool,
         "abilities.packages": packages,
         "abilities.package_detail": package_detail,
+        "abilities.package_version_profile": package_version_profile,
+        "abilities.package_mcp_probe": package_mcp_probe,
         "abilities.package_groups": package_groups,
         "abilities.instances": instances,
     }

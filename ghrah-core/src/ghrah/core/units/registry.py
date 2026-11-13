@@ -36,7 +36,6 @@ type ManagerFactory = Callable[[str], Awaitable[Any]]
 type ConfigHook = Callable[[str, CoreUnitConfig], Awaitable[CoreUnitConfig]]
 type AbilityStoreFactory = Callable[[str], Awaitable[Any]]
 type ManifestResolver = Callable[[str], Any]
-type ManifestResolver = Callable[[str], Any]
 
 
 @dataclass
@@ -67,6 +66,8 @@ class RuntimeRegistry:
         manifest_resolver: ManifestResolver | None = None,
         config_hook: ConfigHook | None = None,
         ability_store_factory: AbilityStoreFactory | None = None,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+        serial: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._config_factory = config_factory
         self._unit_factory = unit_factory
@@ -74,6 +75,8 @@ class RuntimeRegistry:
         self._manifest_resolver = manifest_resolver
         self._config_hook = config_hook
         self._ability_store_factory = ability_store_factory
+        self._emit = emit
+        self._serial = serial
         self._units: dict[str, RuntimeHandle] = {}
         self._managers: dict[str, Any] = {}
         self._lock = asyncio.Lock()
@@ -96,35 +99,34 @@ class RuntimeRegistry:
         """
         if not project_id:
             raise ValueError("project_id required")
-        handle = self._units.get(project_id)
-        if handle is not None:
-            return handle
         async with self._lock:
             handle = self._units.get(project_id)
             if handle is not None:
                 return handle
             config = self._config_factory(project_id)
-            if self._manager_factory is not None:
-                manager = await self._manager_factory(project_id)
-                self._managers[project_id] = manager
-                config = replace(config, message_manager=manager)
-            if self._config_hook is not None:
-                config = await self._config_hook(project_id, config)
-            if config.ability_store is None and self._ability_store_factory is not None:
-                store = await self._ability_store_factory(project_id)
-                config = replace(config, ability_store=store)
-            projector = getattr(config, "room_projector", None)
-            if projector is not None and config.message_manager is not None:
-                configure = getattr(config.message_manager, "configure_room_projector", None)
-                if configure is not None:
-                    configure(projector)
-            unit = self._unit_factory(config)
-            context = UnitContext(request_id=project_id)
-            await unit.init(context)
+            unit = None
             try:
+                if self._manager_factory is not None:
+                    manager = await self._manager_factory(project_id)
+                    self._managers[project_id] = manager
+                    config = replace(config, message_manager=manager)
+                if self._config_hook is not None:
+                    config = await self._config_hook(project_id, config)
+                if config.ability_store is None and self._ability_store_factory is not None:
+                    store = await self._ability_store_factory(project_id)
+                    config = replace(config, ability_store=store)
+                if config.room_projector is not None and config.message_manager is not None:
+                    config.message_manager.configure_room_projector(config.room_projector)
+                unit = self._unit_factory(config)
+                context = UnitContext(request_id=project_id, emit=self._emit, serial=self._serial)
+                await unit.init(context)
                 await unit.start()
             except BaseException:
-                await unit.stop()
+                try:
+                    if unit is not None:
+                        await unit.stop()
+                finally:
+                    await self._close_project_resources(project_id)
                 raise
             handle = RuntimeHandle(
                 project_id=project_id,
@@ -298,16 +300,28 @@ class RuntimeRegistry:
             是否确实停止了一个活动实例
         """
         async with self._lock:
-            handle = self._units.pop(project_id, None)
-        if handle is None:
-            return False
-        await handle.unit.stop()
-        return True
+            handle = self._units.get(project_id)
+            if handle is None:
+                return False
+            try:
+                await handle.unit.stop()
+            finally:
+                self._units.pop(project_id, None)
+                await self._close_project_resources(project_id)
+            return True
+
+    async def _close_project_resources(self, project_id: str) -> None:
+        manager = self._managers.pop(project_id, None)
+        if manager is not None:
+            await manager.close()
 
     async def aclose(self) -> None:
-        """停止全部项目单元。"""
-        async with self._lock:
-            handles = list(self._units.values())
-            self._units.clear()
-        for handle in handles:
-            await handle.unit.stop()
+        """停止全部项目单元，即使单个项目收尾失败也继续释放其余资源。"""
+        errors: list[Exception] = []
+        for project_id in list(self._units):
+            try:
+                await self.stop(project_id)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("failed to stop project runtimes", errors)
