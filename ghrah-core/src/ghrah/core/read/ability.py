@@ -24,7 +24,6 @@ from ghrah.protocol.ability_control import (
     AbilityApiFeatures,
     AbilityApiStatus,
     AbilityChangesPage,
-    AbilityChangeView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,

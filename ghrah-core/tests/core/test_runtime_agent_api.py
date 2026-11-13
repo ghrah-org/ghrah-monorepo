@@ -156,7 +156,11 @@ async def test_conditions_methods_validation_and_disabled_default(tmp_path):
         stale = await state(runtime, created.body["agent_id"], "running", '"rev-0"')
         assert stale.status == 412 and stale.body["details"]["current_etag"] == '"rev-1"'
         wrong = await request(runtime, "POST", url)
-        assert wrong.status == 405 and wrong.headers["Allow"] == "GET, PATCH, DELETE" and "code" not in wrong.body
+        assert (
+            wrong.status == 405
+            and wrong.headers["Allow"] == "GET, PATCH, DELETE"
+            and "code" not in wrong.body
+        )
         assert (await request(runtime, "GET", "/v1/agents/not-an-id")).status == 404
         assert (await request(runtime, "POST", "/v1/agents", body=body())).status == 422
         assert (

@@ -514,15 +514,22 @@ def artifacts() -> dict[Path, str]:
             value = expression(schemas[name])
             lines.extend(
                 (
-                    f"{'export ' if name.startswith('Runtime') else ''}const {name}Schema = {value};",
-                    f"export type {name} = z.infer<typeof {name}Schema>;" if name.startswith("Runtime") else "",
+                    f"{'export ' if name.startswith('Runtime') else ''}"
+                    f"const {name}Schema = {value};",
+                    f"export type {name} = z.infer<typeof {name}Schema>;"
+                    if name.startswith("Runtime")
+                    else "",
                 )
             )
             emitted.add(name)
 
     for model in MODELS:
         emit(model.__name__)
-    lines.append("export const RuntimeAgentCreateExample = " + json.dumps(fixtures()["agent.create.json"].model_dump(mode="json"), ensure_ascii=False) + " as const;")
+    lines.append(
+        "export const RuntimeAgentCreateExample = "
+        + json.dumps(fixtures()["agent.create.json"].model_dump(mode="json"), ensure_ascii=False)
+        + " as const;"
+    )
     problem_ref = {"$ref": "#/components/schemas/RuntimeProblem"}
     standard_ref = {"$ref": "#/components/schemas/RuntimeStandardProblem"}
     paths: dict[str, Any] = {}
@@ -624,12 +631,23 @@ def artifacts() -> dict[Path, str]:
         "patch": resource_operation("patch", "RuntimeAgentPatch", "RuntimeAgentResource"),
         "delete": resource_operation("delete", None, "RuntimeAgentResource", "204"),
     }
-    paths["/v1/agents/{agent_id}"]["delete"]["responses"]["204"] = {"description": "Deleted; historical records and idempotency tombstone are retained"}
+    paths["/v1/agents/{agent_id}"]["delete"]["responses"]["204"] = {
+        "description": "Deleted; historical records and idempotency tombstone are retained"
+    }
     paths["/v1/abilities"] = {"get": resource_operation("get", None, "RuntimeAbilityCatalog")}
-    paths["/v1/ability-instances"] = {"post": resource_operation("post", "RuntimeAbilityInstanceCreate", "RuntimeAbilityInstance")}
-    paths["/v1/agents/{agent_id}/abilities"] = {"get": resource_operation("get", None, "RuntimeAbilitiesView")}
-    paths["/v1/agents/{agent_id}/abilities/changes"] = {"get": resource_operation("get", None, "RuntimeAbilityChanges")}
-    for kind, parameter, model in (("grants", "alias", "RuntimeGrantRequest"), ("tools", "tool_name", "RuntimeToolRequest")):
+    paths["/v1/ability-instances"] = {
+        "post": resource_operation("post", "RuntimeAbilityInstanceCreate", "RuntimeAbilityInstance")
+    }
+    paths["/v1/agents/{agent_id}/abilities"] = {
+        "get": resource_operation("get", None, "RuntimeAbilitiesView")
+    }
+    paths["/v1/agents/{agent_id}/abilities/changes"] = {
+        "get": resource_operation("get", None, "RuntimeAbilityChanges")
+    }
+    for kind, parameter, model in (
+        ("grants", "alias", "RuntimeGrantRequest"),
+        ("tools", "tool_name", "RuntimeToolRequest"),
+    ):
         paths[f"/v1/agents/{{agent_id}}/abilities/{kind}/{{{parameter}}}"] = {
             "put": resource_operation("put", model, "RuntimeAbilitiesView"),
             "delete": resource_operation("delete", None, "RuntimeAbilitiesView"),
@@ -694,13 +712,13 @@ def artifacts() -> dict[Path, str]:
             for operation in methods.values():
                 for parameter in parameters:
                     operation["parameters"].append(
-                    {
-                        "in": "path",
-                        "name": parameter,
-                        "required": True,
-                        "schema": {"type": "string"},
-                    }
-                )
+                        {
+                            "in": "path",
+                            "name": parameter,
+                            "required": True,
+                            "schema": {"type": "string"},
+                        }
+                    )
     for methods in paths.values():
         for operation in methods.values():
             for code in (

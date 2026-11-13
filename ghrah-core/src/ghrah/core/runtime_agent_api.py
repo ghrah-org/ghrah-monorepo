@@ -274,7 +274,11 @@ class RuntimeAgentAPI:
             previous_body = json.loads(previous["body"])
             if await self.store.get(internal_id("agt", previous_body["agent_id"])) is None:
                 raise ResourceError(409, "CONFLICT", "This creation key refers to a deleted Agent")
-            return RuntimeDispatchResponse(201, {**json.loads(previous["headers"]), "Idempotency-Replayed": "true"}, previous_body)
+            return RuntimeDispatchResponse(
+                201,
+                {**json.loads(previous["headers"]), "Idempotency-Replayed": "true"},
+                previous_body,
+            )
         if await self.store.by_external_ref(request.external_ref) is not None:
             raise ResourceError(409, "CONFLICT", "external_ref already exists in this scope")
         record = {
@@ -348,10 +352,12 @@ class RuntimeAgentAPI:
                             for name in ("conversation", "session_info")
                         ],
                     )
-                    materialize = materializer.materialize_stored if await self.ability_store.has_admin_changes(self._actor, agent_id) else materializer.materialize
-                    materialization = await materialize(
-                        agent=agent_id, resolved=resolved
+                    materialize = (
+                        materializer.materialize_stored
+                        if await self.ability_store.has_admin_changes(self._actor, agent_id)
+                        else materializer.materialize
                     )
+                    materialization = await materialize(agent=agent_id, resolved=resolved)
                     await self.supervisor.spawn_agent(
                         agent_config,
                         abilities=materialization.abilities,
@@ -541,16 +547,21 @@ class RuntimeAgentAPI:
         if route == "/v1/agents":
             allowed = "GET, POST"
         elif match:
-            allowed = {None: "GET, PATCH, DELETE", "/state": "PUT", "/messages": "POST", "/timeline": "GET"}[
-                match[2]
-            ]
+            allowed = {
+                None: "GET, PATCH, DELETE",
+                "/state": "PUT",
+                "/messages": "POST",
+                "/timeline": "GET",
+            }[match[2]]
         elif delivery_match or node_match:
             allowed = "GET"
         if "/abilities" in route or route in {"/v1/abilities", "/v1/ability-instances"}:
             from ghrah.core.runtime_management_api import RuntimeManagementAPI
 
             async with self._lock:
-                return await RuntimeManagementAPI(self).dispatch(method, route, query, headers or {}, body)
+                return await RuntimeManagementAPI(self).dispatch(
+                    method, route, query, headers or {}, body
+                )
         if allowed is None:
             raise ResourceError(404, "NOT_FOUND", "Resource is not implemented")
         if method not in allowed.split(", "):

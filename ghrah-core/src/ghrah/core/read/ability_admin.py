@@ -44,6 +44,7 @@ def build_change_view(row: dict[str, Any]) -> AbilityChangeView:
         data["actor"] = json.loads(data["actor"])
     return AbilityChangeView.model_validate(data)
 
+
 __all__ = ["build_admin_view", "read_content"]
 
 

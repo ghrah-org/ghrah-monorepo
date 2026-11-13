@@ -58,7 +58,9 @@ class RuntimeAgentStore:
                 ("deleted_at", "TEXT"),
             ):
                 if name not in names:
-                    await self.db.execute(f"ALTER TABLE runtime_agents ADD COLUMN {name} {declaration}")
+                    await self.db.execute(
+                        f"ALTER TABLE runtime_agents ADD COLUMN {name} {declaration}"
+                    )
             identities = await (
                 await self.db.execute("SELECT agent_id FROM runtime_agents")
             ).fetchall()
@@ -151,7 +153,8 @@ class RuntimeAgentStore:
         """按受信作用域读取定义。"""
         return await (
             await self.connection().execute(
-                "SELECT * FROM runtime_agents WHERE scope_ref=? AND agent_id=? AND deleted_at IS NULL",
+                "SELECT * FROM runtime_agents "
+                "WHERE scope_ref=? AND agent_id=? AND deleted_at IS NULL",
                 (self.scope_ref, agent_id),
             )
         ).fetchone()
@@ -188,7 +191,9 @@ class RuntimeAgentStore:
         try:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
-                "INSERT INTO runtime_agents(agent_id,scope_ref,external_ref,config,assembly_digest,created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO runtime_agents("
+                "agent_id,scope_ref,external_ref,config,assembly_digest,created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     record["agent_id"],
                     self.scope_ref,
@@ -213,13 +218,23 @@ class RuntimeAgentStore:
             await db.rollback()
             raise
 
-    async def replace_config(self, agent_id: str, config: dict[str, Any], digest: str, revision: int) -> bool:
+    async def replace_config(
+        self, agent_id: str, config: dict[str, Any], digest: str, revision: int
+    ) -> bool:
         """按资源修订条件写入完整配置；与创建共用唯一权威表。"""
         db = self.connection()
         cursor = await db.execute(
-            "UPDATE runtime_agents SET config=?,assembly_digest=?,config_revision=config_revision+1,updated_at=? "
+            "UPDATE runtime_agents "
+            "SET config=?,assembly_digest=?,config_revision=config_revision+1,updated_at=? "
             "WHERE scope_ref=? AND agent_id=? AND config_revision=? AND deleted_at IS NULL",
-            (json.dumps(config, ensure_ascii=False), digest, runtime_now(), self.scope_ref, agent_id, revision),
+            (
+                json.dumps(config, ensure_ascii=False),
+                digest,
+                runtime_now(),
+                self.scope_ref,
+                agent_id,
+                revision,
+            ),
         )
         await db.commit()
         return cursor.rowcount == 1
@@ -240,7 +255,8 @@ class RuntimeAgentStore:
         return list(
             await (
                 await self.connection().execute(
-                    "SELECT * FROM runtime_agents WHERE scope_ref=? AND agent_id>? AND deleted_at IS NULL "
+                    "SELECT * FROM runtime_agents "
+                    "WHERE scope_ref=? AND agent_id>? AND deleted_at IS NULL "
                     "ORDER BY agent_id LIMIT ?",
                     (self.scope_ref, after, limit + 1),
                 )
