@@ -185,7 +185,6 @@ class CoreRuntime:
         self._unit = CoreUnit(
             replace(
                 options,
-                cluster_id=self.config.scope_ref,
                 project_id=self.config.scope_ref,
                 message_manager=manager,
                 persistence_factory=lambda _: RuntimeResources.persistence(
