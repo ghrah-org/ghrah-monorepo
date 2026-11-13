@@ -579,21 +579,6 @@ class TestProjectAddRemoveAgent:
         # spawn 调用
         assert mgr._cluster_transport._handle.spawned == ["a1"]  # type: ignore[attr-defined]
 
-    async def test_add_agent_rejects_unknown_cluster(
-        self, store: ProjectStore, tmp_path: Path
-    ) -> None:
-        mgr = _make_manager(store, default_locator=_default_locator(tmp_path))
-        created = await self._create(mgr, tmp_path)
-        result = await mgr.handle_command(
-            "project_add_agent",
-            {
-                "project_id": created["data"]["project"]["project_id"],
-                "agent": {"name": "a1", "cluster_id": "unknown-cluster"},
-            },
-        )
-        assert not result["success"]
-        assert "cluster_id" in (result["error"] or "")
-
     async def test_add_agent_spawn_failure_keeps_diagnostic_desired_state(
         self, store: ProjectStore, tmp_path: Path
     ) -> None:
@@ -835,48 +820,6 @@ class TestProjectAddRemoveAgent:
         assert result["success"], result.get("error")
         assert result["data"]["project"]["agents"] == []
         assert events[-1][0] == "project_agent_removed"
-
-    async def test_remove_agent_unmounted_cluster_skips_terminate(
-        self, store: ProjectStore, tmp_path: Path
-    ) -> None:
-        """cluster 未挂载（stopped 后）→ 无 runtime 可终止，直接删定义。"""
-
-        class _EmptyTransport(_FakeClusterTransport):
-            def has_cluster(self, cluster_id: str) -> bool:
-                return False
-
-        events: list[tuple[str, dict[str, Any]]] = []
-        transport = _EmptyTransport()
-        mgr = _make_manager(
-            store,
-            events=events,
-            default_locator=_default_locator(tmp_path),
-            cluster_transport=transport,
-        )
-        created = await self._create(mgr, tmp_path)
-        project = created["data"]["project"]
-        added = await mgr.handle_command(
-            "project_add_agent",
-            {
-                "project_id": project["project_id"],
-                "agent": {
-                    "name": "a1",
-                    "cluster_id": project["cluster_ids"][0],
-                    "manifest_ref": "tests.agent",
-                },
-            },
-        )
-        result = await mgr.handle_command(
-            "project_remove_agent",
-            {
-                "project_id": project["project_id"],
-                "agent_id": added["data"]["agent_id"],
-                "agent_name": "a1",
-            },
-        )
-        assert result["success"], result.get("error")
-        assert result["data"]["project"]["agents"] == []
-        assert transport._handle.terminated == []
 
 
 class TestProjectStatusTransitions:

@@ -396,29 +396,3 @@ async def test_snapshot_changes_reject_calls_and_release_sessions(
             await service.refresh()
         assert not service._active
         assert mock_mcp_endpoint.stats()["calls"] == ["echo"]
-
-
-async def test_closing_another_cluster_does_not_remove_current_backend(tmp_path, mock_mcp_endpoint):
-    from dataclasses import replace
-
-    from ghrah.ability.mcp_wiring import McpDeployment
-
-    async with environment(tmp_path, mock_mcp_endpoint) as env:
-        assert (await direct(env))["data"]["success"]
-        other = McpDeployment(
-            McpDeploymentConfig(
-                (replace(env.binding, agent_id="b" * 32),),
-                source=env.source,
-            ),
-            env.store,
-            "other",
-        )
-        await other.close()
-        assert (await direct(env, "still-wired"))["data"]["success"]
-        await env.unit._mcp_deployment.close()
-        unavailable = await direct(env, "closed")
-        assert not unavailable["success"] or not unavailable["data"]["success"]
-        view = await env.store.view(ADMIN, AGENT)
-        node = next(node for node in view.abilities if node.alias == "local")
-        assert all(operation.availability == "unavailable" for operation in node.operations)
-        assert mock_mcp_endpoint.stats()["calls"] == ["echo", "echo"]

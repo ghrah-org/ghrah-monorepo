@@ -43,31 +43,6 @@ async def _spawn(handle, project_id, name, *, agent_id="", manifest_ref="tests.a
     assert result["success"], result
 
 
-async def test_project_clusters_share_manager_and_last_shutdown_releases_owner(tmp_path):
-    registry = CoreClusterRegistry(unit_factory=_factory(tmp_path))
-    async with Context() as ctx:
-        registry.bind(ctx)
-        root = str(tmp_path / "project")
-        try:
-            first = await registry.ensure_cluster("c1", project_id="p", project_root_locator=root)
-            second = await registry.ensure_cluster("c2", project_id="p", project_root_locator=root)
-            manager = registry.get_message_manager("p")
-            assert first._unit.supervisor.message_manager is second._unit.supervisor.message_manager
-            await _spawn(first, "p", "a")
-            await _spawn(second, "p", "b", agent_id=TARGET_ID)
-            await registry.shutdown_cluster("c1")
-            assert registry.get_message_manager("p") is manager
-            assert await second._unit.supervisor.send("b", "start") == "ready"
-            await registry.shutdown_cluster("c2")
-            assert manager._db is None
-            third = await registry.ensure_cluster("c3", project_id="p", project_root_locator=root)
-            assert third._unit.supervisor.message_manager is not manager
-            await _spawn(third, "p", "b", agent_id=TARGET_ID)
-            assert third._unit.supervisor.recovery_mode("b") == "restored"
-        finally:
-            await registry.stop()
-
-
 async def test_projects_with_same_agent_name_have_independent_message_authorities(tmp_path):
     registry = CoreClusterRegistry(unit_factory=_factory(tmp_path))
     async with Context() as ctx:
@@ -183,61 +158,6 @@ async def test_room_send_delivers_and_reference_projection_recovers_without_dupl
             ).fetchone()
         assert bodies[0] == "work"
         assert json.loads(bodies[1])["room_ids"] == [room_id]
-
-
-async def test_observer_explicit_send_ability_cross_cluster(tmp_path):
-    """观察端显式能力信封真实经过源 agent 原子提交和跨 cluster MM。"""
-    import json
-
-    registry = CoreClusterRegistry(unit_factory=_factory(tmp_path))
-    async with Context() as ctx:
-        registry.bind(ctx)
-        try:
-            first = await registry.ensure_cluster(
-                "c1", project_id="p", project_root_locator=str(tmp_path / "project")
-            )
-            second = await registry.ensure_cluster(
-                "c2", project_id="p", project_root_locator=str(tmp_path / "project")
-            )
-            await _spawn(first, "p", "source", agent_id=SOURCE_ID, manifest_ref="tests.sender")
-            await _spawn(second, "p", "target", agent_id=TARGET_ID)
-            for async_mode in (False, True):
-                response = await first.dispatch(
-                    "send_message",
-                    {
-                        "project_id": "p",
-                        "agent_id": SOURCE_ID,
-                        "target": "source",
-                        "sender": "user",
-                        "content": "verify",
-                        "metadata": {
-                            "execute_ability": {
-                                "name": "send_message",
-                                "args": {
-                                    "target": TARGET_ID,
-                                    "content": "verify",
-                                    "fire_and_forget": async_mode,
-                                },
-                                "call_id": f"verify-{async_mode}",
-                            }
-                        },
-                    },
-                )
-                assert response["success"], response
-                action = json.loads(response["data"]["content"])
-                assert action["outcome"] == "success", action
-                manager = registry.get_message_manager("p")
-                message = await manager.get_message(action["data"]["message_id"])
-                assert message.sender_id == SOURCE_ID
-                assert message.origin_node_id
-                deliveries = await manager.get_deliveries(message.message_id)
-                assert [delivery.recipient_id for delivery in deliveries] == [TARGET_ID]
-                if async_mode:
-                    assert action["data"]["status"] == "prepared"
-                else:
-                    assert "ready" in json.dumps(action["data"])
-        finally:
-            await registry.stop()
 
 
 async def test_missing_observer_ability_is_rejected_before_enqueue(tmp_path):

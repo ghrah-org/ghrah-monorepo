@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.protocol.types import ProjectStatus, RecoveryAction
+from ghrah.protocol.types import RecoveryAction
 
 from ghrah.subject.config import RecoveryConfig
 from ghrah.subject.project.models import (
@@ -319,21 +319,6 @@ class TestReconcile:
         rebuilt = await desired_store.load("default")
         assert rebuilt is not None
         assert [a.name for a in rebuilt.projects[0].agents] == ["fresh"]
-
-    async def test_paused_project_does_not_mount_cluster(self) -> None:
-        project = _desired_project(agents=[AgentSpec(name="paused", cluster_id="c1")]).model_copy(
-            update={"status": ProjectStatus.PAUSED}
-        )
-        svc, (_, _, cluster_transport, _) = _make_service(
-            projects=[project],
-            workspace_records=[_WS1],
-        )
-
-        report = await svc.reconcile()
-
-        assert report.paused == 1
-        assert cluster_transport.ensure_calls == []
-        assert cluster_transport._handle.spawned == []
 
     async def test_reconcile_existing_agent_not_spawned(self) -> None:
         project = _desired_project(

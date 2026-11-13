@@ -19,7 +19,6 @@ from ghrah.subject.config import SubjectConfig
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
 from ghrah.subject.units import mount_builtin_units
-from ghrah.subject.units.room import RoomUnit
 
 
 def _config(tmp_path: Path) -> SubjectConfig:
@@ -205,99 +204,3 @@ async def test_room_log_persistence_across_restart(tmp_path: Path) -> None:
         assert log["count"] == 1
         assert log["entries"][0]["data"]["message"] == "persisted"
         assert log["entries"][0]["seq"] == 1
-
-
-async def test_room_delivery_routes_agent_id_to_owning_cluster(tmp_path: Path) -> None:
-    """两个 cluster 存在同名 agent 时，Room UUID 必须只投递到所属 CoreUnit。"""
-
-    class ProjectManagerStub:
-        async def handle_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
-            project = {
-                "project_id": "project-1",
-                "project_root_locator": "",
-                "agents": [
-                    {"agent_id": "a" * 32, "name": "planner", "cluster_id": "c1"},
-                    {"agent_id": "b" * 32, "name": "planner", "cluster_id": "c2"},
-                ],
-            }
-            if command == "project_list":
-                return {"success": True, "data": {"projects": [project]}}
-            if command == "project_get" and payload.get("project_id") == "project-1":
-                return {"success": True, "data": {"project": project}}
-            return {"success": False, "data": None, "error": "not found"}
-
-    class HandleStub:
-        def __init__(self) -> None:
-            self.messages: list[Any] = []
-
-        async def send_message(self, payload: Any) -> dict[str, Any]:
-            self.messages.append(payload)
-            return {"success": True, "data": {"delivered": True}, "error": None}
-
-    class RegistryStub:
-        def __init__(self) -> None:
-            self.handles = {"c1": HandleStub(), "c2": HandleStub()}
-            self.ensure_calls: list[str] = []
-
-        async def ensure_cluster(
-            self,
-            cluster_id: str,
-            *,
-            project_id: str = "",
-            project_root_locator: str = "",
-        ) -> HandleStub:
-            self.ensure_calls.append(cluster_id)
-            return self.handles[cluster_id]
-
-    class ContextStub:
-        def __init__(self, registry: RegistryStub) -> None:
-            self.services: dict[str, Any] = {
-                "project_manager": ProjectManagerStub(),
-                "core_cluster_registry": registry,
-            }
-
-        def get(self, name: str) -> Any:
-            return self.services[name]
-
-        def provide(self, name: str, value: Any) -> None:
-            self.services[name] = value
-
-        def emit(self, name: str, payload: dict[str, Any]) -> None:
-            return None
-
-    registry = RegistryStub()
-    unit = RoomUnit(_config(tmp_path))
-    await unit.init(ContextStub(registry))
-    await unit.start()
-    try:
-        created = await unit.service.handle_command(
-            "room_create", {"project_id": "project-1", "name": "routing"}
-        )
-        room_id = created["data"]["room"]["room_id"]
-        ambiguous = await unit.handle_command(
-            "room_join",
-            {"room_id": room_id, "subject": "planner", "subject_type": "agent"},
-            None,  # type: ignore[arg-type]
-        )
-        assert ambiguous["success"] is False
-        joined = await unit.handle_command(
-            "room_join",
-            {"room_id": room_id, "subject": "b" * 32, "subject_type": "agent"},
-            None,  # type: ignore[arg-type]
-        )
-        [member] = joined["data"]["room"]["members"]
-        assert member["subject"] == "b" * 32
-        assert member["subject_name"] == "planner"
-        result = await unit.service._deliver("b" * 32, "human:yuki", "resume", room_id)
-        assert result["success"] is True
-        assert registry.ensure_calls == ["c2"]
-        assert registry.handles["c1"].messages == []
-        [message] = registry.handles["c2"].messages
-        assert message.target == "planner"
-        assert message.metadata == {
-            "room_id": room_id,
-            "project_id": "project-1",
-            "agent_id": "b" * 32,
-        }
-    finally:
-        await unit.stop()

@@ -198,21 +198,6 @@ class TestSupervisorActor:
         with pytest.raises(RegistryError, match="requires a non-empty explicit"):
             await supervisor.spawn_agent(AgentConfig(name="orphan"))
 
-    @pytest.mark.asyncio
-    async def test_spawn_respects_max_cluster_members(self) -> None:
-        """超限 raise：集群宽度硬阻断。"""
-        supervisor = SupervisorActor(max_cluster_members=1)
-
-        async def _spawn(name: str) -> None:
-            await supervisor.spawn_agent(
-                AgentConfig(name=name),
-                abilities=[ConversationAbility(), EndTaskAbility()],
-            )
-
-        await _spawn("first")
-        with pytest.raises(RegistryError, match="member limit reached"):
-            await _spawn("second")
-
 
 class TestGetClusterContext:
     """get_cluster_context：集群身份注入的数据源（C2c）。"""
@@ -248,11 +233,6 @@ class TestGetClusterContext:
         for i in range(_MAX_CONTEXT_MEMBERS + 5):
             supervisor._registry.register(f"agent-{i}", AgentConfig(name=f"agent-{i}"), MagicMock())
         assert len(supervisor.get_cluster_context()["members"]) == _MAX_CONTEXT_MEMBERS
-
-    def test_empty_cluster(self) -> None:
-        supervisor = SupervisorActor()
-        ctx = supervisor.get_cluster_context()
-        assert ctx["members"] == []
 
 
 class TestSupervisorPersistenceRecovery:

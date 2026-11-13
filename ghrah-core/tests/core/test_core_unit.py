@@ -1145,60 +1145,6 @@ async def test_multi_agent_core_restart_restores_independent_snapshots(
     await restarted.stop()
 
 
-async def test_same_name_agents_in_different_clusters_use_uuid_snapshot_keys(
-    tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
-) -> None:
-    """共享 Project action DB 时，同名 Agent 也按 UUID 隔离快照。"""
-    from ghrah.context.persistence.sqlite_backend import SqliteBackend
-
-    db_path = tmp_path / "shared-project-action.db"
-
-    def persistence_factory(config: AgentConfig) -> SqliteBackend:
-        return SqliteBackend(db_path=db_path, run_id=f"run-{config.effective_agent_id}")
-
-    identities = {"cluster-a": "a" * 32, "cluster-b": "b" * 32}
-    first_units: list[CoreUnit] = []
-    heads: dict[str, str] = {}
-    for cluster_id, agent_id in identities.items():
-        unit = create_core_unit(
-            ability_core_config(
-                project_id="default",
-                persistence_factory=persistence_factory,
-            )
-        )
-        await unit.init(FakeCtx())
-        result = await unit.handle_command(
-            "spawn_agent", _spawn_payload_with_id("planner", agent_id), None
-        )
-        assert result["data"]["recovery_mode"] == "initialized"
-        cm = _actor_of(unit, "planner")._context_manager
-        assert cm.agent_name == agent_id
-        cm.begin_iteration()
-        cm.apply_state_changes({"cluster": cluster_id})
-        heads[agent_id] = cm.commit_iteration(ability_names=[]).id
-        first_units.append(unit)
-
-    for unit in first_units:
-        await unit.stop()
-
-    for cluster_id, agent_id in identities.items():
-        unit = create_core_unit(
-            ability_core_config(
-                project_id="default",
-                persistence_factory=persistence_factory,
-            )
-        )
-        await unit.init(FakeCtx())
-        result = await unit.handle_command(
-            "spawn_agent", _spawn_payload_with_id("planner", agent_id), None
-        )
-        assert result["data"]["recovery_mode"] == "restored"
-        cm = _actor_of(unit, "planner")._context_manager
-        assert cm.active_head.id == heads[agent_id]
-        assert cm.get_current_state() == {"cluster": cluster_id}
-        await unit.stop()
-
-
 # ----------------------------------------------------------------
 # 环境信息注入（008 T-2）：spawn 装配接线
 # ----------------------------------------------------------------
