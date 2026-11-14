@@ -1,6 +1,0 @@
-{
-  "command": "list_agents",
-  "payload": {
-    "project_id": "example"
-  }
-}

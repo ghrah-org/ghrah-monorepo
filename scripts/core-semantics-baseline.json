@@ -15,10 +15,6 @@
     "SubjectCommandBridge": "SubjectCommandBridge"
   },
   "counts": {
-    "external_ref": {
-      "ghrah/core/runtime_agent_api.py": 8,
-      "ghrah/core/runtime_agent_store.py": 7
-    },
     "manifest_ref": {
       "ghrah/ability/access/backends.py": 2,
       "ghrah/ability/builtin/cluster/operations/query_manifests.py": 17,
@@ -52,7 +48,6 @@
       "ghrah/core/api/facade.py": 6,
       "ghrah/core/api/handlers/mailbox.py": 1,
       "ghrah/core/read/ability_catalog.py": 5,
-      "ghrah/core/runtime.py": 1,
       "ghrah/core/unit.py": 2,
       "ghrah/core/units/registry.py": 1,
       "ghrah/core/wiring.py": 1
@@ -91,8 +86,6 @@
       "ghrah/core/read/ability_catalog.py": 10,
       "ghrah/core/read/chain.py": 28,
       "ghrah/core/read/mailbox.py": 16,
-      "ghrah/core/runtime.py": 5,
-      "ghrah/core/runtime_resources.py": 1,
       "ghrah/core/unit.py": 62,
       "ghrah/core/units/registry.py": 56,
       "ghrah/core/wiring.py": 9
@@ -103,21 +96,11 @@
       "ghrah/communication/message_manager.py": 6,
       "ghrah/communication/router.py": 1,
       "ghrah/communication/supervisor.py": 6,
-      "ghrah/core/room_protocol.py": 11,
-      "ghrah/core/runtime_agent_api.py": 1
+      "ghrah/core/room_protocol.py": 11
     },
     "room_projector": {
-      "ghrah/core/runtime_resources.py": 2,
       "ghrah/core/unit.py": 1,
       "ghrah/core/units/registry.py": 2
-    },
-    "scope_ref": {
-      "ghrah/core/runtime.py": 14,
-      "ghrah/core/runtime_agent_api.py": 7,
-      "ghrah/core/runtime_agent_store.py": 22,
-      "ghrah/core/runtime_management_api.py": 1,
-      "ghrah/core/runtime_read_api.py": 2,
-      "ghrah/core/runtime_resources.py": 9
     },
     "shell_cwd_provider": {
       "ghrah/ability/access/boundary.py": 3,

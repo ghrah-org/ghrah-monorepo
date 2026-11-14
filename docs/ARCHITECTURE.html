@@ -127,7 +127,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#61-coreunit命令分发与-coreunitconfig" class="lv3">6.1 CoreUnit：命令分发与 CoreUnitConfig</a>
 <a href="#62-unitsregistrypyruntimeregistry" class="lv3">6.2 units/registry.py：RuntimeRegistry</a>
 <a href="#63-apicorefacade-与能力面单一端口" class="lv3">6.3 api/：CoreFacade 与能力面（单一端口）</a>
-<a href="#64-runtimepy--runtime_agent_apipy进程内控制面另一件事" class="lv3">6.4 runtime.py / runtime_agent_api.py：进程内控制面（另一件事）</a>
+<a href="#64-进程内-v1-控制面已退役" class="lv3">6.4 进程内 /v1 控制面（已退役）</a>
 <a href="#65-core--subject-反向通道" class="lv3">6.5 Core → Subject 反向通道</a>
 <a href="#66-supervisor--agent-actor--驱动循环入口" class="lv3">6.6 Supervisor / Agent actor / 驱动循环入口</a>
 <a href="#67-未核实本章" class="lv3">6.7 未核实（本章）</a>
@@ -558,7 +558,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p>TS 依赖图同样无环，且 <code>@ghrah/protocol</code> 是叶子（<code>ghrah-observer-webui/packages/protocol/package.json:40</code>–<code>:42</code> 的 <code>dependencies</code> 只有 <code>zod</code>）。这与 Python 侧 <code>ghrah-protocol</code> 依赖 <code>ghrah-plugin</code> 形成对照：同一份 wire 契约的两个语言实现，只有 TS 侧保持了「契约包零内部依赖」。</p>
 <p>跨语言同步由两侧机制保证：</p>
 <ul>
-<li>Python 是生成源：<code>ability-control.generated.ts</code>、<code>runtime.generated.ts</code> 等文件头注明由 <code>scripts/export_ability_contracts.py</code> / <code>scripts/export_runtime_contracts.py</code> 生成（<code>ghrah-observer-webui/packages/protocol/src/ability-control.generated.ts:5</code>、<code>ghrah-observer-webui/packages/protocol/src/runtime.generated.ts:1</code>）；</li>
+<li>Python 是生成源：<code>ability-control.generated.ts</code> 等文件头注明由 <code>scripts/export_ability_contracts.py</code> 生成（<code>ghrah-observer-webui/packages/protocol/src/ability-control.generated.ts:5</code>）；</li>
 <li>TS 是校验端：<code>protocol-align.spec.ts</code> 用 Python 导出的快照做 Pydantic–Zod 交叉校验（<code>ghrah-observer-webui/packages/protocol/src/protocol-align.spec.ts:307</code>），快照目录为该测试同级的 <code>__snapshots__/</code>（<code>:146</code>）。</li>
 </ul>
 <p>手写而非生成的部分是漂移风险点：<code>payloads/plugin.ts</code> 的六字段镜像（<code>ghrah-observer-webui/packages/protocol/src/payloads/plugin.ts:8</code>–<code>:9</code>）没有对应的导出脚本。</p>
@@ -800,18 +800,8 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tr><td><code>agent_control.py</code></td><td>150</td><td><code>TreeModel</code></td><td><code>AgentPromptSummary</code>、<code>AgentRuntimeView</code>、<code>AgentAbilitySummary</code>、<code>AgentSpecificationSummary</code>/<code>...Detail</code>、<code>AgentSummaryView</code>、<code>AgentListView</code>、<code>AgentAdminView</code>、<code>AgentCreateRequest</code>、<code>AgentSpecPatch</code>、<code>AgentDesiredStateRequest</code>、<code>AgentDeletedView</code></td><td>一次读取同时给规格、运行快照、能力摘要；不接收授权字段（<code>:4</code>–<code>:8</code>）</td></tr>
 <tr><td><code>agentconf_control.py</code></td><td>443</td><td><code>TreeModel</code></td><td><code>AgentconfStatusView</code>、<code>AgentconfProviderView</code> / <code>...EndpointView</code> / <code>...McpProviderView</code> / <code>...McpServerView</code>（各配 Create/Patch/List/References/Resolve）、<code>AgentconfCapabilitySummary</code>/<code>...DetailView</code>/<code>...UpdatePreviewView</code>/<code>...UpdateResultView</code>、<code>BindingView</code></td><td>连接配置面；响应<strong>不含</strong> API key、header/env 值或外部凭据引用（<code>:6</code>）；18 个 <code>format</code> 字面量</td></tr>
 <tr><td><code>scheme.py</code></td><td>85</td><td><code>DescriptorModel</code>（<code>strict</code>/<code>frozen</code>/<code>populate_by_name</code>，<code>:13</code>–<code>:16</code>）</td><td><code>ActionDescriptor</code>、<code>ContractDescriptor</code>（+<code>fingerprint()</code>，<code>:46</code>）、<code>DiscoveredAction</code>、<code>DiscoveredResource</code>、<code>CatalogSnapshot</code></td><td><code>ghrah.scheme.local-contract.v1</code>、<code>ghrah.scheme.catalog.v1</code> 两个 <code>format</code></td></tr>
-<tr><td><code>runtime.py</code></td><td>200</td><td><code>RuntimeRequest</code> / <code>RuntimeResponse</code></td><td><code>RuntimePrincipal</code>、<code>RuntimeCapability</code>、<code>RuntimeMeta</code>、<code>RuntimeStandardProblem</code>、<code>RuntimeProblem</code>、<code>RuntimeSystemStatus</code>、<code>RuntimeCommandRequest</code></td><td>请求 <code>extra=&quot;forbid&quot;</code>（<code>:77</code>），响应 <code>extra=&quot;ignore&quot;</code>（<code>:84</code>）——输入严格、输出 additive-only</td></tr>
-<tr><td><code>runtime_agents.py</code></td><td>294</td><td>同上</td><td><code>RuntimeAssemblyInput</code>、<code>RuntimeAssemblyView</code>、<code>RuntimeAgentCreate</code>、<code>RuntimeAgentResource</code>、<code>RuntimeAgentSummary</code>、<code>RuntimeAgentsPage</code>、<code>RuntimeStateTransitionResult</code></td><td>完整装配输入不依赖 Subject 模板；<code>finite_json</code> 校验拒绝不可 JSON 化参数（<code>:186</code>–<code>:198</code>）</td></tr>
-<tr><td><code>runtime_resources.py</code></td><td>229</td><td>同上</td><td><code>RuntimePage[T]</code>、<code>RuntimeOperation</code>、<code>RuntimeRef</code>、<code>RuntimeEvent</code>、<code>RuntimeMessageCreate</code>、<code>RuntimeMessageAccepted</code>、<code>RuntimeDeliveryView</code>、<code>RuntimeTimelinePage</code>、<code>RuntimeNodeView</code></td><td>id 前缀模式：<code>agt_</code>/<code>dlv_</code>/<code>msg_</code>/<code>nod_</code> + 26 位 Crockford base32（<code>:18</code>–<code>:21</code>）</td></tr>
-<tr><td><code>runtime_digest.py</code></td><td>78</td><td>—</td><td><code>canonical_json</code>、<code>runtime_digest</code>、<code>normalized_assembly</code>、<code>assembly_digest</code></td><td>跨语言规范化 JSON（键按码点排序、整数限 <code>2**53-1</code>、拒绝非有限浮点，<code>:12</code>–<code>:49</code>）；<code>assembly_digest</code> 把 <code>digest_version: 1</code> 计入摘要（<code>:78</code>）</td></tr>
 </tbody></table>
-<p>三条成对的设计：</p>
-<ul>
-<li><strong>输入严格 / 输出宽容</strong>：<code>RuntimeRequest</code> 用 <code>extra=&quot;forbid&quot;</code> + <code>strict=True</code>；<code>RuntimeResponse</code> 用 <code>extra=&quot;ignore&quot;</code> + <code>frozen=True</code>，并把 schema 标成 <code>readOnly</code>（<code>runtime.py:51</code>–<code>:56</code>、<code>:74</code>–<code>:85</code>）。客户端因此可以忽略未来新增字段，但服务端不能忽略客户端多传的字段。</li>
-<li><strong>可省略 ≠ 可传 null</strong>：<code>RuntimeResponse._omittable</code> 声明的字段「可以省略但不能显式 null」（<code>runtime.py:86</code>–<code>:96</code>），序列化时未提供的非 nullable 字段不输出 null 占位（<code>:98</code>–<code>:105</code>）。<code>RuntimeStandardProblem</code> 与 <code>RuntimeProblem</code> 共用同一组 <code>_omittable</code>（<code>:152</code>、<code>:166</code>）。</li>
-<li><strong>单一事实不重复表达</strong>：<code>RuntimePage</code> 的 <code>has_more</code> 必须等于 <code>next_cursor is not None</code>，否则校验失败（<code>runtime_resources.py:44</code>–<code>:49</code>）；<code>RuntimeSystemStatus.ready</code> 必须等于 <code>phase == &quot;ready&quot;</code>，<code>error</code> 只允许出现在 <code>failed</code> 阶段（<code>runtime.py:193</code>–<code>:199</code>）。</li>
-</ul>
-<p>这组模型的产物不止是 Python 类型：<code>ghrah-protocol/contracts/runtime/</code> 里提交了生成物——<code>openapi.json</code>（约 122 KB，只列已实现的 10 条路由）、<code>schema-cases.json</code>（正反例语料）、<code>status.ready.json</code>、<code>command.list.json</code> 与 17 个 <code>fixtures/*.json</code>。生成器是 <code>scripts/export_runtime_contracts.py</code>，漂移由 pytest 而非 CI 单独步骤守护（<code>ghrah-protocol/tests/test_runtime_contract.py:25</code>–<code>:33</code> 直接执行 <code>module.artifacts()</code> 并逐文件比对文本）。「只列已实现路由」这条也被测试钉死（<code>ghrah-protocol/tests/conformance/test_runtime_schemas.py:90</code>–<code>:103</code>）。</p>
+<blockquote><p><strong>已退役（2026-11-14，M7）</strong>：<code>protocol/runtime.py</code>、<code>runtime_agents.py</code>、<code>runtime_resources.py</code>、<code>runtime_digest.py</code> 与其生成物（<code>ghrah-protocol/contracts/runtime/</code>、<code>packages/protocol/src/runtime.generated.ts</code>、对应 pytest/vitest 用例与 <code>scripts/export_runtime_contracts.py</code>）已整体删除。原「输入严格 / 输出宽容」「可省略 ≠ 可传 null」「单一事实不重复表达」三条设计只服务于这条已退役的路径式控制面；能力端口使用的契约（表 3-4 其余模块）不受影响。</p></blockquote>
 <h4 id="334-payloads实际文件清单">3.3.4 <code>payloads/</code>：实际文件清单</h4>
 <p><code>payloads/</code> 有 12 个 <code>.py</code>（11 个域模块 + 聚合再导出的 <code>__init__.py</code>），域模块里 <code>model.py</code> 只是共享校验基类、不含载荷：</p>
 <p>表 3-5 <code>payloads/</code> 文件清单</p>
@@ -855,15 +845,14 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p>这套「无全局版本」的取舍是可推演的一致后果：<code>format</code> 字面量把版本下沉到每个报文类型，任何单个报文改形状只需动它自己的字面量；<code>RuntimeMeta.capabilities</code> 把版本上移到能力协商，客户端按名字+整数版本判断；而 WS 命令/事件面则完全没有版本位，只能靠「未知 type 不崩、未登记 payload 透传」的宽容度吸收差异。</p>
 <p>代价同样清楚：<strong>WS 命令/事件面没有兼容性判据</strong>。<code>persist_*</code> 与 <code>manifest_*</code> 共 17 条命令在 payload 面上就是裸 dict（<code>envelope.py:223</code>），形状变更不会在任何一张表里留下痕迹；<code>EVENT_PAYLOAD_MAP</code> 缺 <code>ability_tree_changed</code>/<code>ability_package_changed</code> 两项（<code>routing.py:25</code>–<code>:26</code>），意味着这两个事件的载荷永远不会被收窄校验。</p>
 <h3 id="35-与-ts-侧-packagesprotocol-的对齐">3.5 与 TS 侧 <code>packages/protocol</code> 的对齐</h3>
-<p>TS 镜像包是 <code>ghrah-observer-webui/packages/protocol</code>（pnpm workspace 成员，包名 <code>@ghrah/protocol</code>）。它不是一个手写副本：Python 侧有<strong>三个生成器</strong>（快照、Ability 契约、Runtime 契约）加<strong>一套共享语料</strong>，把「同一形状」变成可机械校验的关系。</p>
-<p>表 3-7 同步与校验的四条链路</p>
+<p>TS 镜像包是 <code>ghrah-observer-webui/packages/protocol</code>（pnpm workspace 成员，包名 <code>@ghrah/protocol</code>）。它不是一个手写副本：Python 侧有<strong>两个生成器</strong>（快照、Ability 契约）加<strong>一套共享语料</strong>，把「同一形状」变成可机械校验的关系。</p>
+<p>表 3-7 同步与校验的三条链路</p>
 <table>
 <thead><tr><th>链路</th><th>Python 侧（权威）</th><th>生成物</th><th>校验方</th></tr></thead>
 <tbody>
 <tr><td>① payload 快照</td><td><code>payloads/*</code> 的 Pydantic 模型</td><td><code>ghrah-observer-webui/packages/protocol/src/__snapshots__/*.json</code>（实测 154 个 <code>.json</code>，含 1 份 <code>scheme-discovery.json</code> 非 payload 快照）</td><td>双侧：<code>ghrah-protocol/tests/protocol/test_snapshot_roundtrip.py</code> + <code>.../src/protocol-align.spec.ts</code></td></tr>
 <tr><td>② 观察端 REST 契约</td><td><code>ability_tree.py</code>、<code>ability_control.py</code>、<code>agent_control.py</code>、<code>agentconf_control.py</code></td><td><code>src/ability-tree.generated.ts</code>、<code>src/ability-control.generated.ts</code>、<code>src/agent-control.generated.ts</code>、<code>src/agentconf-control.generated.ts</code></td><td><code>scripts/export_ability_contracts.py --check</code>（CI 门禁）</td></tr>
-<tr><td>③ Runtime 契约</td><td><code>runtime.py</code>、<code>runtime_agents.py</code>、<code>runtime_resources.py</code></td><td><code>src/runtime.generated.ts</code> + <code>ghrah-protocol/contracts/runtime/{openapi.json,schema-cases.json,fixtures/*}</code></td><td><code>tests/test_runtime_contract.py:25</code>–<code>:33</code> + <code>contracts/runtime/schema-cases.json</code> 双侧共读</td></tr>
-<tr><td>④ Scheme 描述</td><td><code>scheme.py</code></td><td>无生成物，TS 手写 <code>src/scheme.ts</code></td><td><code>src/scheme.spec.ts</code>（断言为手写镜像）</td></tr>
+<tr><td>③ Scheme 描述</td><td><code>scheme.py</code></td><td>无生成物，TS 手写 <code>src/scheme.ts</code></td><td><code>src/scheme.spec.ts</code>（断言为手写镜像）</td></tr>
 </tbody></table>
 <p><strong>链路①：快照由 Python 生成、两侧读同一份文件。</strong></p>
 <ul>
@@ -876,17 +865,9 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p><strong>链路②：Zod 校验器由 Python 单向生成，手改即漂移。</strong></p>
 <p>生成器是 <code>scripts/export_ability_contracts.py</code>。四个产物文件头都写着 <code>Generated by scripts/export_ability_contracts.py; edit the Python author.</code>（如 <code>ability-control.generated.ts:5</code>、<code>agent-control.generated.ts:5</code>、<code>agentconf-control.generated.ts:5</code>、<code>ability-tree.generated.ts:5</code>）。TS 侧的 <code>ability-control.ts</code>、<code>ability-tree.ts</code>、<code>agent-control.ts</code>、<code>agentconf-control.ts</code> 都只有一两行 <code>export * from &quot;./*.generated.js&quot;</code>，不含手写逻辑。</p>
 <p>生成器不只翻译字段，还把 Python 的 <code>model_validator</code> 语义翻成 <code>.refine(...)</code>（<code>scripts/export_ability_contracts.py:336</code>–<code>:344</code>）：<code>AbilityNode</code> 的 operations key 唯一、<code>AbilityTreeView</code> 的 alias/工具名唯一、<code>TreeChangeResult</code> 的「view 与 error 恰有一项」、<code>AbilityMcpProbeView</code> 的 <code>ok === (error === null)</code>。这些规则在两侧是同一条语义，不是两套近似。</p>
-<p>漂移门禁是 <code>--check</code> 模式（<code>scripts/export_ability_contracts.py:382</code>、<code>:389</code>），CI 里作为独立步骤跑（<code>.github/workflows/ci.yml:30</code>–<code>:31</code>）。注意 CI 只对 <code>export_ability_contracts.py</code> 有独立步骤；<code>export_runtime_contracts.py</code> 的漂移由 pytest 用例同步守护（<code>ghrah-protocol/tests/test_runtime_contract.py:25</code>–<code>:33</code>），效果等价但门禁位置不同。</p>
-<p><strong>链路③： 0  是两侧共读的同一份正反例语料。</strong></p>
-<p>这是全仓最强的一处「单一副本」证据：同一份 JSON 被两侧直接读、各自用本侧校验器跑。</p>
-<table>
-<thead><tr><th>侧</th><th>读取</th><th>断言</th></tr></thead>
-<tbody>
-<tr><td>Python</td><td><code>tests/conformance/test_runtime_schemas.py:18</code>–<code>:19</code> 读 <code>schema-cases.json</code></td><td><code>:22</code>–<code>:33</code> 按 <code>case[&quot;valid&quot;]</code> 断言 <code>model_validate</code> 成功/抛 <code>ValidationError</code></td></tr>
-<tr><td>TS</td><td><code>src/runtime.test.ts:5</code>–<code>:7</code>（相对路径 <code>../../../../ghrah-protocol/contracts/runtime/</code>）、<code>:16</code> 读同一文件</td><td><code>:19</code>–<code>:23</code> <code>it.each(cases)</code> 取 <code>runtime.generated.ts</code> 里的 <code>${schema}Schema</code>，断言 <code>safeParse(body).success === valid</code></td></tr>
-</tbody></table>
-<p><code>it.each(cases)</code> 会为每一条 case 生成一个用例，并在 schema 名对不上时先 <code>expect(validator).toBeDefined()</code> 失败（<code>runtime.test.ts:20</code>–<code>:21</code>）——即「Python 加了模型但 TS 生成器没跟上」会直接红，而不是静默跳过。</p>
-<p><strong>链路④： 0  是唯一手写镜像，因此只有单侧断言。</strong></p>
+<p>漂移门禁是 <code>--check</code> 模式（<code>scripts/export_ability_contracts.py:382</code>、<code>:389</code>），CI 里作为独立步骤跑（<code>.github/workflows/ci.yml:30</code>–<code>:31</code>）。注意 CI 只对 <code>export_ability_contracts.py</code> 有独立步骤；此前另一处生成物（Runtime 契约）由 pytest 守护，已随 M7 退役删除。</p>
+<blockquote><p><strong>原链路③（Runtime 契约： 0  两侧共读）已随 M7 退役（2026-11-14）删除</strong>：该语料、<code>runtime.generated.ts</code> 与 <code>contracts/runtime/</code> 不再是同步面。</p></blockquote>
+<p><strong>链路③： 0  是唯一手写镜像，因此只有单侧断言。</strong></p>
 <p><code>ghrah-observer-webui/packages/protocol/src/scheme.ts:5</code> 注明「与 Python <code>ghrah.protocol.scheme</code> 对齐」，但字段是手抄的（<code>ActionDescriptorSchema</code>/<code>ContractDescriptorSchema</code>/<code>DiscoveredActionSchema</code>/<code>DiscoveredResourceSchema</code>/<code>CatalogSnapshotSchema</code>），没有生成器，也没有读 Python 的测试。它的唯一守护是 <code>src/scheme.spec.ts</code> 的自测，以及 <code>src/__snapshots__/scheme-discovery.json</code> 这份由 Python 导出的样例。这处对齐是否需要自动化，<strong>未核实</strong>。</p>
 <p><strong>其余对齐面与它们的短板：</strong></p>
 <ul>
@@ -901,7 +882,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p><strong>① 提供方实现 Protocol，而不是定义 Protocol。</strong> <code>CoreFacade</code> 从契约包 import 端口签名（<code>ghrah-core/src/ghrah/core/api/facade.py:32</code> 起 <code>from ghrah.protocol.ports.core import ...</code>），Core 的依赖分层图把 <code>facade → runtime, protocol.ports</code> 写成硬约束（<code>ghrah-core/src/ghrah/core/api/__init__.py:14</code>），并在同一段里给出结论：</p>
 <blockquote><p>消费方只 import <code>ghrah.protocol.ports</code>；本包对它不可见。——<code>ghrah-core/src/ghrah/core/api/__init__.py:18</code></p></blockquote>
 <p><strong>② 消费方的业务代码里，提供方的名字一次都不出现。</strong> Subject 侧读 Core 数据只经端口：<code>units/ledger.py:17</code>–<code>:18</code> import <code>CorePort</code> 与 <code>CORE_PORT</code>，<code>:83</code> 用 <code>self._ctx.get(CORE_PORT, strict=False)</code> 取端口；<code>runtime/port_transport.py:21</code> import <code>CORE_PORT</code>，模块头写明「所有对『某个 Agent 的运行时操作』都转成 <code>CORE_PORT</code> 的能力调用」，返回值统一是协议视图的 <code>model_dump</code>，「与观察端/WS 契约同源，不再有第二套形状」（<code>:4</code>–<code>:12</code>）。</p>
-<p><strong>③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。</strong> 全仓 Subject 侧对 <code>ghrah.core</code> 的 import 只有三处，全部在函数体内：<code>units/core_cluster.py:282</code>（<code>from ghrah.core.wiring import build_core_port</code>）、<code>runtime_connection.py:280</code>、<code>core_cluster/registry.py:472</code>；<code>core_cluster.py:283</code> 紧接着 import 的是协议包的 <code>CORE_PORT</code>。<code>core_cluster.py:280</code>–<code>:316</code> 就是「Core 能力端口的唯一装配点」：构造 <code>build_core_port(...)</code> 后 <code>ctx.provide(CORE_PORT, core_port)</code>。<strong>依赖声明存在（ 11  的  12  含  13 ），但 import 被压到装配层这一个人为窄口</strong>——这是本仓区分「可以依赖」与「可以 import」的实际做法。</p>
+<p><strong>③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。</strong> 全仓 Subject 侧对 <code>ghrah.core</code> 的 import 只有两处，全部在函数体内：<code>units/core_cluster.py:282</code>（<code>from ghrah.core.wiring import build_core_port</code>）、<code>core_cluster/registry.py:472</code>；<code>core_cluster.py:283</code> 紧接着 import 的是协议包的 <code>CORE_PORT</code>。<code>core_cluster.py:280</code>–<code>:316</code> 就是「Core 能力端口的唯一装配点」：构造 <code>build_core_port(...)</code> 后 <code>ctx.provide(CORE_PORT, core_port)</code>。<strong>依赖声明存在（ 10  的  11  含  12 ），但 import 被压到装配层这一个人为窄口</strong>——这是本仓区分「可以依赖」与「可以 import」的实际做法。</p>
 <p><strong>④ 端口形状若住在提供方，消费方会被迫在 import 期拉起提供方。</strong> 反推一遍：<code>CorePort</code> 若定义在 <code>ghrah-core</code>，则 <code>units/ledger.py</code>（一个普通的读投影 Unit）在模块导入时就要 <code>import ghrah.core...</code>，于是「只读账本」这一段的 import 依赖会牵入整个 Core 装配面；<code>port_transport.py</code> 同理。而现在的形态下，<code>ledger.py</code>/<code>port_transport.py</code> 的 import 只有协议包与标准库，它们在只有 <code>pydantic</code> + <code>ghrah-plugin</code> 的环境里就能被导入与测试——这正是 <code>ghrah-protocol/pyproject.toml:9</code>–<code>:12</code> 依赖集合的意义，也解释了为什么 <code>ghrah-protocol</code> 的测试不依赖任何提供方（<code>tests/test_port_contract.py</code>、<code>tests/test_interface.py</code> 全程只用端口面类型）。</p>
 <p><strong>⑤ 契约包必须能自证形状，因此连出参都要自带一份。</strong> <code>views/core.py:398</code>–<code>:400</code> 的 <code>ContentReadResult</code> 是这条原则的显式代价：它与 <code>ghrah.ability.content.ContentReadResult</code> 字段一一对应，注释直说「契约包里必须有一份自己的形状，协议不得依赖 Core 的实现包」。同理 <code>payloads/plugin.py:33</code> 的 <code>PluginNegotiateResultPayload</code> 选择<strong>继承</strong>另一个契约包（<code>ghrah-plugin</code>）的模型而非复制字段——因为 <code>ghrah-plugin</code> 本身也是被多方共享的契约包，继承不引入对提供方的依赖。</p>
 <p><strong>⑥ 错误族的基类是最不能下沉到提供方的那一件。</strong> <code>ApiError</code> 若定义在 Core，Subject 的 <code>except ApiError</code> 就要求 Core 的模块在导入链上；<code>Problem</code> 的 <code>code</code> 会被消费方当作唯一分支判据（<code>problem.py:1</code>–<code>:8</code>），一旦两处各有一份 <code>ProblemCode</code>，码表漂移会表现为「明明 catch 到了却分不清类型」。<code>errors.py:7</code> 给出的解法是「基类共享、子类各自派生」：<code>CoreApiError</code> 可以有（<code>ghrah-core/src/ghrah/core/api/errors.py</code> 由 <code>__init__.py:24</code> 导出），但继承自契约包的 <code>ApiError</code>。</p>
@@ -1384,49 +1365,18 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <li>装配根 <code>build_core_port(...)</code>（<code>wiring.py:111-159</code>）按固定顺序组装：<code>ChainReadStore</code> → <code>MailboxReadStore</code> → <code>RuntimeRegistry</code> → <code>AbilityReadStore(resolve_run=registry.run_id_for, resolve_tools=registry.tools_for)</code> → <code>set_ability_store_factory</code> → <code>CoreRuntime(build_handlers(...))</code> → <code>CoreFacade(closer=...)</code>。</li>
 </ul>
 <p><strong>「单一端口」的边界</strong>：Subject 只知道一个字符串键 <code>core.port</code>（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>），由 <code>core_cluster_registry</code> 单元在挂载时 provide（<code>ghrah-subject/src/ghrah/subject/units/core_cluster.py:311-316</code>）；50 条能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是一个端口对象（用法 <code>ghrah-subject/src/ghrah/subject/units/ledger.py:83</code>）。</p>
-<h3 id="64-runtimepy--runtime_agent_apipy进程内控制面另一件事">6.4 <code>runtime.py</code> / <code>runtime_agent_api.py</code>：进程内控制面（另一件事）</h3>
-<p><code>ghrah-core/src/ghrah/core/runtime.py</code> 是<strong>独立的进程内 Core 运行时</strong>，与 §6.3 的能力端口不是同一层，名字相同但不是同一个类：</p>
-<table>
-<thead><tr><th>类</th><th>位置</th><th>角色</th></tr></thead>
-<tbody>
-<tr><td><code>ghrah.core.api.runtime.CoreRuntime</code></td><td><code>api/runtime.py:18</code></td><td>能力收敛点：<code>invoke(name, payload)</code>，名字寻址，无 HTTP</td></tr>
-<tr><td><code>ghrah.core.runtime.CoreRuntime</code></td><td><code>runtime.py:66</code></td><td>进程内 runtime：<code>dispatch(method, path, …)</code>，路径寻址，自带生命周期与 Problem 编码</td></tr>
-</tbody></table>
-<p>它显式声明自己「唯一拥有新路径资源与生命周期，不依赖 Subject Context」（<code>runtime.py:66-67</code>），由 <code>RuntimeConfig</code>（<code>:52-63</code>）配置：<code>scope_ref</code>、<code>database_path</code>（必须是绝对路径）、<code>init_timeout</code>、<code>stop_timeout</code>、<code>ability_source</code>、<code>enabled_commands</code>、<code>enabled_agent_api</code>、<code>config_quota</code>。所有开关默认关闭：<code>enabled_commands=()</code>、<code>enabled_agent_api=False</code>。</p>
-<p><code>dispatch</code> 的路径表（<code>:387-446</code>）：</p>
-<table>
-<thead><tr><th>方法</th><th>路径</th><th>处理</th></tr></thead>
-<tbody>
-<tr><td>GET</td><td><code>/v1/meta</code></td><td>返回接口清单（<code>runtime.lifecycle</code> 恒在，另两个按开关追加）</td></tr>
-<tr><td>GET</td><td><code>/v1/status</code></td><td>返回 <code>RuntimeSystemStatus</code>（phase / ready / boot_id / since / error）</td></tr>
-<tr><td>POST</td><td><code>/v1/commands</code></td><td>仅 <code>enabled_commands</code> 白名单内的 4 条命令（<code>spawn_agent</code> / <code>list_agents</code> / <code>send_message</code> / <code>terminate_agent</code>，<code>:44-49</code>）</td></tr>
-<tr><td>任意</td><td><code>/v1/agents</code>、<code>/v1/agents/{id}</code>、<code>/state</code>、<code>/messages</code>、<code>/timeline</code>、<code>/v1/nodes/{id}</code>、<code>/v1/deliveries/{id}</code></td><td>转 <code>RuntimeAgentAPI.dispatch</code>（<code>runtime_agent_api.py:526-598</code>）</td></tr>
-<tr><td>其它</td><td>—</td><td><code>404 NOT_FOUND</code></td></tr>
-</tbody></table>
-<p><code>RuntimeAgentAPI</code> 的允许方法表在 <code>runtime_agent_api.py:538-552</code>：<code>/v1/agents</code> = <code>GET, POST</code>；<code>/v1/agents/{id}</code> = <code>GET</code>；<code>/state</code> = <code>PUT</code>；<code>/messages</code> = <code>POST</code>；<code>/timeline</code> = <code>GET</code>；<code>/v1/nodes/{id}</code> 与 <code>/v1/deliveries/{id}</code> = <code>GET</code>（后者支持 <code>wait</code> 0–30 秒长轮询，<code>:555-570</code>）。错误统一编码为 <code>application/problem+json</code>（<code>runtime.py:270-300</code>），资源契约用 <code>Idempotency-Key</code>（<code>:85-92</code>）与 <code>ETag</code> / <code>If-Match</code>（<code>:94-97</code>、<code>:300-310</code>；缺失 <code>If-Match</code> 回 428）。</p>
-<p>生命周期是 5 个不可回退的阶段（<code>lifecycle.py:6</code>）：<code>booting → ready → stopping → stopped</code>，任一步失败进 <code>failed</code> 且错误保留到实例退出；<code>ready</code> 仅表示完整初始化完成（<code>lifecycle.py:18-21</code>）。<code>init()</code> 幂等且失败后必须新建实例（<code>runtime.py:110-147</code>），<code>stop()</code> 用 <code>asyncio.shield</code> 保证宿主取消也不留无主写者（<code>:228-239</code>）。</p>
-<p>与模块端口的对照：</p>
-<table>
-<thead><tr><th>维度</th><th>模块端口（§6.3）</th><th>进程内 runtime（本节）</th></tr></thead>
-<tbody>
-<tr><td>寻址</td><td>接口名 <code>group.action</code></td><td><code>method + path</code></td></tr>
-<tr><td>传输物</td><td>Python 调用 + DTO</td><td><code>RuntimeDispatchResponse(status, headers, body)</code></td></tr>
-<tr><td>错误</td><td><code>ApiError</code> / <code>Problem</code>（无状态码）</td><td><code>Problem</code> + HTTP 状态码</td></tr>
-<tr><td>作用域</td><td><code>facade.project(id)</code> 视图</td><td><code>RuntimePrincipal(scope_ref)</code> + <code>config.scope_ref</code></td></tr>
-<tr><td>开关</td><td>装配即全量可用</td><td><code>enabled_commands</code> / <code>enabled_agent_api</code> 默认关闭</td></tr>
-<tr><td>消费者</td><td>Subject 全部单元</td><td><code>RuntimeClient</code>（<code>ghrah-subject/src/ghrah/subject/runtime_connection.py:50-231</code>）</td></tr>
-</tbody></table>
-<p><code>RuntimeConnection</code>（<code>runtime_connection.py:250-318</code>）是唯一已知消费者：默认 <code>enabled=False</code>（<code>:238</code>），启用后构造 <code>CoreRuntime</code>（<code>:279-294</code>）、后台 <code>init()</code> 并轮询 <code>/v1/meta</code> + <code>/v1/status</code> 直到 <code>ready</code>（<code>:211-231</code>、<code>:296-300</code>）。它<strong>没有被任何 Subject 单元引用</strong>（全仓 <code>RuntimeConnection</code> 只出现在自身、<code>scripts/verify_runtime_model.py</code> 与测试中），因此这条控制面当前是「可用的旁路」，不在 Ouroboros 装配链上。</p>
+<h3 id="64-进程内-v1-控制面已退役">6.4 进程内 <code>/v1</code> 控制面（已退役）</h3>
+<blockquote><p><strong>已退役（2026-11-14，M7）</strong>：原 <code>ghrah-core/src/ghrah/core/runtime.py</code> 与 <code>runtime_agent_api.py</code> / <code>runtime_read_api.py</code> / <code>runtime_management_api.py</code> / <code>runtime_resources.py</code> / <code>runtime_agent_store.py</code> / <code>runtime_resource_ids.py</code> / <code>runtime_agent_config.py</code>，协议包 <code>runtime*.py</code>，Subject 侧 <code>runtime_connection.py</code> / <code>runtime_http.py</code>，以及生成物 <code>ghrah-protocol/contracts/runtime/</code>、<code>packages/protocol/src/runtime.generated.ts</code>、相关 pytest/vitest 用例与两个脚本，已整体删除。它从未进入生产单元装配链（只是「可用的旁路」），删除后 Core 只剩 §6.3 的能力端口一个调用面；<code>RuntimePrincipal.scope_ref</code> / <code>external_ref</code> 这类 Subject 业务键语义也随之从 Core 消失。</p></blockquote>
 <h3 id="65-core--subject-反向通道">6.5 Core → Subject 反向通道</h3>
 <p>正向（Subject → Core）是 <code>CORE_PORT</code> 能力调用；反向（Core → Subject）是<strong>不透明命令字符串</strong>，经两条薄类实现：</p>
 <table>
 <thead><tr><th>类</th><th>文件</th><th>行为</th></tr></thead>
 <tbody>
-<tr><td><code>SubjectCommandBridge</code></td><td><code>ghrah-core/src/ghrah/core/subject_bridge.py:22-51</code></td><td>持 <code>serial</code> 回调；<code>dispatch(command, payload)</code> 发 <code>command/&lt;command&gt;</code>，异常/非 dict 回执统一归一为 <code>{&quot;success&quot;: False, &quot;error&quot;: …}</code></td></tr>
+<tr><td><code>HostCommandBridge</code></td><td><code>ghrah-core/src/ghrah/core/host_command_bridge.py:22-51</code></td><td>持 <code>serial</code> 回调；<code>dispatch(command, payload)</code> 发 <code>command/&lt;command&gt;</code>，异常/非 dict 回执统一归一为 <code>{&quot;success&quot;: False, &quot;error&quot;: …}</code></td></tr>
 <tr><td><code>HostCommandPort</code></td><td><code>ghrah-core/src/ghrah/core/host_command_port.py:61-69</code></td><td>按允许集产出 scoped 视图：<code>scoped(allowed)</code></td></tr>
 <tr><td><code>ScopedHostCommandPort</code></td><td><code>host_command_port.py:33-59</code></td><td><code>dispatch</code> 先查白名单，未命中或未接线都返回显式失败回执（含固定文案 <code>HOST_COMMAND_PORT_UNAVAILABLE_ERROR</code>）</td></tr>
 </tbody></table>
-<p>接线点在 <code>CoreUnit._init</code>（<code>unit.py:590-596</code>）：宿主 <code>ctx</code> 有 <code>serial</code> 时才构造 <code>SerialRoomBridge(serial)</code> 与 <code>HostCommandPort(SubjectCommandBridge(serial))</code>；没有 <code>serial</code>（standalone 或 §6.2 的 <code>UnitContext</code>）时二者均为 <code>None</code>，<code>send</code> 工具与宿主命令会明确报错而不是静默失败。</p>
+<p>接线点在 <code>CoreUnit._init</code>（<code>unit.py:590-596</code>）：宿主 <code>ctx</code> 有 <code>serial</code> 时才构造 <code>SerialRoomBridge(serial)</code> 与 <code>HostCommandPort(HostCommandBridge(serial))</code>；没有 <code>serial</code>（standalone 或 §6.2 的 <code>UnitContext</code>）时二者均为 <code>None</code>，<code>send</code> 工具与宿主命令会明确报错而不是静默失败。</p>
 <p>授权边界：允许集来自 <code>CoreUnitConfig.host_command_grants</code>（<code>unit.py:227-230</code>），由装配方（Subject）写入；Core 不认识任何领域命令名或包身份（<code>host_command_port.py:5-13</code>）。注入粒度是<strong>成员级</strong>：只在命中 grants 的成员调用路径上下发 scoped 端口（<code>_resolve_host_command_port</code>，<code>ghrah-core/src/ghrah/agents/base.py:1822</code>），避免共授其它 operation 绕过授权。</p>
 <h3 id="66-supervisor--agent-actor--驱动循环入口">6.6 Supervisor / Agent actor / 驱动循环入口</h3>
 <p>只给结构与入口，不复述算法：</p>
@@ -1446,9 +1396,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <ul>
 <li><code>core/units/reg_frame.py</code>：全仓 grep 零命中，该模块不存在；<code>ghrah-core/src/ghrah/core/units/</code> 只有 <code>context.py</code> 与 <code>registry.py</code>。任务书里这个名字指代什么未核实。</li>
 <li><code>CoreUnit</code> 类 docstring 写「将 17 个 core 命令分发」（<code>unit.py:481</code>），与实测 24 条不一致；以代码为准，docstring 的 17 未核实其来源。</li>
-<li><code>RuntimeConnection</code> 是否有仓外部署代码使用未核实；仓内只有 <code>scripts/verify_runtime_model.py</code> 与测试引用它。</li>
 <li><code>units/ability_control.py</code> 中 <code>access</code>（<code>ABILITY_ACCESS</code>）参数被接收但未在路由实现体内使用（<code>:119-131</code>、<code>:562-576</code>）；是否为预留接缝未核实。</li>
-<li><code>ghrah-core/src/ghrah/core/runtime.py:364</code> 使用无括号的多异常捕获 <code>except ValidationError, ValueError, TypeError, UnicodeError:</code>，该写法依赖 Python 3.14+ 语法（根 <code>pyproject.toml:6</code> 声明 <code>requires-python = &quot;&gt;=3.15.1&quot;</code>）；在低版本解释器上的行为未核实。</li>
 </ul>
 <h2 id="7-上下文系统actionchain--session--branch">7. 上下文系统：ActionChain / Session / Branch</h2>
 <p>本章的对象模型可以一句话概括：<strong>Session 是独立 Root，Branch 是指向 Head 的稳定引用，Node 是不可变的历史节点</strong>。三者都被 <code>ContextManager</code> 收在一个聚合里，落库时只有一张真相表（sqlite），其余读面都是它的投影。</p>
@@ -2623,7 +2571,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <h3 id="142-ghrah-subject-仍依赖-ghrah-core模块边界基线仍有-35-条">14.2 <code>ghrah-subject</code> 仍依赖 <code>ghrah-core</code>，模块边界基线仍有 35 条</h3>
 <ul>
 <li>现状一：<code>ghrah-subject/pyproject.toml:8</code> 仍声明 <code>ghrah-core&gt;=0.2.0a0</code>；ratchet 测试把这条依赖单列成基线键 <code>pyproject.toml::ghrah-core</code>（<code>module_boundary_baseline.json:18</code>），其模块 docstring 声明的目标是&quot;只取消 import、把跨模块通信改为 API&quot;（<code>ghrah-subject/tests/test_module_boundary.py:6-8</code>）。</li>
-<li>现状二：基线共 <strong>35</strong> 条（<code>module_boundary_baseline.json:13-47</code>），分布如下。</li>
+<li>现状二：基线共 <strong>30</strong> 条，分布如下。</li>
 </ul>
 <table>
 <thead><tr><th>源文件</th><th>条数</th></tr></thead>
@@ -2637,7 +2585,6 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <tr><td><code>src/ghrah/subject/manifest_store/service.py</code></td><td>2</td></tr>
 <tr><td><code>src/ghrah/subject/shipped_abilities/project_agent_manage/operations/_shared.py</code></td><td>2</td></tr>
 <tr><td><code>src/ghrah/subject/units/shipped_abilities.py</code></td><td>2</td></tr>
-<tr><td><code>src/ghrah/subject/runtime_connection.py</code></td><td>1</td></tr>
 <tr><td><code>src/ghrah/subject/project/manager.py</code></td><td>1</td></tr>
 <tr><td><code>src/ghrah/subject/sandbox/executor.py</code></td><td>1</td></tr>
 <tr><td><code>src/ghrah/subject/units/core_cluster.py</code></td><td>1</td></tr>
@@ -2645,7 +2592,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <tr><td><code>pyproject.toml</code></td><td>1</td></tr>
 </tbody></table>
 <ul>
-<li>按被禁前缀统计（合计 34 条 import，加 <code>pyproject.toml</code> 依赖 1 条 = 35）：<code>ghrah.ability.*</code> 14 条、<code>ghrah.types.*</code> 5 条、<code>ghrah.context.*</code> 4 条、<code>ghrah.manifest.*</code> 4 条、<code>ghrah.core.*</code> 3 条、<code>ghrah.communication.*</code> 3 条、<code>ghrah.agents.*</code> 1 条。</li>
+<li>按被禁前缀统计（合计 29 条 import，加 <code>pyproject.toml</code> 依赖 1 条 = 30）：<code>ghrah.ability.*</code> 10 条、<code>ghrah.types.*</code> 5 条、<code>ghrah.context.*</code> 4 条、<code>ghrah.manifest.*</code> 4 条、<code>ghrah.communication.*</code> 3 条、<code>ghrah.core.*</code> 2 条、<code>ghrah.agents.*</code> 1 条。</li>
 <li>机制：新增违规失败，违规减少而基线未下调也失败（<code>ghrah-subject/tests/test_module_boundary.py:182-226</code>）；只检查静态 import，<code>importlib.import_module</code>/<code>__import__</code> 抓不到（同文件 <code>:22-24</code>）。上表按基线文件内容统计，未逐条重算当前 import 次数；基线偏大时 <code>test_baseline_is_not_stale</code>（<code>:205-226</code>）会失败。</li>
 <li>影响：Subject 与 Core 在同一进程内仍以直接 import 耦合，任何一方改内部符号都会跨包破；进程内没有物理边界，这条测试是唯一约束。</li>
 </ul>

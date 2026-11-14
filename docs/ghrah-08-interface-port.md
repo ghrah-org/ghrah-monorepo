@@ -27,7 +27,7 @@
 
 本文覆盖：端口模型的三个抽象、代码布局与依赖方向、Core 的 50 条接口清单、`CorePort` 的方法签名、项目作用域模型、装配与生命周期、错误模型与翻译表、三条强制点、边界闸门的现状、Subject 侧的接入方式、新增接口的步骤、已知偏差。
 
-本文**不替代**以下内容，各自有独立归属：能力的业务语义（一个能力内部做了什么）由能力系统与驱动循环的设计文档负责；存储表结构由持久层代码负责；Agent 运行时控制面（`ghrah.core.runtime` 的 `/v1/status`、`/v1/commands` 等路径式接口，用于进程内桥接与观测，与模块端口是两件事）不在本文范围内；`ghrah-kernel` 的信封式调用协议也不在本文范围内。
+本文**不替代**以下内容，各自有独立归属：能力的业务语义（一个能力内部做了什么）由能力系统与驱动循环的设计文档负责；存储表结构由持久层代码负责；Agent 运行时控制面（`/v1` 路径式接口，已于 2026-11-14 随 M7 退役删除）不在本文范围内；`ghrah-kernel` 的信封式调用协议也不在本文范围内。
 
 ## 1.3 读者对象
 
@@ -518,7 +518,7 @@ class CoreApiError(ApiError): ...  # ghrah.core.api.errors
 | 类别 | 条数 | 说明 |
 | --- | --- | --- |
 | `pyproject.toml::ghrah-core` | 1 | Subject 仍声明对 `ghrah-core` 的依赖 |
-| `ghrah.core.*` | 3 | `runtime_connection.py::ghrah.core.runtime`；`core_cluster/registry.py::ghrah.core.unit`；`units/core_cluster.py::ghrah.core.wiring` |
+| `ghrah.core.*` | 2 | `core_cluster/registry.py::ghrah.core.unit`；`units/core_cluster.py::ghrah.core.wiring` |
 | `ghrah.context.*` | 4 | `core_cluster/registry.py` 的 `sqlite_backend`；`project/entities` 三处（`context.persistence`、`sqlite_backend`、`session_runtime`） |
 | `ghrah.communication.*` | 3 | `core_cluster/registry.py`、`project/entities` 的 `mailbox_reader`、`units/room` |
 | `ghrah.ability.*` | 14 | `config` 三处、`ability_catalog` 四处、`core_cluster/registry`、`manifest_store/service`、`project/manager`、`sandbox/executor`、`units/shipped_abilities` 两处 |
