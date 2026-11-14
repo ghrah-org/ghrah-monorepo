@@ -98,9 +98,9 @@ from ghrah.core.events import (
     SessionDeletedEvent,
 )
 from ghrah.core.hitl import HITLPromiseRegistry
+from ghrah.core.host_command_bridge import HostCommandBridge
 from ghrah.core.host_command_port import HostCommandPort
 from ghrah.core.room_protocol import SerialRoomBridge
-from ghrah.core.subject_bridge import SubjectCommandBridge
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome
 
@@ -587,12 +587,12 @@ class CoreUnit:
             agent_id_resolver=self._agent_id_for_name,
         )
 
-        # Room bridge（send 工具回路）：宿主 ctx 有 serial 时桥接 Subject RoomUnit
+        # Room bridge（send 工具回路）：宿主 ctx 有 serial 时桥接宿主 Room 命令面
         # （duck-typed；standalone 场景无 serial → bridge 为 None，send 工具明确报错）
         serial = getattr(ctx, "serial", None)
         room_bridge = SerialRoomBridge(serial) if callable(serial) else None
         self._host_command_port = (
-            HostCommandPort(SubjectCommandBridge(serial)) if callable(serial) else None
+            HostCommandPort(HostCommandBridge(serial)) if callable(serial) else None
         )
 
         if (

@@ -4,7 +4,7 @@
 
 """HostCommandPort：Core → 宿主命令面的通用窄端口。
 
-安装包无法 import Subject 宿主。本端口经 :class:`SubjectCommandBridge`
+安装包无法 import 宿主实现。本端口经 :class:`HostCommandBridge`
 派发**不透明**命令字符串，允许集由装配期 ``host_command_grants`` 注入的
 scoped 视图约束。Core 不认识任何领域命令名或发行版包身份。
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.core.subject_bridge import SubjectCommandBridge
+from ghrah.core.host_command_bridge import HostCommandBridge
 
 __all__ = [
     "HOST_COMMAND_PORT_UNAVAILABLE_ERROR",
@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 HOST_COMMAND_PORT_UNAVAILABLE_ERROR = (
-    "Host command port is not available. A Subject host context "
+    "Host command port is not available. A host context "
     "(Ouroboros ctx.serial) must be wired via CoreUnit."
 )
 
@@ -35,7 +35,7 @@ class ScopedHostCommandPort:
 
     def __init__(
         self,
-        bridge: SubjectCommandBridge | None,
+        bridge: HostCommandBridge | None,
         allowed: frozenset[str],
     ) -> None:
         self._bridge = bridge
@@ -61,7 +61,7 @@ class ScopedHostCommandPort:
 class HostCommandPort:
     """宿主命令端口：按允许集产出 scoped 视图。"""
 
-    def __init__(self, bridge: SubjectCommandBridge | None) -> None:
+    def __init__(self, bridge: HostCommandBridge | None) -> None:
         self._bridge = bridge
 
     def scoped(self, allowed: frozenset[str]) -> ScopedHostCommandPort:

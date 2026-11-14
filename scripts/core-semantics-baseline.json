@@ -15,11 +15,6 @@
     "SubjectCommandBridge": "SubjectCommandBridge"
   },
   "counts": {
-    "SubjectCommandBridge": {
-      "ghrah/core/host_command_port.py": 4,
-      "ghrah/core/subject_bridge.py": 3,
-      "ghrah/core/unit.py": 2
-    },
     "external_ref": {
       "ghrah/core/runtime_agent_api.py": 8,
       "ghrah/core/runtime_agent_store.py": 7

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""SubjectCommandBridge 测试：派发归一化与「报错不炸」语义。
+"""HostCommandBridge 测试：派发归一化与「报错不炸」语义。
 
 覆盖：成功回执透传、``command/<name>`` 路由名与 payload 透传、
 serial 异常转错误回执、非 dict 回执转错误回执。
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ghrah.core.subject_bridge import SubjectCommandBridge
+from ghrah.core.host_command_bridge import HostCommandBridge
 
 
 class _FakeSerial:
@@ -43,7 +43,7 @@ class _FakeSerial:
 
 async def test_dispatch_success_passthrough() -> None:
     serial = _FakeSerial(result={"success": True, "data": {"echo": "ok"}})
-    bridge = SubjectCommandBridge(serial)
+    bridge = HostCommandBridge(serial)
 
     result = await bridge.dispatch("foo_run", {"payload": 1})
 
@@ -53,7 +53,7 @@ async def test_dispatch_success_passthrough() -> None:
 
 async def test_dispatch_failure_receipt_passthrough() -> None:
     serial = _FakeSerial(result={"success": False, "error": "Unknown command: foo_run"})
-    bridge = SubjectCommandBridge(serial)
+    bridge = HostCommandBridge(serial)
 
     result = await bridge.dispatch("foo_run", {})
 
@@ -62,7 +62,7 @@ async def test_dispatch_failure_receipt_passthrough() -> None:
 
 async def test_dispatch_serial_exception_becomes_error_receipt() -> None:
     serial = _FakeSerial(error=RuntimeError("route not found"))
-    bridge = SubjectCommandBridge(serial)
+    bridge = HostCommandBridge(serial)
 
     result = await bridge.dispatch("foo_run", {})
 
@@ -72,7 +72,7 @@ async def test_dispatch_serial_exception_becomes_error_receipt() -> None:
 
 async def test_dispatch_non_dict_result_becomes_error_receipt() -> None:
     serial = _FakeSerial(result="not a dict")
-    bridge = SubjectCommandBridge(serial)
+    bridge = HostCommandBridge(serial)
 
     result = await bridge.dispatch("foo_run", {})
 
@@ -83,7 +83,7 @@ async def test_dispatch_non_dict_result_becomes_error_receipt() -> None:
 async def test_dispatch_delay_visible_to_caller() -> None:
     """bridge 不吞耗时——调用方可基于此测 timeout 行为。"""
     serial = _FakeSerial(result={"success": True}, delay=0.05)
-    bridge = SubjectCommandBridge(serial)
+    bridge = HostCommandBridge(serial)
 
     result = await bridge.dispatch("slow", {})
 

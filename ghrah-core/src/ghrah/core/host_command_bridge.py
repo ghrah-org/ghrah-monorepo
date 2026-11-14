@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Core 向 Subject 宿主命令面派发请求的适配器。"""
+"""Core 向宿主命令面派发请求的适配器（派发不透明命令名，不含领域语义）。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 __all__ = [
-    "SubjectCommandBridge",
+    "HostCommandBridge",
 ]
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 SerialFn = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
 
-class SubjectCommandBridge:
+class HostCommandBridge:
     """基于宿主 ``ctx.serial`` 的命令派发桥（协议命令面客户端）。
 
     Args:
@@ -44,7 +44,7 @@ class SubjectCommandBridge:
         try:
             result = await self._serial(f"command/{command}", payload)
         except Exception as e:
-            logger.warning("SubjectCommandBridge: dispatch of '%s' failed: %s", command, e)
+            logger.warning("HostCommandBridge: dispatch of '%s' failed: %s", command, e)
             return {"success": False, "error": f"command '{command}' failed: {e}"}
         if not isinstance(result, dict):
             return {"success": False, "error": f"Unexpected result for command '{command}'"}

@@ -1458,11 +1458,11 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 
 | 类 | 文件 | 行为 |
 | --- | --- | --- |
-| `SubjectCommandBridge` | `ghrah-core/src/ghrah/core/subject_bridge.py:22-51` | 持 `serial` 回调；`dispatch(command, payload)` 发 `command/<command>`，异常/非 dict 回执统一归一为 `{"success": False, "error": …}` |
+| `HostCommandBridge` | `ghrah-core/src/ghrah/core/host_command_bridge.py:22-51` | 持 `serial` 回调；`dispatch(command, payload)` 发 `command/<command>`，异常/非 dict 回执统一归一为 `{"success": False, "error": …}` |
 | `HostCommandPort` | `ghrah-core/src/ghrah/core/host_command_port.py:61-69` | 按允许集产出 scoped 视图：`scoped(allowed)` |
 | `ScopedHostCommandPort` | `host_command_port.py:33-59` | `dispatch` 先查白名单，未命中或未接线都返回显式失败回执（含固定文案 `HOST_COMMAND_PORT_UNAVAILABLE_ERROR`） |
 
-接线点在 `CoreUnit._init`（`unit.py:590-596`）：宿主 `ctx` 有 `serial` 时才构造 `SerialRoomBridge(serial)` 与 `HostCommandPort(SubjectCommandBridge(serial))`；没有 `serial`（standalone 或 §6.2 的 `UnitContext`）时二者均为 `None`，`send` 工具与宿主命令会明确报错而不是静默失败。
+接线点在 `CoreUnit._init`（`unit.py:590-596`）：宿主 `ctx` 有 `serial` 时才构造 `SerialRoomBridge(serial)` 与 `HostCommandPort(HostCommandBridge(serial))`；没有 `serial`（standalone 或 §6.2 的 `UnitContext`）时二者均为 `None`，`send` 工具与宿主命令会明确报错而不是静默失败。
 
 授权边界：允许集来自 `CoreUnitConfig.host_command_grants`（`unit.py:227-230`），由装配方（Subject）写入；Core 不认识任何领域命令名或包身份（`host_command_port.py:5-13`）。注入粒度是**成员级**：只在命中 grants 的成员调用路径上下发 scoped 端口（`_resolve_host_command_port`，`ghrah-core/src/ghrah/agents/base.py:1822`），避免共授其它 operation 绕过授权。
 
