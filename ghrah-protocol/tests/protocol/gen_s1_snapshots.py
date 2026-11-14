@@ -21,6 +21,11 @@ from ghrah.protocol.types import (
     PluginNegotiatedPayload,
     PluginNegotiatePayload,
     PluginNegotiateResultPayload,
+    ProjectDeletedView,
+    ProjectLifecycleRequest,
+    ProjectTransitionPayload,
+    ProjectTransitionRequest,
+    ProjectUpdateRequest,
     TaskCheckOutcomePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
@@ -266,6 +271,16 @@ SAMPLES: dict[str, object] = {
                 created_at="2026-09-20T10:00:00Z",
             )
         ],
+    ),
+    "ProjectUpdateRequest": ProjectUpdateRequest(name="Renamed", expected_version=3),
+    "ProjectLifecycleRequest": ProjectLifecycleRequest(expected_version=3),
+    "ProjectTransitionRequest": ProjectTransitionRequest(expected_version=3),
+    "ProjectTransitionPayload": ProjectTransitionPayload(project_id="proj-001", expected_version=3),
+    "ProjectDeletedView": ProjectDeletedView(
+        project_id="proj-001",
+        deleted=True,
+        storage_purged=True,
+        rooms_deleted=2,
     ),
 }
 
