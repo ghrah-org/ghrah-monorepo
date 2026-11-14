@@ -18,6 +18,14 @@ import {
   AgentSnapshotSchema,
   CommandType,
   EventType,
+  ProjectCreatePayloadSchema,
+  ProjectDeletedViewSchema,
+  ProjectInfoPayloadSchema,
+  ProjectLifecycleRequestSchema,
+  ProjectListPayloadSchema,
+  ProjectListResultPayloadSchema,
+  ProjectTransitionRequestSchema,
+  ProjectUpdateRequestSchema,
   type AbilityPackageGroupsView,
   type AbilityTreeView,
   type MemberAxes,
@@ -318,6 +326,42 @@ function writeCors(response: ServerResponse): void {
   response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
 }
 
+function projectErrorStatus(message: string): { code: string; status: number } {
+  if (message.startsWith("project not found")) return { code: "not_found", status: 404 };
+  if (
+    message === "project_version_conflict" ||
+    message.includes("version conflict") ||
+    message.includes("modified:")
+  ) {
+    return { code: "conflict", status: 409 };
+  }
+  if (message === "resource_archived") return { code: "resource_archived", status: 409 };
+  if (message === "project_has_rooms") return { code: "project_has_rooms", status: 409 };
+  if (message.startsWith("illegal transition")) {
+    return { code: "illegal_transition", status: 409 };
+  }
+  return { code: "invalid_request", status: 400 };
+}
+
+/** Project REST 错误体：与真实 Subject 的 wire 形状一致（detail 只在需要时出现）。 */
+function writeProjectError(response: ServerResponse, outcome: CommandOutcome): void {
+  const message = outcome.error ?? "invalid_request";
+  const { code, status } = projectErrorStatus(message);
+  const detail: Record<string, unknown> = {};
+  const current = /current (\d+)/.exec(outcome.errorDetail ?? message);
+  if (current) detail.current_version = Number(current[1]);
+  if (message === "project_has_rooms" && outcome.errorDetail && /^\d+$/.test(outcome.errorDetail)) {
+    detail.room_count = Number(outcome.errorDetail);
+  }
+  json(response, status, {
+    error: {
+      code,
+      message: outcome.errorDetail ?? message,
+      detail: Object.keys(detail).length > 0 ? detail : undefined,
+    },
+  });
+}
+
 function json(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   writeCors(response);
@@ -471,6 +515,8 @@ function applyUnbind(record: AgentRecord, toolName: string): void {
   bump(record);
 }
 
+const PROJECT_RESOURCE =
+  /^\/api\/v1\/projects(?:\/([^/]+))?(?:\/(archive|restore|pause|resume|stop))?$/;
 const PROJECT_AGENT = /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)(\/.*)?$/;
 const AGENT_RESOURCE = /^\/api\/v1\/projects\/([^/]+)\/agents(?:\/([^/]+))?(\/desired-state)?$/;
 const CONTENT =
@@ -552,6 +598,159 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
 
     if (method === "GET" && path === "/health") {
       json(response, 200, { status: "ok" });
+      return;
+    }
+    const projectResource = PROJECT_RESOURCE.exec(path);
+    if (projectResource) {
+      const state = options.state;
+      if (!state) {
+        json(response, 503, {
+          error: { code: "capability_unavailable", message: "shared MockState required" },
+        });
+        return;
+      }
+      const [, pid, action] = projectResource;
+      if (method === "GET" && !pid) {
+        const archived = url.searchParams.get("archived") === "true";
+        const status = url.searchParams.get("status") ?? undefined;
+        const parsed = ProjectListPayloadSchema.safeParse({ archived, status });
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid list query" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(
+          CommandType.PROJECT_LIST,
+          parsed.data as Record<string, unknown>,
+        );
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(response, 200, ProjectListResultPayloadSchema.parse(outcome.data));
+        return;
+      }
+      if (method === "POST" && !pid) {
+        const parsed = ProjectCreatePayloadSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project create payload" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(
+          CommandType.PROJECT_CREATE,
+          parsed.data as Record<string, unknown>,
+        );
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        const project = ProjectInfoPayloadSchema.parse(
+          (outcome.data as { project: unknown }).project,
+        );
+        response.setHeader("Location", `/api/v1/projects/${project.project_id}`);
+        json(response, 201, project);
+        return;
+      }
+      if (!pid) {
+        json(response, 405, { error: { code: "invalid_request", message: "method not allowed" } });
+        return;
+      }
+      if (method === "GET" && !action) {
+        const outcome = state.handleCommand(CommandType.PROJECT_GET, { project_id: pid });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      if (method === "PATCH" && !action) {
+        const parsed = ProjectUpdateRequestSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project update payload" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(CommandType.PROJECT_UPDATE, {
+          project_id: pid,
+          ...parsed.data,
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      if (method === "DELETE" && !action) {
+        const expected = url.searchParams.get("expected_version");
+        if (expected === null || !/^\d+$/.test(expected)) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "expected_version required" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(CommandType.PROJECT_DELETE, {
+          project_id: pid,
+          expected_version: Number(expected),
+          cascade_rooms: url.searchParams.get("cascade_rooms") === "true",
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(response, 200, ProjectDeletedViewSchema.parse(outcome.data));
+        return;
+      }
+      if (method === "POST" && pid && action) {
+        const parsed =
+          action === "archive" || action === "restore"
+            ? ProjectLifecycleRequestSchema.safeParse(await readBody(request))
+            : ProjectTransitionRequestSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project lifecycle payload" },
+          });
+          return;
+        }
+        const command =
+          action === "archive"
+            ? CommandType.PROJECT_ARCHIVE
+            : action === "restore"
+              ? CommandType.PROJECT_RESTORE
+              : action === "pause"
+                ? CommandType.PROJECT_PAUSE
+                : action === "resume"
+                  ? CommandType.PROJECT_RESUME
+                  : CommandType.PROJECT_STOP;
+        const outcome = state.handleCommand(command, {
+          project_id: pid,
+          ...parsed.data,
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      json(response, 405, { error: { code: "invalid_request", message: "method not allowed" } });
       return;
     }
     if (method === "GET" && path === "/api/v1/agentconf/endpoints") {

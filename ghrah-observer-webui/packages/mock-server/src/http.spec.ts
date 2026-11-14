@@ -401,3 +401,154 @@ describe("MockHttpServer", () => {
     }
   });
 });
+
+describe("MockHttpServer project REST", () => {
+  async function startWithState(): Promise<{ base: string; state: MockState }> {
+    const state = new MockState();
+    const server = createMockHttpServer({ port: 0, state });
+    servers.push(server);
+    await server.start();
+    return { base: `http://127.0.0.1:${server.port}`, state };
+  }
+
+  async function createProject(base: string): Promise<Record<string, unknown>> {
+    const response = await fetch(`${base}/api/v1/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "rest-project" }),
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toMatch(/^\/api\/v1\/projects\//);
+    return (await response.json()) as Record<string, unknown>;
+  }
+
+  it("creates, lists, reads and patches projects", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+    expect(project.version).toBe(1);
+
+    const list = await getJson<{ projects: unknown[]; count: number }>(`${base}/api/v1/projects`);
+    expect(list.count).toBe(1);
+
+    const patched = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "renamed", expected_version: 1 }),
+    });
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { version: number }).version).toBe(2);
+
+    const stale = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "stale", expected_version: 1 }),
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = (await stale.json()) as {
+      error: { code: string; detail: { current_version: number } };
+    };
+    expect(staleBody.error.code).toBe("conflict");
+    expect(staleBody.error.detail.current_version).toBe(2);
+
+    const detail = await getJson<{ name: string }>(`${base}/api/v1/projects/${projectId}`);
+    expect(detail.name).toBe("renamed");
+  });
+
+  it("archives and restores with the archived list axis", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+
+    const archived = await fetch(`${base}/api/v1/projects/${projectId}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: 1 }),
+    });
+    expect(archived.status).toBe(200);
+    const archivedBody = (await archived.json()) as { archived_at: string | null; version: number };
+    expect(archivedBody.archived_at).not.toBeNull();
+
+    const active = await getJson<{ count: number }>(`${base}/api/v1/projects`);
+    expect(active.count).toBe(0);
+    const archivedList = await getJson<{ count: number }>(`${base}/api/v1/projects?archived=true`);
+    expect(archivedList.count).toBe(1);
+
+    const restored = await fetch(`${base}/api/v1/projects/${projectId}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: archivedBody.version }),
+    });
+    expect(restored.status).toBe(200);
+    expect(((await restored.json()) as { archived_at: string | null }).archived_at).toBeNull();
+  });
+
+  it("guards deletion with room count and supports cascade", async () => {
+    const { base, state } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+    const room = state.handleCommand(CommandType.ROOM_CREATE, {
+      project_id: projectId,
+      name: "room-1",
+    });
+    expect(room.success).toBe(true);
+
+    const blocked = await fetch(`${base}/api/v1/projects/${projectId}?expected_version=1`, {
+      method: "DELETE",
+    });
+    expect(blocked.status).toBe(409);
+    const blockedBody = (await blocked.json()) as {
+      error: { code: string; detail: { room_count: number } };
+    };
+    expect(blockedBody.error.code).toBe("project_has_rooms");
+    expect(blockedBody.error.detail.room_count).toBe(1);
+
+    const deleted = await fetch(
+      `${base}/api/v1/projects/${projectId}?expected_version=1&cascade_rooms=true`,
+      { method: "DELETE" },
+    );
+    expect(deleted.status).toBe(200);
+    const deletedBody = (await deleted.json()) as { rooms_deleted: number; deleted: boolean };
+    expect(deletedBody.deleted).toBe(true);
+    expect(deletedBody.rooms_deleted).toBe(1);
+
+    const gone = await fetch(`${base}/api/v1/projects/${projectId}`);
+    expect(gone.status).toBe(404);
+  });
+
+  it("validates pause version and requires expected_version on delete", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+
+    const stale = await fetch(`${base}/api/v1/projects/${projectId}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: 99 }),
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = (await stale.json()) as {
+      error: { code: string; detail: { current_version: number } };
+    };
+    expect(staleBody.error.detail.current_version).toBe(1);
+
+    const paused = await fetch(`${base}/api/v1/projects/${projectId}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(paused.status).toBe(200);
+    expect(((await paused.json()) as { status: string }).status).toBe("paused");
+
+    const missingVersion = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "DELETE",
+    });
+    expect(missingVersion.status).toBe(400);
+  });
+
+  it("returns 503 for project routes without shared state", async () => {
+    const base = await start();
+    const response = await fetch(`${base}/api/v1/projects`);
+    expect(response.status).toBe(503);
+  });
+});

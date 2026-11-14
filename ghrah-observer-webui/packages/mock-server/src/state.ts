@@ -37,6 +37,7 @@ import {
   type ProjectInfoPayload,
   ProjectLifecyclePayloadSchema,
   ProjectListPayloadSchema,
+  ProjectTransitionPayloadSchema,
   ProjectUpdatePayloadSchema,
   RoomCreatePayloadSchema,
   RoomDeletePayloadSchema,
@@ -337,16 +338,31 @@ export class MockState {
           this._projectDelete(p.project_id, p.expected_version, p.cascade_rooms),
         );
       case CommandType.PROJECT_PAUSE:
-        return this._parse(ProjectIdPayloadSchema, rawPayload, (p) =>
-          this._projectTransition(p.project_id, "paused", EventType.PROJECT_PAUSED),
+        return this._parse(ProjectTransitionPayloadSchema, rawPayload, (p) =>
+          this._projectTransition(
+            p.project_id,
+            "paused",
+            EventType.PROJECT_PAUSED,
+            p.expected_version,
+          ),
         );
       case CommandType.PROJECT_RESUME:
-        return this._parse(ProjectIdPayloadSchema, rawPayload, (p) =>
-          this._projectTransition(p.project_id, "active", EventType.PROJECT_RESUMED),
+        return this._parse(ProjectTransitionPayloadSchema, rawPayload, (p) =>
+          this._projectTransition(
+            p.project_id,
+            "active",
+            EventType.PROJECT_RESUMED,
+            p.expected_version,
+          ),
         );
       case CommandType.PROJECT_STOP:
-        return this._parse(ProjectIdPayloadSchema, rawPayload, (p) =>
-          this._projectTransition(p.project_id, "stopped", EventType.PROJECT_STOPPED),
+        return this._parse(ProjectTransitionPayloadSchema, rawPayload, (p) =>
+          this._projectTransition(
+            p.project_id,
+            "stopped",
+            EventType.PROJECT_STOPPED,
+            p.expected_version,
+          ),
         );
 
       // Task（最小实现）
@@ -1427,7 +1443,8 @@ export class MockState {
       );
     }
     const projectRooms = [...this.rooms.values()].filter((room) => room.project_id === projectId);
-    if (projectRooms.length > 0 && !cascadeRooms) return fail("project_has_rooms");
+    if (projectRooms.length > 0 && !cascadeRooms)
+      return fail("project_has_rooms", String(projectRooms.length));
     for (const room of projectRooms) {
       this.rooms.delete(room.room_id);
       this.roomLogs.delete(room.room_id);
@@ -1466,10 +1483,17 @@ export class MockState {
     projectId: string,
     status: "active" | "paused" | "stopped",
     eventType: EventType,
+    expectedVersion?: number | null,
   ): CommandOutcome {
     const project = this.projects.get(projectId);
     if (!project) return fail(`project not found: ${projectId}`);
     if (project.archived_at != null) return fail("resource_archived");
+    if (expectedVersion != null && expectedVersion !== project.version) {
+      return fail(
+        "project_version_conflict",
+        `version conflict: expected ${expectedVersion}, current ${project.version}`,
+      );
+    }
     project.status = status;
     if (status !== "active") {
       for (const agent of this._agentsForProject(projectId)) {
