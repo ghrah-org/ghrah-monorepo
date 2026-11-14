@@ -478,7 +478,7 @@ TS 依赖图同样无环，且 `@ghrah/protocol` 是叶子（`ghrah-observer-web
 | `:24` | `envelope` | `Envelope`、`PAYLOAD_MAP`、`envelope_from_dict`、`expect_payload` |
 | `:25` | `factories` | `create_command_result` / `create_event` / `create_error` / ping / pong |
 | `:26` | `payloads` | 164 个载荷与内嵌结构符号（`payloads/__init__.py:196`） |
-| `:27` | `routing` | 13 组 `*_COMMANDS` 集合与 `AGENT_SCOPED_EVENT_TYPES` |
+| `:27` | `routing` | 13 组 `*_COMMANDS` 集合（事件归属契约已迁到 Subject 侧，见 §11.4） |
 
 由此产生一条容易踩空的事实：**端口契约面（`interface`/`ports`/`views`/`problem`/`errors`/`corpus`/`events`）不在顶层门面里**，必须走子模块路径 import；`ghrah.protocol.capability`、`ghrah.protocol.ports.keys` 这类写法是消费方的唯一入口。全仓仅一处例外使用顶层包名导入，且是 conformance 测试按子模块取（`ghrah-protocol/tests/conformance/test_runtime_schemas.py:9`）。
 
@@ -651,7 +651,7 @@ id 别名是裸 `str`（`ports/core.py:74`–`:79`）：`AgentId`、`BranchId`�
 | --- | ---: | --- |
 | `persist_*` 命令 | 7 | payload 保持裸 dict 透传（`envelope.py:223` 旁注） |
 | `manifest_*` 命令 | 10 | 未进 `COMMAND_PAYLOAD_MAP`，payload 保持裸 dict |
-| `ability_tree_changed` / `ability_package_changed` 事件 | 2 | 在 `AGENT_SCOPED_EVENT_TYPES` 里（`routing.py:25`、`:26`），但不在 `EVENT_PAYLOAD_MAP` |
+| `ability_tree_changed` / `ability_package_changed` 事件 | 2 | 在 Subject 侧 `event_attribution.AGENT_SCOPED_EVENT_TYPES` 里，但不在 `EVENT_PAYLOAD_MAP` |
 | `command_result` / `error` / `ping` / `pong` | 4 | 不登记：welcome 包手写 payload 与 `CommandResultPayload` schema 不符（`envelope.py:200`–`:201`） |
 
 数字自洽：`CommandType` 101 个成员、登记 84 个，差 17 = 7 个 `persist_*` + 10 个 `manifest_*`；`EventType` 69 个成员、登记 67 个，差 2 即上述两个能力管理面失效信号事件。`payloads/__init__.py` 的 `__all__` 是 164 个符号，比登记数多是正常的——它是「可 import 的载荷符号全集」，含内嵌结构（`RoomMember`、`TaskClaimPayload`）和非顶层消息类型（各类 `*ResultPayload`），并非 `PAYLOAD_MAP` 的镜像。
@@ -679,11 +679,10 @@ id 别名是裸 `str`（`ports/core.py:74`–`:79`）：`AgentId`、`BranchId`�
 | `ClaimantType` | `:339` | 2 | `agent`/`human` |
 | `RoomStatus` | `:346` | 2 | `active`/`archived` |
 
-`routing.py`（225 行）是「这条命令归谁」的判据表——14 个 `frozenset[str]`（存 `.value` 而非枚举成员，便于字符串直接比对）：
+`routing.py`（200 行）是「这条命令归谁」的判据表——13 个 `frozenset[str]`（存 `.value` 而非枚举成员，便于字符串直接比对；事件归属契约已随 M1 迁到 Subject 侧）：
 
 | 集合 | 位置 | 成员数 | 归属 |
 | --- | --- | ---: | --- |
-| `AGENT_SCOPED_EVENT_TYPES` | `:18` | 20 | 必须携带非空 `project_id` + `agent_id` 的事件；生产侧缺失即跳过发布，转发侧缺失即丢弃并计数（`:14`–`:15`） |
 | `PERSIST_COMMANDS` | `:43` | 7 | `persist_*` |
 | `CORE_COMMANDS` | `:56` | 22 | 转发到 Core（含 Session/Branch 的 5+5） |
 | `SESSION_COMMANDS` | `:84` | 5 | Session 域 |
@@ -1272,7 +1271,7 @@ REST 管理面（`/api/v1/…`）是另挂到同一 app 的 router（`units/abil
 
 **事件来源与两个前缀**：单元不直接调总线，而是 `ctx.emit`。端点 `init` 对 `EventType` 全集显式订阅**两个前缀**——`core:<type>`（CoreUnit 发射）与 `event/<type>`（Subject 单元发射）——转发闭包直接以订阅名构造 wire 消息，不做信封解包（`units/websocket_observer_endpoint.py:143-158`）。实测 `EventType` 共 **69** 个值，故此处注册 **138** 个监听。
 
-**归属闸门**：Agent 作用域事件（`AGENT_SCOPED_EVENT_TYPES`，20 个类型，`ghrah-protocol/src/ghrah/protocol/routing.py:18-41`）缺 `project_id` 或 `agent_id` 时丢弃并计数 `dropped_unattributed_events`（`server/event_bus.py:65-67`、`:188-196`），不猜测归属。
+**归属闸门**：Agent 作用域事件（`AGENT_SCOPED_EVENT_TYPES`，20 个类型，M1 后定义在 `ghrah-subject/src/ghrah/subject/server/event_attribution.py`）由 Subject 在转发前用 ProjectStore 的权威映射（`ProjectStore.project_id_for_agent`）补齐 `project_id`（含嵌套 `session.project_id`）；补齐失败或缺失 `agent_id` 时丢弃并计数 `dropped_unattributed_events`（`server/event_bus.py::_attribute`），不猜测归属。归属缓存按 `project_*` 事件整体失效。
 
 **服务方式**：唯一在仓内 `serve` 该 app 的入口是 `ghrah-subject-server`（`server/app.py:102-164`：`Context()` → `assemble_subject(profile="full")` → `create_app` → `uvicorn.Server(...).serve()`）。`ghrah-subject` 入口（`app.py:23-33`）只装配合成常驻，不监听端口。
 
@@ -1336,8 +1335,8 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 
 | 出口 | 位置 | 说明 |
 | --- | --- | --- |
-| `UnitEventPublisher.publish` | `:396-447` | 把 `CoreEvent` 序列化成 dict，补 `project_id` / `agent_id`，再 `_emit("core:…")`；`_emit` 为 `None`（standalone）时退化为日志 |
-| `CoreUnit._emit_event` | `:748-781` | 命令路径直接发事件；同样对 `AGENT_SCOPED_EVENT_TYPES` 做缺失归属丢弃 |
+| `UnitEventPublisher.publish` | `:396-430` | 把 `CoreEvent` 序列化成 dict，只补不透明 `agent_id`（**不携带 Project 归属**，M1 起由 Subject 转发前补齐），再 `_emit("core:…")`；`_emit` 为 `None`（standalone）时退化为日志 |
+| `CoreUnit._emit_event` | `:740-770` | 命令路径直接发事件；只补 `agent_id`，归属判定与补齐在 Subject 侧 |
 
 ### 6.2 `units/registry.py`：`RuntimeRegistry`
 
@@ -2458,7 +2457,7 @@ flowchart TD
 
 一句话：事件负责"快"，读通量负责"对"；任何"事件 → 落库"的路径都要先证明它不是第二写路径，`room_filter` 的答案是不写库、只走命令。
 
-### 11.4 归属契约：协议层定义、两侧各自校验
+### 11.4 归属契约：Subject 侧定义、转发前补齐
 
 归属 = `project_id` + `agent_id`（稳定 id）。`agent_name` 只是展示字段，不参与身份计算。
 
@@ -2466,7 +2465,7 @@ flowchart TD
 
 | 表达 | 内容 | 位置 |
 | --- | --- | --- |
-| 事件归属契约 | `AGENT_SCOPED_EVENT_TYPES`（20 个事件）必须携带非空 `project_id` + `agent_id`：agent 生命周期、链节点、能力结果、HITL、用量、session/branch 六类 | `ghrah-protocol/src/ghrah/protocol/routing.py:18` |
+| 事件归属契约 | `AGENT_SCOPED_EVENT_TYPES`（20 个事件）必须携带非空 `project_id` + `agent_id`：agent 生命周期、链节点、能力结果、HITL、用量、session/branch 六类。M1（2026-11-14）起定义在 Subject 侧；Core 只报告 `agent_id`，不注入也不校验 `project_id` | `ghrah-subject/src/ghrah/subject/server/event_attribution.py` |
 | 命令寻址 | session/branch/chain 命令载荷固定 `{project_id, agent_id, agent_name, ...}` | `ghrah-observer-webui/packages/protocol/src/payloads/session.ts:9`、`:27` |
 | 复合键 | TS 侧 `AgentKey = "${projectId}:${agentId}"`，`scope.ts` 用 JSON 元组键派生 agent/session/chain key | `ghrah-observer-webui/packages/protocol/src/identity.ts:6`、`ghrah-observer-webui/packages/observer-core/src/scope.ts:33` |
 
@@ -2474,8 +2473,8 @@ flowchart TD
 
 | 侧 | 校验 | 失败处置 | 位置 |
 | --- | --- | --- | --- |
-| 生产侧（Core） | 发布前检查 agent 作用域事件是否带 `project_id`/`agent_id` | 缺失即**跳过发布** | `ghrah-protocol/src/ghrah/protocol/routing.py:14`（契约注释） |
-| 转发侧（Subject EventBus） | 同一契约再查一次 | **丢弃 + 计数** `dropped_unattributed_events`，不猜归属、不污染 Observer 的 Project 分桶 | `ghrah-subject/src/ghrah/subject/server/event_bus.py:188` |
+| 生产侧（Core） | 发布前只补不透明 `agent_id`；**不再判定归属**（M1） | —（缺失归属由转发侧丢弃） | `ghrah-core/src/ghrah/core/unit.py:396` |
+| 转发侧（Subject EventBus） | 用 ProjectStore 权威映射（`project_id_for_agent`）补齐 `project_id`（含嵌套 session） | 补齐失败或缺 `agent_id` → **丢弃 + 计数** `dropped_unattributed_events`，不猜归属、不污染 Observer 的 Project 分桶 | `ghrah-subject/src/ghrah/subject/server/event_bus.py::_attribute` |
 | 命令侧（Subject unit） | 每个写边界把显示名归一为 project 内稳定 id（Room join/leave/send、Task create/update/assign、Workspace、Ledger） | 多义或越界 → `ambiguous ...` / `agent_project_mismatch` / `agent_identity_mismatch` | `ghrah-subject/src/ghrah/subject/units/room.py:260`、`ghrah-subject/src/ghrah/subject/units/task.py:136`、`ghrah-subject/src/ghrah/subject/units/workspace.py:172`、`ghrah-subject/src/ghrah/subject/units/ledger.py:177` |
 | 客户端 | 用 `projectId + agentId` 作 store 键；推送型快照只补缺失、不回退已落地状态 | 无完整 key 的 target 不参与同步（`hasCompleteAgentKey`） | `ghrah-observer-webui/packages/observer-core/src/scope.ts:53`、`ghrah-observer-webui/packages/observer-core/src/bind.ts:490` |
 

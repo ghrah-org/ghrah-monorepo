@@ -163,7 +163,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#111-权威链清单" class="lv3">11.1 权威链清单</a>
 <a href="#112-链历史的读取路径只经-coreport" class="lv3">11.2 链历史的读取路径：只经 CorePort</a>
 <a href="#113-事件不是权威" class="lv3">11.3 事件不是权威</a>
-<a href="#114-归属契约协议层定义两侧各自校验" class="lv3">11.4 归属契约：协议层定义、两侧各自校验</a>
+<a href="#114-归属契约subject-侧定义转发前补齐" class="lv3">11.4 归属契约：Subject 侧定义、转发前补齐</a>
 <a href="#12-恢复与弹性reconcile">12. 恢复与弹性（reconcile）</a>
 <a href="#121-期望状态模型" class="lv3">12.1 期望状态模型</a>
 <a href="#122-subject-对账一次性执行--命令触发" class="lv3">12.2 Subject 对账：一次性执行 + 命令触发</a>
@@ -606,7 +606,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tr><td><code>:24</code></td><td><code>envelope</code></td><td><code>Envelope</code>、<code>PAYLOAD_MAP</code>、<code>envelope_from_dict</code>、<code>expect_payload</code></td></tr>
 <tr><td><code>:25</code></td><td><code>factories</code></td><td><code>create_command_result</code> / <code>create_event</code> / <code>create_error</code> / ping / pong</td></tr>
 <tr><td><code>:26</code></td><td><code>payloads</code></td><td>164 个载荷与内嵌结构符号（<code>payloads/__init__.py:196</code>）</td></tr>
-<tr><td><code>:27</code></td><td><code>routing</code></td><td>13 组 <code>*_COMMANDS</code> 集合与 <code>AGENT_SCOPED_EVENT_TYPES</code></td></tr>
+<tr><td><code>:27</code></td><td><code>routing</code></td><td>13 组 <code>*_COMMANDS</code> 集合（事件归属契约已迁到 Subject 侧，见 §11.4）</td></tr>
 </tbody></table>
 <p>由此产生一条容易踩空的事实：<strong>端口契约面（ 0 / 1 / 2 / 3 / 4 / 5 / 6 ）不在顶层门面里</strong>，必须走子模块路径 import；<code>ghrah.protocol.capability</code>、<code>ghrah.protocol.ports.keys</code> 这类写法是消费方的唯一入口。全仓仅一处例外使用顶层包名导入，且是 conformance 测试按子模块取（<code>ghrah-protocol/tests/conformance/test_runtime_schemas.py:9</code>）。</p>
 <p><code>types.py</code> 没有声明 <code>__all__</code>，因此 <code>import *</code> 会连带把辅助导入 <code>time</code>、<code>uuid</code>、<code>StrEnum</code>、<code>Any</code>、<code>TypeVar</code>、<code>BaseModel</code>、<code>ConfigDict</code>、<code>Field</code> 带进 <code>ghrah.protocol</code> 命名空间（<code>types.py:16</code>–<code>:21</code>）。这不是设计意图，是星导出的副作用；新代码不应依赖 <code>ghrah.protocol.time</code> 这类名字。</p>
@@ -744,7 +744,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tbody>
 <tr><td><code>persist_*</code> 命令</td><td>7</td><td>payload 保持裸 dict 透传（<code>envelope.py:223</code> 旁注）</td></tr>
 <tr><td><code>manifest_*</code> 命令</td><td>10</td><td>未进 <code>COMMAND_PAYLOAD_MAP</code>，payload 保持裸 dict</td></tr>
-<tr><td><code>ability_tree_changed</code> / <code>ability_package_changed</code> 事件</td><td>2</td><td>在 <code>AGENT_SCOPED_EVENT_TYPES</code> 里（<code>routing.py:25</code>、<code>:26</code>），但不在 <code>EVENT_PAYLOAD_MAP</code></td></tr>
+<tr><td><code>ability_tree_changed</code> / <code>ability_package_changed</code> 事件</td><td>2</td><td>在 Subject 侧 <code>event_attribution.AGENT_SCOPED_EVENT_TYPES</code> 里，但不在 <code>EVENT_PAYLOAD_MAP</code></td></tr>
 <tr><td><code>command_result</code> / <code>error</code> / <code>ping</code> / <code>pong</code></td><td>4</td><td>不登记：welcome 包手写 payload 与 <code>CommandResultPayload</code> schema 不符（<code>envelope.py:200</code>–<code>:201</code>）</td></tr>
 </tbody></table>
 <p>数字自洽：<code>CommandType</code> 101 个成员、登记 84 个，差 17 = 7 个 <code>persist_*</code> + 10 个 <code>manifest_*</code>；<code>EventType</code> 69 个成员、登记 67 个，差 2 即上述两个能力管理面失效信号事件。<code>payloads/__init__.py</code> 的 <code>__all__</code> 是 164 个符号，比登记数多是正常的——它是「可 import 的载荷符号全集」，含内嵌结构（<code>RoomMember</code>、<code>TaskClaimPayload</code>）和非顶层消息类型（各类 <code>*ResultPayload</code>），并非 <code>PAYLOAD_MAP</code> 的镜像。</p>
@@ -768,11 +768,10 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tr><td><code>ClaimantType</code></td><td><code>:339</code></td><td>2</td><td><code>agent</code>/<code>human</code></td></tr>
 <tr><td><code>RoomStatus</code></td><td><code>:346</code></td><td>2</td><td><code>active</code>/<code>archived</code></td></tr>
 </tbody></table>
-<p><code>routing.py</code>（225 行）是「这条命令归谁」的判据表——14 个 <code>frozenset[str]</code>（存 <code>.value</code> 而非枚举成员，便于字符串直接比对）：</p>
+<p><code>routing.py</code>（200 行）是「这条命令归谁」的判据表——13 个 <code>frozenset[str]</code>（存 <code>.value</code> 而非枚举成员，便于字符串直接比对；事件归属契约已随 M1 迁到 Subject 侧）：</p>
 <table>
 <thead><tr><th>集合</th><th>位置</th><th>成员数</th><th>归属</th></tr></thead>
 <tbody>
-<tr><td><code>AGENT_SCOPED_EVENT_TYPES</code></td><td><code>:18</code></td><td>20</td><td>必须携带非空 <code>project_id</code> + <code>agent_id</code> 的事件；生产侧缺失即跳过发布，转发侧缺失即丢弃并计数（<code>:14</code>–<code>:15</code>）</td></tr>
 <tr><td><code>PERSIST_COMMANDS</code></td><td><code>:43</code></td><td>7</td><td><code>persist_*</code></td></tr>
 <tr><td><code>CORE_COMMANDS</code></td><td><code>:56</code></td><td>22</td><td>转发到 Core（含 Session/Branch 的 5+5）</td></tr>
 <tr><td><code>SESSION_COMMANDS</code></td><td><code>:84</code></td><td>5</td><td>Session 域</td></tr>
@@ -1256,7 +1255,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <li>订阅缺省是「全 Agent」（<code>self._subscriptions[session_id] = {&quot;*&quot;}</code>，<code>connection_manager.py:64</code>），事件类型缺省为空集 = 全事件（<code>get_subscribed_sessions</code>，<code>:187-206</code>）。</li>
 </ul>
 <p><strong>事件来源与两个前缀</strong>：单元不直接调总线，而是 <code>ctx.emit</code>。端点 <code>init</code> 对 <code>EventType</code> 全集显式订阅<strong>两个前缀</strong>——<code>core:&lt;type&gt;</code>（CoreUnit 发射）与 <code>event/&lt;type&gt;</code>（Subject 单元发射）——转发闭包直接以订阅名构造 wire 消息，不做信封解包（<code>units/websocket_observer_endpoint.py:143-158</code>）。实测 <code>EventType</code> 共 <strong>69</strong> 个值，故此处注册 <strong>138</strong> 个监听。</p>
-<p><strong>归属闸门</strong>：Agent 作用域事件（<code>AGENT_SCOPED_EVENT_TYPES</code>，20 个类型，<code>ghrah-protocol/src/ghrah/protocol/routing.py:18-41</code>）缺 <code>project_id</code> 或 <code>agent_id</code> 时丢弃并计数 <code>dropped_unattributed_events</code>（<code>server/event_bus.py:65-67</code>、<code>:188-196</code>），不猜测归属。</p>
+<p><strong>归属闸门</strong>：Agent 作用域事件（<code>AGENT_SCOPED_EVENT_TYPES</code>，20 个类型，M1 后定义在 <code>ghrah-subject/src/ghrah/subject/server/event_attribution.py</code>）由 Subject 在转发前用 ProjectStore 的权威映射（<code>ProjectStore.project_id_for_agent</code>）补齐 <code>project_id</code>（含嵌套 <code>session.project_id</code>）；补齐失败或缺失 <code>agent_id</code> 时丢弃并计数 <code>dropped_unattributed_events</code>（<code>server/event_bus.py::_attribute</code>），不猜测归属。归属缓存按 <code>project_*</code> 事件整体失效。</p>
 <p><strong>服务方式</strong>：唯一在仓内 <code>serve</code> 该 app 的入口是 <code>ghrah-subject-server</code>（<code>server/app.py:102-164</code>：<code>Context()</code> → <code>assemble_subject(profile=&quot;full&quot;)</code> → <code>create_app</code> → <code>uvicorn.Server(...).serve()</code>）。<code>ghrah-subject</code> 入口（<code>app.py:23-33</code>）只装配合成常驻，不监听端口。</p>
 <h3 id="56-启动链从进程入口到-17-个-unit-active">5.6 启动链：从进程入口到 17 个 unit ACTIVE</h3>
 <p>两个 console script 在 <code>ghrah-subject/pyproject.toml:25-28</code>：<code>ghrah-subject</code>（<code>app.py:main</code>）与 <code>ghrah-subject-server</code>（<code>server/app.py:main</code>）。完整的服务型启动链共 <strong>10 步</strong>：</p>
@@ -1313,8 +1312,8 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <table>
 <thead><tr><th>出口</th><th>位置</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td><code>UnitEventPublisher.publish</code></td><td><code>:396-447</code></td><td>把 <code>CoreEvent</code> 序列化成 dict，补 <code>project_id</code> / <code>agent_id</code>，再 <code>_emit(&quot;core:…&quot;)</code>；<code>_emit</code> 为 <code>None</code>（standalone）时退化为日志</td></tr>
-<tr><td><code>CoreUnit._emit_event</code></td><td><code>:748-781</code></td><td>命令路径直接发事件；同样对 <code>AGENT_SCOPED_EVENT_TYPES</code> 做缺失归属丢弃</td></tr>
+<tr><td><code>UnitEventPublisher.publish</code></td><td><code>:396-430</code></td><td>把 <code>CoreEvent</code> 序列化成 dict，只补不透明 <code>agent_id</code>（<strong>不携带 Project 归属</strong>，M1 起由 Subject 转发前补齐），再 <code>_emit(&quot;core:…&quot;)</code>；<code>_emit</code> 为 <code>None</code>（standalone）时退化为日志</td></tr>
+<tr><td><code>CoreUnit._emit_event</code></td><td><code>:740-770</code></td><td>命令路径直接发事件；只补 <code>agent_id</code>，归属判定与补齐在 Subject 侧</td></tr>
 </tbody></table>
 <h3 id="62-unitsregistrypyruntimeregistry">6.2 <code>units/registry.py</code>：<code>RuntimeRegistry</code></h3>
 <p><code>ghrah-core/src/ghrah/core/units/registry.py</code> 是「<strong>一个项目一个 CoreUnit</strong>」的进程内注册表（<code>:12-16</code>）。它不负责跨重启持久化，只持有活动实例；持久化由注入的工厂决定。</p>
@@ -2278,13 +2277,13 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <li>去重只是幂等的补充（per-node LRU 4096），不是正确性依据（<code>:40</code>）。</li>
 </ol>
 <p>一句话：事件负责&quot;快&quot;，读通量负责&quot;对&quot;；任何&quot;事件 → 落库&quot;的路径都要先证明它不是第二写路径，<code>room_filter</code> 的答案是不写库、只走命令。</p>
-<h3 id="114-归属契约协议层定义两侧各自校验">11.4 归属契约：协议层定义、两侧各自校验</h3>
+<h3 id="114-归属契约subject-侧定义转发前补齐">11.4 归属契约：Subject 侧定义、转发前补齐</h3>
 <p>归属 = <code>project_id</code> + <code>agent_id</code>（稳定 id）。<code>agent_name</code> 只是展示字段，不参与身份计算。</p>
 <p>协议层表达三处：</p>
 <table>
 <thead><tr><th>表达</th><th>内容</th><th>位置</th></tr></thead>
 <tbody>
-<tr><td>事件归属契约</td><td><code>AGENT_SCOPED_EVENT_TYPES</code>（20 个事件）必须携带非空 <code>project_id</code> + <code>agent_id</code>：agent 生命周期、链节点、能力结果、HITL、用量、session/branch 六类</td><td><code>ghrah-protocol/src/ghrah/protocol/routing.py:18</code></td></tr>
+<tr><td>事件归属契约</td><td><code>AGENT_SCOPED_EVENT_TYPES</code>（20 个事件）必须携带非空 <code>project_id</code> + <code>agent_id</code>：agent 生命周期、链节点、能力结果、HITL、用量、session/branch 六类。M1（2026-11-14）起定义在 Subject 侧；Core 只报告 <code>agent_id</code>，不注入也不校验 <code>project_id</code></td><td><code>ghrah-subject/src/ghrah/subject/server/event_attribution.py</code></td></tr>
 <tr><td>命令寻址</td><td>session/branch/chain 命令载荷固定 <code>{project_id, agent_id, agent_name, ...}</code></td><td><code>ghrah-observer-webui/packages/protocol/src/payloads/session.ts:9</code>、<code>:27</code></td></tr>
 <tr><td>复合键</td><td>TS 侧 <code>AgentKey = &quot;${projectId}:${agentId}&quot;</code>，<code>scope.ts</code> 用 JSON 元组键派生 agent/session/chain key</td><td><code>ghrah-observer-webui/packages/protocol/src/identity.ts:6</code>、<code>ghrah-observer-webui/packages/observer-core/src/scope.ts:33</code></td></tr>
 </tbody></table>
@@ -2292,8 +2291,8 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <table>
 <thead><tr><th>侧</th><th>校验</th><th>失败处置</th><th>位置</th></tr></thead>
 <tbody>
-<tr><td>生产侧（Core）</td><td>发布前检查 agent 作用域事件是否带 <code>project_id</code>/<code>agent_id</code></td><td>缺失即<strong>跳过发布</strong></td><td><code>ghrah-protocol/src/ghrah/protocol/routing.py:14</code>（契约注释）</td></tr>
-<tr><td>转发侧（Subject EventBus）</td><td>同一契约再查一次</td><td><strong>丢弃 + 计数</strong> <code>dropped_unattributed_events</code>，不猜归属、不污染 Observer 的 Project 分桶</td><td><code>ghrah-subject/src/ghrah/subject/server/event_bus.py:188</code></td></tr>
+<tr><td>生产侧（Core）</td><td>发布前只补不透明 <code>agent_id</code>；<strong>不再判定归属</strong>（M1）</td><td>—（缺失归属由转发侧丢弃）</td><td><code>ghrah-core/src/ghrah/core/unit.py:396</code></td></tr>
+<tr><td>转发侧（Subject EventBus）</td><td>用 ProjectStore 权威映射（<code>project_id_for_agent</code>）补齐 <code>project_id</code>（含嵌套 session）</td><td>补齐失败或缺 <code>agent_id</code> → <strong>丢弃 + 计数</strong> <code>dropped_unattributed_events</code>，不猜归属、不污染 Observer 的 Project 分桶</td><td><code>ghrah-subject/src/ghrah/subject/server/event_bus.py::_attribute</code></td></tr>
 <tr><td>命令侧（Subject unit）</td><td>每个写边界把显示名归一为 project 内稳定 id（Room join/leave/send、Task create/update/assign、Workspace、Ledger）</td><td>多义或越界 → <code>ambiguous ...</code> / <code>agent_project_mismatch</code> / <code>agent_identity_mismatch</code></td><td><code>ghrah-subject/src/ghrah/subject/units/room.py:260</code>、<code>ghrah-subject/src/ghrah/subject/units/task.py:136</code>、<code>ghrah-subject/src/ghrah/subject/units/workspace.py:172</code>、<code>ghrah-subject/src/ghrah/subject/units/ledger.py:177</code></td></tr>
 <tr><td>客户端</td><td>用 <code>projectId + agentId</code> 作 store 键；推送型快照只补缺失、不回退已落地状态</td><td>无完整 key 的 target 不参与同步（<code>hasCompleteAgentKey</code>）</td><td><code>ghrah-observer-webui/packages/observer-core/src/scope.ts:53</code>、<code>ghrah-observer-webui/packages/observer-core/src/bind.ts:490</code></td></tr>
 </tbody></table>

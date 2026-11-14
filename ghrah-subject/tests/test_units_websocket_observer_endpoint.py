@@ -17,6 +17,7 @@ from ghrah.subject.runtime.ouroboros_bridge import mount_unit
 from ghrah.subject.runtime.service_keys import (
     OBSERVER_ENDPOINT,
     OBSERVER_EVENT_BUS,
+    PROJECT_STORE,
 )
 from ghrah.subject.server.config import ObserverServerConfig
 from ghrah.subject.server.connection_manager import ConnectionManager
@@ -148,6 +149,35 @@ async def test_unattributed_agent_scoped_events_are_dropped_and_counted() -> Non
         # 只剩非 Agent 作用域事件；被丢弃的事件永不落库
         assert [e["type"] for e in events] == ["task_created"]
         assert unit.observer_event_bus.dropped_unattributed_events == 2
+
+
+async def test_agent_scoped_event_is_attributed_via_project_store() -> None:
+    """端点解析器接线：Core 事件缺 project_id 时用 PROJECT_STORE 反查补齐。"""
+
+    class FakeProjectStore:
+        async def project_id_for_agent(self, agent_id: str) -> str | None:
+            return "p1" if agent_id == "a" * 32 else None
+
+    config = SubjectConfig()
+    unit = WebSocketObserverEndpointUnit(config)
+
+    async with Context() as ctx:
+        ctx.provide(PROJECT_STORE.name, FakeProjectStore())
+        fiber = ctx.plugin(mount_unit(unit))
+        await wait_active(fiber)
+
+        ctx.emit("core:agent_response", {"agent_id": "a" * 32, "agent_name": "planner"})
+
+        events: list[dict[str, Any]] = []
+        for _ in range(200):
+            events = unit.observer_event_bus.event_store.replay_since(0)
+            if events:
+                break
+            await asyncio.sleep(0.01)
+
+        assert [e["type"] for e in events] == ["agent_response"]
+        assert events[0]["payload"]["project_id"] == "p1"
+        assert unit.observer_event_bus.dropped_unattributed_events == 0
 
 
 async def test_observer_preserves_project_agent_scope_for_subject_router() -> None:

@@ -726,7 +726,6 @@ class TestStandalone:
         emitted: list[tuple[str, dict[str, Any]]] = []
         publisher = UnitEventPublisher(
             emit=lambda name, payload: emitted.append((name, payload)),
-            project_id="default",
             agent_id_resolver=lambda name: name or "",
         )
         await publisher.publish(
@@ -740,13 +739,14 @@ class TestStandalone:
         assert emitted[0][0] == "core:hitl_request"
         assert emitted[0][1]["ability_name"] == "mock_ability"
         assert emitted[0][1]["reason"] == ""  # 触发原因进 wire 载荷（默认空）
+        # M1：Core 事件不携带 Project 归属（由 Subject 转发前补齐）
+        assert "project_id" not in emitted[0][1]
 
-    async def test_publisher_drops_unattributed_agent_scoped_event(self) -> None:
-        """Agent 作用域事件缺失归属（project_id/agent_id）时跳过发布。"""
+    async def test_publisher_no_longer_judges_attribution(self) -> None:
+        """归属判定已迁到 Subject：Core 照发，agent_id 为空由转发侧丢弃。"""
         emitted: list[tuple[str, dict[str, Any]]] = []
         publisher = UnitEventPublisher(
             emit=lambda name, payload: emitted.append((name, payload)),
-            # 缺 project_id + resolver 解析失败（返回空）
             agent_id_resolver=lambda name: "",
         )
         await publisher.publish(
@@ -757,14 +757,15 @@ class TestStandalone:
                 context={"tool_call_id": "call-1"},
             )
         )
-        assert emitted == []
+        assert len(emitted) == 1
+        assert emitted[0][1]["agent_id"] == ""
+        assert "project_id" not in emitted[0][1]
 
     async def test_publisher_context_usage_attribution(self) -> None:
         """context_usage_updated 经 publisher 注入归属并映射 wire 名。"""
         emitted: list[tuple[str, dict[str, Any]]] = []
         publisher = UnitEventPublisher(
             emit=lambda name, payload: emitted.append((name, payload)),
-            project_id="default",
             agent_id_resolver=lambda name: name or "",
         )
         await publisher.publish(
@@ -779,7 +780,7 @@ class TestStandalone:
         )
         assert emitted[0][0] == "core:context_usage_updated"
         payload = emitted[0][1]
-        assert payload["project_id"] == "default"
+        assert "project_id" not in payload
         assert payload["agent_id"] == "agent-1"
         assert payload["agent_name"] == "agent-1"
         assert payload["phase"] == "post_call"

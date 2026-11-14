@@ -35,7 +35,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ghrah.protocol.types import (
-    AGENT_SCOPED_EVENT_TYPES,
     AbilityResultPayload,
     AgentCompactContextPayload,
     AgentResetPayload,
@@ -405,36 +404,26 @@ class UnitEventPublisher(EventPublisher):
         self,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
         *,
-        project_id: str = "",
         agent_id_resolver: Callable[[str], str] | None = None,
     ) -> None:
         """初始化 UnitEventPublisher。
 
+        事件只携带 Agent 的不透明身份（``agent_id``），不携带 Project 归属：
+        Project 是 Subject 的组织方式，由 Subject 在转发给 Observer 前补齐。
+
         Args:
             emit: 宿主事件发射回调（通常为 ``ctx.emit``），None 表示 Null 模式
+            agent_id_resolver: agent 名 → 不透明 agent_id 的解析器
         """
         self._emit = emit
-        self._project_id = project_id
         self._agent_id_resolver = agent_id_resolver
 
     async def publish(self, event: CoreEvent) -> None:
         """发布事件到宿主 ctx。"""
         event_type, payload = _core_event_to_dict(event)
-        payload["project_id"] = self._project_id
         payload["agent_id"] = (
             self._agent_id_resolver(event.agent_name) if self._agent_id_resolver is not None else ""
         )
-        # Agent 作用域事件缺失归属（project_id/agent_id 任一为空）时跳过发布：
-        # 不以空值污染下游 Project 分桶，也不猜测归属（如 shutdown 后解析失败）。
-        if event_type in AGENT_SCOPED_EVENT_TYPES and (
-            not payload["project_id"] or not payload["agent_id"]
-        ):
-            logger.warning(
-                "Dropped unattributed core event '%s' for agent '%s' (missing project_id/agent_id)",
-                event_type,
-                event.agent_name,
-            )
-            return
         if self._emit is None:
             logger.debug(f"Event published (unit-null): {event_type} for agent {event.agent_name}")
             return
@@ -583,7 +572,6 @@ class CoreUnit:
         self._emit = emit if callable(emit) else None
         self._publisher = UnitEventPublisher(
             emit=self._emit,
-            project_id=self._config.project_id,
             agent_id_resolver=self._agent_id_for_name,
         )
 
@@ -746,36 +734,22 @@ class CoreUnit:
         return self._supervisor
 
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        """经宿主 emit 发送 core 域事件（``core:{event_type}``，fire-and-forget）。"""
+        """经宿主 emit 发送 core 域事件（``core:{event_type}``，fire-and-forget）。
+
+        只补 Agent 的不透明身份（``agent_id``）；Project 归属由 Subject 在转发前
+        补齐（M1），Core 不注入、也不判定归属。
+        """
         if self._emit is None:
             logger.debug(f"Event emitted (unit-null): core:{event_type}")
             return
         try:
             enriched = dict(payload)
-            # 注意不能用 setdefault：wire payload 的 model_dump 自带空串字段
-            # （协议默认 project_id=""），已存在的空键不会被 setdefault 覆盖。
-            if not enriched.get("project_id"):
-                enriched["project_id"] = self._config.project_id
             agent_name = str(enriched.get("agent_name") or enriched.get("name") or "")
             if agent_name and not enriched.get("agent_id"):
                 enriched["agent_id"] = self._agent_id_for_name(agent_name)
-            # Agent 作用域事件缺失归属时跳过（与 UnitEventPublisher 同一契约）。
-            if event_type in AGENT_SCOPED_EVENT_TYPES and (
-                not enriched.get("project_id") or not enriched.get("agent_id")
-            ):
-                logger.warning(
-                    "Dropped unattributed core event '%s' for agent '%s' "
-                    "(missing project_id/agent_id)",
-                    event_type,
-                    agent_name,
-                )
-                return
             session = enriched.get("session")
-            if isinstance(session, dict):
-                if not session.get("project_id"):
-                    session["project_id"] = self._config.project_id
-                if not session.get("agent_id"):
-                    session["agent_id"] = enriched.get("agent_id", "")
+            if isinstance(session, dict) and not session.get("agent_id"):
+                session["agent_id"] = enriched.get("agent_id", "")
             self._emit(f"core:{event_type}", enriched)
         except Exception:
             logger.exception(f"Failed to emit core:{event_type}")

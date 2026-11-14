@@ -410,6 +410,32 @@ class ProjectStore:
             )
             return await cursor.fetchone() is not None
 
+    async def project_id_for_agent(self, agent_id: str) -> str | None:
+        """按 ``agent_id`` 反查所属 project（Subject 事件归属的唯一读路径）。
+
+        ``agents`` 列是 JSON 数组，这里用 SQLite JSON1 扫描；只读、不写，结果可由
+        project 记录完整重建（权威仍是 ``subject_projects.agents``）。已软删的
+        project 不参与归属。
+
+        Args:
+            agent_id: Agent 的业务身份（UUID hex）
+
+        Returns:
+            所属 project_id；未找到返回 None
+        """
+        if not agent_id:
+            return None
+        async with self._lock:
+            db = self._require_db()
+            cursor = await db.execute(
+                "SELECT p.project_id FROM subject_projects AS p, json_each(p.agents) AS a "
+                "WHERE json_extract(a.value, '$.agent_id') = ? AND p.deleted_at IS NULL "
+                "LIMIT 1",
+                (agent_id,),
+            )
+            row = await cursor.fetchone()
+        return str(row["project_id"]) if row is not None else None
+
     async def exists_workspace_mounted(self, workspace_id: str) -> bool:
         """workspace_id 是否被任一未软删 project 挂载。
 

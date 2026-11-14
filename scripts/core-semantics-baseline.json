@@ -86,7 +86,7 @@
       "ghrah/core/read/ability_catalog.py": 10,
       "ghrah/core/read/chain.py": 28,
       "ghrah/core/read/mailbox.py": 16,
-      "ghrah/core/unit.py": 62,
+      "ghrah/core/unit.py": 45,
       "ghrah/core/units/registry.py": 56,
       "ghrah/core/wiring.py": 9
     },
