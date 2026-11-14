@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from fastapi.testclient import TestClient
 from ghrah.protocol.types import EventType
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
@@ -182,3 +183,43 @@ async def test_observer_preserves_project_agent_scope_for_subject_router() -> No
             },
         )
     ]
+
+
+def _http_paths(app: Any) -> set[str]:
+    return {
+        route.path
+        for route in app.routes
+        if getattr(route, "path", None) and route.__class__.__name__ == "APIRoute"
+    }
+
+
+async def test_observer_app_http_routes_live_under_api_v1() -> None:
+    """Subject 边缘只提供 /api/v1 下的 HTTP 入口；无前缀 GET 留给 Observer。
+
+    /health 为过渡别名：ghrah-toolchain 仍探测它；切到 /api/v1/health 后删除。
+    """
+    config = SubjectConfig()
+    unit = WebSocketObserverEndpointUnit(config)
+
+    async with Context() as ctx:
+        fiber = ctx.plugin(mount_unit(unit))
+        await wait_active(fiber)
+        app = unit.app
+        paths = _http_paths(app)
+
+        assert "/api/v1/health" in paths
+        assert "/api/v1/meta" in paths
+        assert "/" not in paths
+        assert app.openapi_url == "/api/v1/openapi.json"
+        assert app.docs_url is None
+        assert app.redoc_url is None
+
+        client = TestClient(app)
+        assert client.get("/api/v1/health").json()["status"] == "ok"
+        meta = client.get("/api/v1/meta").json()
+        assert meta["name"] == "ghrah-subject-observer"
+        assert client.get("/api/v1/openapi.json").status_code == 200
+        assert client.get("/").status_code == 404
+        assert client.get("/docs").status_code == 404
+        # 过渡别名仍可用（带 deprecation 标记），供工具链就绪探测
+        assert client.get("/health").json()["status"] == "ok"

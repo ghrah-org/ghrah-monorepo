@@ -186,6 +186,10 @@ def _create_observer_app(
         title="ghrah-subject-observer",
         description="ghrah-subject Observer WebSocket server",
         version="0.1.0",
+        # 业务/元信息入口一律在 /api/v1 命名空间下；无前缀 GET 留给 Observer SPA。
+        docs_url=None,
+        redoc_url=None,
+        openapi_url="/api/v1/openapi.json",
     )
 
     async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -197,7 +201,7 @@ def _create_observer_app(
             "active_sessions": connection_manager.connection_count,
         }
 
-    async def root() -> dict[str, str]:
+    async def meta() -> dict[str, str]:
         return {
             "name": "ghrah-subject-observer",
             "version": "0.1.0",
@@ -205,8 +209,11 @@ def _create_observer_app(
         }
 
     app.websocket(config.ws_path)(websocket_endpoint)
-    app.get("/health")(health)
-    app.get("/")(root)
+    app.get("/api/v1/health")(health)
+    app.get("/api/v1/meta")(meta)
+    # 过渡别名：ghrah-toolchain 的 dev/生命周期仍探测无前缀 /health。
+    # 待工具链切到 /api/v1/health 后删除（基线切换阶段，见 T0 任务书）。
+    app.get("/health", deprecated=True, include_in_schema=False)(health)
     return app
 
 
