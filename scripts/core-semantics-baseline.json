@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "generated_by": "scripts/check_core_semantics.py --update",
+  "note": "Core 运行时面的 Subject 语义存量基线。只降不升：新增泄漏请先迁移，不要直接 --update。下降后可用 --update 收紧。",
+  "symbols": {
+    "project_id": "\\bproject_id\\b",
+    "project": "\\bproject\\b",
+    "room_id(s)": "\\broom_ids?\\b",
+    "room_projector": "\\broom_projector\\b",
+    "scope_ref": "\\bscope_ref\\b",
+    "external_ref": "\\bexternal_ref\\b",
+    "manifest_ref": "\\bmanifest_ref\\b",
+    "manifest_store": "\\bmanifest_store\\b",
+    "shell_cwd_provider": "\\bshell_cwd_provider\\b",
+    "SubjectCommandBridge": "SubjectCommandBridge"
+  },
+  "counts": {
+    "SubjectCommandBridge": {
+      "ghrah/core/host_command_port.py": 4,
+      "ghrah/core/subject_bridge.py": 3,
+      "ghrah/core/unit.py": 2
+    },
+    "external_ref": {
+      "ghrah/core/runtime_agent_api.py": 8,
+      "ghrah/core/runtime_agent_store.py": 7
+    },
+    "manifest_ref": {
+      "ghrah/ability/access/backends.py": 2,
+      "ghrah/ability/builtin/cluster/operations/query_manifests.py": 17,
+      "ghrah/ability/builtin/cluster/operations/spawn_agent.py": 25,
+      "ghrah/communication/supervisor.py": 1,
+      "ghrah/core/api/facade.py": 3,
+      "ghrah/core/api/handlers/agents.py": 4,
+      "ghrah/core/api/handlers/manifests.py": 5,
+      "ghrah/core/api/interfaces.py": 1,
+      "ghrah/core/unit.py": 9,
+      "ghrah/core/units/registry.py": 3
+    },
+    "manifest_store": {
+      "ghrah/ability/builtin/cluster/operations/query_manifests.py": 2,
+      "ghrah/ability/builtin/cluster/operations/spawn_agent.py": 2,
+      "ghrah/ability/execution/execution_services.py": 5,
+      "ghrah/agents/base.py": 2,
+      "ghrah/communication/supervisor.py": 4,
+      "ghrah/core/unit.py": 9
+    },
+    "project": {
+      "ghrah/ability/access/startup.py": 2,
+      "ghrah/ability/access/store.py": 47,
+      "ghrah/ability/builtin/fs/operations/edit_file.py": 1,
+      "ghrah/ability/builtin/fs/operations/list_directory.py": 1,
+      "ghrah/ability/builtin/fs/operations/move_file.py": 1,
+      "ghrah/ability/permissions/fs_permissions.py": 2,
+      "ghrah/ability/scheme/host.py": 7,
+      "ghrah/chat/format/__init__.py": 1,
+      "ghrah/communication/message_manager.py": 1,
+      "ghrah/core/api/facade.py": 6,
+      "ghrah/core/api/handlers/mailbox.py": 1,
+      "ghrah/core/read/ability_catalog.py": 5,
+      "ghrah/core/runtime.py": 1,
+      "ghrah/core/unit.py": 2,
+      "ghrah/core/units/registry.py": 1,
+      "ghrah/core/wiring.py": 1
+    },
+    "project_id": {
+      "ghrah/ability/access/boundary.py": 3,
+      "ghrah/ability/access/migration.py": 3,
+      "ghrah/ability/access/startup.py": 3,
+      "ghrah/ability/access/store.py": 51,
+      "ghrah/ability/builtin/core/operations/session_info.py": 1,
+      "ghrah/ability/execution/invocation.py": 2,
+      "ghrah/ability/file_backend.py": 2,
+      "ghrah/ability/local_content.py": 3,
+      "ghrah/ability/mcp_wiring.py": 15,
+      "ghrah/ability/scheme/host.py": 2,
+      "ghrah/ability/surface/catalog.py": 5,
+      "ghrah/ability/surface/projection.py": 3,
+      "ghrah/ability/surface/runtime.py": 4,
+      "ghrah/ability/surface/search.py": 2,
+      "ghrah/agents/base.py": 4,
+      "ghrah/communication/mailbox_reader.py": 4,
+      "ghrah/communication/message_manager.py": 9,
+      "ghrah/core/api/facade.py": 10,
+      "ghrah/core/api/handlers/abilities.py": 22,
+      "ghrah/core/api/handlers/agents.py": 41,
+      "ghrah/core/api/handlers/branches.py": 2,
+      "ghrah/core/api/handlers/deliveries.py": 12,
+      "ghrah/core/api/handlers/mailbox.py": 15,
+      "ghrah/core/api/handlers/messages.py": 14,
+      "ghrah/core/api/handlers/nodes.py": 2,
+      "ghrah/core/api/handlers/session_write.py": 46,
+      "ghrah/core/api/handlers/sessions.py": 8,
+      "ghrah/core/api/interfaces.py": 46,
+      "ghrah/core/read/ability.py": 53,
+      "ghrah/core/read/ability_admin.py": 2,
+      "ghrah/core/read/ability_catalog.py": 10,
+      "ghrah/core/read/chain.py": 28,
+      "ghrah/core/read/mailbox.py": 16,
+      "ghrah/core/runtime.py": 5,
+      "ghrah/core/runtime_resources.py": 1,
+      "ghrah/core/unit.py": 62,
+      "ghrah/core/units/registry.py": 56,
+      "ghrah/core/wiring.py": 9
+    },
+    "room_id(s)": {
+      "ghrah/ability/builtin/cluster/operations/send.py": 7,
+      "ghrah/agents/base.py": 4,
+      "ghrah/communication/message_manager.py": 6,
+      "ghrah/communication/router.py": 1,
+      "ghrah/communication/supervisor.py": 6,
+      "ghrah/core/room_protocol.py": 11,
+      "ghrah/core/runtime_agent_api.py": 1
+    },
+    "room_projector": {
+      "ghrah/core/runtime_resources.py": 2,
+      "ghrah/core/unit.py": 1,
+      "ghrah/core/units/registry.py": 2
+    },
+    "scope_ref": {
+      "ghrah/core/runtime.py": 14,
+      "ghrah/core/runtime_agent_api.py": 7,
+      "ghrah/core/runtime_agent_store.py": 22,
+      "ghrah/core/runtime_management_api.py": 1,
+      "ghrah/core/runtime_read_api.py": 2,
+      "ghrah/core/runtime_resources.py": 9
+    },
+    "shell_cwd_provider": {
+      "ghrah/ability/access/boundary.py": 3,
+      "ghrah/ability/access/startup.py": 4,
+      "ghrah/ability/builtin/shell/operations/execute_command.py": 2,
+      "ghrah/ability/execution/ability_build.py": 7,
+      "ghrah/core/unit.py": 4
+    }
+  }
+}

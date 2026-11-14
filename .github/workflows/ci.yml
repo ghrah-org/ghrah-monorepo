@@ -29,6 +29,9 @@ jobs:
           echo "::notice::pytest 已返回，退出码 $?"
       - name: 契约漂移检查
         run: uv run python scripts/export_ability_contracts.py --check
+      # 第二阶段（Core 适配）的防回归基线：Core 运行时面只降不升，且不得 import Subject。
+      - name: Core 语义基线
+        run: uv run python scripts/check_core_semantics.py --check
       - name: Kernel 独立安装与真实命名服务
         run: |
           uv build --package ghrah-kernel --out-dir dist/kernel-check
