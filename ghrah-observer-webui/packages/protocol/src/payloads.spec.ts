@@ -41,10 +41,15 @@ import {
   PersistSavePayloadSchema,
   ProjectCreatePayloadSchema,
   ProjectDeletePayloadSchema,
+  ProjectDeletedViewSchema,
   ProjectInfoPayloadSchema,
   ProjectLifecyclePayloadSchema,
+  ProjectLifecycleRequestSchema,
   ProjectListPayloadSchema,
+  ProjectTransitionPayloadSchema,
+  ProjectTransitionRequestSchema,
   ProjectUpdatePayloadSchema,
+  ProjectUpdateRequestSchema,
   RegisterAbilityPayloadSchema,
   RoomDeletePayloadSchema,
   RoomLifecyclePayloadSchema,
@@ -129,6 +134,60 @@ describe("Project payload schemas", () => {
     expect(project.isolation.agent_path_grants["agent-001"]?.[0]?.subpath).toBe("src");
     expect(project.agents[0]?.runtime_status).toBe("error");
     expect(project.agents[0]?.runtime_error).toBe("transport down");
+  });
+});
+
+describe("Project REST request schemas", () => {
+  it("requires expected_version and at least one mutable field for update", () => {
+    expect(() => ProjectUpdateRequestSchema.parse({ name: "renamed" })).toThrow();
+    expect(() => ProjectUpdateRequestSchema.parse({ expected_version: 3 })).toThrow();
+    expect(ProjectUpdateRequestSchema.parse({ name: "renamed", expected_version: 3 })).toEqual({
+      name: "renamed",
+      description: undefined,
+      manifest_ref: undefined,
+      shell_cwd: undefined,
+      expected_version: 3,
+    });
+  });
+
+  it("rejects unknown fields on update", () => {
+    expect(() =>
+      ProjectUpdateRequestSchema.parse({
+        name: "renamed",
+        expected_version: 3,
+        project_id: "proj-001",
+      }),
+    ).toThrow();
+  });
+
+  it("requires expected_version for archive and restore", () => {
+    expect(() => ProjectLifecycleRequestSchema.parse({})).toThrow();
+    expect(ProjectLifecycleRequestSchema.parse({ expected_version: 3 })).toEqual({
+      expected_version: 3,
+    });
+  });
+
+  it("allows optional expected_version for pause/resume/stop request and payload", () => {
+    expect(ProjectTransitionRequestSchema.parse({})).toEqual({});
+    expect(ProjectTransitionRequestSchema.parse({ expected_version: 3 })).toEqual({
+      expected_version: 3,
+    });
+    expect(ProjectTransitionPayloadSchema.parse({ project_id: "proj-001" })).toEqual({
+      project_id: "proj-001",
+    });
+    expect(() => ProjectTransitionPayloadSchema.parse({ expected_version: 3 })).toThrow();
+  });
+
+  it("pins the deleted view shape", () => {
+    const view = {
+      project_id: "proj-001",
+      deleted: true,
+      storage_purged: true,
+      rooms_deleted: 2,
+    };
+    expect(ProjectDeletedViewSchema.parse(view)).toEqual(view);
+    expect(() => ProjectDeletedViewSchema.parse({ ...view, rooms_deleted: -1 })).toThrow();
+    expect(() => ProjectDeletedViewSchema.parse({ ...view, room_ids: [] })).toThrow();
   });
 });
 

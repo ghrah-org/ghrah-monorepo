@@ -153,6 +153,46 @@ export const ProjectListResultPayloadSchema = z.object({
   count: z.number().int().optional().default(0),
 });
 
+// ─── Project REST 请求/响应（观察端管理面，非 WS wire） ───
+
+export const ProjectUpdateRequestSchema = z
+  .object({
+    name: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    manifest_ref: z.string().nullable().optional(),
+    shell_cwd: z.string().nullable().optional(),
+    expected_version: z.number().int().min(1),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      [value.name, value.description, value.manifest_ref, value.shell_cwd].some(
+        (item) => item !== undefined && item !== null,
+      ),
+    { message: "至少需要一个可改字段" },
+  );
+
+export const ProjectLifecycleRequestSchema = z
+  .object({ expected_version: z.number().int().min(1) })
+  .strict();
+
+export const ProjectTransitionRequestSchema = z
+  .object({ expected_version: z.number().int().min(1).nullable().optional() })
+  .strict();
+
+export const ProjectTransitionPayloadSchema = ProjectIdPayloadSchema.extend({
+  expected_version: z.number().int().min(1).nullable().optional(),
+}).strict();
+
+export const ProjectDeletedViewSchema = z
+  .object({
+    project_id: z.string(),
+    deleted: z.boolean(),
+    storage_purged: z.boolean(),
+    rooms_deleted: z.number().int().min(0),
+  })
+  .strict();
+
 // ─── Project Event Payloads ───
 
 export const ProjectEventPayloadSchema = z.object({
@@ -185,5 +225,10 @@ export type ProjectLinkTaskPayload = z.infer<typeof ProjectLinkTaskPayloadSchema
 export type ProjectUnlinkTaskPayload = z.infer<typeof ProjectUnlinkTaskPayloadSchema>;
 export type ProjectSetRecoveryPayload = z.infer<typeof ProjectSetRecoveryPayloadSchema>;
 export type ProjectListResultPayload = z.infer<typeof ProjectListResultPayloadSchema>;
+export type ProjectUpdateRequest = z.infer<typeof ProjectUpdateRequestSchema>;
+export type ProjectLifecycleRequest = z.infer<typeof ProjectLifecycleRequestSchema>;
+export type ProjectTransitionRequest = z.infer<typeof ProjectTransitionRequestSchema>;
+export type ProjectTransitionPayload = z.infer<typeof ProjectTransitionPayloadSchema>;
+export type ProjectDeletedView = z.infer<typeof ProjectDeletedViewSchema>;
 export type ProjectEventPayload = z.infer<typeof ProjectEventPayloadSchema>;
 export type ProjectAgentEventPayload = z.infer<typeof ProjectAgentEventPayloadSchema>;
