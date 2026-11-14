@@ -30,10 +30,10 @@ async def mount_builtin_units(
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
     均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
-    + taskstore + task/desired_state）；full = 17（coexistence 7 +
+    + taskstore + task/desired_state）；full = 18（coexistence 7 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
-    project/ability_control/agent_control/agentconf_control/room/recovery
-    + room_filter）。
+    project/project_control/ability_control/agent_control/agentconf_control/
+    room/recovery + room_filter）。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
@@ -86,6 +86,7 @@ async def mount_builtin_units(
         from ghrah.subject.units.agentconf_control import AgentconfControlUnit
         from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
         from ghrah.subject.units.project import ProjectUnit
+        from ghrah.subject.units.project_control import ProjectControlUnit
         from ghrah.subject.units.recovery import RecoveryUnit
         from ghrah.subject.units.room import RoomUnit
         from ghrah.subject.units.room_filter import RoomFilterUnit
@@ -104,6 +105,9 @@ async def mount_builtin_units(
                 if core_cluster_unit is not None
                 else CoreClusterRegistryUnit(config),
                 ProjectUnit(config),
+                # Project 管理 REST 读面：requires PROJECT_MANAGER（ProjectUnit
+                # 之后）；异常处理器/CORS 复用 ability_control 的注册结果。
+                ProjectControlUnit(config),
                 # 能力管理面：requires PROJECT_STORE（ProjectUnit 之后）与
                 # CORE_CLUSTER_REGISTRY/ABILITY_ACCESS（registry 之后）。
                 AbilityControlUnit(config),

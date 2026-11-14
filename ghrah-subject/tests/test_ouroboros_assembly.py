@@ -77,6 +77,7 @@ async def test_full_assembly_all_fibers_active(
             "websocket_observer_endpoint",
             "core_cluster_registry",
             "project",
+            "project_control",
             "ability_control",
             "agent_control",
             "agentconf_control",
