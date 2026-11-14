@@ -102,6 +102,16 @@ def _jsonable(model: Any) -> Any:
     return model.model_dump(mode="json")
 
 
+def _serializable_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pydantic 错误 → 可 JSON 化的列表。
+
+    ``model_validator`` 抛 ``ValueError`` 时，Pydantic 会把异常对象放进
+    ``ctx``；直接塞进 JSONResponse 会 ``TypeError``。错误体只需要
+    ``type/loc/msg/input``，去掉 ``ctx`` 即可。
+    """
+    return [{key: value for key, value in error.items() if key != "ctx"} for error in errors]
+
+
 def _is_loopback(request: Request) -> bool:
     client = request.client
     if client is None:
@@ -566,7 +576,7 @@ def register_ability_control_error_handlers(app: FastAPI) -> None:
             "error": {
                 "code": "invalid_request",
                 "message": "请求参数不合法",
-                "detail": {"errors": exc.errors()},
+                "detail": {"errors": _serializable_validation_errors(exc.errors())},
             }
         }
         return JSONResponse(status_code=400, content=payload)
