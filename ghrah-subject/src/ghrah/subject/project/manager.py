@@ -41,6 +41,7 @@ from ghrah.protocol.types import (
     ProjectListPayload,
     ProjectRemoveAgentPayload,
     ProjectSetRecoveryPayload,
+    ProjectTransitionPayload,
     ProjectUnlinkTaskPayload,
     ProjectUpdatePayload,
     RecoveryAction,
@@ -747,7 +748,7 @@ class ProjectManager:
             except Exception as exc:  # noqa: BLE001
                 return _err(f"project_room_count_failed: {exc}")
             if room_count and not p.cascade_rooms:
-                return _err("project_has_rooms")
+                return _err_code("project_has_rooms", str(room_count))
             shutdown_error = await self._shutdown_project_clusters(existing)
             if shutdown_error is not None:
                 return _err_code("project_shutdown_failed", str(shutdown_error))
@@ -1143,11 +1144,15 @@ class ProjectManager:
         shutdown_clusters: bool = False,
         reinit_clusters: bool = False,
     ) -> dict[str, Any]:
-        p = ProjectIdPayload.model_validate(payload)
+        p = ProjectTransitionPayload.model_validate(_strip_envelope(payload))
         existing, error = await self._get_active_project(p.project_id)
         if error is not None:
             return error
         assert existing is not None
+        if p.expected_version is not None:
+            conflict = self._check_expected_version(existing, p.expected_version)
+            if conflict is not None:
+                return conflict
         if not can_transition(existing.status, target):
             return _err(f"illegal transition: {existing.status.value} -> {target.value}")
         updated = await self._store.update(
