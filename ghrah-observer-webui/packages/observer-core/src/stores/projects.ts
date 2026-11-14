@@ -102,6 +102,7 @@ export const useProjectsStore = defineStore("ghrah-projects", () => {
     activeProject,
     onProjectEvent,
     onProjectDeleted,
+    removeProject,
     setProjectsFromList,
     replaceProjects,
     isProjectOperable,
