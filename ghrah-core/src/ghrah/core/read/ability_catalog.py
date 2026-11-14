@@ -353,8 +353,8 @@ def _dict_member_count(definition: dict[str, Any]) -> int | None:
     return len(operations) + len(skills)
 
 
-async def build_instances_view(store: Any, operator: Any, project_id: str) -> AbilityInstancesView:
-    """列出项目已提交的实例和版本，不改当前选择，不返回实例根。"""
+async def build_instances_view(store: Any, operator: Any) -> AbilityInstancesView:
+    """列出本作用域已提交的实例和版本，不改当前选择，不返回实例根。"""
     try:
         instance_ids = await store.list_instances(operator)
         stored_versions = await store.list_versions(operator)
@@ -435,7 +435,7 @@ async def build_instances_view(store: Any, operator: Any, project_id: str) -> Ab
         if version.digest not in claimed
     ]
     return AbilityInstancesView(
-        project_id=project_id, instances=instances, unbound_versions=unbound
+        project_id=operator.project_id, instances=instances, unbound_versions=unbound
     )
 
 

@@ -28,15 +28,15 @@ __all__ = ["make_mailbox_handlers"]
 _EMPTY_SUMMARY = MailboxSummaryView(availability="empty", inbox_counts={}, outbox_count=0)
 
 
-def _manager(registry: Any, project_id: str, capability: str) -> Any:
-    """取项目消息管理器；单元未启动时抛 ``UNAVAILABLE``。"""
-    manager = registry.message_manager(project_id)
+def _manager(registry: Any, capability: str) -> Any:
+    """取作用域消息管理器；单元未启动时抛 ``UNAVAILABLE``。"""
+    manager = registry.message_manager()
     if manager is None:
         raise CoreApiError(
             Problem.make(
                 ProblemCode.UNAVAILABLE,
                 capability=capability,
-                detail=f"project {project_id} has no message manager",
+                detail="message manager unavailable for this scope",
             ),
         )
     return manager
@@ -56,10 +56,7 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
     async def summary(request: MailboxSummaryRequest) -> MailboxSummaryView:
         """读取信箱概览。消息库不存在时返回 ``empty``，不报错。"""
         try:
-            return await store.summary(
-                project_id=request.project_id,
-                agent_id=request.agent_id,
-            )
+            return await store.summary(agent_id=request.agent_id)
         except MailboxUnavailableError:
             return _EMPTY_SUMMARY
 
@@ -68,7 +65,6 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
         before_seq = int(request.cursor) if request.cursor else None
         try:
             items, next_seq = await store.list_messages(
-                project_id=request.project_id,
                 agent_id=request.agent_id,
                 inbox=request.inbox,
                 limit=request.limit,
@@ -85,15 +81,14 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
     async def get_message(request: MailboxGetRequest) -> MessageView:
         """读取单条可见消息。"""
         return await store.get_message(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             message_id=request.message_id,
         )
 
     async def publish_external(request: MailboxPublishExternalRequest) -> PublishedMessageView:
         """以外部（人）身份发布消息：写入消息表并投递给收件人。"""
-        await registry.ensure(request.project_id)
-        manager = _manager(registry, request.project_id, "mailbox.publish_external")
+        await registry.ensure()
+        manager = _manager(registry, "mailbox.publish_external")
         record = await manager.send_external(
             sender=request.sender,
             recipient_ids=tuple(request.recipient_ids),
@@ -109,8 +104,8 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
         """发布通知类消息，并按指定收件人投递。"""
         from ghrah.communication import MessageKind
 
-        await registry.ensure(request.project_id)
-        manager = _manager(registry, request.project_id, "mailbox.publish_notification")
+        await registry.ensure()
+        manager = _manager(registry, "mailbox.publish_notification")
         record = await manager.send(
             sender_id=request.sender_id,
             recipient_ids=tuple(request.recipient_ids),
@@ -123,8 +118,8 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
 
     async def recover_room_projections(request: MailboxRecoverProjectionsRequest) -> AckView:
         """补齐缺失的 Room 投影日志。"""
-        await registry.ensure(request.project_id)
-        manager = _manager(registry, request.project_id, "mailbox.recover_room_projections")
+        await registry.ensure()
+        manager = _manager(registry, "mailbox.recover_room_projections")
         await manager.recover_room_projections()
         return AckView(ok=True)
 

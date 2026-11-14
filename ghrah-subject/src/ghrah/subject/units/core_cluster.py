@@ -228,39 +228,46 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 room_projector=project_room,
                 shell_cwd_lookup=shell_cwd_lookup,
             )
-        from ghrah.core.wiring import build_core_port
+        from ghrah.core.wiring import build_core_assembly, build_core_port
         from ghrah.protocol.ports.keys import CORE_PORT
 
         from ghrah.subject.project.paths import ProjectPaths
 
-        def resolve_db_path(project_id: str) -> str:
-            locator = None
+        def _locator_for(project_id: str) -> str | None:
+            """取已登记的项目根定位符（由 cluster 登记提供）。"""
             if self._transport is not None:
-                locator = self._transport.locator_for(project_id)
-            if not locator:
-                return ""
-            return str(ProjectPaths.from_locator(locator).action_chain_db_path)
+                return self._transport.locator_for(project_id)
+            return None
 
-        def _config_factory(project_id: str) -> Any:
+        def _build_config(project_id: str, locator: str) -> Any:
             """Core 单元配置：复用 legacy 工厂的项目级装配（含 manifest_store）。"""
-            locator = None
-            if self._transport is not None:
-                locator = self._transport.locator_for(project_id)
-            if not locator:
-                raise ValueError(f"project locator unavailable: {project_id}")
             build = getattr(self._unit_factory, "build_config", None)
             if build is None:
                 raise ValueError("core unit factory 未提供 build_config")
             return build(project_id, locator)
 
-        core_port = build_core_port(
-            resolve_db_path=resolve_db_path,
+        def _make_port(project_id: str) -> Any:
+            """按项目构造作用域端口实例（数据根 + 不透明作用域 token）。"""
+            locator = _locator_for(project_id)
+            if not locator:
+                raise ValueError(f"project locator unavailable: {project_id}")
+            db_path = str(ProjectPaths.from_locator(locator).action_chain_db_path)
+            return build_core_port(
+                scope_id=project_id,
+                db_path=db_path,
+                config_factory=lambda: _build_config(project_id, locator),
+                install_root=self._config.ability.install_root,
+                agentconf_db_path=self._config.agentconf_db_path,
+                grant_policy=self._config.ability_grant_policy,
+                emit=ctx.emit,
+                serial=ctx.serial,
+            )
+
+        core_port = build_core_assembly(
+            port_factory=_make_port,
             install_root=self._config.ability.install_root,
             agentconf_db_path=self._config.agentconf_db_path,
             grant_policy=self._config.ability_grant_policy,
-            config_factory=_config_factory,
-            emit=ctx.emit,
-            serial=ctx.serial,
         )
         ctx.provide(CORE_PORT, core_port)
         from ghrah.subject.runtime.port_transport import PortClusterTransport

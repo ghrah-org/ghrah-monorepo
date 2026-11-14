@@ -38,7 +38,6 @@ def make_delivery_handlers(
     async def get_delivery(request: DeliveriesGetRequest) -> DeliveryView:
         """读取单条可见投递。"""
         return await store.get_delivery(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             delivery_id=request.delivery_id,
         )
@@ -46,32 +45,24 @@ def make_delivery_handlers(
     async def retry(request: DeliveriesRetryRequest) -> AckView:
         """重试一条失败投递（先校验该投递对本实体可见）。"""
         await store.get_delivery(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             delivery_id=request.delivery_id,
         )
-        await registry.retry_delivery(
-            project_id=request.project_id,
-            delivery_id=request.delivery_id,
-        )
+        await registry.retry_delivery(delivery_id=request.delivery_id)
         return AckView(ok=True)
 
     async def resume(request: DeliveriesResumeRequest) -> AckView:
         """恢复一条中断投递（同样先校验可见性）。"""
         await store.get_delivery(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             delivery_id=request.delivery_id,
         )
-        await registry.resume_delivery(
-            project_id=request.project_id,
-            delivery_id=request.delivery_id,
-        )
+        await registry.resume_delivery(delivery_id=request.delivery_id)
         return AckView(ok=True)
 
     async def recover(request: RoomsRecoverRequest) -> AckView:
         """修复 Room 投影。"""
-        await registry.recover_rooms(project_id=request.project_id)
+        await registry.recover_rooms()
         return AckView(ok=True)
 
     return {

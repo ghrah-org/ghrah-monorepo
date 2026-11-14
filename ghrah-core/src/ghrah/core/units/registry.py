@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Core 自持的运行时注册表。
+"""Core 自持的运行时注册表（单作用域）。
 
-职责：按 ``project_id`` 创建、启动、复用 CoreUnit，并把命令转交给它。
+职责：为一个**作用域**创建、启动、复用 CoreUnit，并把命令转交给它。
 
-这是「Agent 生命周期归 Core」的落地件。此前 CoreUnit 的创建与挂载都在
-Subject 的集群注册表里，导致写能力无法在 Core 侧实现。CoreUnit 对宿主只要
-求三个成员（见 :class:`UnitContext`），所以 Core 可以自行托管。
+作用域由构造参数 ``scope_id`` 固定：一个注册表只承载一个单元，不再按
+``project_id`` 做多槽字典。作用域对 Core 是**不透明 token**（装配层通常传
+Project 标识），只用于数据库分区、事件/命令的归属与日志关联。
 
-粒度与 CoreUnit 一致：**一个项目一个单元**，Agent 在单元内通过
-``spawn_agent`` / ``terminate_agent`` 等命令增删。
+这是「Agent 生命周期归 Core」的落地件。CoreUnit 对宿主只要求三个成员
+（见 :class:`UnitContext`），所以 Core 可以自行托管。
 
 **进程内语义**：注册表持有活动实例，不承担跨重启的持久化；持久化随 Subject
 侧注册表迁移一并落地。
@@ -31,35 +31,42 @@ from ghrah.core.units.context import UnitContext
 __all__ = ["RuntimeHandle", "RuntimeRegistry"]
 
 type UnitFactory = Callable[[CoreUnitConfig], Any]
-type ConfigFactory = Callable[[str], CoreUnitConfig]
-type ManagerFactory = Callable[[str], Awaitable[Any]]
-type ConfigHook = Callable[[str, CoreUnitConfig], Awaitable[CoreUnitConfig]]
-type AbilityStoreFactory = Callable[[str], Awaitable[Any]]
+type ConfigFactory = Callable[[], CoreUnitConfig]
+type ManagerFactory = Callable[[], Awaitable[Any]]
+type ConfigHook = Callable[[CoreUnitConfig], Awaitable[CoreUnitConfig]]
+type AbilityStoreFactory = Callable[[], Awaitable[Any]]
 type ManifestResolver = Callable[[str], Any]
 
 
 @dataclass
 class RuntimeHandle:
-    """一个项目单元的活动实例。"""
+    """一个作用域单元的活动实例。"""
 
-    project_id: str
+    scope_id: str
     run_id: str
     unit: Any
     context: UnitContext
 
 
 class RuntimeRegistry:
-    """按项目维护活动单元。
+    """维护单个作用域的活动单元。
 
     Args:
+        scope_id: 不透明作用域 token（装配层注入，Core 不解释其含义）
         config_factory: 由装配注入的 CoreUnitConfig 构造器（携带部署设置）
         unit_factory: 单元构造器（默认 ``create_core_unit``，测试可替换）
-        manager_factory: 项目消息管理器工厂（Agent 动态注册，可省略）
+        manager_factory: 消息管理器工厂（Agent 动态注册，可省略）
+        manifest_resolver: manifest 解析源（可省略）
+        config_hook: 单元创建前的异步配置钩子（注入 ability_store 等）
+        ability_store_factory: 启动授权关系库工厂（装配方在构造后注入亦可）
+        emit: 宿主事件投影回调
+        serial: 宿主命令入口，由 Core 的受限桥转发
     """
 
     def __init__(
         self,
         *,
+        scope_id: str,
         config_factory: ConfigFactory,
         unit_factory: UnitFactory = create_core_unit,
         manager_factory: ManagerFactory | None = None,
@@ -69,6 +76,7 @@ class RuntimeRegistry:
         emit: Callable[[str, dict[str, Any]], None] | None = None,
         serial: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
+        self._scope_id = scope_id
         self._config_factory = config_factory
         self._unit_factory = unit_factory
         self._manager_factory = manager_factory
@@ -77,48 +85,53 @@ class RuntimeRegistry:
         self._ability_store_factory = ability_store_factory
         self._emit = emit
         self._serial = serial
-        self._units: dict[str, RuntimeHandle] = {}
-        self._managers: dict[str, Any] = {}
+        self._handle: RuntimeHandle | None = None
+        self._manager: Any = None
         self._lock = asyncio.Lock()
+
+    @property
+    def scope(self) -> str:
+        """本实例的作用域 token（不透明）。"""
+        return self._scope_id
 
     def set_ability_store_factory(self, factory: AbilityStoreFactory | None) -> None:
         """设置启动授权关系库工厂（装配方在构造后注入）。"""
         self._ability_store_factory = factory
 
-    async def ensure(self, project_id: str) -> RuntimeHandle:
-        """取（或懒启动）项目单元。
-
-        Args:
-            project_id: 项目标识
+    async def ensure(self) -> RuntimeHandle:
+        """取（或懒启动）本作用域单元。
 
         Returns:
             运行时句柄
 
         Raises:
-            ValueError: ``project_id`` 为空
+            RuntimeError: 单元启动失败（资源已回滚）
         """
-        if not project_id:
-            raise ValueError("project_id required")
+        handle = self._handle
+        if handle is not None:
+            return handle
         async with self._lock:
-            handle = self._units.get(project_id)
+            handle = self._handle
             if handle is not None:
                 return handle
-            config = self._config_factory(project_id)
+            config = self._config_factory()
             unit = None
             try:
                 if self._manager_factory is not None:
-                    manager = await self._manager_factory(project_id)
-                    self._managers[project_id] = manager
+                    manager = await self._manager_factory()
+                    self._manager = manager
                     config = replace(config, message_manager=manager)
                 if self._config_hook is not None:
-                    config = await self._config_hook(project_id, config)
+                    config = await self._config_hook(config)
                 if config.ability_store is None and self._ability_store_factory is not None:
-                    store = await self._ability_store_factory(project_id)
+                    store = await self._ability_store_factory()
                     config = replace(config, ability_store=store)
                 if config.room_projector is not None and config.message_manager is not None:
                     config.message_manager.configure_room_projector(config.room_projector)
                 unit = self._unit_factory(config)
-                context = UnitContext(request_id=project_id, emit=self._emit, serial=self._serial)
+                context = UnitContext(
+                    request_id=self._scope_id, emit=self._emit, serial=self._serial
+                )
                 await unit.init(context)
                 await unit.start()
             except BaseException:
@@ -126,15 +139,15 @@ class RuntimeRegistry:
                     if unit is not None:
                         await unit.stop()
                 finally:
-                    await self._close_project_resources(project_id)
+                    await self._close_resources()
                 raise
             handle = RuntimeHandle(
-                project_id=project_id,
+                scope_id=self._scope_id,
                 run_id=uuid.uuid4().hex,
                 unit=unit,
                 context=context,
             )
-            self._units[project_id] = handle
+            self._handle = handle
             return handle
 
     async def resolve_manifest(self, manifest_ref: str) -> Any:
@@ -156,58 +169,41 @@ class RuntimeRegistry:
             return await result
         return result
 
-    def message_manager(self, project_id: str) -> Any:
-        """取项目消息管理器；未启动时懒启动不可行，返回 ``None``。
+    def message_manager(self) -> Any:
+        """取本作用域的消息管理器；未启动时返回 ``None``。"""
+        return self._manager
 
-        Args:
-            project_id: 项目标识
-
-        Returns:
-            管理器实例；单元未启动时为 ``None``
-        """
-        return self._managers.get(project_id)
-
-    async def retry_delivery(self, *, project_id: str, delivery_id: str) -> None:
+    async def retry_delivery(self, *, delivery_id: str) -> None:
         """重试一条失败投递（沿用消息管理器的重试规则）。"""
-        await self.ensure(project_id)
-        manager = self._managers.get(project_id)
-        if manager is None:
+        await self.ensure()
+        if self._manager is None:
             raise LookupError("message_manager_unavailable")
-        await manager.retry(delivery_id)
+        await self._manager.retry(delivery_id)
 
-    async def resume_delivery(self, *, project_id: str, delivery_id: str) -> None:
+    async def resume_delivery(self, *, delivery_id: str) -> None:
         """恢复一条中断投递。"""
-        await self.ensure(project_id)
-        manager = self._managers.get(project_id)
-        if manager is None:
+        await self.ensure()
+        if self._manager is None:
             raise LookupError("message_manager_unavailable")
-        await manager.resume_delivery(delivery_id)
+        await self._manager.resume_delivery(delivery_id)
 
-    async def recover_rooms(self, *, project_id: str) -> int:
+    async def recover_rooms(self) -> int:
         """修复 Room 投影，返回修复条数。"""
-        await self.ensure(project_id)
-        manager = self._managers.get(project_id)
-        if manager is None:
+        await self.ensure()
+        if self._manager is None:
             raise LookupError("message_manager_unavailable")
-        return int(await manager.recover_room_projections())
+        return int(await self._manager.recover_room_projections())
 
-    def get(self, project_id: str) -> RuntimeHandle | None:
-        """取已启动的项目单元；未启动返回 ``None``。"""
-        return self._units.get(project_id)
+    def get(self) -> RuntimeHandle | None:
+        """取已启动的单元；未启动返回 ``None``。"""
+        return self._handle
 
-    async def handle_command(
-        self,
-        *,
-        project_id: str,
-        command: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """把命令转交给项目单元（懒启动）。
+    async def handle_command(self, *, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """把命令转交给本作用域单元（懒启动）。
 
         Args:
-            project_id: 项目标识
             command: 命令名
-            payload: 命令载荷
+            payload: 命令载荷（作用域由单元自身补齐，调用方不传）
 
         Returns:
             单元返回的结果字典
@@ -215,29 +211,28 @@ class RuntimeRegistry:
         Raises:
             RuntimeError: 单元返回非字典
         """
-        handle = await self.ensure(project_id)
+        handle = await self.ensure()
         result = await handle.unit.handle_command(command, payload, handle.context)
         if not isinstance(result, dict):
             raise RuntimeError(f"unexpected result for {command}")
         return result
 
-    def tools_for(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
+    def tools_for(self, agent_id: str) -> tuple[str, ...] | None:
         """同步读取某 Agent 当前装载的工具名（离线返回 ``None``）。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             工具名元组；不在线时为 ``None``
         """
-        handle = self._units.get(project_id)
+        handle = self._handle
         if handle is None:
             return None
         method = getattr(handle.unit, "get_entity_runtime", None)
         if method is None:
             return None
-        data = method(project_id, agent_id)
+        data = method(handle.scope_id, agent_id)
         if not isinstance(data, dict) or data.get("availability") != "online":
             return None
         tools = data.get("loaded_abilities")
@@ -245,83 +240,72 @@ class RuntimeRegistry:
             return None
         return tuple(str(item) for item in tools)
 
-    def run_id_for(self, project_id: str, agent_id: str) -> str | None:
+    def run_id_for(self, agent_id: str) -> str | None:
         """同步解析某 Agent 当前的生命周期 run（离线返回 ``None``）。
 
         能力关系库的 ``runs`` 回调是同步的，因此这里必须同步返回。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             run 标识；不在线时为 ``None``
         """
-        handle = self._units.get(project_id)
+        handle = self._handle
         if handle is None:
             return None
         method = getattr(handle.unit, "get_entity_runtime", None)
         if method is None:
             return None
-        data = method(project_id, agent_id)
+        data = method(handle.scope_id, agent_id)
         if not isinstance(data, dict) or data.get("availability") != "online":
             return None
         value = data.get("incarnation_id")
         return str(value) if value else None
 
-    async def get_entity_runtime(self, *, project_id: str, agent_id: str) -> dict[str, Any]:
-        """读取 Agent 的运行时快照。
+    async def get_entity_runtime(self, *, agent_id: str) -> dict[str, Any]:
+        """读取本作用域内 Agent 的运行时快照。
 
         单元把该方法暴露为普通方法（不在命令表里），因此这里直连调用。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             单元返回的运行时快照字典
         """
-        handle = self._units.get(project_id)
+        handle = self._handle
         if handle is None:
             return {"availability": "offline", "incarnation_id": None}
         method = getattr(handle.unit, "get_entity_runtime", None)
         if method is None:
             return {"availability": "offline", "incarnation_id": None}
-        result = method(project_id, agent_id)
+        result = method(handle.scope_id, agent_id)
         return result if isinstance(result, dict) else {"availability": "offline"}
 
-    async def stop(self, project_id: str) -> bool:
-        """停止并移除项目单元。
-
-        Args:
-            project_id: 项目标识
+    async def stop(self) -> bool:
+        """停止并释放本作用域单元。
 
         Returns:
             是否确实停止了一个活动实例
         """
         async with self._lock:
-            handle = self._units.get(project_id)
+            handle = self._handle
             if handle is None:
                 return False
             try:
                 await handle.unit.stop()
             finally:
-                self._units.pop(project_id, None)
-                await self._close_project_resources(project_id)
+                self._handle = None
+                await self._close_resources()
             return True
 
-    async def _close_project_resources(self, project_id: str) -> None:
-        manager = self._managers.pop(project_id, None)
+    async def _close_resources(self) -> None:
+        manager = self._manager
+        self._manager = None
         if manager is not None:
             await manager.close()
 
     async def aclose(self) -> None:
-        """停止全部项目单元，即使单个项目收尾失败也继续释放其余资源。"""
-        errors: list[Exception] = []
-        for project_id in list(self._units):
-            try:
-                await self.stop(project_id)
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise ExceptionGroup("failed to stop project runtimes", errors)
+        """停止本作用域单元并释放资源（幂等）。"""
+        await self.stop()

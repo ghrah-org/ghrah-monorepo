@@ -29,7 +29,6 @@ def make_branch_handlers(store: ChainReadStore) -> dict[str, Handler]:
     async def list_branches(request: BranchesListRequest) -> BranchListView:
         """列出某会话下的分支。"""
         branches = await store.branches(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             session_id=request.session_id,
         )

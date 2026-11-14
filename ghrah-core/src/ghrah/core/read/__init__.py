@@ -31,7 +31,6 @@ from __future__ import annotations
 from ghrah.core.read.chain import (
     ChainDatabaseUnavailableError,
     ChainReadStore,
-    DbPathResolver,
 )
 from ghrah.core.read.mailbox import (
     MailboxBadPageSizeError,
@@ -44,7 +43,6 @@ from ghrah.core.read.mailbox import (
 __all__ = [
     "ChainDatabaseUnavailableError",
     "ChainReadStore",
-    "DbPathResolver",
     "MailboxBadPageSizeError",
     "MailboxProjectMismatchError",
     "MailboxReadStore",

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """``agents`` 分组的处理器。
 
-所有操作都经 :class:`ghrah.core.units.RuntimeRegistry` 转交给项目单元——
+所有操作都经 :class:`ghrah.core.units.RuntimeRegistry` 转交给作用域单元——
 Agent 的真实生命周期由 CoreUnit 承载，本层只做协议转换与错误映射。
 """
 
@@ -52,13 +52,9 @@ def _fail(capability: str, result: dict[str, Any]) -> CoreApiError:
     )
 
 
-async def _online_agents(registry: RuntimeRegistry, project_id: str) -> list[dict[str, Any]]:
+async def _online_agents(registry: RuntimeRegistry) -> list[dict[str, Any]]:
     """读取单元的在册 Agent（``list_agents``）。"""
-    result = await registry.handle_command(
-        project_id=project_id,
-        command="list_agents",
-        payload={"project_id": project_id},
-    )
+    result = await registry.handle_command(command="list_agents", payload={})
     if not result.get("success"):
         raise _fail("agents.list", result)
     return list((result.get("data") or {}).get("agents") or [])
@@ -117,11 +113,10 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         能力名到处理器的映射
     """
 
-    async def _spawn(capability: str, project_id: str, spec: AgentSpawnSpec) -> AgentIdView:
+    async def _spawn(capability: str, spec: AgentSpawnSpec) -> AgentIdView:
         """把一份 spawn 规格落成 Core 命令。"""
         agent_id = spec.agent_id or uuid.uuid4().hex
         payload: dict[str, Any] = {
-            "project_id": project_id,
             "manifest_ref": spec.manifest_ref,
             "validate_model": spec.validate_model,
             "config": {
@@ -138,7 +133,6 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
             },
         }
         result = await registry.handle_command(
-            project_id=project_id,
             command="spawn_agent",
             payload=payload,
         )
@@ -148,19 +142,18 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     async def create(request: AgentCreateRequest) -> AgentIdView:
         """创建并启动一个 Agent（单元内同步完成激活）。"""
-        return await _spawn("agents.create", request.project_id, request.spec)
+        return await _spawn("agents.create", request.spec)
 
     async def create_from_template(request: AgentCreateFromTemplateRequest) -> AgentIdView:
         """按模板创建 Agent：模板先解析成 spawn 规格。"""
         return await _spawn(
             "agents.create_from_template",
-            request.project_id,
             _spec_from_template(request.template, request.agent_id),
         )
 
     async def get_agent(request: AgentGetRequest) -> AgentView:
         """读取在线 Agent 的定义与状态。"""
-        agents = await _online_agents(registry, request.project_id)
+        agents = await _online_agents(registry)
         record = next(
             (item for item in agents if str(item.get("agent_id") or "") == request.agent_id),
             None,
@@ -175,10 +168,8 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
             )
         name = str(record.get("name") or "")
         info = await registry.handle_command(
-            project_id=request.project_id,
             command="get_agent_info",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "name": name,
             },
@@ -188,22 +179,22 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         data = dict(info.get("data") or {})
         return AgentView(
             agent_id=request.agent_id,
-            project_id=request.project_id,
+            project_id=registry.scope,
             name=name,
             state=dict(data.get("state") or {}),
             abilities=[str(item) for item in (data.get("abilities") or [])],
         )
 
     async def list_agents(request: AgentListRequest) -> Page[str]:
-        """列出项目内在线 Agent 的 id。"""
-        agents = await _online_agents(registry, request.project_id)
+        """列出作用域内在线 Agent 的 id。"""
+        agents = await _online_agents(registry)
         ids = [str(item.get("agent_id") or "") for item in agents]
         return Page[str](items=[item for item in ids if item])
 
     async def delete(request: AgentDeleteRequest) -> AckView:
         """停止并移除一个 Agent。"""
         # terminate_agent 的载荷需要 name（协议既有形状）；按 agent_id 解析。
-        online = await _online_agents(registry, request.project_id)
+        online = await _online_agents(registry)
         name = next(
             (str(item.get("name")) for item in online if item.get("agent_id") == request.agent_id),
             "",
@@ -217,10 +208,8 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                 ),
             )
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="terminate_agent",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "name": name,
             },
@@ -231,10 +220,7 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     async def runtime(request: AgentRuntimeRequest) -> AgentRuntimeView:
         """读取 Agent 运行时快照。"""
-        data = await registry.get_entity_runtime(
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-        )
+        data = await registry.get_entity_runtime(agent_id=request.agent_id)
         return AgentRuntimeView(
             agent_id=request.agent_id,
             availability="online" if data.get("availability") == "online" else "offline",
@@ -249,7 +235,7 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     async def tools(request: AgentRuntimeRequest) -> ToolListView:
         """列出 Agent 当前装载的工具。"""
-        agents = await _online_agents(registry, request.project_id)
+        agents = await _online_agents(registry)
         record = next(
             (item for item in agents if str(item.get("agent_id") or "") == request.agent_id),
             None,
@@ -263,10 +249,8 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                 ),
             )
         info = await registry.handle_command(
-            project_id=request.project_id,
             command="get_agent_info",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "name": str(record.get("name") or ""),
             },
@@ -277,12 +261,10 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     async def compact(request: AgentRuntimeRequest) -> AckView:
         """触发上下文压缩。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="agent_compact_context",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
             },
@@ -293,9 +275,8 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
     async def reset(request: AgentRuntimeRequest) -> AckView:
         """重置 Agent 上下文。"""
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="agent_reset",
-            payload={"project_id": request.project_id, "agent_id": request.agent_id},
+            payload={"agent_id": request.agent_id},
         )
         _ok_or_raise(result, "agents.reset")
         return AckView(ok=True)

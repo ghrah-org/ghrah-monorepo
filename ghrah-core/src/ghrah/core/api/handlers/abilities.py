@@ -58,29 +58,21 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
     async def changes(request: AbilitiesChangesRequest) -> AbilityChangesPage:
         """读取关系库变更流。"""
         return await store.changes(
-            project_id=request.project_id,
             after_seq=request.after_seq,
             limit=request.limit,
         )
 
     async def tree(request: AbilitiesTreeRequest) -> AbilityTreeView:
         """读取某 Agent 的能力树。"""
-        return await store.tree(
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-        )
+        return await store.tree(agent_id=request.agent_id)
 
     async def admin(request: AbilitiesAdminRequest) -> AbilityAdminView:
         """装配能力管理总览。"""
-        return await store.admin(
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-        )
+        return await store.admin(agent_id=request.agent_id)
 
     async def content(request: AbilitiesContentRequest) -> ContentReadResult:
         """读取某授权下的成员内容。"""
         result = await store.content(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             alias=request.alias,
             member=request.member,
@@ -99,12 +91,11 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
 
     async def status(request: AbilitiesStatusRequest) -> AbilityApiStatus:
         """读取能力管理面可用性。"""
-        return await store.status(project_id=request.project_id)
+        return await store.status()
 
     async def grant(request: AbilitiesGrantRequest) -> AbilityTreeChangeResult:
         """授予能力。"""
         return await store.grant(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             change=request.change,
         )
@@ -112,7 +103,6 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
     async def revoke(request: AbilitiesRevokeRequest) -> AbilityTreeChangeResult:
         """撤销能力。"""
         return await store.revoke(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             change=request.change,
         )
@@ -120,7 +110,6 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
     async def enable_tool(request: AbilitiesEnableToolRequest) -> AbilityTreeChangeResult:
         """绑定工具。"""
         return await store.enable_tool(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             change=request.change,
         )
@@ -128,7 +117,6 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
     async def disable_tool(request: AbilitiesDisableToolRequest) -> AbilityTreeChangeResult:
         """解绑工具。"""
         return await store.disable_tool(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             change=request.change,
         )
@@ -159,14 +147,11 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
 
     async def package_groups(request: AbilitiesPackageGroupsRequest) -> AbilityPackageGroupsView:
         """能力包分组视图。"""
-        return await store.package_groups(
-            project_id=request.project_id or None,
-            agent_id=request.agent_id,
-        )
+        return await store.package_groups(agent_id=request.agent_id)
 
     async def instances(request: AbilitiesInstancesRequest) -> AbilityInstancesView:
-        """项目下的能力实例清单。"""
-        return await store.instances(project_id=request.project_id)
+        """作用域内的能力实例清单。"""
+        return await store.instances()
 
     return {
         "abilities.tree": tree,

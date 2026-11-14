@@ -9,7 +9,7 @@ from pathlib import Path
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend  # type: ignore[import-untyped]
 from ghrah.context.session_runtime import SessionRuntime
-from ghrah.core.wiring import build_core_port
+from ghrah.core.wiring import build_core_assembly, build_core_port
 from ghrah.protocol.ports.keys import CORE_PORT
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
@@ -60,7 +60,14 @@ class FakeProjectManager:
 
 def _provide_core(ctx, resolve_db_path) -> None:
     """注入真实 Core 端口（测试允许 import Core，src 不允许）。"""
-    ctx.provide(CORE_PORT, build_core_port(resolve_db_path=resolve_db_path))
+
+    def make_port(project_id: str):
+        return build_core_port(
+            scope_id=project_id,
+            db_path=str(resolve_db_path(project_id)),
+        )
+
+    ctx.provide(CORE_PORT, build_core_assembly(port_factory=make_port))
 
 
 async def test_ledger_unit_reads_explicit_session_branch(tmp_path: Path) -> None:

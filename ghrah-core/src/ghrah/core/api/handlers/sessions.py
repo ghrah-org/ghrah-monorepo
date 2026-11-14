@@ -34,15 +34,11 @@ def make_session_handlers(store: ChainReadStore) -> dict[str, Handler]:
 
     async def catalog(request: SessionsCatalogRequest) -> SessionCatalogView:
         """读取会话目录与分支表。无链数据时返回空目录，不报错。"""
-        return await store.catalog(
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-        )
+        return await store.catalog(agent_id=request.agent_id)
 
     async def history(request: SessionsHistoryRequest) -> HistoryView:
         """读取某分支上的链历史。"""
         view = await store.history(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             session_id=request.session_id,
             branch_id=request.branch_id,
@@ -63,7 +59,6 @@ def make_session_handlers(store: ChainReadStore) -> dict[str, Handler]:
     async def head(request: SessionsHeadRequest) -> NodeIdView:
         """读取某分支的当前头节点 id。"""
         node_id = await store.head(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             session_id=request.session_id,
             branch_id=request.branch_id,
@@ -83,10 +78,7 @@ def make_session_handlers(store: ChainReadStore) -> dict[str, Handler]:
 
     async def meta(request: SessionsMetaRequest) -> ChainMetaView:
         """读取链目录元数据。无链数据时返回空表，不报错。"""
-        return await store.meta(
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-        )
+        return await store.meta(agent_id=request.agent_id)
 
     return {
         "sessions.catalog": catalog,

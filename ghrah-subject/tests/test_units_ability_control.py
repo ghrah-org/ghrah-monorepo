@@ -26,7 +26,7 @@ from ghrah.core.read.ability_catalog import (
     build_package_catalog,
     build_package_groups,
 )
-from ghrah.core.wiring import build_core_port
+from ghrah.core.wiring import build_core_assembly, build_core_port
 from ghrah.protocol.ability_control import (
     AbilityMcpProbeView,
     AbilityMcpServerInfoView,
@@ -192,8 +192,15 @@ async def make_app():
 
     def build(config: SubjectConfig, handle: _Handle, bus: _Bus, probe: Any = None) -> FastAPI:
         # 关系库由测试布置事实，HTTP 通过独立的真实 Core 端口读取。
-        port = build_core_port(
-            resolve_db_path=lambda _: handle.store_path or "",
+        def make_port(project_id: str):
+            return build_core_port(
+                scope_id=project_id,
+                db_path=handle.store_path or "",
+                install_root=config.ability.install_root,
+            )
+
+        port = build_core_assembly(
+            port_factory=make_port,
             install_root=config.ability.install_root,
         )
         ports.append(port)

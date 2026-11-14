@@ -488,8 +488,12 @@ class CorePort(Protocol):
     @property
     def manifests(self) -> ManifestOperations: ...
 
+    async def aclose(self) -> None:
+        """关闭本端口实例（停单元 + 释放读面资源；幂等）。"""
+        ...
+
     async def stop_project(self) -> None:
-        """停止绑定项目的 Core 单元并释放写侧资源。"""
+        """停止绑定项目的 Core 单元并释放写侧资源（过渡接口，下一轮删除）。"""
         ...
 
     def project(self, project_id: str) -> CorePort:

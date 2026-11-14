@@ -26,7 +26,6 @@ from ghrah.protocol.views.core import (
 )
 
 from ghrah.communication.mailbox_reader import MailboxReader
-from ghrah.core.read.chain import DbPathResolver
 
 __all__ = [
     "DeliveryNotFoundError",
@@ -59,27 +58,28 @@ class MailboxBadPageSizeError(ValueError):
 
 
 class MailboxReadStore:
-    """按「项目 + 实体」读取信箱。
+    """作用域固定的信箱读取器（构造时给定库路径与作用域）。
 
     Args:
-        resolve_db_path: 项目到 ActionChain sqlite 路径的解析器（与 chain 共用同一文件）
+        db_path: ActionChain sqlite 的路径（与 chain 共用同一文件）
+        scope_id: 作用域标识，用于 reader 的项目归属校验
     """
 
-    def __init__(self, resolve_db_path: DbPathResolver) -> None:
-        self._resolve = resolve_db_path
+    def __init__(self, db_path: str | Path, scope_id: str) -> None:
+        self._db_path = Path(db_path)
+        self._scope_id = scope_id
 
-    async def _reader(self, project_id: str, agent_id: str) -> MailboxReader:
+    async def _reader(self, agent_id: str) -> MailboxReader:
         """构建并打开一次查询用的 reader（上下文管理器由调用方负责）。"""
-        path = Path(self._resolve(project_id))
+        path = self._db_path
         if not path.is_file():
             raise MailboxUnavailableError(str(path))
-        return MailboxReader(path, AgentIdentity(project_id=project_id, agent_id=agent_id))
+        return MailboxReader(path, AgentIdentity(project_id=self._scope_id, agent_id=agent_id))
 
-    async def summary(self, *, project_id: str, agent_id: str) -> MailboxSummaryView:
+    async def summary(self, *, agent_id: str) -> MailboxSummaryView:
         """读取信箱概览。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
@@ -89,7 +89,7 @@ class MailboxReadStore:
             MailboxUnavailableError: 消息库不存在
             MailboxProjectMismatchError: 项目归属不一致
         """
-        reader = await self._reader(project_id, agent_id)
+        reader = await self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.summary()
@@ -97,11 +97,10 @@ class MailboxReadStore:
             raise _map_reader_error(exc) from exc
         return MailboxSummaryView.model_validate(raw)
 
-    async def get_message(self, *, project_id: str, agent_id: str, message_id: str) -> MessageView:
+    async def get_message(self, *, agent_id: str, message_id: str) -> MessageView:
         """读取单条消息（含可见投递记录）。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             message_id: 消息标识
 
@@ -112,7 +111,7 @@ class MailboxReadStore:
             MessageNotFoundError: 消息不存在或不可见
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(project_id, agent_id)
+        reader = await self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.get_message(message_id)
@@ -120,13 +119,10 @@ class MailboxReadStore:
             raise _map_reader_error(exc) from exc
         return _message_view(raw)
 
-    async def get_delivery(
-        self, *, project_id: str, agent_id: str, delivery_id: str
-    ) -> DeliveryView:
+    async def get_delivery(self, *, agent_id: str, delivery_id: str) -> DeliveryView:
         """读取单条可见投递。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             delivery_id: 投递标识
 
@@ -137,7 +133,7 @@ class MailboxReadStore:
             DeliveryNotFoundError: 投递不存在或不可见
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(project_id, agent_id)
+        reader = await self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.get_delivery(delivery_id)
@@ -148,7 +144,6 @@ class MailboxReadStore:
     async def list_messages(
         self,
         *,
-        project_id: str,
         agent_id: str,
         inbox: bool,
         limit: int,
@@ -157,7 +152,6 @@ class MailboxReadStore:
         """分页列出收件箱/发件箱。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             inbox: ``True`` 列收件箱，``False`` 列发件箱
             limit: 页大小（1..200）
@@ -170,7 +164,7 @@ class MailboxReadStore:
             MailboxBadPageSizeError: ``limit`` 越界
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(project_id, agent_id)
+        reader = await self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.list_messages(inbox=inbox, limit=limit, before_seq=before_seq)

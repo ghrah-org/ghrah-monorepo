@@ -29,7 +29,6 @@ def make_node_handlers(store: ChainReadStore) -> dict[str, Handler]:
     async def get(request: NodeGetRequest) -> NodeView:
         """读取单个节点。"""
         view = await store.node(
-            project_id=request.project_id,
             agent_id=request.agent_id,
             node_id=request.node_id,
         )

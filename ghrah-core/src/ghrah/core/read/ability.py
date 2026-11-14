@@ -4,8 +4,8 @@
 """能力关系库（ability access）读取。
 
 数据源是 Core 自己的 :class:`ghrah.ability.access.AbilityAccessStore`——
-它打开的就是项目 ActionChain sqlite，因此本层的 :class:`DbPathResolver`
-与 ``chain`` / ``mailbox`` 共用同一个解析器。
+它打开的就是作用域固定的 ActionChain sqlite，因此本层的库路径与
+``chain`` / ``mailbox`` 一样在构造时给定，实例本身就是作用域。
 
 **离线读语义**：端口不假设 Agent 正在运行，``runs`` 回调固定返回 ``None``。
 需要「当前是否在跑 / 可见工具表」这类运行时事实时走 ``agents.runtime``，
@@ -49,7 +49,6 @@ from ghrah.core.read.ability_catalog import (
     build_package_groups,
     build_version_profile,
 )
-from ghrah.core.read.chain import DbPathResolver
 
 __all__ = ["AbilityConflictError", "AbilityReadStore", "AbilityUnavailableError"]
 
@@ -70,97 +69,120 @@ class AbilityUnavailableError(RuntimeError):
 
 
 class AbilityReadStore:
-    """按项目懒打开并复用能力关系库，只做读操作。
+    """作用域固定的能力关系库读取器，只做读操作。
+
+    构造时固定库路径与作用域；``scope_id`` 为 ``None`` 时只提供全局视图
+    （包目录、包组、状态），涉及关系库的方法会抛 ``AbilityUnavailableError``。
 
     Args:
-        resolve_db_path: 项目到 ActionChain sqlite 路径的解析器
+        db_path: ActionChain sqlite 的路径（能力关系库与链共用同一文件）
+        scope_id: 作用域标识；``None`` 表示未绑定作用域的全局读面
+        resolve_run: Agent 生命周期 run 的解析器；未注入时离线读
+        resolve_tools: Agent 当前可见工具表的解析器
+        grant_policy: 部署显式配置的启动授权策略
+        install_root: 能力包安装根
+        agentconf_db_path: MCP 探测使用的受信配置库路径
+        reclaim_stale: 打开关系库时是否回收过期运行态
     """
 
     def __init__(
         self,
-        resolve_db_path: DbPathResolver,
-        resolve_run: Callable[[str, str], str | None] | None = None,
-        resolve_tools: Callable[[str, str], tuple[str, ...] | None] | None = None,
+        *,
+        db_path: str | Path,
+        scope_id: str | None = None,
+        resolve_run: Callable[[str], str | None] | None = None,
+        resolve_tools: Callable[[str], tuple[str, ...] | None] | None = None,
         grant_policy: Any = None,
         install_root: str | None = None,
         agentconf_db_path: str | None = None,
         reclaim_stale: bool = False,
     ) -> None:
-        self._resolve = resolve_db_path
+        self._db_path = Path(db_path)
+        self._scope_id = scope_id
         self._resolve_run = resolve_run
         self._resolve_tools = resolve_tools
         self._grant_policy = grant_policy
         self._install_root = install_root
         self._agentconf_db_path = agentconf_db_path
         self._reclaim_stale = reclaim_stale
-        self._stores: dict[str, AbilityAccessStore] = {}
+        self._store: AbilityAccessStore | None = None
         self._lock = asyncio.Lock()
 
-    def _operator(self, project_id: str) -> AccessIdentity:
-        """受信操作员身份：由装配注入，不从请求体读取。"""
+    def _operator(self) -> AccessIdentity:
+        """受信操作员身份：作用域来自构造，不从请求体读取。
+
+        Raises:
+            AbilityUnavailableError: 实例没有绑定作用域
+        """
+        if self._scope_id is None:
+            raise AbilityUnavailableError("能力读面未绑定作用域")
         return AccessIdentity(
-            project_id,
+            self._scope_id,
             _DEPLOYMENT_OPERATOR,
             None,
             operator=True,
             source="admin",
         )
 
-    def _run_of(self, project_id: str, agent_id: str) -> str | None:
+    def _run_of(self, agent_id: str) -> str | None:
         """解析某 Agent 的生命周期 run；未注入或离线时为 ``None``。"""
         if self._resolve_run is None:
             return None
-        return self._resolve_run(project_id, agent_id)
+        return self._resolve_run(agent_id)
 
-    async def project_store(self, project_id: str) -> AbilityAccessStore:
-        """取（或懒打开）项目的能力关系库。"""
+    async def store(self) -> AbilityAccessStore:
+        """取（或懒打开）本作用域的能力关系库。
+
+        Raises:
+            AbilityUnavailableError: 实例未绑定作用域，或关系库文件不存在
+        """
+        scope_id = self._scope_id
+        if scope_id is None:
+            raise AbilityUnavailableError("能力读面未绑定作用域")
         async with self._lock:
-            store = self._stores.get(project_id)
-            if store is not None:
-                return store
-            path = Path(self._resolve(project_id))
-            if not path.is_file():
-                raise AbilityUnavailableError(str(path))
+            if self._store is not None:
+                return self._store
+            if not self._db_path.is_file():
+                raise AbilityUnavailableError(str(self._db_path))
             store = await AbilityAccessStore.open(
-                path,
-                project_id,
+                self._db_path,
+                scope_id,
                 operators=frozenset({_DEPLOYMENT_OPERATOR}),
-                runs=lambda agent: self._run_of(project_id, agent),
+                runs=self._run_of,
                 reclaim_stale=self._reclaim_stale,
             )
-            self._stores[project_id] = store
+            self._store = store
             return store
 
-    async def tree(self, *, project_id: str, agent_id: str) -> AbilityTreeView:
+    async def tree(self, *, agent_id: str) -> AbilityTreeView:
         """读取某 Agent 的能力树。
 
         视图含运行时装配状态，因此单元必须在线；离线时关系库会拒绝。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             能力树视图
         """
-        store = await self.project_store(project_id)
-        return await store.view(self._operator(project_id), agent_id)
+        store = await self.store()
+        return await store.view(self._operator(), agent_id)
 
     async def admin(
         self,
         *,
-        project_id: str,
         agent_id: str,
         grant_policy: Any = None,
     ) -> AbilityAdminView:
         """装配某 Agent 的能力管理总览。"""
         from ghrah.core.read.ability_admin import build_admin_view
 
-        store = await self.project_store(project_id)
-        runtime_tools = self._resolve_tools(project_id, agent_id) if self._resolve_tools else None
+        store = await self.store()
+        operator = self._operator()
+        runtime_tools = self._resolve_tools(agent_id) if self._resolve_tools else None
         return await build_admin_view(
             store,
-            self._operator(project_id),
+            operator,
             agent_id,
             runtime_tools=runtime_tools,
             grant_policy=grant_policy if grant_policy is not None else self._grant_policy,
@@ -169,7 +191,6 @@ class AbilityReadStore:
     async def content(
         self,
         *,
-        project_id: str,
         agent_id: str,
         alias: str,
         member: str,
@@ -179,10 +200,10 @@ class AbilityReadStore:
         """读取某授权下的成员内容；未授权返回 ``None``。"""
         from ghrah.core.read.ability_admin import read_content
 
-        store = await self.project_store(project_id)
+        store = await self.store()
         return await read_content(
             store,
-            self._operator(project_id),
+            self._operator(),
             agent_id,
             alias=alias,
             member=member,
@@ -219,44 +240,42 @@ class AbilityReadStore:
             db_path=self._agentconf_db_path,
         )
 
-    async def package_groups(
-        self, *, project_id: str | None = None, agent_id: str | None = None
-    ) -> AbilityPackageGroupsView:
-        """能力包分组视图；``project_id`` 为空时返回全局视图。"""
-        if project_id is None:
+    async def package_groups(self, *, agent_id: str | None = None) -> AbilityPackageGroupsView:
+        """能力包分组视图；实例未绑定作用域时只返回全局发行版视图。"""
+        if self._scope_id is None:
             return await build_package_groups(self._install_root)
-        store = await self.project_store(project_id)
-        operator = self._operator(project_id)
+        store = await self.store()
+        operator = self._operator()
         return await build_package_groups(
             self._install_root,
             store=store,
             operator=operator,
-            project_id=project_id,
+            project_id=self._scope_id,
             agent_id=agent_id,
         )
 
-    async def instances(self, *, project_id: str) -> AbilityInstancesView:
-        """项目下的能力实例清单；链库尚未建立时返回空清单。"""
+    async def instances(self) -> AbilityInstancesView:
+        """本作用域已提交的能力实例清单；链库尚未建立时返回空清单。
+
+        Raises:
+            AbilityUnavailableError: 实例没有绑定作用域
+        """
+        operator = self._operator()
         try:
-            store = await self.project_store(project_id)
+            store = await self.store()
         except AbilityUnavailableError:
-            return AbilityInstancesView(project_id=project_id)
-        operator = self._operator(project_id)
-        return await build_instances_view(store, operator, project_id)
+            return AbilityInstancesView(project_id=operator.project_id)
+        return await build_instances_view(store, operator)
 
-    async def status(self, *, project_id: str) -> AbilityApiStatus:
-        """读取能力管理面的可用性（项目级，不查库）。
+    async def status(self) -> AbilityApiStatus:
+        """读取能力管理面的可用性（作用域级，不查库）。
 
-        这里如实反映 **Core 侧已实现**的面：树、变更流与四个写操作已就绪，
+        这里如实反映 **Core 侧已实现** 的面：树、变更流与四个写操作已就绪，
         版本/包/可见面写尚未提供——调用方据此决定按钮是否可用。
-
-        Args:
-            project_id: 项目标识
 
         Returns:
             管理面状态
         """
-        del project_id
         return AbilityApiStatus(
             ability_source="builtin",
             operator=_DEPLOYMENT_OPERATOR,
@@ -272,42 +291,40 @@ class AbilityReadStore:
             reason=None,
         )
 
-    async def grant(
-        self, *, project_id: str, agent_id: str, change: GrantAbilityRequest
-    ) -> AbilityTreeChangeResult:
+    async def grant(self, *, agent_id: str, change: GrantAbilityRequest) -> AbilityTreeChangeResult:
         """授予能力；返回写后的视图与修订号。"""
-        store = await self.project_store(project_id)
-        operator = self._operator(project_id)
+        store = await self.store()
+        operator = self._operator()
         return await self._write(
             store, operator, agent_id, lambda: store.write_grant(operator, agent_id, change)
         )
 
     async def revoke(
-        self, *, project_id: str, agent_id: str, change: RevokeAbilityRequest
+        self, *, agent_id: str, change: RevokeAbilityRequest
     ) -> AbilityTreeChangeResult:
         """撤销能力；返回写后的视图与修订号。"""
-        store = await self.project_store(project_id)
-        operator = self._operator(project_id)
+        store = await self.store()
+        operator = self._operator()
         return await self._write(
             store, operator, agent_id, lambda: store.write_revoke(operator, agent_id, change)
         )
 
     async def enable_tool(
-        self, *, project_id: str, agent_id: str, change: BindToolRequest
+        self, *, agent_id: str, change: BindToolRequest
     ) -> AbilityTreeChangeResult:
         """绑定工具；返回写后的视图与修订号。"""
-        store = await self.project_store(project_id)
-        operator = self._operator(project_id)
+        store = await self.store()
+        operator = self._operator()
         return await self._write(
             store, operator, agent_id, lambda: store.write_bind_tool(operator, agent_id, change)
         )
 
     async def disable_tool(
-        self, *, project_id: str, agent_id: str, change: UnbindToolRequest
+        self, *, agent_id: str, change: UnbindToolRequest
     ) -> AbilityTreeChangeResult:
         """解绑工具；返回写后的视图与修订号。"""
-        store = await self.project_store(project_id)
-        operator = self._operator(project_id)
+        store = await self.store()
+        operator = self._operator()
         return await self._write(
             store, operator, agent_id, lambda: store.write_unbind_tool(operator, agent_id, change)
         )
@@ -354,20 +371,19 @@ class AbilityReadStore:
             view = None
         return AbilityTreeChangeResult(view=view, revision=revision)
 
-    async def changes(self, *, project_id: str, after_seq: int, limit: int) -> AbilityChangesPage:
-        """读取关系库的变更流（项目级，不按 Agent 过滤）。
+    async def changes(self, *, after_seq: int, limit: int) -> AbilityChangesPage:
+        """读取关系库的变更流（作用域级，不按 Agent 过滤）。
 
         Args:
-            project_id: 项目标识
             after_seq: 只返回序号大于它的变更
             limit: 页大小（1..200）
 
         Returns:
             变更分页（``next_after_seq`` 为下一页游标）
         """
-        store = await self.project_store(project_id)
+        store = await self.store()
         rows = await store.changes(
-            self._operator(project_id),
+            self._operator(),
             after_seq=after_seq,
             limit=limit,
         )
@@ -381,9 +397,9 @@ class AbilityReadStore:
         )
 
     async def aclose(self) -> None:
-        """关闭全部已打开的关系库。"""
+        """关闭已打开的关系库（幂等）。"""
         async with self._lock:
-            stores = list(self._stores.values())
-            self._stores.clear()
-        for store in stores:
+            store = self._store
+            self._store = None
+        if store is not None:
             await store.close()

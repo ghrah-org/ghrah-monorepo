@@ -31,12 +31,11 @@ from ghrah.core.units.registry import RuntimeRegistry
 __all__ = ["make_session_write_handlers"]
 
 
-async def resolve_agent_name(registry: RuntimeRegistry, project_id: str, agent_id: str) -> str:
+async def resolve_agent_name(registry: RuntimeRegistry, agent_id: str) -> str:
     """按 agent_id 解析单元使用的 agent_name。
 
     Args:
         registry: 运行时注册表
-        project_id: 项目标识
         agent_id: 稳定 Agent ID
 
     Returns:
@@ -47,11 +46,7 @@ async def resolve_agent_name(registry: RuntimeRegistry, project_id: str, agent_i
     """
     capability = "agents.resolve"
     with translate(capability):
-        result = await registry.handle_command(
-            project_id=project_id,
-            command="list_agents",
-            payload={"project_id": project_id},
-        )
+        result = await registry.handle_command(command="list_agents", payload={})
     if not result.get("success"):
         raise CoreApiError(
             Problem.make(
@@ -107,12 +102,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def session_create(request: SessionsCreateRequest) -> SessionIdView:
         """新建会话。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="session_create",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "name": request.name,
@@ -127,12 +120,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def session_activate(request: SessionsActivateRequest) -> AckView:
         """激活会话。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="session_activate",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -143,12 +134,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def session_archive(request: SessionsArchiveRequest) -> AckView:
         """归档会话。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="session_archive",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -159,12 +148,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def session_delete(request: SessionsDeleteRequest) -> AckView:
         """软删除会话。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="session_delete",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -175,12 +162,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def branch_create(request: BranchesCreateRequest) -> BranchIdView:
         """分叉出新分支。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="branch_create",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -195,12 +180,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def branch_activate(request: BranchesActivateRequest) -> AckView:
         """激活分支。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="branch_activate",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -212,12 +195,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def branch_archive(request: BranchesArchiveRequest) -> AckView:
         """归档分支。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="branch_archive",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,
@@ -229,12 +210,10 @@ def make_session_write_handlers(registry: RuntimeRegistry) -> dict[str, Handler]
 
     async def branch_delete(request: BranchesDeleteRequest) -> AckView:
         """软删除分支。"""
-        name = await resolve_agent_name(registry, request.project_id, request.agent_id)
+        name = await resolve_agent_name(registry, request.agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="branch_delete",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "agent_name": name,
                 "session_id": request.session_id,

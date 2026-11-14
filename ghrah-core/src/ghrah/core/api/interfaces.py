@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Core 接口清单与请求信封。
 
-请求信封里的 ``project_id`` 由装配层注入，消费方传不进来——
-所以信封是模块内部形状，不进契约包。
+请求信封里**没有任何作用域字段**：作用域由端口实例在构造时确定，
+消费方与信封都不参与。因此信封是模块内部形状，不进契约包。
 """
 
 from __future__ import annotations
@@ -96,7 +96,6 @@ class NodeGetRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     node_id: str
 
@@ -106,7 +105,6 @@ class SessionsCatalogRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -115,7 +113,6 @@ class SessionsHistoryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     branch_id: str
@@ -127,7 +124,6 @@ class SessionsHeadRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     branch_id: str
@@ -138,7 +134,6 @@ class SessionsMetaRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -147,7 +142,6 @@ class BranchesListRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
 
@@ -157,7 +151,6 @@ class MailboxSummaryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -169,7 +162,6 @@ class MailboxListRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     inbox: bool = True
     limit: int = 50
@@ -181,7 +173,6 @@ class MailboxGetRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     message_id: str
 
@@ -191,7 +182,6 @@ class MailboxPublishExternalRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     sender: str
     recipient_ids: list[str] = Field(default_factory=list)
     content: str
@@ -204,7 +194,6 @@ class MailboxPublishNotificationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     sender_id: str
     recipient_ids: list[str] = Field(default_factory=list)
     content: str
@@ -218,15 +207,12 @@ class MailboxRecoverProjectionsRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
-
 
 class DeliveriesGetRequest(BaseModel):
     """``deliveries.get`` 的请求信封。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     delivery_id: str
 
@@ -236,7 +222,6 @@ class AbilitiesTreeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -245,7 +230,6 @@ class AbilitiesAdminRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -254,7 +238,6 @@ class AbilitiesContentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     alias: str
     member: str
@@ -267,7 +250,6 @@ class AbilitiesChangesRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     after_seq: int = 0
     limit: int = 100
 
@@ -277,7 +259,6 @@ class AgentCreateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     spec: AgentSpawnSpec
 
 
@@ -286,7 +267,6 @@ class AgentCreateFromTemplateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     template: AgentTemplateSpec
     agent_id: str | None = None
 
@@ -296,7 +276,6 @@ class AgentGetRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -305,15 +284,12 @@ class AgentListRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
-
 
 class AgentDeleteRequest(BaseModel):
     """``agents.delete`` 的请求信封。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -322,7 +298,6 @@ class AgentRuntimeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
 
 
@@ -331,7 +306,6 @@ class SessionsCreateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     name: str | None = None
     system_prompt: str | None = None
@@ -345,7 +319,6 @@ class SessionsActivateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
 
@@ -355,7 +328,6 @@ class SessionsArchiveRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
 
@@ -365,7 +337,6 @@ class SessionsDeleteRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
 
@@ -375,7 +346,6 @@ class BranchesCreateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     name: str
@@ -389,7 +359,6 @@ class BranchesActivateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     branch_id: str
@@ -400,7 +369,6 @@ class BranchesArchiveRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     branch_id: str
@@ -411,7 +379,6 @@ class BranchesDeleteRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     session_id: str
     branch_id: str
@@ -422,7 +389,6 @@ class MessagesAppendRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     target: str
     content: str
@@ -436,7 +402,6 @@ class MessagesBroadcastRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     content: str
     sender: str = "user"
 
@@ -446,7 +411,6 @@ class MessagesDelegateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     from_agent_id: str
     to_agent_id: str
     content: str
@@ -458,7 +422,6 @@ class ManifestsResolveRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     manifest_ref: str
 
 
@@ -472,8 +435,6 @@ class AbilitiesInstancesRequest(BaseModel):
     """``abilities.instances`` 的请求信封。"""
 
     model_config = ConfigDict(extra="forbid")
-
-    project_id: str
 
 
 class AbilitiesPackageDetailRequest(BaseModel):
@@ -502,7 +463,6 @@ class AbilitiesPackageGroupsRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str = ""
     agent_id: str | None = None
 
 
@@ -511,7 +471,6 @@ class DeliveriesRetryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     delivery_id: str
 
@@ -521,7 +480,6 @@ class DeliveriesResumeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     delivery_id: str
 
@@ -531,15 +489,11 @@ class RoomsRecoverRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
-
 
 class AbilitiesStatusRequest(BaseModel):
     """``abilities.status`` 的请求信封（项目级，无 Agent）。"""
 
     model_config = ConfigDict(extra="forbid")
-
-    project_id: str
 
 
 class AbilitiesGrantRequest(BaseModel):
@@ -547,7 +501,6 @@ class AbilitiesGrantRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     change: GrantAbilityRequest
 
@@ -557,7 +510,6 @@ class AbilitiesRevokeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     change: RevokeAbilityRequest
 
@@ -567,7 +519,6 @@ class AbilitiesEnableToolRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     change: BindToolRequest
 
@@ -577,7 +528,6 @@ class AbilitiesDisableToolRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str
     agent_id: str
     change: UnbindToolRequest
 

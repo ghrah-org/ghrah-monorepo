@@ -87,28 +87,35 @@ from ghrah.core.api.runtime import CoreRuntime
 
 __all__ = ["CoreFacade"]
 
+type PortFactory = Callable[[str], CorePort]
+
 
 class CoreFacade:
-    """``CorePort`` 的实现，每个应用实例一个。
+    """``CorePort`` 的实现。
+
+    一个实例对应一个**作用域**：``scope_id`` 由装配层在构造时确定，对 Core 是
+    不透明 token——它不出现在能力请求里，也不由调用方传入。
 
     Args:
         runtime: 模块内收敛点
-        project_id: 项目作用域；``None`` 表示未绑定（只有 :meth:`project` 可调用）
-        closer: 关闭内部资源的回调（只有装配层创建的根实例持有）
+        scope_id: 作用域 token；``None`` 表示装配根（只服务全局能力）
+        closer: 关闭内部资源的回调（只有装配层创建的实例持有）
+        port_factory: 装配根用于按作用域创建端口实例的工厂（过渡形态）
     """
 
     def __init__(
         self,
         *,
         runtime: CoreRuntime,
-        project_id: str | None = None,
+        scope_id: str | None = None,
         closer: Callable[[], Awaitable[None]] | None = None,
-        stop_project: Callable[[str], Awaitable[bool]] | None = None,
+        port_factory: PortFactory | None = None,
     ) -> None:
         self._runtime = runtime
-        self._project_id = project_id
+        self._scope_id = scope_id
         self._closer = closer
-        self._stop_project = stop_project
+        self._port_factory = port_factory
+        self._ports: dict[str, CorePort] = {}
         self._nodes = _Nodes(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
@@ -173,37 +180,53 @@ class CoreFacade:
         return self._messages
 
     def project(self, project_id: str) -> CorePort:
-        """返回绑定了项目作用域的端口视图。
+        """取（或惰性创建）某作用域的端口实例。
 
-        视图是轻量对象：共享同一个收敛点与只读连接池，只额外记住 ``project_id``。
-        连接池归根端口所有——关闭任一视图都会释放它（可再懒重开）。
+        过渡接口：只应由装配根调用。装配层在下一轮改为直接按
+        ``for_project(project_id)`` 取实例后，本方法删除。
 
         Args:
-            project_id: 项目标识
+            project_id: 作用域 token（装配层通常传 Project 标识）
 
         Returns:
-            绑定后的端口
+            该作用域的端口实例
         """
-        return CoreFacade(
-            runtime=self._runtime,
-            project_id=project_id,
-            closer=self._closer,
-            stop_project=self._stop_project,
-        )
+        if self._port_factory is None:
+            raise ValueError("port is already scoped: project() is only on the assembly root")
+        port = self._ports.get(project_id)
+        if port is None:
+            port = self._port_factory(project_id)
+            self._ports[project_id] = port
+        return port
 
     # ── 生命周期 ──
 
     async def stop_project(self) -> None:
-        """释放绑定项目的活动单元。"""
-        if self._project_id is None:
-            raise ValueError("call project(id) before stopping a project")
-        if self._stop_project is not None:
-            await self._stop_project(self._project_id)
+        """停止并释放本作用域实例。"""
+        if self._scope_id is None:
+            raise ValueError("assembly root has no scope to stop")
+        await self.aclose()
 
     async def aclose(self) -> None:
-        """释放内部资源（幂等；关闭任一视图等价于关闭共享连接池）。"""
+        """释放内部资源（幂等）。
+
+        装配根会一并关闭它创建的全部作用域实例；单个实例只关自己的资源。
+        """
+        errors: list[Exception] = []
+        ports = list(self._ports.values())
+        self._ports.clear()
+        for port in ports:
+            try:
+                await port.aclose()
+            except Exception as exc:
+                errors.append(exc)
         if self._closer is not None:
-            await self._closer()
+            try:
+                await self._closer()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("failed to close Core port", errors)
 
     # ── 内部 ──
 
@@ -212,29 +235,26 @@ class CoreFacade:
 
         Args:
             capability: 能力名
-            **kwargs: 领域参数（``project_id`` 由这里注入，调用方从未参与）
+            **kwargs: 领域参数（作用域由实例在构造时确定，调用方从未参与）
 
         Returns:
             JSON 形状的出参
 
         Raises:
-            CoreApiError: 端口未绑定项目作用域时抛 ``FAILED_PRECONDITION``
+            CoreApiError: 端口没有作用域时抛 ``FAILED_PRECONDITION``
         """
-        if self._project_id is None:
+        if self._scope_id is None:
             raise CoreApiError(
                 Problem.make(
                     ProblemCode.FAILED_PRECONDITION,
                     capability=capability,
-                    detail="capability requires a project-scoped port: call project(id) first",
+                    detail="capability requires a scoped Core port",
                 ),
             )
-        return await self._runtime.invoke(
-            capability,
-            {"project_id": self._project_id, **kwargs},
-        )
+        return await self._runtime.invoke(capability, dict(kwargs))
 
     async def _call_global(self, capability: str, **kwargs: Any) -> Any:
-        """调用不绑定项目作用域的全局能力（如能力包目录）。"""
+        """调用不绑定作用域的全局能力（如能力包目录）。"""
         return await self._runtime.invoke(capability, dict(kwargs))
 
 

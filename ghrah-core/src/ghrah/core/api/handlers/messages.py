@@ -38,10 +38,8 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
     async def append(request: MessagesAppendRequest) -> MessageReplyView:
         """将请求投递给指定 Agent，保留调用者身份。"""
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="send_message",
             payload={
-                "project_id": request.project_id,
                 "agent_id": request.agent_id,
                 "sender": request.sender,
                 "timeout": request.timeout,
@@ -62,12 +60,10 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         return MessageReplyView.model_validate(_ok_or_raise(result, "messages.append"))
 
     async def broadcast(request: MessagesBroadcastRequest) -> BroadcastRepliesView:
-        """向项目内全部 Agent 广播。"""
+        """向作用域内全部 Agent 广播。"""
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="broadcast_message",
             payload={
-                "project_id": request.project_id,
                 "content": request.content,
                 "sender": request.sender,
             },
@@ -86,13 +82,11 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     async def delegate(request: MessagesDelegateRequest) -> MessageReplyView:
         """把一个任务委派给另一个 Agent。"""
-        from_name = await resolve_agent_name(registry, request.project_id, request.from_agent_id)
-        to_name = await resolve_agent_name(registry, request.project_id, request.to_agent_id)
+        from_name = await resolve_agent_name(registry, request.from_agent_id)
+        to_name = await resolve_agent_name(registry, request.to_agent_id)
         result = await registry.handle_command(
-            project_id=request.project_id,
             command="delegate",
             payload={
-                "project_id": request.project_id,
                 "from_agent_id": request.from_agent_id,
                 "to_agent_id": request.to_agent_id,
                 "from_agent": from_name,

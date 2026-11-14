@@ -5,11 +5,13 @@
 
 这是「禁止直连 Core 存储」之后消费方读链路的唯一入口。
 
-两条必须守住的约束：
+三条必须守住的约束：
 
-1. **不依赖 ``CoreUnit`` 挂载**：按 ``project_id`` 懒开只读连接即可回答，
+1. **作用域在构造时固定**：实例只读一个已给定的库文件，不再接收作用域参数，
+   消费方拿到的端口实例本身就是作用域；
+2. **不依赖 ``CoreUnit`` 挂载**：只读连接按库路径懒开即可回答，
    否则「读一个已停止 Agent 的历史」会先复活项目；
-2. **不缓存数据**：只读连接 + WAL 已能保证读己之写；缓存会让 ``head_node_id``
+3. **不缓存数据**：只读连接 + WAL 已能保证读己之写；缓存会让 ``head_node_id``
    落后于刚提交的写。
 
 ⚠ **持久层分区键是 ``agent_id``，不是显示名。**
@@ -20,7 +22,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from pathlib import Path
 
 from ghrah.protocol.views.core import (
@@ -38,8 +39,6 @@ from ghrah.context.session_runtime import SessionRuntime
 
 __all__ = ["ChainReadStore", "ChainDatabaseUnavailableError"]
 
-type DbPathResolver = Callable[[str], str | Path]
-
 
 class ChainDatabaseUnavailableError(RuntimeError):
     """项目链库不存在或不可打开。
@@ -50,71 +49,62 @@ class ChainDatabaseUnavailableError(RuntimeError):
 
 
 class ChainReadStore:
-    """按项目复用只读连接的链读取器。
+    """作用域固定的链读取器（构造时给定库路径，实例即作用域）。
 
     返回 DTO，不返回内部对象——转换发生在最靠近存储的这一层。
 
     Args:
-        resolve_db_path: 项目到 ActionChain sqlite 路径的解析器（装配层注入）
+        db_path: ActionChain sqlite 的路径（装配层按作用域解析后注入）
     """
 
-    def __init__(self, resolve_db_path: DbPathResolver) -> None:
-        self._resolve = resolve_db_path
-        self._backends: dict[str, SqliteBackend] = {}
+    def __init__(self, db_path: str | Path) -> None:
+        self._db_path = Path(db_path)
+        self._slot: SqliteBackend | None = None
         self._lock = asyncio.Lock()
 
-    async def _backend(self, project_id: str) -> SqliteBackend:
-        """取（或懒建）某项目的只读连接。
-
-        Args:
-            project_id: 项目标识
+    async def _backend(self) -> SqliteBackend:
+        """取（或懒建）本作用域的只读连接。
 
         Returns:
             已连接的只读 backend
 
         Raises:
-            ChainDatabaseUnavailableError: 项目链库文件不存在
+            ChainDatabaseUnavailableError: 链库文件不存在
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
-            raise ChainDatabaseUnavailableError(str(self._resolve(project_id)))
+            raise ChainDatabaseUnavailableError(str(self._db_path))
         return backend
 
-    async def _maybe_backend(self, project_id: str) -> SqliteBackend | None:
-        """取（或懒建）只读连接；项目还没有链库时返回 ``None``。
+    async def _maybe_backend(self) -> SqliteBackend | None:
+        """取（或懒建）只读连接；本作用域还没有链库时返回 ``None``。
 
-        「文件不存在」是**正常状态**（项目尚未产生链数据），不是故障——
+        「文件不存在」是**正常状态**（尚未产生链数据），不是故障——
         由调用方决定它对应「空结果」还是 ``NOT_FOUND``。
-
-        Args:
-            project_id: 项目标识
 
         Returns:
             只读 backend，或 ``None``
         """
         async with self._lock:
-            backend = self._backends.get(project_id)
-            if backend is None:
-                db_path = Path(self._resolve(project_id))
-                if not db_path.is_file():
+            if self._slot is None:
+                if not self._db_path.is_file():
                     return None
-                backend = SqliteBackend(db_path=db_path, read_only=True)
+                backend = SqliteBackend(db_path=self._db_path, read_only=True)
                 await backend.connect()
-                self._backends[project_id] = backend
-            return backend
+                self._slot = backend
+            return self._slot
 
-    async def node(self, *, project_id: str, agent_id: str, node_id: str) -> NodeView | None:
+    async def node(self, *, agent_id: str, node_id: str) -> NodeView | None:
         """读取单个节点（精确查询，不加载整条链）。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID（持久层分区键）
             node_id: 节点标识
 
         Returns:
             节点视图；不存在时返回 ``None``
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return None
         node = await backend.load_node(agent_id, node_id)
@@ -122,19 +112,18 @@ class ChainReadStore:
             return None
         return NodeView.model_validate(serialize_node(node))
 
-    async def catalog(self, *, project_id: str, agent_id: str) -> SessionCatalogView:
+    async def catalog(self, *, agent_id: str) -> SessionCatalogView:
         """读取会话目录与分支表。
 
         语义与面向用户的读法一致：**过滤软删除**，无链数据时返回空目录。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             会话目录（永远不是 ``None``）
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return SessionCatalogView(availability="offline")
         raw = await backend.load_session_catalog(agent_id)
@@ -145,17 +134,16 @@ class ChainReadStore:
             branches=[BranchView.model_validate(item) for item in raw["branches"]],
         )
 
-    async def meta(self, *, project_id: str, agent_id: str) -> ChainMetaView:
+    async def meta(self, *, agent_id: str) -> ChainMetaView:
         """读取链目录元数据（active 指针 + 会话/分支表，不含节点）。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
 
         Returns:
             元数据（永远不是 ``None``；无链数据时为空表）
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return ChainMetaView(agent_id=agent_id)
         raw = await backend.load_session_catalog(agent_id)
@@ -166,20 +154,17 @@ class ChainReadStore:
             branches=[BranchView.model_validate(item) for item in raw["branches"]],
         )
 
-    async def branches(
-        self, *, project_id: str, agent_id: str, session_id: str
-    ) -> list[BranchView] | None:
+    async def branches(self, *, agent_id: str, session_id: str) -> list[BranchView] | None:
         """列出某会话下的分支。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             session_id: 会话标识
 
         Returns:
             分支列表；会话不存在时返回 ``None``
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return None
         raw = await backend.load_session_catalog(agent_id)
@@ -195,7 +180,6 @@ class ChainReadStore:
     async def head(
         self,
         *,
-        project_id: str,
         agent_id: str,
         session_id: str,
         branch_id: str,
@@ -203,7 +187,6 @@ class ChainReadStore:
         """读取某分支的当前头节点 id。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             session_id: 会话标识
             branch_id: 分支标识
@@ -211,7 +194,7 @@ class ChainReadStore:
         Returns:
             头节点 id；会话或分支不存在时返回 ``None``
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return None
         checkpoint = await backend.load_checkpoint(agent_id, snapshot_payloads="boundaries")
@@ -239,7 +222,6 @@ class ChainReadStore:
     async def history(
         self,
         *,
-        project_id: str,
         agent_id: str,
         session_id: str,
         branch_id: str,
@@ -248,7 +230,6 @@ class ChainReadStore:
         """读取某分支上的链历史。
 
         Args:
-            project_id: 项目标识
             agent_id: 稳定 Agent ID
             session_id: 会话标识
             branch_id: 分支标识
@@ -257,7 +238,7 @@ class ChainReadStore:
         Returns:
             链历史；会话不存在时返回 ``None``
         """
-        backend = await self._maybe_backend(project_id)
+        backend = await self._maybe_backend()
         if backend is None:
             return None
         checkpoint = await backend.load_checkpoint(agent_id, snapshot_payloads="boundaries")
@@ -285,9 +266,9 @@ class ChainReadStore:
         )
 
     async def aclose(self) -> None:
-        """关闭全部只读连接（幂等）。"""
+        """关闭只读连接（幂等）。"""
         async with self._lock:
-            backends = list(self._backends.values())
-            self._backends.clear()
-        for backend in backends:
+            backend = self._slot
+            self._slot = None
+        if backend is not None:
             await backend.close()
