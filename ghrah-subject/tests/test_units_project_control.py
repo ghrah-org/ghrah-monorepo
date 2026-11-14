@@ -30,9 +30,13 @@ from ouroboros_testutil import wait_active
 
 from ghrah.subject.config import RecoveryConfig, SubjectConfig
 from ghrah.subject.core_cluster.registry import CoreClusterRegistry
+from ghrah.subject.project.paths import ProjectPaths
+from ghrah.subject.room.models import make_room_record
+from ghrah.subject.room.store import RoomStore
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command, mount_unit
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
+    DESIRED_STATE_STORE,
     OBSERVER_ENDPOINT,
     PROJECT_MANAGER,
 )
@@ -306,3 +310,326 @@ async def test_non_loopback_requires_bearer(
             response = await client.get("/api/v1/projects")
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "access_denied"
+
+
+# ─── 写面与生命周期 ───
+
+
+async def _add_room(project: dict[str, Any]) -> str:
+    """在项目 Root 的 rooms 库里布置一条房间记录（供 delete 门禁用例）。"""
+    paths = ProjectPaths.from_locator(project["project_root_locator"])
+    store = RoomStore(paths.room_db_path)
+    await store.start()
+    try:
+        room = make_room_record(project_id=project["project_id"], name="room-1")
+        await store.upsert(room)
+        return room.room_id
+    finally:
+        await store.stop()
+
+
+async def test_create_project_returns_201_with_location(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        async with _client(app) as client:
+            response = await client.post("/api/v1/projects", json={"name": "created-via-rest"})
+        assert response.status_code == 201
+        body = response.json()
+        assert body["name"] == "created-via-rest"
+        assert body["version"] == 1
+        assert body["workspaces"] == []
+        assert response.headers["location"] == f"/api/v1/projects/{body['project_id']}"
+        async with _client(app) as client:
+            detail = await client.get(f"/api/v1/projects/{body['project_id']}")
+        assert detail.status_code == 200
+
+
+async def test_create_rejects_two_default_workspaces(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        first = tmp_path / "ws-a"
+        second = tmp_path / "ws-b"
+        first.mkdir()
+        second.mkdir()
+        body = {
+            "name": "bad-workspaces",
+            "writable_workspaces": [
+                {"locator": str(first), "name": "a", "default_for_agents": True},
+                {"locator": str(second), "name": "b", "default_for_agents": True},
+            ],
+        }
+        async with _client(app) as client:
+            response = await client.post("/api/v1/projects", json=body)
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_request"
+
+
+async def test_patch_updates_and_bumps_version(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "patch-me")
+        async with _client(app) as client:
+            response = await client.patch(
+                f"/api/v1/projects/{project['project_id']}",
+                json={
+                    "name": "renamed",
+                    "description": "updated",
+                    "expected_version": project["version"],
+                },
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["name"] == "renamed"
+            assert body["description"] == "updated"
+            assert body["version"] == project["version"] + 1
+            detail = await client.get(f"/api/v1/projects/{project['project_id']}")
+        assert detail.json()["name"] == "renamed"
+
+
+async def test_patch_requires_change_and_version(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "patch-validation")
+        async with _client(app) as client:
+            empty = await client.patch(
+                f"/api/v1/projects/{project['project_id']}",
+                json={"expected_version": project["version"]},
+            )
+            no_version = await client.patch(
+                f"/api/v1/projects/{project['project_id']}",
+                json={"name": "renamed"},
+            )
+        assert empty.status_code == 400
+        assert empty.json()["error"]["code"] == "invalid_request"
+        assert no_version.status_code == 400
+
+
+async def test_patch_stale_version_returns_conflict_detail(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "patch-conflict")
+        async with _client(app) as client:
+            response = await client.patch(
+                f"/api/v1/projects/{project['project_id']}",
+                json={"name": "stale", "expected_version": project["version"] + 5},
+            )
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "conflict"
+        assert error["detail"]["current_version"] == project["version"]
+
+
+async def test_patch_unknown_and_archived_projects(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        archived = await _archive_project(ctx, await _create_project(ctx, "patch-archived"))
+        async with _client(app) as client:
+            unknown = await client.patch(
+                "/api/v1/projects/missing", json={"name": "x", "expected_version": 1}
+            )
+            archived_response = await client.patch(
+                f"/api/v1/projects/{archived['project_id']}",
+                json={"name": "x", "expected_version": archived["version"]},
+            )
+        assert unknown.status_code == 404
+        assert unknown.json()["error"]["code"] == "not_found"
+        assert archived_response.status_code == 409
+        assert archived_response.json()["error"]["code"] == "resource_archived"
+
+
+async def test_archive_and_restore_are_idempotent(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "lifecycle")
+        async with _client(app) as client:
+            archived = await client.post(
+                f"/api/v1/projects/{project['project_id']}/archive",
+                json={"expected_version": project["version"]},
+            )
+            assert archived.status_code == 200
+            archived_body = archived.json()
+            assert archived_body["archived_at"] is not None
+            assert archived_body["status"] == "stopped"
+
+            again = await client.post(
+                f"/api/v1/projects/{project['project_id']}/archive",
+                json={"expected_version": archived_body["version"]},
+            )
+            assert again.status_code == 200
+            assert again.json()["version"] == archived_body["version"]
+
+            restored = await client.post(
+                f"/api/v1/projects/{project['project_id']}/restore",
+                json={"expected_version": archived_body["version"]},
+            )
+            assert restored.status_code == 200
+            restored_body = restored.json()
+            assert restored_body["archived_at"] is None
+            assert restored_body["status"] == "stopped"
+
+
+async def test_archive_stale_version_returns_conflict(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "archive-conflict")
+        async with _client(app) as client:
+            response = await client.post(
+                f"/api/v1/projects/{project['project_id']}/archive",
+                json={"expected_version": project["version"] + 1},
+            )
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "conflict"
+        assert error["detail"]["current_version"] == project["version"]
+
+
+async def test_pause_resume_stop_chain(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "transitions")
+        project_id = project["project_id"]
+        async with _client(app) as client:
+            paused = await client.post(f"/api/v1/projects/{project_id}/pause", json={})
+            assert paused.status_code == 200
+            assert paused.json()["status"] == "paused"
+            resumed = await client.post(f"/api/v1/projects/{project_id}/resume", json={})
+            assert resumed.status_code == 200
+            assert resumed.json()["status"] == "active"
+            stopped = await client.post(f"/api/v1/projects/{project_id}/stop", json={})
+            assert stopped.status_code == 200
+            assert stopped.json()["status"] == "stopped"
+
+
+async def test_pause_stale_version_and_illegal_transition(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "transition-errors")
+        project_id = project["project_id"]
+        async with _client(app) as client:
+            stale = await client.post(
+                f"/api/v1/projects/{project_id}/pause",
+                json={"expected_version": project["version"] + 3},
+            )
+            assert stale.status_code == 409
+            assert stale.json()["error"]["detail"]["current_version"] == project["version"]
+
+            await client.post(f"/api/v1/projects/{project_id}/stop", json={})
+            illegal = await client.post(f"/api/v1/projects/{project_id}/stop", json={})
+            assert illegal.status_code == 409
+            assert illegal.json()["error"]["code"] == "illegal_transition"
+
+
+async def test_delete_with_rooms_requires_cascade(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "rooms-project")
+        await _add_room(project)
+        async with _client(app) as client:
+            response = await client.delete(
+                f"/api/v1/projects/{project['project_id']}",
+                params={"expected_version": project["version"]},
+            )
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "project_has_rooms"
+        assert error["detail"]["room_count"] == 1
+
+
+async def test_delete_cascade_removes_project_and_rooms(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "cascade-project")
+        await _add_room(project)
+        await _add_room(project)
+        async with _client(app) as client:
+            response = await client.delete(
+                f"/api/v1/projects/{project['project_id']}",
+                params={"expected_version": project["version"], "cascade_rooms": "true"},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["deleted"] is True
+            assert body["storage_purged"] is True
+            assert body["rooms_deleted"] == 2
+            gone = await client.get(f"/api/v1/projects/{project['project_id']}")
+            assert gone.status_code == 404
+            listing = await client.get("/api/v1/projects")
+        assert listing.json()["count"] == 0
+
+
+async def test_delete_requires_version_and_matches_revision(tmp_path: Path) -> None:
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "delete-version")
+        async with _client(app) as client:
+            missing = await client.delete(f"/api/v1/projects/{project['project_id']}")
+            stale = await client.delete(
+                f"/api/v1/projects/{project['project_id']}",
+                params={"expected_version": project["version"] + 2},
+            )
+        assert missing.status_code == 400
+        assert stale.status_code == 409
+        assert stale.json()["error"]["detail"]["current_version"] == project["version"]
+
+
+async def test_write_disabled_returns_503(tmp_path: Path) -> None:
+    async with _boot(tmp_path, enabled=False) as (ctx, app, _):
+        async with _client(app) as client:
+            created = await client.post("/api/v1/projects", json={"name": "blocked"})
+        assert created.status_code == 503
+        assert created.json()["error"]["code"] == "capability_unavailable"
+
+
+async def test_write_routes_keep_desired_state_and_events(tmp_path: Path) -> None:
+    """REST 写经命令总线：desired-state 投影与 project_* 事件仍触发。"""
+    async with _boot(tmp_path) as (ctx, app, _):
+        events: list[str] = []
+        ctx.on("event/project_created", lambda payload: events.append("created"))
+        ctx.on("event/project_updated", lambda payload: events.append("updated"))
+        ctx.on("event/project_archived", lambda payload: events.append("archived"))
+
+        async with _client(app) as client:
+            created = await client.post("/api/v1/projects", json={"name": "wired"})
+            assert created.status_code == 201
+            project_id = created.json()["project_id"]
+            updated = await client.patch(
+                f"/api/v1/projects/{project_id}",
+                json={"name": "wired-2", "expected_version": created.json()["version"]},
+            )
+            assert updated.status_code == 200
+            # 归档前：desired-state 派生缓存已含新项目（投影仍走 ProjectUnit）
+            desired_store = ctx.get(DESIRED_STATE_STORE.name)
+            active_record = await desired_store.load("default")
+            assert active_record is not None
+            assert project_id in {item.project_id for item in active_record.projects}
+
+            archived = await client.post(
+                f"/api/v1/projects/{project_id}/archive",
+                json={"expected_version": updated.json()["version"]},
+            )
+            assert archived.status_code == 200
+
+        assert events == ["created", "updated", "archived"]
+        # 归档后活跃列表为空 → 快照为空（归档项目不进入 reconcile 期望状态）
+        archived_record = await desired_store.load("default")
+        assert archived_record is not None
+        assert archived_record.projects == []
+
+
+async def test_transition_payload_strips_ws_envelope(tmp_path: Path) -> None:
+    """WS 路径的 request_id/session_id 不得触发 ProjectTransitionPayload 的 extra 校验。"""
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "envelope")
+        result = await bridge_command(
+            ctx,
+            "project_pause",
+            {
+                "project_id": project["project_id"],
+                "request_id": "req-1",
+                "session_id": "sess-1",
+            },
+        )
+        assert result["success"] is True, result
+        assert result["data"]["project"]["status"] == "paused"
+
+
+async def test_delete_guard_reports_room_count_at_command_level(tmp_path: Path) -> None:
+    """``project_has_rooms`` 在命令回执里携带 error_detail=房间数（WS 兼容、REST 消费）。"""
+    async with _boot(tmp_path) as (ctx, app, _):
+        project = await _create_project(ctx, "room-guard")
+        await _add_room(project)
+        result = await bridge_command(
+            ctx,
+            "project_delete",
+            {"project_id": project["project_id"], "expected_version": project["version"]},
+        )
+        assert result["success"] is False
+        assert result["error"] == "project_has_rooms"
+        assert result["error_detail"] == "1"
