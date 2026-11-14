@@ -13,6 +13,9 @@ import {
   extractValidationResult,
   type ListProjectsOptions,
   ObserverClient,
+  projectControlClient,
+  resolveProjectApiMode,
+  RestProjectObserverClient,
   type SessionTarget,
   useActionChainsStore,
   useAgentsStore,
@@ -108,7 +111,11 @@ export function useObserver() {
     await loadManifest();
 
     try {
-      const obsClient = new ObserverClient(url);
+      const mode = resolveProjectApiMode();
+      const obsClient =
+        mode === "rest"
+          ? new RestProjectObserverClient(url, projectControlClient())
+          : new ObserverClient(url);
       unbind = connectStores(obsClient, { tsHalfProvider });
 
       await obsClient.connect();

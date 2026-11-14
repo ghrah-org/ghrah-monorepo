@@ -15,4 +15,6 @@ declare module "*.vue" {
 /** 插件宿主装配挂载（main.ts）：import map 的 "vue" shim 读取。 */
 declare global {
   var __GHRAH_VUE__: typeof import("vue");
+  /** 运行时注入的 Project REST 开关（`ws` | `rest`）；未注入时用构建期默认值。 */
+  var __GHRAH_PROJECT_API__: string | undefined;
 }

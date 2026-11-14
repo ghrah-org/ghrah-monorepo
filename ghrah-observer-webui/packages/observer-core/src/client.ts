@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AgentEntity } from "./agent-entity.js";
+import { toProjectCreatePayload } from "./project-control.js";
 import {
   type AbilityDefinitionPayload,
   type AgentEntityCreatePayload,
@@ -882,23 +883,7 @@ export class ObserverClient extends ServerClient {
   // ── Project ──
 
   async createProject(name: string, options: CreateProjectOptions): Promise<CommandResultPayload> {
-    const payload: Record<string, unknown> = { name };
-    if (options.description) payload["description"] = options.description;
-    if (options.manifestRef != null) payload["manifest_ref"] = options.manifestRef;
-    if (options.projectRootLocator) {
-      payload["project_root_locator"] = options.projectRootLocator;
-    }
-    if (options.writableWorkspaces !== undefined) {
-      payload["writable_workspaces"] = options.writableWorkspaces.map((workspace) => ({
-        locator: workspace.locator,
-        ...(workspace.name ? { name: workspace.name } : {}),
-        ...(workspace.role !== undefined ? { role: workspace.role } : {}),
-        ...(workspace.defaultForAgents !== undefined
-          ? { default_for_agents: workspace.defaultForAgents }
-          : {}),
-      }));
-    }
-    if (options.shellCwd) payload["shell_cwd"] = options.shellCwd;
+    const payload = toProjectCreatePayload(name, options);
     const msg: ServerMessage = {
       type: CommandType.PROJECT_CREATE,
       payload,

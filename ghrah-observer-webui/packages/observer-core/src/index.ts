@@ -42,6 +42,27 @@ export {
   type ProjectLifecycleTarget,
   type RoomLifecycleTarget,
 } from "./client.js";
+export { RestProjectObserverClient } from "./client-project-rest.js";
+export {
+  createProjectControlClient,
+  projectControlClient,
+  projectErrorResult,
+  type ProjectControlClient,
+  type ProjectCreateOptionsLike,
+  type ProjectDeleteQuery,
+  type ProjectListQuery,
+  toProjectCreatePayload,
+} from "./project-control.js";
+export {
+  applyProjectListResult,
+  applyProjectRemoved,
+  applyProjectUpsert,
+} from "./project-projection.js";
+export {
+  DEFAULT_PROJECT_API_MODE,
+  type ProjectApiMode,
+  resolveProjectApiMode,
+} from "./project-api.js";
 export {
   createFrameBatcher,
   createSyncBatcher,
