@@ -976,14 +976,15 @@ wiring       → 全部</code></pre>
 <tr><td><code>abilities.package_groups</code></td><td>全局包分组（不绑定项目）</td></tr>
 </tbody></table>
 <p>登记表本身是唯一权威：<code>ghrah-core/src/ghrah/core/api/interfaces.py</code>（<code>CORE_INTERFACES</code> 在 <code>:543</code>，<code>CORE_CATALOG_INTERFACES</code> 在 <code>:612</code>）。名字规律是 <code>&lt;分组&gt;.&lt;动作&gt;</code>；作用域接口与 <code>CorePort</code> 的属性名、方法名一一对应，目录接口与 <code>CoreCatalogPort</code> 的方法一一对应。<code>abilities.package_groups</code> 在两份清单里各有一条：作用域形态注入项目 token，目录形态是全局读面（见 §4.5）。</p>
+<p><code>messages.append</code> 与 <code>mailbox.publish_external</code> 都接受可选的 <code>content_blocks</code>。直聊经 前者投递，房间的人类消息经后者受理。Subject 在调用前校验内容块和项目内的附件引用。 Core 通过消息库持久化结构化内容块，房间日志按消息引用回读，模型适配器在编码时将视频 转换成图片帧与说明文本。</p>
 <h3 id="45-作用域模型一个端口实例就是一个作用域">4.5 作用域模型：一个端口实例就是一个作用域</h3>
 <p>装配层（Subject）为每个 Project 构造并缓存一个 <code>CorePort</code> 实例；<strong>端口实例本身就携带作用域</strong>，不存在&quot;未绑定端口 + 绑定视图&quot;两步：</p>
 <pre><code>from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-ports = ctx.get(CORE_PORT)                # CorePorts：按项目懒建/缓存端口实例
-port = ports.for_project(project_id)      # 该项目的端口实例（无则构造）
+ports = ctx.get(CORE_PORT)  # CorePorts：按项目懒建/缓存端口实例
+port = ports.for_project(project_id)  # 该项目的端口实例（无则构造）
 catalog = await port.sessions.catalog(agent_id=agent_id)
-packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面</code></pre>
+packages = await ctx.get(CORE_CATALOG).packages()  # 无作用域目录读面</code></pre>
 <p><code>CoreFacade(*, runtime, scope_id, closer)</code>（<code>ghrah-core/src/ghrah/core/api/facade.py:83</code>、<code>:95</code>）在构造时固定作用域 token；门面里的 <code>_call</code> 只做「装箱 → 转交」：</p>
 <pre><code>async def _call(self, capability: str, **kwargs: Any) -&gt; dict[str, Any]:
     return await self._runtime.invoke(capability, dict(kwargs))</code></pre>
@@ -997,7 +998,7 @@ packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面</
 <p>全局读面（能力包目录等 5 项）拆成独立的 <code>CoreCatalogPort</code>（实现 <code>ghrah-core/src/ghrah/core/api/catalog.py:32</code>）：没有作用域、不打开数据库、不建单元，因此<strong>零项目时也可用</strong>。同名接口 <code>abilities.package_groups</code> 在目录端口上是全局形态，在作用域端口上是项目形态。</p>
 <h3 id="46-装配与生命周期">4.6 装配与生命周期</h3>
 <p>装配层有<strong>两个</strong>构造入口，对应两种端口：</p>
-<pre><code>def build_core_port(          # 作用域端口：每个 Project 一个实例
+<pre><code>def build_core_port(  # 作用域端口：每个 Project 一个实例
     *,
     scope_id: str,
     db_path: str,
@@ -1014,7 +1015,7 @@ packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面</
 ) -&gt; CoreFacade: ...
 
 
-def build_core_catalog(       # 目录端口：无作用域，进程内一个
+def build_core_catalog(  # 目录端口：无作用域，进程内一个
     *,
     install_root: str | None = None,
     agentconf_db_path: str | None = None,
@@ -1032,12 +1033,12 @@ def build_core_catalog(       # 目录端口：无作用域，进程内一个
 </ol>
 <p>目录端口只需三步：<code>AbilityReadStore(db_path=Path(&quot;&quot;), scope_id=None, install_root=…)</code>（<strong>不打开数据库</strong>）→ <code>CoreCatalogRuntime(build_catalog_handlers(abilities))</code> → <code>CoreCatalog(runtime=…, closer=…</code>）。</p>
 <p>注入与关闭（<code>ghrah-subject</code> 装配侧）：</p>
-<pre><code>self._ports = CorePorts(_make_port)        # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
+<pre><code>self._ports = CorePorts(_make_port)  # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
 self._catalog = build_core_catalog(install_root=..., agentconf_db_path=...)
-ctx.provide(CORE_PORT, self._ports)        # 键来自 ghrah.protocol.ports.keys
+ctx.provide(CORE_PORT, self._ports)  # 键来自 ghrah.protocol.ports.keys
 ctx.provide(CORE_CATALOG, self._catalog)
 ...
-await port.aclose()                        # 单个项目端口：与创建逆序；幂等</code></pre>
+await port.aclose()  # 单个项目端口：与创建逆序；幂等</code></pre>
 <ul>
 <li><code>CORE_CATALOG</code> / <code>CORE_PORT</code> 是字符串常量 <code>&quot;core.catalog&quot;</code> / <code>&quot;core.port&quot;</code>，两侧共用同一字面量（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>、<code>:13</code>）；</li>
 <li><code>CoreFacade.aclose()</code> 幂等；关闭后该实例的读连接随之释放，再次使用须由装配层重建实例（<code>CorePorts.for_project</code> 会新建）；</li>
@@ -1060,9 +1061,9 @@ class CoreApiError(ApiError): ...  # ghrah-core/src/ghrah/core/api/errors.py:36<
 <p>Subject 只认协议包的键与端口协议，不 import Core：</p>
 <pre><code>from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-ports = ctx.get(CORE_PORT, strict=False)     # ghrah-subject/src/ghrah/subject/units/ledger.py:83
-port = ports.for_project(project_id)         # -&gt; CorePort（按项目懒建/缓存）
-catalog = ctx.get(CORE_CATALOG)              # -&gt; CoreCatalogPort（无作用域）</code></pre>
+ports = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units/ledger.py:83
+port = ports.for_project(project_id)  # -&gt; CorePort（按项目懒建/缓存）
+catalog = ctx.get(CORE_CATALOG)  # -&gt; CoreCatalogPort（无作用域）</code></pre>
 <p><code>ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28</code> 的 <code>CorePorts</code> 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，<code>for_project</code> 懒建、<code>close_project</code> 关闭并移除、<code>aclose</code> 关闭全部。<code>CoreClusterUnit</code> 在 <code>init</code> 里构造 <code>CorePorts(_make_port)</code>（<code>units/core_cluster.py:253</code>–<code>:272</code>）与目录端口，并 provide 到 <code>CORE_PORT</code> / <code>CORE_CATALOG</code>（<code>:277</code>–<code>:278</code>）；端口生命周期因此跟随 <code>CoreClusterUnit</code>。</p>
 <p><code>ghrah-subject/src/ghrah/subject/runtime/port_transport.py</code> 把历史的 cluster 命令面适配到端口：<code>PortClusterTransport</code> 实现 <code>CoreClusterRegistryService</code>、维护 <code>cluster_id → project_id</code> 映射、把命令转成能力调用（<code>port_for</code> 取端口实例，<code>:497</code>）；<code>PortMailbox</code> 是只实现实际用到的成员的最小替身（不给旁路留口子）；<code>build_port_transport(ctx)</code> 从 ctx 取注册表构造传输层（<code>:563</code>）。</p>
 <h2 id="5-subject-运行时效果半区">5. Subject 运行时（效果半区）</h2>
@@ -1280,7 +1281,7 @@ catalog = ctx.get(CORE_CATALOG)              # -&gt; CoreCatalogPort（无作用
 <tr><td>GET</td><td><code>/health</code></td><td>返回 <code>status</code> 与 <code>active_sessions</code></td></tr>
 <tr><td>GET</td><td><code>/</code></td><td>服务名/版本/描述</td></tr>
 </tbody></table>
-<p>REST 管理面（<code>/api/v1/…</code>）是另挂到同一 app 的 router（<code>units/ability_control.py:585</code>、<code>units/agent_control.py:537</code>、<code>units/agentconf_control.py</code>），不属于 WS 路由。</p>
+<p>REST 管理面在同一 app 下使用 <code>/api/v1</code>。项目、Agent、能力和模型配置由各自的路由单元管理。 <code>units/media_control.py</code> 负责项目附件的上传和分段读取。归档项目的附件仍可读取。 <code>units/artifact_control.py</code> 负责浏览项目挂载的工作区，以及发布、列出和下载产物。</p>
 <p><strong>事件总线与环形缓冲</strong>：</p>
 <ul>
 <li>缓冲是 <code>deque</code>，容量 <code>event_replay_capacity</code>，默认 <strong>1000</strong>（<code>server/event_bus.py:32-42</code>、<code>server/config.py:32</code>、<code>:56</code>）；写入时自增 <code>seq_id</code>，超出容量从头部丢弃（<code>event_bus.py:37-42</code>）。</li>

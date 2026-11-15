@@ -35,6 +35,14 @@ from ghrah.protocol.payloads.agent import (  # noqa: F401
     UnregisterAbilityPayload,
     UnsubscribePayload,
 )
+from ghrah.protocol.payloads.content import (  # noqa: F401
+    AudioBlockPayload,
+    FileBlockPayload,
+    ImageBlockPayload,
+    InputContentBlock,
+    TextBlockPayload,
+    VideoBlockPayload,
+)
 from ghrah.protocol.payloads.entity import (  # noqa: F401
     AgentEntityCreatePayload,
     AgentEntityListPayload,
@@ -216,6 +224,7 @@ __all__ = [
     "AgentSpawnedPayload",
     "AgentSpecSchema",
     "AgentTerminatedPayload",
+    "AudioBlockPayload",
     "BranchActivatePayload",
     "BranchArchivePayload",
     "BranchCreatePayload",
@@ -234,6 +243,7 @@ __all__ = [
     "DestroyWorkspacePayload",
     "ErrorPayload",
     "ExecuteAbilityPayload",
+    "FileBlockPayload",
     "GetAgentInfoPayload",
     "GetChainHistoryPayload",
     "HITLRequestPayload",
@@ -241,6 +251,8 @@ __all__ = [
     "HITLResolvedPayload",
     "HealthCheckPayload",
     "HealthStatusPayload",
+    "ImageBlockPayload",
+    "InputContentBlock",
     "IsolationSpecPayload",
     "ListAgentsPayload",
     "ManifestAbilityEventPayload",
@@ -353,6 +365,8 @@ __all__ = [
     "TaskVerificationPayload",
     "TaskVerifyPayload",
     "TerminateAgentPayload",
+    "TextBlockPayload",
+    "VideoBlockPayload",
     "UnregisterAbilityPayload",
     "UnsubscribePayload",
     "WorkspaceCreatedPayload",

@@ -257,6 +257,38 @@ class RoomFilterConfig:
 
 
 @dataclass
+class MediaConfig:
+    """项目级附件（媒体）配置切片。
+
+    附件是 Project Root 下的内容寻址资源，经观测端 HTTP API
+    ``/api/v1/projects/{project_id}/attachments`` 上传/读取。本切片只控制
+    Subject 侧的存储与读取策略；上传格式白名单是「部署方显式声明」的，
+    不做隐式放行。
+
+    Attributes:
+        enabled: 是否开放附件端点（False 时端点返回 503 ``media_disabled``；
+            env GHRAH_SUBJECT_MEDIA_ENABLED）
+        max_upload_bytes: 单文件上传上限（字节，默认 64 MiB；``<= 0`` 表示
+            不限制；env GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES）
+        allowed_mime_prefixes: 允许上传的 MIME 前缀（逗号分隔；空元组表示
+            不限制；env GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES）
+        range_requests: 是否支持 ``Range`` 分段读取（False 时忽略 Range、
+            始终返回完整字节；env GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS）
+    """
+
+    enabled: bool = True
+    max_upload_bytes: int = 64 * 1024 * 1024
+    allowed_mime_prefixes: tuple[str, ...] = (
+        "image/",
+        "audio/",
+        "video/",
+        "text/",
+        "application/",
+    )
+    range_requests: bool = True
+
+
+@dataclass
 class PluginTrustConfig:
     """插件信任边界切片（双层权威的 Subject 层）。
 
@@ -343,6 +375,7 @@ class SubjectConfig:
     room_filter_slice: InitVar[RoomFilterConfig | None] = None
     plugin_trust_slice: InitVar[PluginTrustConfig | None] = None
     taskstore_slice: InitVar[TaskStoreConfig | None] = None
+    media_slice: InitVar[MediaConfig | None] = None
     ability: AbilityConfig = field(default_factory=AbilityConfig)
 
     # 非 slice 的新字段（有默认值，可直接构造）。
@@ -380,6 +413,7 @@ class SubjectConfig:
     _room_filter: RoomFilterConfig = field(init=False)
     _plugin_trust: PluginTrustConfig = field(init=False)
     _taskstore: TaskStoreConfig = field(init=False)
+    _media: MediaConfig = field(init=False)
 
     def __post_init__(
         self,
@@ -392,6 +426,7 @@ class SubjectConfig:
         room_filter_slice: RoomFilterConfig | None,
         plugin_trust_slice: PluginTrustConfig | None,
         taskstore_slice: TaskStoreConfig | None,
+        media_slice: MediaConfig | None,
     ) -> None:
         self._persistence = persistence_slice or PersistenceConfig(db_path=self.db_path)
         self._sandbox = sandbox_slice or SandboxUnitConfig(
@@ -417,6 +452,7 @@ class SubjectConfig:
         self._room_filter = room_filter_slice or RoomFilterConfig()
         self._plugin_trust = plugin_trust_slice or PluginTrustConfig()
         self._taskstore = taskstore_slice or TaskStoreConfig()
+        self._media = media_slice or MediaConfig()
 
         from ghrah.ability.assembly import AbilitySourceMode
 
@@ -475,6 +511,10 @@ class SubjectConfig:
     def taskstore(self) -> TaskStoreConfig:
         return self._taskstore
 
+    @property
+    def media(self) -> MediaConfig:
+        return self._media
+
     @classmethod
     def from_env(cls) -> SubjectConfig:
         """从环境变量创建配置。
@@ -510,6 +550,11 @@ class SubjectConfig:
         - GHRAH_SUBJECT_OBSERVER_CORS_ORIGINS（逗号分隔的浏览器来源白名单）
         - GHRAH_SUBJECT_ROOM_FILTER_ENABLED
         - GHRAH_SUBJECT_ROOM_FILTER_ABILITIES（逗号分隔白名单能力名）
+        - GHRAH_SUBJECT_MEDIA_ENABLED（项目级附件端点开关）
+        - GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES（单文件上传上限字节数）
+        - GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES（逗号分隔 MIME 前缀白名单；
+          显式置空表示不限制）
+        - GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS（是否支持 Range 分段读取）
         - GHRAH_SUBJECT_SAFE_EXTRA_COMMANDS（逗号/分号/空白分隔，追加基础命令 safe 白名单）
         - GHRAH_SUBJECT_SAFE_EXTRA_SUB_COMMANDS（base:sub1,sub2;base2:sub3 形状，
           追加子命令 safe 白名单；只增不减，保持 fail-closed）
@@ -677,6 +722,30 @@ class SubjectConfig:
             ),
         )
 
+        # media slice（项目级附件库）
+        media_allowed_prefixes_raw = os.environ.get("GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES")
+        media_slice = MediaConfig(
+            enabled=os.environ.get("GHRAH_SUBJECT_MEDIA_ENABLED", "true").lower()
+            in ("true", "1", "yes"),
+            max_upload_bytes=_safe_int(
+                os.environ.get("GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES"),
+                64 * 1024 * 1024,
+                "GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES",
+            )
+            or 0,
+            allowed_mime_prefixes=(
+                tuple(
+                    prefix.strip().lower()
+                    for prefix in media_allowed_prefixes_raw.split(",")
+                    if prefix.strip()
+                )
+                if media_allowed_prefixes_raw is not None
+                else MediaConfig().allowed_mime_prefixes
+            ),
+            range_requests=os.environ.get("GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS", "true").lower()
+            in ("true", "1", "yes"),
+        )
+
         if os.environ.get("GHRAH_SUBJECT_SKILL_ROOT"):
             logger.warning(
                 "GHRAH_SUBJECT_SKILL_ROOT has been retired; install Skills as v1 Ability packages"
@@ -722,6 +791,7 @@ class SubjectConfig:
             room_filter_slice=room_filter_slice,
             plugin_trust_slice=plugin_trust_slice,
             taskstore_slice=taskstore_slice,
+            media_slice=media_slice,
             ability_grant_policy=ability_grant_policy,
             observer_http_api_enabled=os.environ.get(
                 "GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED", "true"

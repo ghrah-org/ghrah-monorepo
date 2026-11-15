@@ -25,6 +25,11 @@ from ghrah.protocol.types import ProjectStatus
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.core_cluster.registry import default_core_unit_factory
 from ghrah.subject.errors import StableError
+from ghrah.subject.room.content_blocks import (
+    CONTENT_TEXT_REQUIRED,
+    resolve_content_attachments,
+    validate_content_blocks,
+)
 from ghrah.subject.runtime.service_keys import (
     CORE_CATALOG_SERVICE,
     CORE_CLUSTER_REGISTRY,
@@ -302,11 +307,13 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 "error": "legacy_ability_registration_disabled",
                 "error_detail": "Manage grants and tool selection in the ability access store",
             }
-        if command == "send_message" and getattr(cmd_ctx, "request_id", None):
-            payload = {
-                **payload,
-                "metadata": {**(payload.get("metadata") or {}), "request_id": cmd_ctx.request_id},
-            }
+        if command == "send_message":
+            metadata = dict(payload.get("metadata") or {})
+            # 公开命令只接受已校验的顶层内容块，禁止借用旧数据的 metadata 入口。
+            metadata.pop("content_blocks", None)
+            if getattr(cmd_ctx, "request_id", None):
+                metadata["request_id"] = cmd_ctx.request_id
+            payload = {**payload, "metadata": metadata}
         if command not in _PROJECT_AGENT_COMMANDS:
             return {
                 "success": False,
@@ -324,6 +331,20 @@ class CoreClusterRegistryUnit(SubjectUnit):
             if command == "delegate":
                 return await self._delegate(project, payload)
             agent = self._resolve_agent(project, payload, _TARGET_FIELDS[command])
+            # 直聊入站内容块：与 Room 通路同一套策略校验（稳定错误码），
+            # 且在 ensure_cluster（可能挂载 Core）之前拒绝，避免为坏消息挂载。
+            send_blocks: list[dict[str, Any]] | None = None
+            if command == "send_message":
+                send_blocks = validate_content_blocks(payload.get("content_blocks"))
+                if send_blocks is not None:
+                    send_blocks = await resolve_content_attachments(
+                        send_blocks, str(project["project_root_locator"])
+                    )
+                if send_blocks is None and not str(payload.get("content") or "").strip():
+                    raise StableError(
+                        CONTENT_TEXT_REQUIRED,
+                        "content is required when content_blocks is empty",
+                    )
             cluster_id = str(project["project_id"])
             # 先登记定位符：Core 的库路径由项目定位符推导，未挂载单元也要能解析。
             remember = getattr(self.service, "remember_locator", None)
@@ -340,6 +361,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 project_root_locator=str(project["project_root_locator"]),
             )
             core_payload = dict(payload)
+            if send_blocks is not None:
+                core_payload["content_blocks"] = send_blocks
             core_payload["project_id"] = project["project_id"]
             core_payload["agent_id"] = agent["agent_id"]
             target_field = _TARGET_FIELDS[command]

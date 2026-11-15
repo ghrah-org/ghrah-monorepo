@@ -206,7 +206,7 @@ describe("ChatPanel", () => {
     await wrapper.vm.$nextTick();
     await wrapper.find("textarea").setValue("hello room");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "hello room", []);
+    expect(roomSendMock).toHaveBeenCalledWith("r1", "hello room", [], []);
     const pending = chat.allEntries.find((e) => e.content === "hello room");
     expect(pending?.roomId).toBe("r1");
     expect(pending?.pending).toBe(true);
@@ -251,19 +251,20 @@ describe("ChatPanel", () => {
     expect(wrapper.find(".entry-error").exists()).toBe(true);
   });
 
-  it("targeted send: chip 选中后 roomSend 携带 targets", async () => {
+  it("targeted send: 目标下拉选择后 roomSend 携带非空 targets", async () => {
     const { rooms } = setup();
     rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend", "backend"])], "active");
     rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    // 会话头也有 type="button" 的“详情”按钮，chip 只在输入表单内查找
-    const chips = wrapper.find("form").findAll('button[type="button"]');
-    await chips[0].trigger("click"); // @frontend
+    // 默认选中第一个 agent；再从下拉勾选 backend。
+    await wrapper.find(".chat-target-trigger").trigger("click");
+    const options = wrapper.findAll(".chat-target-option");
+    await options[1].find('input[type="checkbox"]').trigger("change");
     await wrapper.find("textarea").setValue("please review");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend"]);
+    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend", "backend"], []);
   });
 
   it("entry 带 targets 时 header 显示定向标记", async () => {
@@ -346,6 +347,98 @@ describe("ChatPanel", () => {
     await wrapper.vm.$nextTick();
     expect(el.scrollTop).toBe(300);
     wrapper.unmount();
+  });
+
+  it("发送图片：roomSend 携带 blocks，pending 立即渲染图片", async () => {
+    const { rooms, chat } = setup();
+    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    roomSendMock.mockResolvedValueOnce({ success: true });
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    const file = new File([Uint8Array.from([1, 2, 3])], "shot.png", { type: "image/png" });
+    const input = wrapper.find('input[type="file"]').element as HTMLInputElement;
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    await wrapper.find('input[type="file"]').trigger("change");
+    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
+    await wrapper.find("form").trigger("submit");
+    const blocks = [{ type: "image", base64: "AQID", mime_type: "image/png" }];
+    expect(roomSendMock).toHaveBeenCalledWith("r1", "", [], blocks);
+    const pending = chat.allEntries.find((entry) => entry.pending);
+    expect(pending?.blocks).toEqual(blocks);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".chat-entry img").exists()).toBe(true);
+  });
+
+  it("旧核未回显图片时给出块丢失提示", async () => {
+    const { rooms, chat } = setup();
+    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    chat.addPendingEntry({
+      projectId: "p1",
+      to: "r1",
+      content: "",
+      agentName: "",
+      roomId: "r1",
+      blocks: [{ type: "image", base64: "AQID", mime_type: "image/png" }],
+    });
+    await wrapper.vm.$nextTick();
+    const echo = logEntry("r1", 2, "user", "human", "");
+    rooms.onRoomLogAppended({ entry: echo });
+    chat.onRoomLogAppended(echo, "p1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("did not echo the attached media");
+  });
+
+  it("渲染 video 块：attachment_id → <video src=附件 URL> + 封面帧", async () => {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "", {
+        content_blocks: [
+          {
+            type: "video",
+            attachment_id: "att-v1",
+            mime_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_s: 5,
+            width: 640,
+            height: 360,
+            frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+          },
+        ],
+      }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    const video = wrapper.find("video");
+    expect(video.exists()).toBe(true);
+    expect(video.attributes("src")).toContain("/api/v1/projects/p1/attachments/att-v1");
+    expect(video.attributes("poster")).toContain("data:image/jpeg;base64,RlJBTUU=");
+    expect(video.attributes("controls")).toBeDefined();
+  });
+
+  it("video 块缺 attachment_id/url 时回退封面帧并明确提示", async () => {
+    const { rooms } = setup();
+    rooms.setRoomLog("r1", [
+      logEntry("r1", 1, "user", "human", "", {
+        content_blocks: [
+          {
+            type: "video",
+            mime_type: "video/mp4",
+            filename: "clip.mp4",
+            duration_s: 5,
+            frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
+          },
+        ],
+      }),
+    ]);
+    const wrapper = mountPanel("r1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("video").exists()).toBe(false);
+    const img = wrapper.find(".block-video-fallback img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toContain("data:image/jpeg;base64,RlJBTUU=");
+    expect(wrapper.text()).toContain("Video unavailable");
   });
 });
 

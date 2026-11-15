@@ -26,6 +26,7 @@ from ghrah.subject.config import (
     CoreTransportConfig,
     HITLPolicyConfig,
     ManifestConfig,
+    MediaConfig,
     PersistenceConfig,
     PluginTrustConfig,
     ProjectConfig,
@@ -467,6 +468,64 @@ class TestFromEnv:
         monkeypatch.delenv("GHRAH_SUBJECT_TASKSTORE_DB", raising=False)
         config = SubjectConfig.from_env()
         assert config.taskstore.enabled is True
+
+    def test_media_defaults(self) -> None:
+        """media slice：默认开放 + 64 MiB 上限 + 常用 MIME 前缀 + Range 开启。"""
+        media = SubjectConfig().media
+        assert media.enabled is True
+        assert media.max_upload_bytes == 64 * 1024 * 1024
+        assert {"image/", "audio/", "video/", "text/", "application/"} == set(
+            media.allowed_mime_prefixes
+        )
+        assert media.range_requests is True
+
+    def test_media_slice_explicit(self) -> None:
+        config = SubjectConfig(
+            media_slice=MediaConfig(
+                enabled=False,
+                max_upload_bytes=1024,
+                allowed_mime_prefixes=(),
+                range_requests=False,
+            )
+        )
+        assert config.media.enabled is False
+        assert config.media.max_upload_bytes == 1024
+        assert config.media.allowed_mime_prefixes == ()
+        assert config.media.range_requests is False
+
+    def test_from_env_media(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ENABLED", "false")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES", "4096")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES", "video/, IMAGE/")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS", "false")
+        media = SubjectConfig.from_env().media
+        assert media.enabled is False
+        assert media.max_upload_bytes == 4096
+        assert media.allowed_mime_prefixes == ("video/", "image/")
+        assert media.range_requests is False
+
+    def test_from_env_media_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in (
+            "GHRAH_SUBJECT_MEDIA_ENABLED",
+            "GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES",
+            "GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES",
+            "GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        media = SubjectConfig.from_env().media
+        assert media.enabled is True
+        assert media.max_upload_bytes == 64 * 1024 * 1024
+        assert media.range_requests is True
+
+    def test_from_env_media_empty_prefixes_means_unrestricted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES", "")
+        assert SubjectConfig.from_env().media.allowed_mime_prefixes == ()
+
+    def test_from_env_media_invalid_max_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES", "not-a-number")
+        assert SubjectConfig.from_env().media.max_upload_bytes == 64 * 1024 * 1024
 
     def test_from_env_reports_retired_skill_root(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

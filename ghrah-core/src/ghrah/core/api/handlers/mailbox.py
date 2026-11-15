@@ -89,12 +89,21 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
         """以外部（人）身份发布消息：写入消息表并投递给收件人。"""
         await registry.ensure()
         manager = _manager(registry, "mailbox.publish_external")
+        metadata = request.metadata
+        if request.content_blocks is not None:
+            metadata = {
+                **(metadata or {}),
+                "content_blocks": [
+                    block.model_dump(mode="json", exclude_none=True)
+                    for block in request.content_blocks
+                ],
+            }
         record = await manager.send_external(
             sender=request.sender,
             recipient_ids=tuple(request.recipient_ids),
             content=request.content,
             idempotency_key=request.idempotency_key,
-            metadata=request.metadata,
+            metadata=metadata,
         )
         return PublishedMessageView(message_id=str(record.message_id))
 

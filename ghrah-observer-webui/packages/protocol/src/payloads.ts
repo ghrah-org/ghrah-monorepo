@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export * from "./payloads/agent.js";
+export * from "./payloads/content.js";
 export * from "./payloads/manifest.js";
 export * from "./payloads/persist.js";
 export * from "./payloads/plugin.js";

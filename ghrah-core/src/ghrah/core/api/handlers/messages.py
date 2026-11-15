@@ -46,6 +46,14 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                 "target": request.target,
                 "content": request.content,
                 "metadata": request.metadata,
+                "content_blocks": (
+                    [
+                        block.model_dump(mode="json", exclude_none=True)
+                        for block in request.content_blocks
+                    ]
+                    if request.content_blocks is not None
+                    else None
+                ),
             },
         )
         if not result.get("success") and result.get("error") == "source_ability_missing":

@@ -354,3 +354,38 @@ async def test_two_tool_calls_in_one_action_have_independent_message_ids(tmp_pat
         finally:
             mm.release.set()
             await supervisor.shutdown()
+
+
+@pytest.mark.parametrize("legacy_metadata", [False, True])
+async def test_persistent_input_preserves_image_blocks(tmp_path, legacy_metadata):
+    """显式内容块和已有 metadata 调用方都能跨持久投递到模型。"""
+    path = tmp_path / "core.sqlite"
+    await bootstrap(path)
+    llm = ScriptedLLM(["seen"])
+    image = {"type": "image", "base64": "aGVsbG8=", "mime_type": "image/png"}
+    async with MessageManager(
+        path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
+    ) as manager:
+        supervisor = SupervisorActor(message_manager=manager)
+        try:
+            await supervisor.spawn_agent(
+                AgentConfig(name="worker"),
+                abilities=[ConversationAbility()],
+                llm_factory=lambda config: llm,
+            )
+            options = (
+                {"metadata": {"content_blocks": [image]}}
+                if legacy_metadata
+                else {"content_blocks": [image]}
+            )
+            assert await supervisor.send("worker", "", **options) == "seen"
+            images = [
+                block
+                for message in llm.calls[0]
+                for block in message.content_blocks
+                if block.type == "image"
+            ]
+            assert len(images) == 1
+            assert images[0].mime_type == image["mime_type"]
+        finally:
+            await supervisor.shutdown()

@@ -13,6 +13,7 @@ from ghrah.protocol.types import SendMessagePayload
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.scoped_stores import ProjectScopedRoomStore
+from ghrah.subject.room.content_blocks import resolve_content_attachments
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
@@ -83,7 +84,13 @@ class RoomUnit(SubjectUnit):
                 return None
             return (result.get("data") or {}).get("project")
 
-        async def deliver(target: str, sender: str, content: str, room_id: str) -> dict[str, Any]:
+        async def deliver(
+            target: str,
+            sender: str,
+            content: str,
+            room_id: str,
+            blocks: list[dict[str, Any]] | None = None,
+        ) -> dict[str, Any]:
             """按 room.project_id + agent_id 找 cluster，并直达对应 CoreUnit。"""
             if self._store is None:
                 return {"success": False, "data": None, "error": "RoomUnit not initialized"}
@@ -130,6 +137,7 @@ class RoomUnit(SubjectUnit):
                     target=str(agent["name"]),
                     content=content,
                     sender=sender,
+                    content_blocks=blocks,
                     metadata={
                         "room_id": room_id,
                         "project_id": room.project_id,
@@ -145,6 +153,12 @@ class RoomUnit(SubjectUnit):
             project = await project_get(room.project_id)
             if not project:
                 return {"success": False, "error": "Room project unavailable", "data": None}
+            raw_blocks = payload.data.get("content_blocks")
+            blocks: list[dict[str, Any]] | None = (
+                raw_blocks if isinstance(raw_blocks, list) and raw_blocks else None
+            )
+            if blocks is not None:
+                blocks = await resolve_content_attachments(blocks, project["project_root_locator"])
             try:
                 manager = cluster_registry.get_message_manager(room.project_id)
             except KeyError:
@@ -157,7 +171,11 @@ class RoomUnit(SubjectUnit):
                 manager = cluster_registry.get_message_manager(room.project_id)
             from ghrah.communication import MessageKind
 
-            meta = {"room_ids": [room.room_id], "room_id": room.room_id, "room_projection": True}
+            meta: dict[str, Any] = {
+                "room_ids": [room.room_id],
+                "room_id": room.room_id,
+                "room_projection": True,
+            }
             key = f"room:{room.room_id}:{payload.data.get('request_id') or uuid4().hex}"
             content = str(payload.data.get("message") or "")
             has_message = bool(content.strip())
@@ -166,10 +184,19 @@ class RoomUnit(SubjectUnit):
             }
             meta["room_has_message"] = has_message
             if not has_message:
-                content = json.dumps(payload.data, ensure_ascii=False)
+                if blocks is None:
+                    # 既有语义：非消息类 room 事件把 data 序列化为正文。
+                    content = json.dumps(payload.data, ensure_ascii=False)
+                else:
+                    # 纯块消息：正文留空，不把 data（含 base64）序列化进正文。
+                    content = ""
             if str(payload.author_type.value) == "human":
+                # 人类消息块由 Core 存在消息权威中，历史读通时再投影到日志。
+                meta["room_data"].pop("content_blocks", None)
                 targets = (
-                    RoomManager._resolve_delivery_targets(room, payload) if has_message else []
+                    RoomManager._resolve_delivery_targets(room, payload)
+                    if has_message or blocks is not None
+                    else []
                 )
                 message = await manager.send_external(
                     sender=payload.author,
@@ -177,9 +204,12 @@ class RoomUnit(SubjectUnit):
                     content=content,
                     idempotency_key=key,
                     metadata=meta,
+                    content_blocks=blocks,
                 )
             else:
                 # 外部 agent 日志发布保留原语义；工具的实际投递在 action 中准备。
+                if blocks is not None:
+                    meta["room_data"]["content_blocks"] = blocks
                 message = await manager.send(
                     sender_id=payload.author,
                     recipient_ids=(),

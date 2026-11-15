@@ -265,7 +265,7 @@ class ProjectManager:
         try:
             project_id = str(payload.get("project_id") or "")
             if command in _LOCKED_PROJECT_MUTATIONS and project_id:
-                async with self._lifecycle_lock(project_id):
+                async with self.lifecycle_lock(project_id):
                     return await handler(self, payload)
             return await handler(self, payload)
         except ValidationError as e:
@@ -329,7 +329,8 @@ class ProjectManager:
         if room_store:
             self._room_store = resource
 
-    def _lifecycle_lock(self, project_id: str) -> asyncio.Lock:
+    def lifecycle_lock(self, project_id: str) -> asyncio.Lock:
+        """串行化项目目录写入与归档、恢复、删除。"""
         lock = self._lifecycle_locks.get(project_id)
         if lock is None:
             lock = asyncio.Lock()
@@ -664,7 +665,7 @@ class ProjectManager:
 
     async def _handle_archive(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectLifecyclePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(p.project_id, include_archived=True)
             if existing is None:
                 return _err(f"project not found: {p.project_id}")
@@ -695,7 +696,7 @@ class ProjectManager:
 
     async def _handle_restore(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectLifecyclePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(p.project_id, include_archived=True)
             if existing is None:
                 return _err(f"project not found: {p.project_id}")
@@ -729,7 +730,7 @@ class ProjectManager:
 
     async def _handle_delete(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectDeletePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(
                 p.project_id, include_archived=True, include_deleted=True
             )
@@ -908,7 +909,7 @@ class ProjectManager:
         self, project_id: str, agent_id: str, agent_name: str
     ) -> tuple[str | None, str | None]:
         """在生命周期锁内重读权威；已停止或移除的实体不会被旧快照拉起。"""
-        async with self._lifecycle_lock(project_id):
+        async with self.lifecycle_lock(project_id):
             project, error = await self._get_active_project(project_id)
             if error or project is None or project.status != ProjectStatus.ACTIVE:
                 return "skipped", None

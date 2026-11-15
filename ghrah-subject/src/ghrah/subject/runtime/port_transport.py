@@ -92,6 +92,7 @@ class PortMailbox:
         content: str,
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
+        content_blocks: list[dict[str, Any]] | None = None,
     ) -> _Published:
         """以外部（人）身份发布消息：转 ``mailbox.publish_external``。"""
         view = await self._port.mailbox.publish_external(
@@ -100,6 +101,7 @@ class PortMailbox:
             content=content,
             idempotency_key=idempotency_key,
             metadata=metadata,
+            content_blocks=content_blocks,
         )
         return _Published(view.message_id)
 
@@ -305,6 +307,14 @@ class PortClusterHandle:
             sender=payload.sender,
             timeout=payload.timeout,
             metadata=payload.metadata,
+            content_blocks=(
+                [
+                    block.model_dump(mode="json", exclude_none=True)
+                    for block in payload.content_blocks
+                ]
+                if payload.content_blocks is not None
+                else None
+            ),
         )
         return {"success": True, "data": reply.model_dump(mode="json")}
 
@@ -432,6 +442,7 @@ class PortClusterHandle:
                 sender=payload.get("sender", "user"),
                 timeout=payload.get("timeout"),
                 metadata=payload.get("metadata"),
+                content_blocks=payload.get("content_blocks"),
             )
             return reply.model_dump(mode="json")
 

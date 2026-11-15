@@ -56,7 +56,7 @@ from ghrah.ability.execution.invocation import InvocationIdentity, MemberReferen
 from ghrah.ability.execution.loop_data import LoopData
 from ghrah.ability.surface.assembly import SurfaceAssemblyError
 from ghrah.agents.runner import AgentRunner
-from ghrah.chat.content import ContentBlock, block_to_dict, blocks_from_dicts
+from ghrah.chat.content import ContentBlock, TextBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
@@ -703,7 +703,13 @@ class ActorAgent:
             # metadata——随 commit_iteration 落入链节点 messages_delta，
             # 供回复归属推导（Room Filter）消费
             if message.content_blocks:
-                text_or_blocks: str | list[ContentBlock] = blocks_from_dicts(message.content_blocks)
+                blocks = blocks_from_dicts(message.content_blocks)
+                if message.content and not any(
+                    isinstance(block, TextBlock) and block.text == message.content
+                    for block in blocks
+                ):
+                    blocks.insert(0, TextBlock(text=message.content))
+                text_or_blocks: str | list[ContentBlock] = blocks
             else:
                 text_or_blocks = message.content
             await self._message_queue.put(

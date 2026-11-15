@@ -244,6 +244,16 @@ export function renderContentBlock(
         filename: block.filename ?? undefined,
       };
     }
+    case "video": {
+      // ActionChain 不解析项目作用域，附件 URL 留空；封面帧可作图片预览。
+      return {
+        kind: "media-preview",
+        mime: block.mime_type ?? "video/*",
+        url: block.url ?? undefined,
+        base64: block.frames?.[0]?.base64 ?? block.base64 ?? undefined,
+        filename: block.filename ?? undefined,
+      };
+    }
     case "tool_call": {
       if (SUPPRESSED_TOOL_CALL_NAMES.has(block.name)) return null;
       return kvTable(block.name, block.arguments);

@@ -74,7 +74,7 @@ class AgentEntityManager:
 
     async def create(self, request: AgentEntityCreatePayload) -> AgentEntity:
         """经原 ProjectManager 创建持久规格，显式选择初始启停状态。"""
-        async with self._projects._lifecycle_lock(request.project_id):
+        async with self._projects.lifecycle_lock(request.project_id):
             project, error = await self._projects._get_active_project(request.project_id)
             if error or project is None:
                 raise StableError("project_unavailable", str(error))
@@ -291,7 +291,7 @@ class AgentEntityManager:
 
         省略参数使用 ``...``。空字符串的端点视为清除。
         """
-        async with self._projects._lifecycle_lock(project_id):
+        async with self._projects.lifecycle_lock(project_id):
             project, agent = await self._load(
                 AgentIdentity(project_id=project_id, agent_id=agent_id)
             )
@@ -314,7 +314,7 @@ class AgentEntityManager:
     async def execute(self, request: AgentEntityPayload) -> dict[str, Any]:
         """对同一项目串行执行实体操作，与既有生命周期命令共用锁。"""
         identity = AgentIdentity(project_id=request.project_id, agent_id=request.agent_id)
-        async with self._projects._lifecycle_lock(identity.project_id):
+        async with self._projects.lifecycle_lock(identity.project_id):
             project, agent = await self._load(identity)
             op = request.operation.model_dump(mode="json")
             kind = op["type"]

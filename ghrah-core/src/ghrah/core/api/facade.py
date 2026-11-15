@@ -406,6 +406,7 @@ class _Mailbox:
         content: str,
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
+        content_blocks: Sequence[dict[str, Any]] | None = None,
     ) -> PublishedMessageView:
         """以外部（人）身份发布消息。"""
         raw = await self._facade._call(
@@ -415,6 +416,7 @@ class _Mailbox:
             content=content,
             idempotency_key=idempotency_key,
             metadata=metadata,
+            content_blocks=content_blocks,
         )
         return PublishedMessageView.model_validate(raw)
 
@@ -515,6 +517,7 @@ class _Messages:
         sender: str = "user",
         timeout: float | None = None,
         metadata: dict[str, Any] | None = None,
+        content_blocks: Sequence[dict[str, Any]] | None = None,
     ) -> MessageReplyView:
         """发送一条消息。"""
         raw = await self._facade._call(
@@ -525,6 +528,7 @@ class _Messages:
             sender=sender,
             timeout=timeout,
             metadata=metadata,
+            content_blocks=content_blocks,
         )
         return MessageReplyView.model_validate(raw)
 

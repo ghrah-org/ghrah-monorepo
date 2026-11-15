@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { z } from "zod";
+import { InputContentBlockSchema } from "./content.js";
 import { BranchInfoPayloadSchema } from "./session.js";
 
 export const AgentConfigPayloadSchema = z
@@ -51,6 +52,7 @@ export const SendMessagePayloadSchema = z.object({
   agent_id: z.string(),
   target: z.string(),
   content: z.string(),
+  content_blocks: z.array(InputContentBlockSchema).nullable().optional(),
   sender: z.string().optional().default("user"),
   timeout: z.number().nullable().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
@@ -177,19 +179,45 @@ export const ContentBlockSchema = z.discriminatedUnion("type", [
     type: z.literal("image"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
   }),
   z.object({
     type: z.literal("audio"),
     data: z.string(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string(),
   }),
   z.object({
     type: z.literal("file"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
     filename: z.string().nullable().optional(),
+  }),
+  z.object({
+    type: z.literal("video"),
+    url: z.string().nullable().optional(),
+    base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
+    mime_type: z.string().nullable().optional(),
+    filename: z.string().nullable().optional(),
+    duration_s: z.number().nullable().optional(),
+    width: z.number().int().nullable().optional(),
+    height: z.number().int().nullable().optional(),
+    frames: z
+      .array(
+        z.object({
+          type: z.literal("image"),
+          url: z.string().nullable().optional(),
+          base64: z.string().nullable().optional(),
+          attachment_id: z.string().nullable().optional(),
+          mime_type: z.string().nullable().optional(),
+        }),
+      )
+      .nullable()
+      .optional(),
   }),
   z.object({
     type: z.literal("tool_call"),

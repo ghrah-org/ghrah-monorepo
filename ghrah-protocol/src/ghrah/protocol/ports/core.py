@@ -225,6 +225,7 @@ class MailboxOperations(Protocol):
         content: str,
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
+        content_blocks: Sequence[dict[str, Any]] | None = None,
     ) -> PublishedMessageView:
         """以外部（人）身份发布一条消息；``idempotency_key`` 保证重复提交幂等。"""
         ...
@@ -392,6 +393,7 @@ class MessageOperations(Protocol):
         sender: str = "user",
         timeout: float | None = None,
         metadata: dict[str, Any] | None = None,
+        content_blocks: Sequence[dict[str, Any]] | None = None,
     ) -> MessageReplyView:
         """向指定 Agent 发送消息并等待回复。"""
         ...

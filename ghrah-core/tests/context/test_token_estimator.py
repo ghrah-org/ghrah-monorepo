@@ -21,6 +21,7 @@ from ghrah.chat.content import (
     ImageBlock,
     ReasoningBlock,
     ToolCallBlock,
+    VideoBlock,
 )
 from ghrah.chat.message import ChatMessage
 from ghrah.context.token_estimator import (
@@ -202,3 +203,22 @@ class TestCharsBudgetFor:
         estimator = WeightedTokenEstimator()
         assert estimator.chars_budget_for(0) == 0
         assert estimator.chars_budget_for(-5) == 0
+
+
+class TestVideoBlockEstimate:
+    def test_video_estimate_scales_with_frames(self) -> None:
+        estimator = WeightedTokenEstimator()
+        one = estimator._estimate_block(
+            VideoBlock(frames=[ImageBlock(base64="a", mime_type="image/jpeg")])
+        )
+        three = estimator._estimate_block(
+            VideoBlock(
+                frames=[
+                    ImageBlock(base64="a", mime_type="image/jpeg"),
+                    ImageBlock(base64="b", mime_type="image/jpeg"),
+                    ImageBlock(base64="c", mime_type="image/jpeg"),
+                ]
+            )
+        )
+        assert one > 1
+        assert three == one * 3

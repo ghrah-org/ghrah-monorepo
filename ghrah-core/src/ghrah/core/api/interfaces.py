@@ -32,6 +32,7 @@ from ghrah.protocol.ability_tree import (
     UnbindToolRequest,
 )
 from ghrah.protocol.interface import Interface, InterfaceRegistry
+from ghrah.protocol.payloads.content import InputContentBlock
 from ghrah.protocol.views.common import (
     AckView,
     AgentIdView,
@@ -189,6 +190,7 @@ class MailboxPublishExternalRequest(BaseModel):
     content: str
     idempotency_key: str
     metadata: dict[str, Any] | None = None
+    content_blocks: list[InputContentBlock] | None = None
 
 
 class MailboxPublishNotificationRequest(BaseModel):
@@ -397,6 +399,7 @@ class MessagesAppendRequest(BaseModel):
     sender: str = "user"
     timeout: float | None = None
     metadata: dict[str, Any] | None = None
+    content_blocks: list[InputContentBlock] | None = None
 
 
 class MessagesBroadcastRequest(BaseModel):

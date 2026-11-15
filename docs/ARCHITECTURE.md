@@ -937,6 +937,11 @@ wiring       → 全部
 
 登记表本身是唯一权威：`ghrah-core/src/ghrah/core/api/interfaces.py`（`CORE_INTERFACES` 在 `:543`，`CORE_CATALOG_INTERFACES` 在 `:612`）。名字规律是 `<分组>.<动作>`；作用域接口与 `CorePort` 的属性名、方法名一一对应，目录接口与 `CoreCatalogPort` 的方法一一对应。`abilities.package_groups` 在两份清单里各有一条：作用域形态注入项目 token，目录形态是全局读面（见 §4.5）。
 
+`messages.append` 与 `mailbox.publish_external` 都接受可选的 `content_blocks`。直聊经
+前者投递，房间的人类消息经后者受理。Subject 在调用前校验内容块和项目内的附件引用。
+Core 通过消息库持久化结构化内容块，房间日志按消息引用回读，模型适配器在编码时将视频
+转换成图片帧与说明文本。
+
 ### 4.5 作用域模型：一个端口实例就是一个作用域
 
 装配层（Subject）为每个 Project 构造并缓存一个 `CorePort` 实例；**端口实例本身就携带作用域**，不存在"未绑定端口 + 绑定视图"两步：
@@ -944,10 +949,10 @@ wiring       → 全部
 ```python
 from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-ports = ctx.get(CORE_PORT)                # CorePorts：按项目懒建/缓存端口实例
-port = ports.for_project(project_id)      # 该项目的端口实例（无则构造）
+ports = ctx.get(CORE_PORT)  # CorePorts：按项目懒建/缓存端口实例
+port = ports.for_project(project_id)  # 该项目的端口实例（无则构造）
 catalog = await port.sessions.catalog(agent_id=agent_id)
-packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面
+packages = await ctx.get(CORE_CATALOG).packages()  # 无作用域目录读面
 ```
 
 `CoreFacade(*, runtime, scope_id, closer)`（`ghrah-core/src/ghrah/core/api/facade.py:83`、`:95`）在构造时固定作用域 token；门面里的 `_call` 只做「装箱 → 转交」：
@@ -972,7 +977,7 @@ async def _call(self, capability: str, **kwargs: Any) -> dict[str, Any]:
 装配层有**两个**构造入口，对应两种端口：
 
 ```python
-def build_core_port(          # 作用域端口：每个 Project 一个实例
+def build_core_port(  # 作用域端口：每个 Project 一个实例
     *,
     scope_id: str,
     db_path: str,
@@ -989,7 +994,7 @@ def build_core_port(          # 作用域端口：每个 Project 一个实例
 ) -> CoreFacade: ...
 
 
-def build_core_catalog(       # 目录端口：无作用域，进程内一个
+def build_core_catalog(  # 目录端口：无作用域，进程内一个
     *,
     install_root: str | None = None,
     agentconf_db_path: str | None = None,
@@ -1012,12 +1017,12 @@ def build_core_catalog(       # 目录端口：无作用域，进程内一个
 注入与关闭（`ghrah-subject` 装配侧）：
 
 ```python
-self._ports = CorePorts(_make_port)        # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
+self._ports = CorePorts(_make_port)  # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
 self._catalog = build_core_catalog(install_root=..., agentconf_db_path=...)
-ctx.provide(CORE_PORT, self._ports)        # 键来自 ghrah.protocol.ports.keys
+ctx.provide(CORE_PORT, self._ports)  # 键来自 ghrah.protocol.ports.keys
 ctx.provide(CORE_CATALOG, self._catalog)
 ...
-await port.aclose()                        # 单个项目端口：与创建逆序；幂等
+await port.aclose()  # 单个项目端口：与创建逆序；幂等
 ```
 
 - `CORE_CATALOG` / `CORE_PORT` 是字符串常量 `"core.catalog"` / `"core.port"`，两侧共用同一字面量（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:10`、`:13`）；
@@ -1055,9 +1060,9 @@ Subject 只认协议包的键与端口协议，不 import Core：
 ```python
 from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-ports = ctx.get(CORE_PORT, strict=False)     # ghrah-subject/src/ghrah/subject/units/ledger.py:83
-port = ports.for_project(project_id)         # -> CorePort（按项目懒建/缓存）
-catalog = ctx.get(CORE_CATALOG)              # -> CoreCatalogPort（无作用域）
+ports = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units/ledger.py:83
+port = ports.for_project(project_id)  # -> CorePort（按项目懒建/缓存）
+catalog = ctx.get(CORE_CATALOG)  # -> CoreCatalogPort（无作用域）
 ```
 
 `ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28` 的 `CorePorts` 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，`for_project` 懒建、`close_project` 关闭并移除、`aclose` 关闭全部。`CoreClusterUnit` 在 `init` 里构造 `CorePorts(_make_port)`（`units/core_cluster.py:253`–`:272`）与目录端口，并 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:277`–`:278`）；端口生命周期因此跟随 `CoreClusterUnit`。
@@ -1296,7 +1301,9 @@ sequenceDiagram
 | GET | `/health` | 返回 `status` 与 `active_sessions` |
 | GET | `/` | 服务名/版本/描述 |
 
-REST 管理面（`/api/v1/…`）是另挂到同一 app 的 router（`units/ability_control.py:585`、`units/agent_control.py:537`、`units/agentconf_control.py`），不属于 WS 路由。
+REST 管理面在同一 app 下使用 `/api/v1`。项目、Agent、能力和模型配置由各自的路由单元管理。
+`units/media_control.py` 负责项目附件的上传和分段读取。归档项目的附件仍可读取。
+`units/artifact_control.py` 负责浏览项目挂载的工作区，以及发布、列出和下载产物。
 
 **事件总线与环形缓冲**：
 

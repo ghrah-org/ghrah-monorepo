@@ -29,6 +29,7 @@ from ghrah.protocol.types import (
     ProjectTransitionPayload,
     ProjectTransitionRequest,
     ProjectUpdateRequest,
+    SendMessagePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
     TaskClaimListResultPayload,
@@ -76,6 +77,8 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TaskInfoPayload_verification": TaskInfoPayload,
     "TaskDumpPayload": TaskDumpPayload,
     "TaskDumpResultPayload": TaskDumpResultPayload,
+    "SendMessagePayload_with_blocks": SendMessagePayload,
+    "SendMessagePayload_with_video": SendMessagePayload,
 }
 
 

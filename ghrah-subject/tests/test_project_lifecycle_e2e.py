@@ -156,6 +156,13 @@ async def test_project_rest_lifecycle_e2e(tmp_path: Path) -> None:
             project_id = project["project_id"]
             assert created.headers["location"] == f"/api/v1/projects/{project_id}"
 
+            attachment_url = f"/api/v1/projects/{project_id}/attachments"
+            upload = await client.post(
+                attachment_url, content=b"video", headers={"Content-Type": "video/mp4"}
+            )
+            assert upload.status_code == 201, upload.text
+            attachment_id = upload.json()["attachment_id"]
+
             room = _data(
                 await bridge_command(
                     ctx,
@@ -170,6 +177,14 @@ async def test_project_rest_lifecycle_e2e(tmp_path: Path) -> None:
             )
             assert archived.status_code == 200, archived.text
             assert archived.json()["archived_at"] is not None
+
+            rejected_upload = await client.post(
+                attachment_url, content=b"new video", headers={"Content-Type": "video/mp4"}
+            )
+            assert rejected_upload.status_code == 409, rejected_upload.text
+            assert rejected_upload.json()["error"]["code"] == "project_archived"
+            saved_video = await client.get(f"{attachment_url}/{attachment_id}")
+            assert saved_video.content == b"video"
 
             restored = await client.post(
                 f"/api/v1/projects/{project_id}/restore",
@@ -200,6 +215,7 @@ async def test_project_rest_lifecycle_e2e(tmp_path: Path) -> None:
 
             gone = await client.get(f"/api/v1/projects/{project_id}")
             assert gone.status_code == 404
+            assert (await client.get(f"{attachment_url}/{attachment_id}")).status_code == 404
 
         assert room["room_id"]
         assert events == [
@@ -401,3 +417,112 @@ async def test_reconcile_reports_legacy_name_collisions_without_spawning(tmp_pat
         assert {item["agent_id"] for item in report.agent_results} == {"old-id", ""}
         assert all(project_id in message and "worker" in message for message in report.errors)
         assert (await ctx.get("core.port").for_project(project_id).agents.list()).items == []
+
+
+async def test_omni_messages_through_project_ports(tmp_path: Path) -> None:
+    """直聊和房间使用同一项目端口，正文、附件帧和投影均能往返。"""
+    from ability_testutil import EchoLLM, put_agent_template
+    from ghrah.ability.access import GrantPolicy
+    from ghrah.chat.content import ImageBlock, VideoBlock
+    from ghrah.chat.format.openai import OpenAIFormat
+
+    from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT
+    from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
+
+    seen = []
+
+    class CapturingLLM(EchoLLM):
+        async def generate(self, messages, tools=None):
+            seen.extend(
+                message
+                for message in messages
+                if any(
+                    isinstance(block, (ImageBlock, VideoBlock)) for block in message.content_blocks
+                )
+            )
+            return await super().generate(messages, tools)
+
+    config = _config(tmp_path)
+    config.ability_grant_policy = GrantPolicy(mode="merge")
+    async with Context() as ctx:
+        await mount_builtin_units(
+            ctx,
+            config,
+            profile="full",
+            core_cluster_unit=CoreClusterRegistryUnit(config, llm_factory=lambda _: CapturingLLM()),
+        )
+        template = put_agent_template(ctx.get("manifest_store"))
+        project = _data(await bridge_command(ctx, "project_create", {"name": "omni"}))["project"]
+        project_id = project["project_id"]
+        agent = _data(
+            await bridge_command(
+                ctx,
+                "spawn_agent",
+                {"project_id": project_id, "config": {"name": "worker"}, "manifest_ref": template},
+            )
+        )
+        assert not agent["runtime_pending"], agent
+        agent_id = agent["agent_id"]
+
+        target = {"project_id": project_id, "agent_id": agent_id, "target": "worker", "timeout": 5}
+        malformed = await bridge_command(
+            ctx, "send_message", {**target, "content": "", "content_blocks": [{}]}
+        )
+        assert malformed["error"] == "content_blocks_malformed"
+        blocks = [{"type": "image", "base64": "aGVsbG8=", "mime_type": "image/png"}]
+        direct = await bridge_command(
+            ctx, "send_message", {**target, "content": "看图片", "content_blocks": blocks}
+        )
+        assert _data(direct)["content"] == "ready"
+        assert seen[-1].text == "看图片"
+        assert isinstance(seen[-1].content_blocks[-1], ImageBlock)
+
+        transport = httpx2.ASGITransport(app=ctx.get(OBSERVER_ENDPOINT.name).app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            upload = await client.post(
+                f"/api/v1/projects/{project_id}/attachments",
+                content=b"video",
+                headers={"Content-Type": "video/mp4"},
+            )
+        assert upload.status_code == 201, upload.text
+        video = {
+            "type": "video",
+            "attachment_id": upload.json()["attachment_id"],
+            "mime_type": "video/mp4",
+            "frames": blocks,
+        }
+        room = _data(
+            await bridge_command(ctx, "room_create", {"project_id": project_id, "name": "room"})
+        )["room"]
+        room_id = room["room_id"]
+        _data(
+            await bridge_command(
+                ctx, "room_join", {"room_id": room_id, "subject": agent_id, "subject_type": "agent"}
+            )
+        )
+        message = {
+            "room_id": room_id,
+            "author": "user",
+            "author_type": "human",
+            "data": {"content_blocks": [video], "targets": [agent_id]},
+        }
+        bad_video = {**video, "attachment_id": "f" * 64}
+        rejected = await bridge_command(
+            ctx, "room_send", {**message, "data": {"content_blocks": [bad_video]}}
+        )
+        assert rejected["error"] == "attachment_not_found"
+
+        entry = _data(await bridge_command(ctx, "room_send", message))["entry"]
+        assert entry["data"]["content_blocks"] == [video]
+        assert "message" not in entry["data"]
+        async with asyncio.timeout(5):
+            while not any(isinstance(block, VideoBlock) for block in seen[-1].content_blocks):
+                await asyncio.sleep(0.02)
+        format_ = OpenAIFormat(model="vision", api_key="unused")
+        encoded = format_._format_messages([seen[-1]])[0]["content"]
+        assert any(part["type"] == "image_url" for part in encoded)
+
+        history = _data(await bridge_command(ctx, "room_get_log", {"room_id": room_id}))
+        logged = next(item for item in history["entries"] if item["seq"] == entry["seq"])
+        assert logged["data"]["content_blocks"] == [video]
+        assert "message" not in logged["data"]
