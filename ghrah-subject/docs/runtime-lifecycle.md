@@ -1,5 +1,9 @@
 # 显式初始化与 REST 风格进程内调用
 
+> **历史记录。** 2026-11-14 的 `872abfc` 退役了本文描述的 `/v1` 进程内控制面，移除了
+> `ghrah.core.runtime.CoreRuntime`、`enabled_agent_api` 配置以及文中的验证和契约导出脚本。
+> 当前 Subject 与 Core 的接入方式见[模块接口端口](../../docs/ARCHITECTURE.md#4-模块接口端口跨模块唯一通道)。
+
 新增 Runtime 入口由 Subject 显式初始化 Core，并在同一进程内通过统一请求/响应契约调用。
 旧 `ghrah-subject`、`ghrah-subject-server`、CoreUnit 挂载和 Observer WS 的启动方式保持原样。
 本次不提供新增 HTTP 宿主、客户端或转发服务，Observer Mock 与意图收敛也不在本次范围。

@@ -114,15 +114,14 @@ uv run ruff check src/ tests/
 
 Apache 2.0
 
-## 新增显式 Runtime 入口
+## Core 端口与 Subject 接入
 
-现有生命周期与 Subject 进程内调用链已完成实现和验收；完整 M0 的资源管理扩展另行交付。
+Subject 内嵌 Core，并为每个项目按需创建独立的 `CorePort`。全局能力包目录由
+`CoreCatalogPort` 提供，启动后即使没有项目也能查询。
+端口契约、装配与生命周期见[模块接口端口](../docs/ARCHITECTURE.md#4-模块接口端口跨模块唯一通道)。
 
-新增的显式 `CoreRuntime` 生命周期、REST 风格进程内派发与 Subject 新客户端入口见
-[Runtime 生命周期接入](../ghrah-subject/docs/runtime-lifecycle.md)。显式启用 `enabled_agent_api=True`
-可使用 Agent 定义、条件启停、消息/投递及 Timeline/Node 只读资源接口。
-目前支持内置 conversation 组合，并可显式传入模型覆盖和窗口策略。
-默认不启用资源接口；原有 CoreUnit 用法保持原样。
+旧 `/v1` 进程内 Runtime 控制面已退役。原 API 与验证步骤见
+[Runtime 生命周期接入（历史）](../ghrah-subject/docs/runtime-lifecycle.md)。
 
 ## 可选 Scheme 资源切片
 

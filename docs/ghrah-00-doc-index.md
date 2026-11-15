@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档编号 | GHRAH-INDEX-000 |
 | 文档状态 | 现行（authoritative，本目录的入口） |
-| 校准基线 | `ghrah-monorepo` @ `08983d7`（2026-11-13），工作区干净 |
+| 校准基线 | 端口索引按 `2ac183b`（2026-11-15）校准，其余条目沿用 `08983d7`（2026-11-13） |
 | 读者 | 所有人：先读这一页，再决定读哪份 |
 | 上一次全量重写 | 2026-11-13（`ghrah-08` 按能力端口全量重写） |
 
@@ -18,6 +18,7 @@
 | 2.2 | 2026-11-12 | 新增 `ghrah-08-interface-port.md`：Core 侧 50 项能力已实现，补齐 Core ↔ Subject 的调用边界与按功能点时序图，并登记 `ARCHITECTURE.md` §4.4 / §7 / §10 的 `ActionChainLedger` 直读描述已过期 |
 | 2.3 | 2026-11-13 | `ghrah-08` 全量重写为「模块能力端口设计说明」（自闭环、50 条能力逐条列出、作用域/装配/错误/闸门/偏差）；`ARCHITECTURE.md` 修正 `ActionChainLedger` 直读相关九处（§2.1 总览图、§7 读写分离图与 `SqliteBackend` 只读开关、§9.3 时序图、§10.1 权威图、§10.2/§10.3/§10.5 表、§13 跨机边界行），统一改为经 `CorePort` 调用；`ghrah-05`/`ghrah-06`/`ghrah-07` 同步该口径 |
 | 2.4 | 2026-11-13 | `ARCHITECTURE.md` **全量重写**为 14 章 + 2 附录（2954 行，逐章重新从代码取证，2310 处 `file:line`），新增 §4「模块能力端口」独立成章、§14 记录 12 条已核实偏离；`ARCHITECTURE.html` 改为由 Markdown 生成（`scripts/gen_architecture_html.py`）；`ghrah-06` §5.2 工具面口径改为 `ToolSurfaceRuntime`，并修正 `ghrah-protocol` 依赖边描述 |
+| 2.5 | 2026-11-15 | 将端口接入和维护指引改指向 `ARCHITECTURE.md` §4，将 `ghrah-08` 标记为旧端口模型的历史参考 |
 
 ## 1. 这个目录是什么
 
@@ -54,9 +55,9 @@
 | GHRAH-OPS-005 | [ghrah-05-build-startup-and-troubleshooting.md](ghrah-05-build-startup-and-troubleshooting.md) | 13 步启动链、命令面、端口、日志落点、数据落盘、启动期硬失败原文、前端、排障手册 | 起服务；服务起不来；日志找不到；端口/宿主配置 |
 | GHRAH-MAP-006 | [ghrah-06-code-map.md](ghrah-06-code-map.md) | 仓库结构与包边界、文件职责速查、一次能力调用的七步链、协议层与前端下发、依赖方向、新文件放哪 | 找文件；判断改动该落在哪个包；避免循环依赖 |
 | GHRAH-ADR-007 | [ghrah-07-history-and-decisions.md](ghrah-07-history-and-decisions.md) | 旧件逐份判决、8 条关键决策（D-1~D-8）、5 条教训、未处理的文档债务 | 想知道"某概念为什么没了"；评审新设计前避免重走弯路 |
-| GHRAH-DESIGN-008 | [ghrah-08-interface-port.md](ghrah-08-interface-port.md) | 模块能力端口：三个抽象（能力/清单/收敛点）、代码布局与依赖方向、**50 条能力逐条总表**、`CorePort` 签名、作用域模型、装配与生命周期、错误模型与翻译表、三条强制点、边界闸门现状、Subject 接入、新增能力步骤、已知偏差 | 新增/修改跨模块能力；排查"这条跨模块链路断在哪"；模块边界评审 |
+| GHRAH-DESIGN-008 | [模块接口与端口设计说明（历史）](ghrah-08-interface-port.md) | 旧端口的 50 项接口与项目绑定模型 | 追溯旧端口设计。现行接口与接入方式见[模块接口端口](ARCHITECTURE.md#4-模块接口端口跨模块唯一通道) |
 
-依赖关系：`02` 与 `04` 都以 `01` 的契约为前提；`06` 是 `01`/`03`/`04`/`05` 的坐标索引；`07` 与其余正交（只解释历史）。平台层与子系统层是**引用关系而非重复**：ARCHITECTURE §6 给骨架与口径，更细的 `file:line` 在子系统文档里；两者冲突时以子系统文档为准并回改 §6。
+`02` 与 `04` 都以 `01` 的契约为前提，`06` 为 `01`、`03`、`04`、`05` 提供代码位置索引。`07` 与 `08` 用于追溯历史。`ARCHITECTURE.md` §6 概述 Core 运行时，子系统文档提供实现细节。文档互有出入时，以代码为准。
 
 ### 2.3 Scheme 包文档层
 
@@ -103,8 +104,8 @@
 | 技能扫描 / lock / 注入 | `ghrah-04` §4–§9、`ARCHITECTURE.md` §6.8 |
 | 启动脚本、端口、日志路径 | `ghrah-05` §1–§5 |
 | 新增顶层包或改依赖方向 | `ghrah-06` §2、§7、`ARCHITECTURE.md` §2 |
-| 新增/删除 Core 能力，或改 `ports/core.py` | `ghrah-08` §3 总表与 §5 对应时序图、`ghrah-06` §7 |
-| 改跨模块调用路径（谁调谁、经不经端口） | `ghrah-08` 全文、`ARCHITECTURE.md` §2.1 总览图 / §7 读写分离 / §10 一致性 |
+| 新增或删除 Core 端口接口，或改 `ports/core.py` | `ARCHITECTURE.md` §3.2 契约与 §4 接口表及调用说明 |
+| 改跨模块调用路径（谁调谁、经不经端口） | `ARCHITECTURE.md` §2.1 总览图、§4 端口接入与 §11 一致性 |
 | `ghrah.scheme` API、生命周期或 Scheme 产品树语义 | [包文档入口](../ghrah-scheme/README.md)所列的相应专题及实现状态；跨语言描述格式仍同步 Python／TS |
 | 推翻了某条既有决策 | `ghrah-07` §3 追加 `D-n` 并标"已否决"，**不要**直接删旧条目 |
 
