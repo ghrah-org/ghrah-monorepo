@@ -110,7 +110,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#42-三个抽象与一次调用的四步" class="lv3">4.2 三个抽象与一次调用的四步</a>
 <a href="#43-core-的实现分层" class="lv3">4.3 Core 的实现分层</a>
 <a href="#44-能力面规模" class="lv3">4.4 能力面规模</a>
-<a href="#45-作用域模型" class="lv3">4.5 作用域模型</a>
+<a href="#45-作用域模型一个端口实例就是一个作用域" class="lv3">4.5 作用域模型：一个端口实例就是一个作用域</a>
 <a href="#46-装配与生命周期" class="lv3">4.6 装配与生命周期</a>
 <a href="#47-错误族与边界闸门" class="lv3">4.7 错误族与边界闸门</a>
 <a href="#48-契约与实现为什么必须分包" class="lv3">4.8 契约与实现为什么必须分包</a>
@@ -126,7 +126,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#6-core-认知半区">6. Core 认知半区</a>
 <a href="#61-coreunit命令分发与-coreunitconfig" class="lv3">6.1 CoreUnit：命令分发与 CoreUnitConfig</a>
 <a href="#62-unitsregistrypyruntimeregistry" class="lv3">6.2 units/registry.py：RuntimeRegistry</a>
-<a href="#63-apicorefacade-与能力面单一端口" class="lv3">6.3 api/：CoreFacade 与能力面（单一端口）</a>
+<a href="#63-apicorefacadecorecatalog-与能力面两种端口" class="lv3">6.3 api/：CoreFacade、CoreCatalog 与能力面（两种端口）</a>
 <a href="#64-进程内-v1-控制面已退役" class="lv3">6.4 进程内 /v1 控制面（已退役）</a>
 <a href="#65-core--subject-反向通道" class="lv3">6.5 Core → Subject 反向通道</a>
 <a href="#66-supervisor--agent-actor--驱动循环入口" class="lv3">6.6 Supervisor / Agent actor / 驱动循环入口</a>
@@ -197,7 +197,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <main class="main">
 <h1 id="ghrah-系统架构">ghrah 系统架构</h1>
 <blockquote><p>本文是平台层的事实基线：<strong>只写当前实现</strong>，每条关键论断都带 <code>文件路径:行号</code>。 代码与本文冲突时以代码为准，并回来改本文。不写路线图、不写历史沿革。  校准基线：<code>ghrah-monorepo</code> @ <code>08983d7</code>（2026-11-13），工作区干净。  <strong>路径约定</strong>：<code>file:line</code> 一律相对仓库根。少数条目为<strong>包内相对路径</strong>的简写 （如 <code>corpus.py</code>、<code>ports/core.py</code>、<code>payloads/system.py</code>），按所在章节的包定位： §3 → <code>ghrah-protocol/src/ghrah/protocol/</code>；§5–§6 → <code>ghrah-core/src/ghrah/</code> 与 <code>ghrah-subject/src/ghrah/subject/</code>；§7–§8 → <code>ghrah-core/src/ghrah/context/</code> 与 <code>ghrah-core/src/ghrah/ability/</code>。需要精确跳转时按此补全前缀。</p></blockquote>
-<blockquote><p><strong>术语约定</strong>：模块之间经端口互相调用的操作，本项目统一称<strong>接口</strong>（interface）， 代码落点为 <code>ghrah-protocol/src/ghrah/protocol/interface.py</code>、<code>ghrah-core/src/ghrah/core/api/interfaces.py</code>、<code>CORE_INTERFACES</code>； 历史上曾称「能力 / 能力清单」，现已统一改名，旧称一律按「接口」理解。 <code>ability</code>（能力包）是另一概念——被授权、被调用的实现单元，与「接口」不可混用。 错误响应中的 <code>Problem.capability</code> 字段名为兼容保留，其值即接口名。</p></blockquote>
+<blockquote><p><strong>术语约定</strong>：模块之间经端口互相调用的操作，本项目统一称<strong>接口</strong>（interface）， 代码落点为 <code>ghrah-protocol/src/ghrah/protocol/interface.py</code>、<code>ghrah-core/src/ghrah/core/api/interfaces.py</code>、<code>CORE_INTERFACES</code>（作用域能力）与 <code>CORE_CATALOG_INTERFACES</code>（无作用域目录能力）； 历史上曾称「能力 / 能力清单」，现已统一改名，旧称一律按「接口」理解。 <code>ability</code>（能力包）是另一概念——被授权、被调用的实现单元，与「接口」不可混用。 错误响应中的 <code>Problem.capability</code> 字段名为兼容保留，其值即接口名。</p></blockquote>
 <h2 id="目录">目录</h2>
 <ol>
 <li><a href="#1-系统定位与设计原则">系统定位与设计原则</a></li>
@@ -237,7 +237,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>1</td><td><strong>单一权威</strong></td><td>每份被多方使用的状态只有一条写路径；其余副本只能是派生，且必须能从权威重建</td><td>Core <code>ContextManager</code> 的 sqlite 是链与消息的写入权威（<code>ghrah-core/src/ghrah/context/manager.py</code>）</td></tr>
 <tr><td>2</td><td><strong>派生可重建</strong></td><td>副本不得独立写；重建指令必须存在且幂等</td><td>Observer store 重连时经命令面重新拉取；Subject 侧读链历史只调用能力</td></tr>
 <tr><td>3</td><td><strong>跨模块单一入口</strong></td><td>模块之间零 import；一切能力调用经端口</td><td><code>ghrah-protocol/src/ghrah/protocol/ports/core.py</code> + <code>ghrah-core/src/ghrah/core/api/facade.py</code></td></tr>
-<tr><td>4</td><td><strong>零隐式行为</strong></td><td>新能力必须显式声明（清单 / 配置 / 白名单），不做&quot;顺便帮你做了&quot;</td><td>能力必须登记进 <code>CORE_INTERFACES</code> 且有处理器，否则启动即失败（<code>ghrah-core/src/ghrah/core/api/runtime.py:18</code>）</td></tr>
+<tr><td>4</td><td><strong>零隐式行为</strong></td><td>新能力必须显式声明（清单 / 配置 / 白名单），不做&quot;顺便帮你做了&quot;</td><td>能力必须登记进 <code>CORE_INTERFACES</code> / <code>CORE_CATALOG_INTERFACES</code> 且有处理器，否则启动即失败（<code>ghrah-core/src/ghrah/core/api/runtime.py:25</code>、<code>:41</code>）</td></tr>
 <tr><td>5</td><td><strong>代码是事实</strong></td><td>文档给索引，代码给答案；关键论断附 <code>file:line</code></td><td>全文</td></tr>
 </tbody></table>
 <h3 id="13-一次交互的宏观形状">1.3 一次交互的宏观形状</h3>
@@ -253,13 +253,16 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
         Units --&gt; XPort
     end
 
-    XPort --&gt;|&quot;CORE_PORT 能力调用（进程内）&quot;| FACADE
+    XPort --&gt;|&quot;CORE_PORT 能力调用（按项目端口实例）&quot;| FACADE
+    XPort -.-&gt;|&quot;CORE_CATALOG 目录读面（无作用域）&quot;| CATALOG
 
     subgraph CORE[&quot;ghrah-core（同进程，认知半区）&quot;]
-        FACADE[&quot;CoreFacade → CoreRuntime&lt;br/&gt;50 条能力&quot;]
-        H[&quot;handlers × 10 组&quot;]
+        FACADE[&quot;CorePort 实例（每项目一个）&lt;br/&gt;→ CoreRuntime&lt;br/&gt;48 条作用域能力&quot;]
+        CATALOG[&quot;CoreCatalogPort → CoreCatalogRuntime&lt;br/&gt;5 条目录能力&quot;]
+        H[&quot;handlers × 10 组 + 目录 1 组&quot;]
         AG[&quot;Supervisor / ActorAgent&lt;br/&gt;驱动循环 / ContextManager&quot;]
         FACADE --&gt; H
+        CATALOG --&gt; H
         H --&gt; AG
     end
 
@@ -414,7 +417,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <thead><tr><th>一级子目录</th><th><code>.py</code> / 行</th><th>职责</th><th>锚点</th></tr></thead>
 <tbody>
 <tr><td><code>payloads/</code></td><td>13 / 2,275</td><td>各域载荷模型聚合再导出：agent、session、task、project、room、workspace、manifest、persist、system、plugin</td><td><code>ghrah-protocol/src/ghrah/protocol/payloads/__init__.py:4</code></td></tr>
-<tr><td><code>ports/</code></td><td>3 / 521</td><td>模块端口：每个模块对外能力的唯一入口（<code>CORE_PORT</code>、<code>SUBJECT_PORT</code>）</td><td><code>ghrah-protocol/src/ghrah/protocol/ports/__init__.py:4</code></td></tr>
+<tr><td><code>ports/</code></td><td>3 / 562</td><td>模块端口：每个模块对外能力的唯一入口（<code>CORE_PORT</code>、<code>CORE_CATALOG</code>、<code>SUBJECT_PORT</code>）</td><td><code>ghrah-protocol/src/ghrah/protocol/ports/__init__.py:4</code></td></tr>
 <tr><td><code>views/</code></td><td>3 / 619</td><td>跨模块共用视图与资源视图（<code>Page</code>、<code>AckView</code> 等）</td><td><code>ghrah-protocol/src/ghrah/protocol/views/__init__.py:4</code></td></tr>
 <tr><td>（根模块）</td><td>20 / 4,206</td><td><code>envelope.py</code>、<code>types.py</code>（门面）、<code>enums.py</code>、<code>events.py</code>、<code>routing.py</code>、<code>factories.py</code>、<code>interface.py</code>、<code>problem.py</code>、<code>errors.py</code>、<code>corpus.py</code>、<code>ability_control.py</code>、<code>ability_tree.py</code>、<code>agent_control.py</code>、<code>agentconf_control.py</code>、<code>scheme.py</code>、<code>runtime.py</code>、<code>runtime_agents.py</code>、<code>runtime_digest.py</code>、<code>runtime_resources.py</code>、<code>__init__.py</code></td><td><code>ghrah-protocol/src/ghrah/protocol/__init__.py:4</code></td></tr>
 </tbody></table>
@@ -639,27 +642,27 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p>第四步是「只说 DTO」这条边界的唯一强制点（<code>interface.py:188</code> 的注释原文：这是这条铁律唯一的强制点）。进程内没有物理边界，返回值里塞一个 <code>datetime</code>、ORM 行或内部实体，只有在这里才会被抓到——而不是在下游消费方手里炸。</p>
 <p><code>invoke</code> 返回 <code>dict[str, Any]</code> 而非 DTO 实例（<code>:141</code>），刻意的降级：调用方必须在类型系统里显式 <code>model_validate</code> 回来，转换点因此可见。</p>
 <h4 id="322-ports方法签名与注入键">3.2.2 <code>ports/</code>：方法签名与注入键</h4>
-<p><code>ports/core.py</code> 定义 Core 对外能力的唯一入口。约定写在模块头（<code>ports/core.py:6</code>–<code>:10</code>）：项目作用域由装配层注入、签名里不出现；所有返回值是 DTO、id 或 <code>None</code>；所有失败抛 <code>ApiError</code> 子类。</p>
-<p>id 别名是裸 <code>str</code>（<code>ports/core.py:74</code>–<code>:79</code>）：<code>AgentId</code>、<code>BranchId</code>、<code>DeliveryId</code>、<code>MessageId</code>、<code>NodeId</code>、<code>SessionId</code>。</p>
-<p>十个能力分组（每组一个 <code>Protocol</code>），全部用 <code>async def</code> + 关键字参数：</p>
+<p><code>ports/core.py</code> 定义 Core 对外能力的唯一入口。约定写在模块头（<code>ports/core.py:6</code>–<code>:10</code>）：作用域由装配层在<strong>构造端口实例</strong>时注入、能力签名里不出现；所有返回值是 DTO、id 或 <code>None</code>；所有失败抛 <code>ApiError</code> 子类。</p>
+<p>id 别名是裸 <code>str</code>（<code>ports/core.py:80</code>–<code>:85</code>）：<code>AgentId</code>、<code>BranchId</code>、<code>DeliveryId</code>、<code>MessageId</code>、<code>NodeId</code>、<code>SessionId</code>。</p>
+<p>十个作用域能力分组（每组一个 <code>Protocol</code>），全部用 <code>async def</code> + 关键字参数；作用域由端口实例决定，能力签名里不出现（见 §4.5）：</p>
 <p>表 3-3 <code>ports/core.py</code> 的能力分组</p>
 <table>
 <thead><tr><th>分组</th><th>位置</th><th>方法数</th><th>代表方法</th></tr></thead>
 <tbody>
-<tr><td><code>NodeOperations</code></td><td><code>:82</code></td><td>1</td><td><code>get(*, agent_id, node_id) -&gt; NodeView</code></td></tr>
-<tr><td><code>SessionOperations</code></td><td><code>:90</code></td><td>8</td><td><code>catalog</code>、<code>history</code>、<code>head</code>、<code>meta</code>、<code>create</code>、<code>activate</code>、<code>archive</code>、<code>delete</code></td></tr>
-<tr><td><code>BranchOperations</code></td><td><code>:145</code></td><td>5</td><td><code>list</code>、<code>create</code>、<code>activate</code>、<code>archive</code>、<code>delete</code></td></tr>
-<tr><td><code>MailboxOperations</code></td><td><code>:188</code></td><td>6</td><td><code>summary</code>、<code>list</code>、<code>get</code>、<code>publish_external</code>、<code>publish_notification</code>、<code>recover_room_projections</code></td></tr>
-<tr><td><code>DeliveriesOperations</code></td><td><code>:239</code></td><td>3</td><td><code>get</code>、<code>retry</code>、<code>resume</code></td></tr>
-<tr><td><code>AbilityOperations</code></td><td><code>:255</code></td><td>13</td><td><code>tree</code>、<code>changes</code>、<code>admin</code>、<code>content</code>、<code>packages</code>、<code>package_detail</code>、<code>package_groups</code>、<code>instances</code>、<code>status</code>、<code>grant</code>、<code>revoke</code>、<code>enable_tool</code>、<code>disable_tool</code></td></tr>
-<tr><td><code>AgentOperations</code></td><td><code>:336</code></td><td>9</td><td><code>create</code>、<code>create_from_template</code>、<code>get</code>、<code>delete</code>、<code>runtime</code>、<code>tools</code>、<code>compact</code>、<code>reset</code>、<code>list</code></td></tr>
-<tr><td><code>MessageOperations</code></td><td><code>:381</code></td><td>3</td><td><code>append</code>、<code>broadcast</code>、<code>delegate</code></td></tr>
-<tr><td><code>RoomOperations</code></td><td><code>:411</code></td><td>1</td><td><code>recover</code></td></tr>
-<tr><td><code>ManifestOperations</code></td><td><code>:419</code></td><td>1</td><td><code>resolve(*, manifest_ref) -&gt; AgentSpecView</code></td></tr>
+<tr><td><code>NodeOperations</code></td><td><code>:88</code></td><td>1</td><td><code>get(*, agent_id, node_id) -&gt; NodeView</code></td></tr>
+<tr><td><code>SessionOperations</code></td><td><code>:96</code></td><td>8</td><td><code>catalog</code>、<code>history</code>、<code>head</code>、<code>meta</code>、<code>create</code>、<code>activate</code>、<code>archive</code>、<code>delete</code></td></tr>
+<tr><td><code>BranchOperations</code></td><td><code>:154</code></td><td>5</td><td><code>list</code>、<code>create</code>、<code>activate</code>、<code>archive</code>、<code>delete</code></td></tr>
+<tr><td><code>MailboxOperations</code></td><td><code>:198</code></td><td>6</td><td><code>summary</code>、<code>list</code>、<code>get</code>、<code>publish_external</code>、<code>publish_notification</code>、<code>recover_room_projections</code></td></tr>
+<tr><td><code>DeliveriesOperations</code></td><td><code>:250</code></td><td>3</td><td><code>get</code>、<code>retry</code>、<code>resume</code></td></tr>
+<tr><td><code>AbilityOperations</code></td><td><code>:266</code></td><td>11</td><td><code>tree</code>、<code>changes</code>、<code>admin</code>、<code>content</code>、<code>package_groups</code>、<code>instances</code>、<code>status</code>、<code>grant</code>、<code>revoke</code>、<code>enable_tool</code>、<code>disable_tool</code></td></tr>
+<tr><td><code>AgentOperations</code></td><td><code>:338</code></td><td>9</td><td><code>create</code>、<code>create_from_template</code>、<code>get</code>、<code>delete</code>、<code>runtime</code>、<code>tools</code>、<code>compact</code>、<code>reset</code>、<code>list</code></td></tr>
+<tr><td><code>MessageOperations</code></td><td><code>:383</code></td><td>3</td><td><code>append</code>、<code>broadcast</code>、<code>delegate</code></td></tr>
+<tr><td><code>RoomOperations</code></td><td><code>:415</code></td><td>1</td><td><code>recover</code></td></tr>
+<tr><td><code>ManifestOperations</code></td><td><code>:423</code></td><td>1</td><td><code>resolve(*, manifest_ref) -&gt; AgentSpecView</code></td></tr>
 </tbody></table>
-<p><code>CorePort</code> 本身是十个 <code>@property</code> 加一个绑定方法（<code>ports/core.py:427</code>–<code>:476</code>）。<code>project(project_id) -&gt; CorePort</code>（<code>:467</code>）返回<strong>绑定了项目作用域</strong>的端口视图；注释说明了动机：装配层提供一个未绑定实例，同一实例可服务多个项目，避免「一个进程只能有一个项目」的隐含约束（<code>:433</code>–<code>:435</code>）。</p>
-<p><code>ports/keys.py</code> 只有两个常量：<code>CORE_PORT = &quot;core.port&quot;</code>（<code>:10</code>）、<code>SUBJECT_PORT = &quot;subject.port&quot;</code>（<code>:13</code>）。它们是容器键的唯一真相——键是字符串，跨包的装配代码与消费代码必须拼同一串；把字面量写进契约包是让拼错在 import 期而非运行期失败的唯一办法。</p>
-<p><code>ports/__init__.py</code> 只再导出 <code>CORE_PORT</code>、<code>SUBJECT_PORT</code> 与 8 个 <code>core.py</code> 符号（<code>:8</code>–<code>:31</code>）；<code>MessageOperations</code>、<code>DeliveriesOperations</code>、<code>AbilityOperations</code> 等其余分组必须从 <code>ghrah.protocol.ports.core</code> 直接取。门面刻意收窄，避免把「端口全貌」固化成一个稳定 API 面。</p>
+<p><code>CorePort</code> 本身是十个 <code>@property</code> 加一个 <code>aclose()</code>（<code>ports/core.py:431</code>–<code>:470</code>）：<strong>一个端口实例就是一个作用域</strong>，没有&quot;绑定视图&quot;这类方法；作用域 token 由装配层在构造时传入，调用方无从参数化（§4.5）。无作用域的全局读面——能力包目录、包详情、版本画像、MCP 探测、全局包分组——单独走 <code>CoreCatalogPort</code>（<code>ports/core.py:473</code>–<code>:511</code>）：它不打开数据库、不建单元，因此零项目时也可用。</p>
+<p><code>ports/keys.py</code> 有三个常量：<code>CORE_CATALOG = &quot;core.catalog&quot;</code>（<code>:10</code>）、<code>CORE_PORT = &quot;core.port&quot;</code>（<code>:13</code>）、<code>SUBJECT_PORT = &quot;subject.port&quot;</code>（<code>:16</code>）。它们是容器键的唯一真相——键是字符串，跨包的装配代码与消费代码必须拼同一串；把字面量写进契约包是让拼错在 import 期而非运行期失败的唯一办法。</p>
+<p><code>ports/__init__.py</code> 只再导出三个注入键与 9 个 <code>core.py</code> 符号（<code>:8</code>–<code>:33</code>，含 <code>CorePort</code> 与 <code>CoreCatalogPort</code>）；<code>MessageOperations</code>、<code>DeliveriesOperations</code>、<code>AbilityOperations</code> 等其余分组必须从 <code>ghrah.protocol.ports.core</code> 直接取。门面刻意收窄，避免把「端口全貌」固化成一个稳定 API 面。</p>
 <h4 id="323-views出参形状">3.2.3 <code>views/</code>：出参形状</h4>
 <p><code>views/common.py</code> 提供分页、长动作、空回执与 id 信封四类共用形状（134 行）：</p>
 <table>
@@ -881,11 +884,11 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <p><strong>① 提供方实现 Protocol，而不是定义 Protocol。</strong> <code>CoreFacade</code> 从契约包 import 端口签名（<code>ghrah-core/src/ghrah/core/api/facade.py:32</code> 起 <code>from ghrah.protocol.ports.core import ...</code>），Core 的依赖分层图把 <code>facade → runtime, protocol.ports</code> 写成硬约束（<code>ghrah-core/src/ghrah/core/api/__init__.py:14</code>），并在同一段里给出结论：</p>
 <blockquote><p>消费方只 import <code>ghrah.protocol.ports</code>；本包对它不可见。——<code>ghrah-core/src/ghrah/core/api/__init__.py:18</code></p></blockquote>
 <p><strong>② 消费方的业务代码里，提供方的名字一次都不出现。</strong> Subject 侧读 Core 数据只经端口：<code>units/ledger.py:17</code>–<code>:18</code> import <code>CorePort</code> 与 <code>CORE_PORT</code>，<code>:83</code> 用 <code>self._ctx.get(CORE_PORT, strict=False)</code> 取端口；<code>runtime/port_transport.py:21</code> import <code>CORE_PORT</code>，模块头写明「所有对『某个 Agent 的运行时操作』都转成 <code>CORE_PORT</code> 的能力调用」，返回值统一是协议视图的 <code>model_dump</code>，「与观察端/WS 契约同源，不再有第二套形状」（<code>:4</code>–<code>:12</code>）。</p>
-<p><strong>③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。</strong> 全仓 Subject 侧对 <code>ghrah.core</code> 的 import 只有两处，全部在函数体内：<code>units/core_cluster.py:282</code>（<code>from ghrah.core.wiring import build_core_port</code>）、<code>core_cluster/registry.py:472</code>；<code>core_cluster.py:283</code> 紧接着 import 的是协议包的 <code>CORE_PORT</code>。<code>core_cluster.py:280</code>–<code>:316</code> 就是「Core 能力端口的唯一装配点」：构造 <code>build_core_port(...)</code> 后 <code>ctx.provide(CORE_PORT, core_port)</code>。<strong>依赖声明存在（ 10  的  11  含  12 ），但 import 被压到装配层这一个人为窄口</strong>——这是本仓区分「可以依赖」与「可以 import」的实际做法。</p>
+<p><strong>③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。</strong> 全仓 Subject 侧对 <code>ghrah.core</code> 的 import 只有两处，全部在函数体内：<code>units/core_cluster.py:234</code>（<code>from ghrah.core.wiring import build_core_catalog, build_core_port</code>）、<code>core_cluster/registry.py:472</code>；<code>core_cluster.py:235</code> 紧接着 import 的是协议包的 <code>CORE_CATALOG</code> / <code>CORE_PORT</code>。<code>core_cluster.py:253</code>–<code>:282</code> 就是「Core 端口实例的唯一装配点」：<code>_make_port</code> 调 <code>build_core_port(...)</code>、<code>build_core_catalog(...)</code> 造目录端口，然后 <code>ctx.provide(CORE_PORT, ports)</code> / <code>ctx.provide(CORE_CATALOG, catalog)</code>。<strong>依赖声明存在（ 14  的  15  含  16 ），但 import 被压到装配层这一个人为窄口</strong>——这是本仓区分「可以依赖」与「可以 import」的实际做法。</p>
 <p><strong>④ 端口形状若住在提供方，消费方会被迫在 import 期拉起提供方。</strong> 反推一遍：<code>CorePort</code> 若定义在 <code>ghrah-core</code>，则 <code>units/ledger.py</code>（一个普通的读投影 Unit）在模块导入时就要 <code>import ghrah.core...</code>，于是「只读账本」这一段的 import 依赖会牵入整个 Core 装配面；<code>port_transport.py</code> 同理。而现在的形态下，<code>ledger.py</code>/<code>port_transport.py</code> 的 import 只有协议包与标准库，它们在只有 <code>pydantic</code> + <code>ghrah-plugin</code> 的环境里就能被导入与测试——这正是 <code>ghrah-protocol/pyproject.toml:9</code>–<code>:12</code> 依赖集合的意义，也解释了为什么 <code>ghrah-protocol</code> 的测试不依赖任何提供方（<code>tests/test_port_contract.py</code>、<code>tests/test_interface.py</code> 全程只用端口面类型）。</p>
 <p><strong>⑤ 契约包必须能自证形状，因此连出参都要自带一份。</strong> <code>views/core.py:398</code>–<code>:400</code> 的 <code>ContentReadResult</code> 是这条原则的显式代价：它与 <code>ghrah.ability.content.ContentReadResult</code> 字段一一对应，注释直说「契约包里必须有一份自己的形状，协议不得依赖 Core 的实现包」。同理 <code>payloads/plugin.py:33</code> 的 <code>PluginNegotiateResultPayload</code> 选择<strong>继承</strong>另一个契约包（<code>ghrah-plugin</code>）的模型而非复制字段——因为 <code>ghrah-plugin</code> 本身也是被多方共享的契约包，继承不引入对提供方的依赖。</p>
 <p><strong>⑥ 错误族的基类是最不能下沉到提供方的那一件。</strong> <code>ApiError</code> 若定义在 Core，Subject 的 <code>except ApiError</code> 就要求 Core 的模块在导入链上；<code>Problem</code> 的 <code>code</code> 会被消费方当作唯一分支判据（<code>problem.py:1</code>–<code>:8</code>），一旦两处各有一份 <code>ProblemCode</code>，码表漂移会表现为「明明 catch 到了却分不清类型」。<code>errors.py:7</code> 给出的解法是「基类共享、子类各自派生」：<code>CoreApiError</code> 可以有（<code>ghrah-core/src/ghrah/core/api/errors.py</code> 由 <code>__init__.py:24</code> 导出），但继承自契约包的 <code>ApiError</code>。</p>
-<p><strong>一处遗留的不一致：</strong> 注入键的字符串在同一仓库里出现两次字面量——<code>ports/keys.py:10</code> 的 <code>CORE_PORT = &quot;core.port&quot;</code>，以及 <code>ghrah-subject/src/ghrah/subject/runtime/service_keys.py:277</code>–<code>:278</code> 的 <code>CORE_PORT_SERVICE = SubjectServiceKey[Any](&quot;core.port&quot;)</code>（注释自陈「名字就是协议包的 <code>core.port</code>」）。后者没有 import 前者，因此键名一旦变更，两处需要人工同步。这是 SubjectServiceKey 与容器字符串键两套命名空间并存的直接后果，不是笔误。</p>
+<p><strong>一处遗留的不一致：</strong> 注入键的字符串在同一仓库里出现两次字面量——<code>ports/keys.py:10</code>/<code>:13</code> 的 <code>CORE_CATALOG = &quot;core.catalog&quot;</code> 与 <code>CORE_PORT = &quot;core.port&quot;</code>，以及 <code>ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278</code>–<code>:280</code> 的 <code>CORE_PORT_SERVICE</code> / <code>CORE_CATALOG_SERVICE</code>（注释自陈「名字就是协议包的 <code>core.port</code>」）。后者没有 import 前者，因此键名一旦变更，两处需要人工同步。这是 SubjectServiceKey 与容器字符串键两套命名空间并存的直接后果，不是笔误。</p>
 <p><strong>口径说明</strong>：本章的类数、条目数、文件数与快照数以 <code>ghrah-protocol/src</code>、<code>ghrah-observer-webui/packages/protocol/src</code> 的当前工作树为准；注册表条目数由运行时枚举实测（<code>len(COMMAND_PAYLOAD_MAP) == 84</code>、<code>len(EVENT_PAYLOAD_MAP) == 67</code>、<code>len(PAYLOAD_MAP) == 151</code>、<code>len(CommandType) == 101</code>、<code>len(EventType) == 69</code>、<code>len(payloads.__all__) == 164</code>），可用同一条命令复现：</p>
 <pre><code>uv run python -c &quot;from ghrah.protocol.envelope import PAYLOAD_MAP,COMMAND_PAYLOAD_MAP,EVENT_PAYLOAD_MAP; import ghrah.protocol.payloads as p; from ghrah.protocol import enums; print(len(COMMAND_PAYLOAD_MAP),len(EVENT_PAYLOAD_MAP),len(PAYLOAD_MAP),len(list(enums.CommandType)),len(list(enums.EventType)),len(p.__all__))&quot;</code></pre>
 <h2 id="4-模块接口端口跨模块唯一通道">4. 模块接口端口（跨模块唯一通道）</h2>
@@ -902,7 +905,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tr><td>分页</td><td>返回 <code>Page[T]</code></td><td>保留</td></tr>
 <tr><td>长动作</td><td>返回 <code>Operation</code></td><td>保留</td></tr>
 </tbody></table>
-<p>保留下来的不是传输细节，而是<strong>资源命名纪律</strong>：每条能力必须落到一个名词分组上，命名可预测（<code>nodes.get</code> 而不是 <code>getNodeById</code>），否则 50 条能力会退化成无法猜的 RPC 集合。</p>
+<p>保留下来的不是传输细节，而是<strong>资源命名纪律</strong>：每条能力必须落到一个名词分组上，命名可预测（<code>nodes.get</code> 而不是 <code>getNodeById</code>），否则 48 条作用域能力会退化成无法猜的 RPC 集合。</p>
 <h3 id="42-三个抽象与一次调用的四步">4.2 三个抽象与一次调用的四步</h3>
 <p>契约包用三个类型定义&quot;一条能力&quot;，与具体模块无关：</p>
 <table>
@@ -933,20 +936,21 @@ wiring       → 全部</code></pre>
 <table>
 <thead><tr><th>路径</th><th>职责</th></tr></thead>
 <tbody>
-<tr><td><code>core/read/chain.py</code></td><td>只读链库：<code>ChainReadStore</code>、<code>ChainDatabaseUnavailableError</code>、<code>DbPathResolver</code></td></tr>
-<tr><td><code>core/read/mailbox.py</code></td><td>只读信箱/投递：<code>MailboxReadStore</code> 与三类未找到异常</td></tr>
-<tr><td><code>core/read/ability.py</code></td><td>能力关系库读面：<code>AbilityReadStore</code>、<code>AbilityConflictError</code>、<code>AbilityUnavailableError</code></td></tr>
+<tr><td><code>core/read/chain.py</code></td><td>只读链库：<code>ChainReadStore(db_path)</code>、<code>ChainDatabaseUnavailableError</code></td></tr>
+<tr><td><code>core/read/mailbox.py</code></td><td>只读信箱/投递：<code>MailboxReadStore(db_path, scope_id)</code> 与三类未找到异常</td></tr>
+<tr><td><code>core/read/ability.py</code></td><td>能力关系库读面：<code>AbilityReadStore(*, db_path, scope_id=…)</code>、<code>AbilityConflictError</code>、<code>AbilityUnavailableError</code></td></tr>
 <tr><td><code>core/read/ability_catalog.py</code></td><td>能力包目录读面：<code>CatalogError</code>（<code>not_found</code> / <code>invalid_request</code> / <code>unavailable</code> 三值）</td></tr>
-<tr><td><code>core/api/interfaces.py</code></td><td><code>CORE_INTERFACES</code>：50 条能力声明</td></tr>
-<tr><td><code>core/api/handlers/</code></td><td>10 个处理器模块：<code>nodes</code>、<code>sessions</code>、<code>session_write</code>、<code>branches</code>、<code>mailbox</code>、<code>deliveries</code>、<code>manifests</code>、<code>abilities</code>、<code>agents</code>；<code>build_handlers(chain, mailbox, abilities, registry)</code> 汇总</td></tr>
-<tr><td><code>core/api/runtime.py</code></td><td><code>CoreRuntime(InterfaceRuntime)</code> + <code>build_runtime</code>：绑定 Core 的清单、翻译表、异常工厂</td></tr>
+<tr><td><code>core/api/interfaces.py</code></td><td><code>CORE_INTERFACES</code>：48 条作用域能力声明；<code>CORE_CATALOG_INTERFACES</code>：5 条目录能力声明</td></tr>
+<tr><td><code>core/api/handlers/</code></td><td>10 个处理器模块：<code>nodes</code>、<code>sessions</code>、<code>session_write</code>、<code>branches</code>、<code>mailbox</code>、<code>deliveries</code>、<code>manifests</code>、<code>abilities</code>、<code>agents</code>、<code>messages</code>；<code>build_handlers(chain, mailbox, abilities, registry)</code> 汇总作用域能力，<code>build_catalog_handlers(abilities)</code> 汇总目录能力</td></tr>
+<tr><td><code>core/api/runtime.py</code></td><td><code>CoreRuntime(InterfaceRuntime)</code> / <code>CoreCatalogRuntime</code> + <code>build_runtime</code> / <code>build_catalog_runtime</code>：各自绑定清单、翻译表、异常工厂</td></tr>
 <tr><td><code>core/api/errors.py</code></td><td><code>CoreApiError</code> + <code>translate()</code> 翻译表</td></tr>
-<tr><td><code>core/api/facade.py</code></td><td><code>CoreFacade</code> 与 10 个分组实现类；<code>_call</code> / <code>_call_global</code> / <code>project</code> / <code>aclose</code></td></tr>
-<tr><td><code>core/wiring.py</code></td><td><code>build_core_port(...)</code>：装配根唯一入口</td></tr>
+<tr><td><code>core/api/facade.py</code></td><td><code>CoreFacade</code>（作用域端口实现）与 10 个分组实现类；<code>_call</code> / <code>aclose</code></td></tr>
+<tr><td><code>core/api/catalog.py</code></td><td><code>CoreCatalog</code>（<code>CoreCatalogPort</code> 实现，无作用域）；<code>_call</code> / <code>aclose</code></td></tr>
+<tr><td><code>core/wiring.py</code></td><td><code>build_core_port(...)</code>（作用域端口）与 <code>build_core_catalog(...)</code>（目录端口）：装配层的两个唯一入口</td></tr>
 </tbody></table>
-<p><strong>读面与集群生命周期解耦</strong>：<code>core/read/*</code> 只按 <code>resolve_db_path(project_id)</code> 打开只读连接，不需要先挂载 <code>CoreUnit</code>。因此读取一个已停止 Agent 的历史不会复活项目。带运行时状态的能力（<code>agents.runtime</code>、<code>abilities.tree</code>、<code>agents.tools</code>）是例外：它们经 <code>RuntimeRegistry</code> 读活跃单元，离线时按各自视图返回 <code>offline</code> 或抛 <code>NOT_FOUND</code>。</p>
+<p><strong>读面与集群生命周期解耦，作用域在构造期固定</strong>：三个读 store 在 <code>build_core_port</code> 里按该作用域的数据根（<code>db_path</code>）与不透明 token（<code>scope_id</code>）直接构造，不需要先挂载 <code>CoreUnit</code>。因此读取一个已停止 Agent 的历史不会复活项目；也因为作用域是构造参数而不是方法参数，调用方无法在两次调用之间切换作用域。带运行时状态的能力（<code>agents.runtime</code>、<code>abilities.tree</code>、<code>agents.tools</code>）是例外：它们经 <code>RuntimeRegistry</code> 读活跃单元，离线时按各自视图返回 <code>offline</code> 或抛 <code>NOT_FOUND</code>。</p>
 <h3 id="44-能力面规模">4.4 能力面规模</h3>
-<p>口径：<code>len(CORE_INTERFACES) == 50</code>，分组数等于 <code>CorePort</code> 上的属性数，均为 10。</p>
+<p>口径：<code>len(CORE_INTERFACES) == 48</code>（作用域能力），<code>len(CORE_CATALOG_INTERFACES) == 5</code>（目录能力）；作用域分组数等于 <code>CorePort</code> 上的属性数（10），目录能力不分组、直接挂在 <code>CoreCatalogPort</code> 的方法上。</p>
 <table>
 <thead><tr><th>分组</th><th>条数</th><th>说明</th></tr></thead>
 <tbody>
@@ -955,62 +959,89 @@ wiring       → 全部</code></pre>
 <tr><td><code>branches</code></td><td>5</td><td>列表 / 分叉 / 激活 / 归档 / 删除</td></tr>
 <tr><td><code>mailbox</code></td><td>6</td><td>概览 / 分页列表 / 单条 / 外部发布 / 通知发布 / Room 投影补齐</td></tr>
 <tr><td><code>deliveries</code></td><td>3</td><td>读取 / 重试 / 恢复</td></tr>
-<tr><td><code>abilities</code></td><td>13</td><td>树 / 变更流 / 管理总览 / 包目录 / 包详情 / 包分组 / 实例 / 成员内容 / 可用性 / 授予 / 撤销 / 绑工具 / 解绑工具</td></tr>
+<tr><td><code>abilities</code></td><td>11</td><td>树 / 变更流 / 管理总览 / 包分组 / 实例 / 成员内容 / 可用性 / 授予 / 撤销 / 绑工具 / 解绑工具</td></tr>
 <tr><td><code>agents</code></td><td>9</td><td>创建 / 按模板创建 / 读取 / 列表 / 删除 / 运行时 / 工具 / 压缩 / 重置</td></tr>
 <tr><td><code>messages</code></td><td>3</td><td>发送 / 广播 / 委派</td></tr>
 <tr><td><code>rooms</code></td><td>1</td><td>投影修复</td></tr>
 <tr><td><code>manifests</code></td><td>1</td><td>manifest 解析</td></tr>
 </tbody></table>
-<p>登记表本身是唯一权威：<code>ghrah-core/src/ghrah/core/api/interfaces.py</code>。名字规律是 <code>&lt;分组&gt;.&lt;动作&gt;</code>，与 <code>CorePort</code> 的属性名、方法名一一对应。</p>
-<h3 id="45-作用域模型">4.5 作用域模型</h3>
-<p>装配根只构造<strong>一个未绑定</strong>的 <code>CoreFacade</code>；消费方按项目取绑定视图：</p>
-<pre><code>port = ctx.get(CORE_PORT)  # 未绑定
-scoped = port.project(project_id)  # 绑定视图（轻量，共享收敛点与连接池）
-catalog = await scoped.sessions.catalog(agent_id=agent_id)</code></pre>
-<p>绑定视图是 <code>CoreFacade(runtime=..., project_id=..., closer=...)</code>——共享同一个 <code>CoreRuntime</code> 与同一组只读连接，只多记一个字符串（<code>ghrah-core/src/ghrah/core/api/facade.py:183</code>）。因此不存在&quot;一个进程只能有一个项目&quot;的隐含约束。</p>
-<p><code>CorePort</code> 的 50 个方法签名里<strong>都没有  1 </strong>，注入点在唯一的地方：</p>
+<p>目录能力（<code>CORE_CATALOG_INTERFACES</code>，无作用域，<code>CoreCatalogPort</code> 的五个方法）：</p>
+<table>
+<thead><tr><th>接口</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>abilities.packages</code></td><td>已安装能力包目录</td></tr>
+<tr><td><code>abilities.package_detail</code></td><td>单个能力包详情</td></tr>
+<tr><td><code>abilities.package_version_profile</code></td><td>单个能力包版本的画像</td></tr>
+<tr><td><code>abilities.package_mcp_probe</code></td><td>只读探测该版本声明的 MCP 服务</td></tr>
+<tr><td><code>abilities.package_groups</code></td><td>全局包分组（不绑定项目）</td></tr>
+</tbody></table>
+<p>登记表本身是唯一权威：<code>ghrah-core/src/ghrah/core/api/interfaces.py</code>（<code>CORE_INTERFACES</code> 在 <code>:543</code>，<code>CORE_CATALOG_INTERFACES</code> 在 <code>:612</code>）。名字规律是 <code>&lt;分组&gt;.&lt;动作&gt;</code>；作用域接口与 <code>CorePort</code> 的属性名、方法名一一对应，目录接口与 <code>CoreCatalogPort</code> 的方法一一对应。<code>abilities.package_groups</code> 在两份清单里各有一条：作用域形态注入项目 token，目录形态是全局读面（见 §4.5）。</p>
+<h3 id="45-作用域模型一个端口实例就是一个作用域">4.5 作用域模型：一个端口实例就是一个作用域</h3>
+<p>装配层（Subject）为每个 Project 构造并缓存一个 <code>CorePort</code> 实例；<strong>端口实例本身就携带作用域</strong>，不存在&quot;未绑定端口 + 绑定视图&quot;两步：</p>
+<pre><code>from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
+
+ports = ctx.get(CORE_PORT)                # CorePorts：按项目懒建/缓存端口实例
+port = ports.for_project(project_id)      # 该项目的端口实例（无则构造）
+catalog = await port.sessions.catalog(agent_id=agent_id)
+packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面</code></pre>
+<p><code>CoreFacade(*, runtime, scope_id, closer)</code>（<code>ghrah-core/src/ghrah/core/api/facade.py:83</code>、<code>:95</code>）在构造时固定作用域 token；门面里的 <code>_call</code> 只做「装箱 → 转交」：</p>
 <pre><code>async def _call(self, capability: str, **kwargs: Any) -&gt; dict[str, Any]:
-    if self._project_id is None:
-        raise CoreApiError(
-            Problem.make(
-                ProblemCode.FAILED_PRECONDITION,
-                capability=capability,
-                detail=&quot;capability requires a project-scoped port: call project(id) first&quot;,
-            )
-        )
-    return await self._runtime.invoke(capability, {&quot;project_id&quot;: self._project_id, **kwargs})</code></pre>
-<p>判据：漏传不可能（不是参数）；越权参数化不可能（只有一个来源）；忘了 <code>project()</code> 会得到 <code>FAILED_PRECONDITION</code> 且 detail 直接说明怎么修。</p>
-<p>无项目维度的能力（<code>abilities.packages</code>、<code>abilities.package_detail</code>）走 <code>_call_global</code>，不注入 <code>project_id</code>（<code>ghrah-core/src/ghrah/core/api/facade.py:224</code>）。</p>
+    return await self._runtime.invoke(capability, dict(kwargs))</code></pre>
+<p>作用域 token 在更下层生效：<code>RuntimeRegistry</code> 以 <code>scope_id</code> 构造；命令进入 <code>CoreUnit</code> 时在唯一入口补齐内部命令载荷的 <code>project_id</code>（<code>ghrah-core/src/ghrah/core/unit.py:697</code>–<code>:719</code>），读面则直接用构造期固定的 <code>db_path</code> / <code>scope_id</code>。</p>
+<p>判据因此从&quot;调用方别忘了传&quot;变成&quot;调用方没有地方传&quot;：</p>
+<ul>
+<li>漏传不可能——作用域不是方法参数；</li>
+<li>越权参数化不可能——一个实例只有一个作用域，跨作用域调用必须先取另一个实例；</li>
+<li>不存在&quot;忘了调 <code>project()</code>&quot;这种失败态，因为不存在未绑定实例。</li>
+</ul>
+<p>全局读面（能力包目录等 5 项）拆成独立的 <code>CoreCatalogPort</code>（实现 <code>ghrah-core/src/ghrah/core/api/catalog.py:32</code>）：没有作用域、不打开数据库、不建单元，因此<strong>零项目时也可用</strong>。同名接口 <code>abilities.package_groups</code> 在目录端口上是全局形态，在作用域端口上是项目形态。</p>
 <h3 id="46-装配与生命周期">4.6 装配与生命周期</h3>
-<pre><code>def build_core_port(
+<p>装配层有<strong>两个</strong>构造入口，对应两种端口：</p>
+<pre><code>def build_core_port(          # 作用域端口：每个 Project 一个实例
     *,
-    resolve_db_path: DbPathResolver,
+    scope_id: str,
+    db_path: str,
     config_factory: ConfigFactory | None = None,
     unit_factory: UnitFactory | None = None,
     manager_factory: ManagerFactory | None = None,
     manifest_resolver: ManifestResolver | None = None,
     install_root: str | None = None,
+    agentconf_db_path: str | None = None,
+    grant_policy: Any = None,
     config_hook: ConfigHook | None = None,
-) -&gt; CoreFacade: ...</code></pre>
-<p>组装顺序（<code>ghrah-core/src/ghrah/core/wiring.py:111</code>）：</p>
+    emit: Callable[[str, dict[str, Any]], None] | None = None,
+    serial: Callable[..., Awaitable[Any]] | None = None,
+) -&gt; CoreFacade: ...
+
+
+def build_core_catalog(       # 目录端口：无作用域，进程内一个
+    *,
+    install_root: str | None = None,
+    agentconf_db_path: str | None = None,
+    grant_policy: Any = None,
+) -&gt; CoreCatalog: ...</code></pre>
+<p>作用域端口的组装顺序（<code>ghrah-core/src/ghrah/core/wiring.py:133</code>–<code>:162</code>）：</p>
 <ol>
-<li><code>ChainReadStore(resolve_db_path)</code> —— 链库只读；</li>
-<li><code>MailboxReadStore(resolve_db_path)</code> —— 信箱/投递只读；</li>
-<li><code>RuntimeRegistry(config_factory=…, manager_factory=…, manifest_resolver=…, config_hook=…)</code> —— 活跃单元注册表，也是 <code>agents.*</code> / <code>abilities.tree</code> 的运行时真相；</li>
-<li><code>AbilityReadStore(resolve_db_path, resolve_run=registry.run_id_for, resolve_tools=registry.tools_for, install_root=…)</code>；</li>
+<li><code>ChainReadStore(db_path)</code> —— 链库只读；</li>
+<li><code>MailboxReadStore(db_path, scope_id)</code> —— 信箱/投递只读；</li>
+<li><code>RuntimeRegistry(scope_id=…, config_factory=…, manager_factory=…, manifest_resolver=…, config_hook=…)</code> —— 单作用域活跃单元注册表，也是 <code>agents.*</code> / <code>abilities.tree</code> 的运行时真相；</li>
+<li><code>AbilityReadStore(db_path=…, scope_id=…, resolve_run=registry.run_id_for, resolve_tools=registry.tools_for, install_root=…)</code>；</li>
 <li><code>registry.set_ability_store_factory(...)</code> —— 授权关系库由 Core 自持，<code>reclaim_stale=True</code> 回收上一进程异常退出留下的 pending 占位；</li>
-<li><code>CoreRuntime(build_handlers(chain, mailbox, abilities, registry))</code> —— 此处校验 50 条能力与处理器齐全；</li>
-<li><code>CoreFacade(runtime=…, closer=lambda: _close_all(chain.aclose, abilities.aclose, registry.aclose))</code>。</li>
+<li><code>CoreRuntime(build_handlers(chain, mailbox, abilities, registry))</code> —— 此处校验 48 条作用域能力与处理器齐全；</li>
+<li><code>CoreFacade(runtime=…, scope_id=…, closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose))</code>。</li>
 </ol>
-<p>注入与关闭：</p>
-<pre><code>port = build_core_port(resolve_db_path=..., config_factory=...)
-ctx.provide(CORE_PORT, port)  # 键来自 ghrah.protocol.ports.keys
+<p>目录端口只需三步：<code>AbilityReadStore(db_path=Path(&quot;&quot;), scope_id=None, install_root=…)</code>（<strong>不打开数据库</strong>）→ <code>CoreCatalogRuntime(build_catalog_handlers(abilities))</code> → <code>CoreCatalog(runtime=…, closer=…</code>）。</p>
+<p>注入与关闭（<code>ghrah-subject</code> 装配侧）：</p>
+<pre><code>self._ports = CorePorts(_make_port)        # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
+self._catalog = build_core_catalog(install_root=..., agentconf_db_path=...)
+ctx.provide(CORE_PORT, self._ports)        # 键来自 ghrah.protocol.ports.keys
+ctx.provide(CORE_CATALOG, self._catalog)
 ...
-await port.aclose()  # 与创建逆序；幂等</code></pre>
+await port.aclose()                        # 单个项目端口：与创建逆序；幂等</code></pre>
 <ul>
-<li><code>CORE_PORT</code> 是字符串常量 <code>&quot;core.port&quot;</code>，两侧共用同一字面量（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>）；</li>
-<li><code>CoreFacade.aclose()</code> 幂等；关闭任一绑定视图等价于关闭共享连接池，连接池可在下次调用时懒重开；</li>
-<li>端口对象<strong>不做进程级全局单例</strong>：由装配根创建、注入、关闭。这样测试可替换、多应用实例不串味、连接有明确负责人。</li>
+<li><code>CORE_CATALOG</code> / <code>CORE_PORT</code> 是字符串常量 <code>&quot;core.catalog&quot;</code> / <code>&quot;core.port&quot;</code>，两侧共用同一字面量（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>、<code>:13</code>）；</li>
+<li><code>CoreFacade.aclose()</code> 幂等；关闭后该实例的读连接随之释放，再次使用须由装配层重建实例（<code>CorePorts.for_project</code> 会新建）；</li>
+<li>端口对象<strong>不做进程级全局单例</strong>：作用域端口由装配层按项目创建、缓存、关闭；目录端口进程内一个。这样测试可替换、多应用实例不串味、连接有明确负责人。</li>
 </ul>
 <p><strong>部署设置不在 Core 里读</strong>：HITL 策略、工作区根、能力安装目录由 <code>config_factory</code> / <code>config_hook</code> / <code>install_root</code> 注入。Core 不读环境变量、不猜配置。</p>
 <h3 id="47-错误族与边界闸门">4.7 错误族与边界闸门</h3>
@@ -1026,11 +1057,14 @@ class CoreApiError(ApiError): ...  # ghrah-core/src/ghrah/core/api/errors.py:36<
 <h3 id="48-契约与实现为什么必须分包">4.8 契约与实现为什么必须分包</h3>
 <p>如果 <code>CorePort</code> 定义在 <code>ghrah-core</code> 里，Subject 就必须 <code>from ghrah.core... import CorePort</code>——边界当场失效。所以端口协议、视图、错误基类、注入键只能住在第三方包；模块只提供实现。这条是结构约束，不是风格偏好。</p>
 <h3 id="49-subject-侧怎么接">4.9 Subject 侧怎么接</h3>
-<pre><code>from ghrah.protocol.ports.keys import CORE_PORT
+<p>Subject 只认协议包的键与端口协议，不 import Core：</p>
+<pre><code>from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units/ledger.py:83</code></pre>
-<p><code>CoreClusterUnit</code> 在 mount 时构造并注入端口，再把自己的 transport 提供给注册表（<code>ghrah-subject/src/ghrah/subject/units/core_cluster.py:283</code> 起）。因此端口生命周期跟随 <code>CoreClusterUnit</code>：单元在则端口在，单元走则端口随之关闭。</p>
-<p><code>ghrah-subject/src/ghrah/subject/runtime/port_transport.py</code> 把历史的 cluster 命令面适配到端口：<code>PortClusterTransport</code> 实现 <code>CoreClusterRegistryService</code>、维护 <code>cluster_id → project_id</code> 映射、把命令转成能力调用；<code>PortMailbox</code> 是只实现实际用到的成员的最小替身（不给旁路留口子）；<code>build_port_transport(ctx)</code> 从 ctx 取端口构造传输层。</p>
+ports = ctx.get(CORE_PORT, strict=False)     # ghrah-subject/src/ghrah/subject/units/ledger.py:83
+port = ports.for_project(project_id)         # -&gt; CorePort（按项目懒建/缓存）
+catalog = ctx.get(CORE_CATALOG)              # -&gt; CoreCatalogPort（无作用域）</code></pre>
+<p><code>ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28</code> 的 <code>CorePorts</code> 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，<code>for_project</code> 懒建、<code>close_project</code> 关闭并移除、<code>aclose</code> 关闭全部。<code>CoreClusterUnit</code> 在 <code>init</code> 里构造 <code>CorePorts(_make_port)</code>（<code>units/core_cluster.py:253</code>–<code>:272</code>）与目录端口，并 provide 到 <code>CORE_PORT</code> / <code>CORE_CATALOG</code>（<code>:277</code>–<code>:278</code>）；端口生命周期因此跟随 <code>CoreClusterUnit</code>。</p>
+<p><code>ghrah-subject/src/ghrah/subject/runtime/port_transport.py</code> 把历史的 cluster 命令面适配到端口：<code>PortClusterTransport</code> 实现 <code>CoreClusterRegistryService</code>、维护 <code>cluster_id → project_id</code> 映射、把命令转成能力调用（<code>port_for</code> 取端口实例，<code>:497</code>）；<code>PortMailbox</code> 是只实现实际用到的成员的最小替身（不给旁路留口子）；<code>build_port_transport(ctx)</code> 从 ctx 取注册表构造传输层（<code>:563</code>）。</p>
 <h2 id="5-subject-运行时效果半区">5. Subject 运行时（效果半区）</h2>
 <p>Subject 是<strong>效果半区</strong>：工作区、沙箱命令、任务、项目、Room、清单库、恢复对账、观察端投递、链读侧，以及唯一持有 Ouroboros <code>Context</code> 的进程。它不做 Agent 生命周期决策，只把「运行事实」的读写转成 Core 能力调用（<code>ghrah-subject/src/ghrah/subject/runtime/port_transport.py:1-13</code>）。</p>
 <h3 id="51-单元契约unit">5.1 单元契约（<code>unit/</code>）</h3>
@@ -1048,7 +1082,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <ol>
 <li><strong>生命周期钩子默认空实现且必须幂等</strong>（<code>unit/base.py:107-114</code> 的 docstring 明写 idempotent）。挂载桥的 disposer 只调 <code>stop()</code>（<code>runtime/ouroboros_bridge.py:112-115</code>）。</li>
 <li><strong> 0  的默认回执是失败</strong>（<code>unit/base.py:116-127</code>）：未覆写该命令的单元不会静默返回成功，而是 <code>{&quot;success&quot;: False, &quot;error&quot;: &quot;Command &#x27;…&#x27; is not implemented by unit &#x27;…&#x27;&quot;}</code>。</li>
-<li><strong> 0  只是声明面</strong>：挂载桥的 <code>inject</code> 只从 <code>meta.requires</code> 派生（<code>runtime/ouroboros_bridge.py:96-97</code>），<code>provides</code> 不参与激活判定。因此实际 <code>ctx.provide</code> 与声明可以不一致，例如 <code>taskstore</code> 声明为空却在 <code>init</code> 里 provide 两个键（<code>units/taskstore.py:70-73</code> 与 <code>:108-109</code>），<code>core_cluster_registry</code> 声明两个键却额外 provide 了 <code>CORE_PORT</code>（<code>units/core_cluster.py:180-185</code> 与 <code>:316</code>）。</li>
+<li><strong> 0  只是声明面</strong>：挂载桥的 <code>inject</code> 只从 <code>meta.requires</code> 派生（<code>runtime/ouroboros_bridge.py:96-97</code>），<code>provides</code> 不参与激活判定。因此实际 <code>ctx.provide</code> 与声明可以不一致，例如 <code>taskstore</code> 声明为空却在 <code>init</code> 里 provide 两个键（<code>units/taskstore.py:70-73</code> 与 <code>:108-109</code>）；<code>core_cluster_registry</code> 声明 <code>CORE_CLUSTER_REGISTRY</code>/<code>CORE_PORT</code>/<code>CORE_CATALOG</code> 三键并与实际 provide 一致（<code>units/core_cluster.py:152-155</code> 与 <code>:277-282</code>）。</li>
 <li><strong> 0  在真实分发路径上是占位</strong>：<code>_register_routes</code> 固定传 <code>CommandContext.internal()</code>（<code>runtime/ouroboros_bridge.py:146</code>），因为 Ouroboros listener 是单参签名；<code>request_id</code> / <code>session_id</code> 改由适配层合并进 payload（<code>units/websocket_observer_endpoint.py:56-68</code>）。</li>
 </ol>
 <h3 id="52-builtin-单元清单与职责">5.2 builtin 单元清单与职责</h3>
@@ -1065,7 +1099,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <tr><td>7</td><td><code>desired_state</code></td><td><code>units/recovery.py:34-78</code></td><td>0</td><td><code>DESIRED_STATE_STORE</code></td><td>—</td></tr>
 <tr><td>8</td><td><code>shipped_abilities</code></td><td><code>units/shipped_abilities.py</code></td><td>0</td><td>—</td><td>—</td></tr>
 <tr><td>9</td><td><code>websocket_observer_endpoint</code></td><td><code>units/websocket_observer_endpoint.py</code></td><td>0</td><td><code>OBSERVER_ENDPOINT</code>、<code>OBSERVER_EVENT_BUS</code></td><td>—</td></tr>
-<tr><td>10</td><td><code>core_cluster_registry</code></td><td><code>units/core_cluster.py</code></td><td>21</td><td><code>CORE_CLUSTER_REGISTRY</code>、<code>ABILITY_ACCESS</code>（+<code>CORE_PORT</code>）</td><td><code>MANIFEST_STORE</code>、<code>WORKSPACE_SERVICE</code>、<code>SANDBOX_EXECUTOR</code></td></tr>
+<tr><td>10</td><td><code>core_cluster_registry</code></td><td><code>units/core_cluster.py</code></td><td>21</td><td><code>CORE_CLUSTER_REGISTRY</code>、<code>CORE_PORT</code>、<code>CORE_CATALOG</code></td><td><code>MANIFEST_STORE</code>、<code>WORKSPACE_SERVICE</code>、<code>SANDBOX_EXECUTOR</code></td></tr>
 <tr><td>11</td><td><code>project</code></td><td><code>units/project.py</code></td><td>18</td><td><code>PROJECT_MANAGER</code>、<code>PROJECT_STORE</code></td><td>6 项（<code>units/project.py</code> <code>UnitMeta</code>）</td></tr>
 <tr><td>12</td><td><code>ability_control</code></td><td><code>units/ability_control.py</code></td><td>0</td><td>—</td><td>5 项（<code>:538-550</code>）</td></tr>
 <tr><td>13</td><td><code>agent_control</code></td><td><code>units/agent_control.py</code></td><td>0</td><td>—</td><td>5 项（<code>:504-516</code>）</td></tr>
@@ -1077,18 +1111,18 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <p><code>coexistence</code> = 前 7 个（其中 <code>taskstore</code> 由 <code>config.taskstore.enabled</code> 控制，<code>units/__init__.py:78-79</code>；<code>room_filter</code> 只在 <code>full</code> 分支内挂载，另受 <code>config.room_filter.enabled</code> 控制，<code>:118-119</code>）。命令数口径：以 <code>SubjectConfig()</code> 默认值构造 17 个单元实例，对 <code>meta.routes.commands ∪ meta.routes.long_running_commands</code> 计长度（<code>long_running_commands</code> 当前全部为空）。</p>
 <h4 id="core_clusterunitscore_clusterpy"><code>core_cluster</code>（<code>units/core_cluster.py</code>）</h4>
 <ul>
-<li>职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。<code>init</code> 里构造 <code>PortClusterTransport</code> 并以 <code>CORE_CLUSTER_REGISTRY</code> 键 provide（<code>:319-322</code>），同时构造 Core 端口并 provide 到 <code>CORE_PORT</code>（<code>:311-316</code>）。</li>
+<li>职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。<code>init</code> 里构造 <code>CorePorts(_make_port)</code>（按项目懒建端口实例）与无作用域目录端口，分别 provide 到 <code>CORE_PORT</code> / <code>CORE_CATALOG</code>（<code>:277</code>–<code>:278</code>），再构造 <code>PortClusterTransport</code> 并 provide 到 <code>CORE_CLUSTER_REGISTRY</code>（<code>:282</code>）。</li>
 <li>21 条命令 = <code>_PROJECT_AGENT_COMMANDS</code>（<code>:46-70</code>），是从 Subject 到 Core 的<strong>唯一 Agent 运行命令面</strong>。</li>
 <li>三道守卫，顺序固定：<code>register_ability</code> / <code>unregister_ability</code> 直接拒（<code>:347-353</code>，指向授权关系库）→ 命令名白名单（<code>:359-364</code>）→ <code>_project()</code> 校验项目存在/未归档/ACTIVE（<code>:417-440</code>）。<code>_RUNTIME_REVIVING_COMMANDS</code>（<code>:101-118</code>）要求项目处于 <code>ACTIVE</code>，防止一条消息惰性复活 stopped 项目；<code>_NO_MOUNT_COMMANDS</code>（<code>:122</code>，含 <code>get_agent_info</code> / <code>session_list</code> / <code>terminate_agent</code>）在无运行实例时走免挂载回执（<code>:384-385</code>、<code>:442-470</code>）。</li>
 <li>命令到端口的落地：<code>handle.dispatch(command, core_payload)</code>（<code>:397</code>），<code>PortClusterTransport</code> 里是一张「命令名 → 能力调用」的显式映射表（<code>runtime/port_transport.py:305-411</code>）。</li>
 <li><code>_spawn</code> 自带乐观锁重试（最多 3 次，<code>:508-538</code>），并把 <code>project_add_agent</code> 的回执归一成 <code>name</code>/<code>agent_id</code>/<code>runtime_pending</code>/<code>runtime_error</code>。</li>
-<li><code>start()</code> 预热项目定位符（<code>:324-333</code>），因为 Core 侧库路径由 locator 推导。</li>
+<li>每条命令分发前先登记项目定位符（<code>:327-333</code>）：Core 侧数据根由 locator 推导，端口实例懒建时要能解析——因此即使单元未挂载，读命令也能取到端口。</li>
 </ul>
 <h4 id="ledgerunitsledgerpy"><code>ledger</code>（<code>units/ledger.py</code>）</h4>
 <ul>
 <li>职责：ActionChain 读侧投影，<strong>只是 Core 端口的调用方</strong>，自己不发布任何服务（<code>provides=frozenset()</code>，<code>:40-45</code>），避免出现绕过端口的第二条读路径。</li>
 <li>只有 1 条命令 <code>get_chain_history</code>（<code>units/_commands.py:21</code> ← <code>ghrah-protocol/src/ghrah/protocol/routing.py:137-141</code>）。</li>
-<li>端口按项目懒取并缓存（<code>_port_for_project</code>，<code>:62-88</code>）；端口缺失抛 <code>core_port_unavailable</code>，项目已冻结抛 <code>resource_archived</code>。</li>
+<li>端口经装配层注册表取（<code>_port_for_project</code> → <code>CorePorts.for_project</code>，<code>:62-88</code>）；注册表缺失抛 <code>core_port_unavailable</code>，项目已冻结抛 <code>resource_archived</code>。</li>
 <li>读前把显示名解析为稳定 <code>agent_id</code> 并校验归属（<code>_resolve_persistence_key</code>，<code>:158-184</code>）：项目内匹配数必须为 1 且 <code>name</code> 一致，否则 <code>agent_project_mismatch</code> / <code>agent_identity_mismatch</code>。</li>
 <li>会话不存在（<code>ProblemCode.NOT_FOUND</code>）按空历史返回，其它错误上抛（<code>:135-141</code>）。</li>
 </ul>
@@ -1105,7 +1139,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 </ul>
 <h4 id="ability_controlunitsability_controlpy"><code>ability_control</code>（<code>units/ability_control.py</code>）</h4>
 <ul>
-<li>职责：能力域管理面的 <strong>HTTP 形态适配</strong>——不含业务逻辑，全部转 Core 能力端口（<code>:119-131</code> 的 docstring 与 <code>_port</code>）。因此 <code>RouteSpec()</code> 为空：它不新增任何 WS 命令。</li>
+<li>职责：能力域管理面的 <strong>HTTP 形态适配</strong>——不含业务逻辑，全部转 Core 能力端口（<code>:119-131</code> 的 docstring 与 <code>_port</code>）；四个全局目录端点（包目录 / 包详情 / 版本画像 / MCP 探测）走无作用域的 <code>_catalog()</code>（<code>:190</code>）。因此 <code>RouteSpec()</code> 为空：它不新增任何 WS 命令。</li>
 <li>挂载方式是把 <code>APIRouter(prefix=&quot;/api/v1&quot;)</code> 加到观察端持有的 FastAPI app 上（<code>:562-591</code>），并注册错误处理器与 CORS。</li>
 <li>鉴权：回环地址放行，否则要求 <code>Authorization: Bearer &lt;observer_http_api_token&gt;</code> 且用 <code>hmac.compare_digest</code> 比较（<code>:101-116</code>）。</li>
 <li>端点可用性分两级：<code>observer_http_api_enabled</code> 总开关，<code>ability_source == &quot;builtin&quot;</code> 才开目录/实例读面（<code>:133-152</code>）；<code>/abilities/status</code> 永远可达（<code>:205-230</code>）。</li>
@@ -1354,16 +1388,17 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 </tbody></table>
 <p><code>UnitContext</code>（<code>units/context.py:18-78</code>）是托管 CoreUnit 用的最小上下文：<code>request_id</code>、<code>emit</code>（先落内存队列）、<code>provide</code> / <code>get</code>（字典）、<code>drain_events</code>。它<strong>没有  7 </strong>，因此经它托管的 CoreUnit 无法向 Subject 反向派发命令——反向通道只在 Ouroboros 宿主下成立（见 §6.5）。</p>
 <blockquote><p><code>ghrah-core/src/ghrah/core/units/</code> 下的实际模块只有 <code>context.py</code>、<code>registry.py</code>、<code>__init__.py</code>；<code>reg_frame.py</code> 不存在（未核实）。</p></blockquote>
-<h3 id="63-apicorefacade-与能力面单一端口">6.3 <code>api/</code>：<code>CoreFacade</code> 与能力面（单一端口）</h3>
-<p><code>CoreFacade</code> 是 <code>CorePort</code> 的唯一实现（<code>api/facade.py:89</code>），门面刻意做薄：装箱 → 转交 → 建模型，不含业务判断、不碰存储、不决定错误语义（<code>:4-8</code>）。</p>
+<h3 id="63-apicorefacadecorecatalog-与能力面两种端口">6.3 <code>api/</code>：<code>CoreFacade</code>、<code>CoreCatalog</code> 与能力面（两种端口）</h3>
+<p><code>CoreFacade</code> 是 <code>CorePort</code> 的唯一实现（<code>api/facade.py:83</code>），门面刻意做薄：装箱 → 转交 → 建模型，不含业务判断、不碰存储、不决定错误语义（<code>:4-8</code>）。</p>
 <ul>
-<li>10 个分组属性：<code>nodes</code> / <code>sessions</code> / <code>branches</code> / <code>mailbox</code> / <code>deliveries</code> / <code>rooms</code> / <code>manifests</code> / <code>abilities</code> / <code>agents</code> / <code>messages</code>（<code>:121-169</code>）。</li>
-<li><code>project(project_id)</code> 返回绑定视图，共享同一收敛点与连接池，只多记一个字符串（<code>:171-187</code>）；<code>_call</code> 在这一层唯一注入 <code>project_id</code>（<code>:198-222</code>）；无项目维度的能力走 <code>_call_global</code>（<code>:224-226</code>）。</li>
-<li>接口清单 <code>CORE_INTERFACES</code>（<code>api/interfaces.py:564</code>）：实测 <strong>50</strong> 条，分组分布 <code>abilities 13 / agents 9 / sessions 8 / mailbox 6 / branches 5 / deliveries 3 / messages 3 / nodes 1 / rooms 1 / manifests 1</code>。</li>
-<li>收敛点 <code>api/runtime.py:18-31</code> 的 <code>CoreRuntime(InterfaceRuntime)</code> 在构造时校验「清单 == 处理器集合」；处理器由 <code>api/handlers/__init__.py:32-60</code> 的 <code>build_handlers(chain, mailbox, abilities, registry)</code> 汇总。</li>
-<li>装配根 <code>build_core_port(...)</code>（<code>wiring.py:111-159</code>）按固定顺序组装：<code>ChainReadStore</code> → <code>MailboxReadStore</code> → <code>RuntimeRegistry</code> → <code>AbilityReadStore(resolve_run=registry.run_id_for, resolve_tools=registry.tools_for)</code> → <code>set_ability_store_factory</code> → <code>CoreRuntime(build_handlers(...))</code> → <code>CoreFacade(closer=...)</code>。</li>
+<li>10 个分组属性：<code>nodes</code> / <code>sessions</code> / <code>branches</code> / <code>mailbox</code> / <code>deliveries</code> / <code>rooms</code> / <code>manifests</code> / <code>abilities</code> / <code>agents</code> / <code>messages</code>（<code>:121-167</code>）。</li>
+<li>构造入参固定作用域（<code>scope_id</code>，<code>:95-118</code>）；<code>_call</code> 只转交（<code>:177-189</code>），不再注入任何项目字段——内部命令载荷的作用域由单元入口补齐（§4.5）。</li>
+<li>接口清单 <code>CORE_INTERFACES</code>（<code>api/interfaces.py:543</code>）：实测 <strong>48</strong> 条，分组分布 <code>abilities 11 / agents 9 / sessions 8 / mailbox 6 / branches 5 / deliveries 3 / messages 3 / nodes 1 / rooms 1 / manifests 1</code>。</li>
+<li>目录端口 <code>CoreCatalog</code>（<code>api/catalog.py:32</code>）实现 <code>CoreCatalogPort</code>，收敛点 <code>CoreCatalogRuntime</code>，清单 <code>CORE_CATALOG_INTERFACES</code>（<code>api/interfaces.py:612</code>）：<strong>5</strong> 条。</li>
+<li>收敛点 <code>api/runtime.py:25</code> / <code>:41</code> 的两个 <code>InterfaceRuntime</code> 子类在构造时校验「清单 == 处理器集合」；处理器由 <code>api/handlers/__init__.py:32</code> 的 <code>build_handlers(chain, mailbox, abilities, registry)</code> 与 <code>:63</code> 的 <code>build_catalog_handlers(abilities)</code> 分别汇总。</li>
+<li>装配入口是 <code>build_core_port(...)</code>（<code>wiring.py:96-162</code>）与 <code>build_core_catalog(...)</code>（<code>wiring.py:165-189</code>）。</li>
 </ul>
-<p><strong>「单一端口」的边界</strong>：Subject 只知道一个字符串键 <code>core.port</code>（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>），由 <code>core_cluster_registry</code> 单元在挂载时 provide（<code>ghrah-subject/src/ghrah/subject/units/core_cluster.py:311-316</code>）；50 条能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是一个端口对象（用法 <code>ghrah-subject/src/ghrah/subject/units/ledger.py:83</code>）。</p>
+<p><strong>「端口」的边界</strong>：Subject 只知道两个字符串键 <code>core.port</code> / <code>core.catalog</code>（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:13</code>、<code>:10</code>），由 <code>core_cluster_registry</code> 单元在 init 时 provide（<code>ghrah-subject/src/ghrah/subject/units/core_cluster.py:277-282</code>）；48 条作用域能力 + 5 条目录能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是端口对象（用法 <code>ghrah-subject/src/ghrah/subject/units/ledger.py:83</code>）。</p>
 <h3 id="64-进程内-v1-控制面已退役">6.4 进程内 <code>/v1</code> 控制面（已退役）</h3>
 <blockquote><p><strong>已退役（2026-11-14，M7）</strong>：原 <code>ghrah-core/src/ghrah/core/runtime.py</code> 与 <code>runtime_agent_api.py</code> / <code>runtime_read_api.py</code> / <code>runtime_management_api.py</code> / <code>runtime_resources.py</code> / <code>runtime_agent_store.py</code> / <code>runtime_resource_ids.py</code> / <code>runtime_agent_config.py</code>，协议包 <code>runtime*.py</code>，Subject 侧 <code>runtime_connection.py</code> / <code>runtime_http.py</code>，以及生成物 <code>ghrah-protocol/contracts/runtime/</code>、<code>packages/protocol/src/runtime.generated.ts</code>、相关 pytest/vitest 用例与两个脚本，已整体删除。它从未进入生产单元装配链（只是「可用的旁路」），删除后 Core 只剩 §6.3 的能力端口一个调用面；<code>RuntimePrincipal.scope_ref</code> / <code>external_ref</code> 这类 Subject 业务键语义也随之从 Core 消失。</p></blockquote>
 <h3 id="65-core--subject-反向通道">6.5 Core → Subject 反向通道</h3>
@@ -2247,7 +2282,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <p><code>get_chain_history</code> 的当前实现是&quot;调用方&quot;而不是&quot;第二读者&quot;：</p>
 <ol>
 <li>命令名集合 <code>CHAIN_HISTORY_COMMANDS</code> 只有一条（<code>ghrah-protocol/src/ghrah/protocol/routing.py:137</code>）；</li>
-<li><code>LedgerUnit</code> 不发布任何实例级服务（<code>provides=frozenset()</code>），取端口经 <code>ctx.get(CORE_PORT)</code> → <code>base.project(project_id)</code>（<code>ghrah-subject/src/ghrah/subject/units/ledger.py:62</code>、<code>:83</code>）；</li>
+<li><code>LedgerUnit</code> 不发布任何实例级服务（<code>provides=frozenset()</code>），取端口经 <code>ctx.get(CORE_PORT)</code> → <code>ports.for_project(project_id)</code>（<code>ghrah-subject/src/ghrah/subject/units/ledger.py:83</code>、<code>:86</code>）；</li>
 <li>真正读历史的是 <code>port.sessions.history(agent_id, session_id, branch_id, limit)</code>（<code>ghrah-subject/src/ghrah/subject/units/ledger.py:129</code>），端口契约在 <code>ghrah-protocol/src/ghrah/protocol/ports/core.py:97</code>；</li>
 <li>会话不存在按&quot;空历史&quot;返回而不是报错：只吞 <code>NOT_FOUND</code>，其它 <code>ApiError</code> 继续上抛（<code>ghrah-subject/src/ghrah/subject/units/ledger.py:135</code>）；</li>
 <li>归属先解析后读：<code>_resolve_persistence_key</code> 用 <code>project_get</code> 校验 <code>agent_id</code> 唯一命中且 <code>name</code> 一致，否则 <code>agent_project_mismatch</code> / <code>agent_identity_mismatch</code>（<code>ghrah-subject/src/ghrah/subject/units/ledger.py:158</code>）。</li>
@@ -2385,7 +2420,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <tbody>
 <tr><td><code>ProjectScopedTaskStore</code></td><td>快照 <code>task → project</code> 归属，冻结后任何 <code>_project_store</code> 访问抛 <code>ProjectArchivedError</code>，并关闭已打开的 <code>TaskStore</code></td><td><code>ghrah-subject/src/ghrah/subject/project/scoped_stores.py:72</code>、<code>:52</code>、<code>:92</code></td></tr>
 <tr><td><code>ProjectScopedRoomStore</code></td><td>同构：快照 <code>room → project</code>、冻结、关闭 <code>RoomStore</code></td><td><code>ghrah-subject/src/ghrah/subject/project/scoped_stores.py:241</code>、<code>:261</code></td></tr>
-<tr><td><code>LedgerUnit</code></td><td>项目加入 <code>_frozen_projects</code> 并丢弃缓存的 Core 端口视图；<code>_port_for_project</code> 见冻结即 <code>resource_archived</code></td><td><code>ghrah-subject/src/ghrah/subject/units/ledger.py:90</code>、<code>:78</code></td></tr>
+<tr><td><code>LedgerUnit</code></td><td>项目加入 <code>_frozen_projects</code> 并丢弃缓存的端口引用；<code>_port_for_project</code> 见冻结即 <code>resource_archived</code></td><td><code>ghrah-subject/src/ghrah/subject/units/ledger.py:78</code>、<code>:62</code></td></tr>
 </tbody></table>
 <p>冻结是<strong>纵深防御</strong>：即使上层漏了状态判断，命中的 store 也会在取库句柄时拒绝。命令层还有一层前置闸：Room 写命令先查父 Project 的 <code>archived_at</code>/<code>deleted_at</code>（<code>ghrah-subject/src/ghrah/subject/room/manager.py:139</code>）；Task 命令同理（<code>ghrah-subject/src/ghrah/subject/units/task.py:105</code>）；Project 自身的 9 条 mutation 命令先过 <code>_get_active_project</code>（<code>archived_at != None</code> → <code>resource_archived</code>）（<code>ghrah-subject/src/ghrah/subject/project/manager.py:338</code>）。</p>
 <p><code>archive</code> / <code>restore</code> / <code>delete</code> 的顺序是被刻意排过的：</p>
@@ -2657,7 +2692,7 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 </ul>
 <h3 id="1410-同一个容器键在两个包里各写一份字面量">14.10 同一个容器键在两个包里各写一份字面量</h3>
 <ul>
-<li>现状：<code>CORE_PORT = &quot;core.port&quot;</code> 在协议包（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:10</code>），Subject 又在服务键表里重新写了一份同值字面量并加注释说明&quot;名字就是协议包的 <code>core.port</code>&quot;（<code>ghrah-subject/src/ghrah/subject/runtime/service_keys.py:277-278</code>）。两处都有使用方：<code>units/core_cluster.py:283-316</code> 用协议常量 provide，<code>units/agent_control.py:42</code>、<code>:512</code> 用 Subject 常量 requires。</li>
+<li>现状：<code>CORE_PORT = &quot;core.port&quot;</code> / <code>CORE_CATALOG = &quot;core.catalog&quot;</code> 在协议包（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:13</code>、<code>:10</code>），Subject 又在服务键表里重新写了两份同值字面量并加注释说明&quot;名字就是协议包的 <code>core.port</code> / <code>core.catalog</code>&quot;（<code>ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278</code>、<code>:280</code>）。两处都有使用方：<code>units/core_cluster.py:277-282</code> 用协议常量 provide，<code>units/ability_control.py</code>、<code>units/agent_control.py</code> 用 Subject 常量 requires。</li>
 <li>影响：容器键本应只有一处真相（<code>keys.py:4</code> 的 docstring 即如此声明），现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为&quot;依赖未满足 / service not found&quot;。</li>
 </ul>
 <h3 id="1411-内置链挂载-taskstore-与目标形态是插件自相矛盾">14.11 内置链挂载 TaskStore 与&quot;目标形态是插件&quot;自相矛盾</h3>
@@ -2690,9 +2725,9 @@ port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units
 <tr><td>门面（facade）</td><td>端口的实现对象，每应用实例一个，由装配根创建</td></tr>
 <tr><td>装配根（composition root）</td><td>唯一允许同时认识多个模块的位置：创建门面、注入、关闭</td></tr>
 <tr><td>契约包</td><td><code>ghrah-protocol</code>：端口协议、视图 DTO、错误码、接口骨架</td></tr>
-<tr><td>请求信封</td><td>一条接口的入参 DTO，形如 <code>SessionsCatalogRequest</code>，除全局接口外都含 <code>project_id</code></td></tr>
+<tr><td>请求信封</td><td>一条接口的入参 DTO，形如 <code>SessionsCatalogRequest</code>；<strong>不含作用域字段</strong>——作用域由端口实例决定</td></tr>
 <tr><td>出参信封</td><td>接口层统一返回的 DTO（如 <code>NodeIdView</code>），端口层拆壳成裸值</td></tr>
-<tr><td>作用域（scope）</td><td>一条接口所属的项目边界；由 <code>project(project_id)</code> 绑定</td></tr>
+<tr><td>作用域（scope）</td><td>一条接口所属的项目边界；由端口实例在构造时绑定（一个实例一个作用域），调用方不能更换</td></tr>
 <tr><td><code>run</code></td><td>一次 Agent 进程内实例的标识；能力关系库用它判定运行时态</td></tr>
 <tr><td>工具面（tool surface）</td><td>真正发给模型的工具 schema 集合，由 <code>Ability.bind_tool()</code> 的返回值决定</td></tr>
 <tr><td>定义面（definition surface）</td><td>能力在 <code>ability.yaml</code> / manifest 里的声明（名称、参数、权限）</td></tr>

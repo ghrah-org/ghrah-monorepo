@@ -12,7 +12,7 @@
 > `ghrah-core/src/ghrah/ability/`。需要精确跳转时按此补全前缀。
 
 > **术语约定**：模块之间经端口互相调用的操作，本项目统一称**接口**（interface），
-> 代码落点为 `ghrah-protocol/src/ghrah/protocol/interface.py`、`ghrah-core/src/ghrah/core/api/interfaces.py`、`CORE_INTERFACES`；
+> 代码落点为 `ghrah-protocol/src/ghrah/protocol/interface.py`、`ghrah-core/src/ghrah/core/api/interfaces.py`、`CORE_INTERFACES`（作用域能力）与 `CORE_CATALOG_INTERFACES`（无作用域目录能力）；
 > 历史上曾称「能力 / 能力清单」，现已统一改名，旧称一律按「接口」理解。
 > `ability`（能力包）是另一概念——被授权、被调用的实现单元，与「接口」不可混用。
 > 错误响应中的 `Problem.capability` 字段名为兼容保留，其值即接口名。
@@ -59,7 +59,7 @@ ghrah 是一个**多智能体运行时**的 monorepo。它把"Agent 怎么想"�
 | 1 | **单一权威** | 每份被多方使用的状态只有一条写路径；其余副本只能是派生，且必须能从权威重建 | Core `ContextManager` 的 sqlite 是链与消息的写入权威（`ghrah-core/src/ghrah/context/manager.py`） |
 | 2 | **派生可重建** | 副本不得独立写；重建指令必须存在且幂等 | Observer store 重连时经命令面重新拉取；Subject 侧读链历史只调用能力 |
 | 3 | **跨模块单一入口** | 模块之间零 import；一切能力调用经端口 | `ghrah-protocol/src/ghrah/protocol/ports/core.py` + `ghrah-core/src/ghrah/core/api/facade.py` |
-| 4 | **零隐式行为** | 新能力必须显式声明（清单 / 配置 / 白名单），不做"顺便帮你做了" | 能力必须登记进 `CORE_INTERFACES` 且有处理器，否则启动即失败（`ghrah-core/src/ghrah/core/api/runtime.py:18`） |
+| 4 | **零隐式行为** | 新能力必须显式声明（清单 / 配置 / 白名单），不做"顺便帮你做了" | 能力必须登记进 `CORE_INTERFACES` / `CORE_CATALOG_INTERFACES` 且有处理器，否则启动即失败（`ghrah-core/src/ghrah/core/api/runtime.py:25`、`:41`） |
 | 5 | **代码是事实** | 文档给索引，代码给答案；关键论断附 `file:line` | 全文 |
 
 ### 1.3 一次交互的宏观形状
@@ -77,13 +77,16 @@ graph TB
         Units --> XPort
     end
 
-    XPort -->|"CORE_PORT 能力调用（进程内）"| FACADE
+    XPort -->|"CORE_PORT 能力调用（按项目端口实例）"| FACADE
+    XPort -.->|"CORE_CATALOG 目录读面（无作用域）"| CATALOG
 
     subgraph CORE["ghrah-core（同进程，认知半区）"]
-        FACADE["CoreFacade → CoreRuntime<br/>50 条能力"]
-        H["handlers × 10 组"]
+        FACADE["CorePort 实例（每项目一个）<br/>→ CoreRuntime<br/>48 条作用域能力"]
+        CATALOG["CoreCatalogPort → CoreCatalogRuntime<br/>5 条目录能力"]
+        H["handlers × 10 组 + 目录 1 组"]
         AG["Supervisor / ActorAgent<br/>驱动循环 / ContextManager"]
         FACADE --> H
+        CATALOG --> H
         H --> AG
     end
 
@@ -261,7 +264,7 @@ for p in ["ghrah-core","ghrah-kernel","ghrah-plugin","ghrah-protocol",
 | 一级子目录 | `.py` / 行 | 职责 | 锚点 |
 | --- | ---: | --- | --- |
 | `payloads/` | 13 / 2,275 | 各域载荷模型聚合再导出：agent、session、task、project、room、workspace、manifest、persist、system、plugin | `ghrah-protocol/src/ghrah/protocol/payloads/__init__.py:4` |
-| `ports/` | 3 / 521 | 模块端口：每个模块对外能力的唯一入口（`CORE_PORT`、`SUBJECT_PORT`） | `ghrah-protocol/src/ghrah/protocol/ports/__init__.py:4` |
+| `ports/` | 3 / 562 | 模块端口：每个模块对外能力的唯一入口（`CORE_PORT`、`CORE_CATALOG`、`SUBJECT_PORT`） | `ghrah-protocol/src/ghrah/protocol/ports/__init__.py:4` |
 | `views/` | 3 / 619 | 跨模块共用视图与资源视图（`Page`、`AckView` 等） | `ghrah-protocol/src/ghrah/protocol/views/__init__.py:4` |
 | （根模块） | 20 / 4,206 | `envelope.py`、`types.py`（门面）、`enums.py`、`events.py`、`routing.py`、`factories.py`、`interface.py`、`problem.py`、`errors.py`、`corpus.py`、`ability_control.py`、`ability_tree.py`、`agent_control.py`、`agentconf_control.py`、`scheme.py`、`runtime.py`、`runtime_agents.py`、`runtime_digest.py`、`runtime_resources.py`、`__init__.py` | `ghrah-protocol/src/ghrah/protocol/__init__.py:4` |
 
@@ -522,32 +525,32 @@ TS 依赖图同样无环，且 `@ghrah/protocol` 是叶子（`ghrah-observer-web
 
 #### 3.2.2 `ports/`：方法签名与注入键
 
-`ports/core.py` 定义 Core 对外能力的唯一入口。约定写在模块头（`ports/core.py:6`–`:10`）：项目作用域由装配层注入、签名里不出现；所有返回值是 DTO、id 或 `None`；所有失败抛 `ApiError` 子类。
+`ports/core.py` 定义 Core 对外能力的唯一入口。约定写在模块头（`ports/core.py:6`–`:10`）：作用域由装配层在**构造端口实例**时注入、能力签名里不出现；所有返回值是 DTO、id 或 `None`；所有失败抛 `ApiError` 子类。
 
-id 别名是裸 `str`（`ports/core.py:74`–`:79`）：`AgentId`、`BranchId`、`DeliveryId`、`MessageId`、`NodeId`、`SessionId`。
+id 别名是裸 `str`（`ports/core.py:80`–`:85`）：`AgentId`、`BranchId`、`DeliveryId`、`MessageId`、`NodeId`、`SessionId`。
 
-十个能力分组（每组一个 `Protocol`），全部用 `async def` + 关键字参数：
+十个作用域能力分组（每组一个 `Protocol`），全部用 `async def` + 关键字参数；作用域由端口实例决定，能力签名里不出现（见 §4.5）：
 
 表 3-3 `ports/core.py` 的能力分组
 
 | 分组 | 位置 | 方法数 | 代表方法 |
 | --- | --- | ---: | --- |
-| `NodeOperations` | `:82` | 1 | `get(*, agent_id, node_id) -> NodeView` |
-| `SessionOperations` | `:90` | 8 | `catalog`、`history`、`head`、`meta`、`create`、`activate`、`archive`、`delete` |
-| `BranchOperations` | `:145` | 5 | `list`、`create`、`activate`、`archive`、`delete` |
-| `MailboxOperations` | `:188` | 6 | `summary`、`list`、`get`、`publish_external`、`publish_notification`、`recover_room_projections` |
-| `DeliveriesOperations` | `:239` | 3 | `get`、`retry`、`resume` |
-| `AbilityOperations` | `:255` | 13 | `tree`、`changes`、`admin`、`content`、`packages`、`package_detail`、`package_groups`、`instances`、`status`、`grant`、`revoke`、`enable_tool`、`disable_tool` |
-| `AgentOperations` | `:336` | 9 | `create`、`create_from_template`、`get`、`delete`、`runtime`、`tools`、`compact`、`reset`、`list` |
-| `MessageOperations` | `:381` | 3 | `append`、`broadcast`、`delegate` |
-| `RoomOperations` | `:411` | 1 | `recover` |
-| `ManifestOperations` | `:419` | 1 | `resolve(*, manifest_ref) -> AgentSpecView` |
+| `NodeOperations` | `:88` | 1 | `get(*, agent_id, node_id) -> NodeView` |
+| `SessionOperations` | `:96` | 8 | `catalog`、`history`、`head`、`meta`、`create`、`activate`、`archive`、`delete` |
+| `BranchOperations` | `:154` | 5 | `list`、`create`、`activate`、`archive`、`delete` |
+| `MailboxOperations` | `:198` | 6 | `summary`、`list`、`get`、`publish_external`、`publish_notification`、`recover_room_projections` |
+| `DeliveriesOperations` | `:250` | 3 | `get`、`retry`、`resume` |
+| `AbilityOperations` | `:266` | 11 | `tree`、`changes`、`admin`、`content`、`package_groups`、`instances`、`status`、`grant`、`revoke`、`enable_tool`、`disable_tool` |
+| `AgentOperations` | `:338` | 9 | `create`、`create_from_template`、`get`、`delete`、`runtime`、`tools`、`compact`、`reset`、`list` |
+| `MessageOperations` | `:383` | 3 | `append`、`broadcast`、`delegate` |
+| `RoomOperations` | `:415` | 1 | `recover` |
+| `ManifestOperations` | `:423` | 1 | `resolve(*, manifest_ref) -> AgentSpecView` |
 
-`CorePort` 本身是十个 `@property` 加一个绑定方法（`ports/core.py:427`–`:476`）。`project(project_id) -> CorePort`（`:467`）返回**绑定了项目作用域**的端口视图；注释说明了动机：装配层提供一个未绑定实例，同一实例可服务多个项目，避免「一个进程只能有一个项目」的隐含约束（`:433`–`:435`）。
+`CorePort` 本身是十个 `@property` 加一个 `aclose()`（`ports/core.py:431`–`:470`）：**一个端口实例就是一个作用域**，没有"绑定视图"这类方法；作用域 token 由装配层在构造时传入，调用方无从参数化（§4.5）。无作用域的全局读面——能力包目录、包详情、版本画像、MCP 探测、全局包分组——单独走 `CoreCatalogPort`（`ports/core.py:473`–`:511`）：它不打开数据库、不建单元，因此零项目时也可用。
 
-`ports/keys.py` 只有两个常量：`CORE_PORT = "core.port"`（`:10`）、`SUBJECT_PORT = "subject.port"`（`:13`）。它们是容器键的唯一真相——键是字符串，跨包的装配代码与消费代码必须拼同一串；把字面量写进契约包是让拼错在 import 期而非运行期失败的唯一办法。
+`ports/keys.py` 有三个常量：`CORE_CATALOG = "core.catalog"`（`:10`）、`CORE_PORT = "core.port"`（`:13`）、`SUBJECT_PORT = "subject.port"`（`:16`）。它们是容器键的唯一真相——键是字符串，跨包的装配代码与消费代码必须拼同一串；把字面量写进契约包是让拼错在 import 期而非运行期失败的唯一办法。
 
-`ports/__init__.py` 只再导出 `CORE_PORT`、`SUBJECT_PORT` 与 8 个 `core.py` 符号（`:8`–`:31`）；`MessageOperations`、`DeliveriesOperations`、`AbilityOperations` 等其余分组必须从 `ghrah.protocol.ports.core` 直接取。门面刻意收窄，避免把「端口全貌」固化成一个稳定 API 面。
+`ports/__init__.py` 只再导出三个注入键与 9 个 `core.py` 符号（`:8`–`:33`，含 `CorePort` 与 `CoreCatalogPort`）；`MessageOperations`、`DeliveriesOperations`、`AbilityOperations` 等其余分组必须从 `ghrah.protocol.ports.core` 直接取。门面刻意收窄，避免把「端口全貌」固化成一个稳定 API 面。
 
 #### 3.2.3 `views/`：出参形状
 
@@ -820,7 +823,7 @@ TS 镜像包是 `ghrah-observer-webui/packages/protocol`（pnpm workspace 成员
 
 **② 消费方的业务代码里，提供方的名字一次都不出现。** Subject 侧读 Core 数据只经端口：`units/ledger.py:17`–`:18` import `CorePort` 与 `CORE_PORT`，`:83` 用 `self._ctx.get(CORE_PORT, strict=False)` 取端口；`runtime/port_transport.py:21` import `CORE_PORT`，模块头写明「所有对『某个 Agent 的运行时操作』都转成 `CORE_PORT` 的能力调用」，返回值统一是协议视图的 `model_dump`，「与观察端/WS 契约同源，不再有第二套形状」（`:4`–`:12`）。
 
-**③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。** 全仓 Subject 侧对 `ghrah.core` 的 import 只有两处，全部在函数体内：`units/core_cluster.py:282`（`from ghrah.core.wiring import build_core_port`）、`core_cluster/registry.py:472`；`core_cluster.py:283` 紧接着 import 的是协议包的 `CORE_PORT`。`core_cluster.py:280`–`:316` 就是「Core 能力端口的唯一装配点」：构造 `build_core_port(...)` 后 `ctx.provide(CORE_PORT, core_port)`。**依赖声明存在（`ghrah-subject/pyproject.toml` 的 `dependencies` 含 `ghrah-core`），但 import 被压到装配层这一个人为窄口**——这是本仓区分「可以依赖」与「可以 import」的实际做法。
+**③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。** 全仓 Subject 侧对 `ghrah.core` 的 import 只有两处，全部在函数体内：`units/core_cluster.py:234`（`from ghrah.core.wiring import build_core_catalog, build_core_port`）、`core_cluster/registry.py:472`；`core_cluster.py:235` 紧接着 import 的是协议包的 `CORE_CATALOG` / `CORE_PORT`。`core_cluster.py:253`–`:282` 就是「Core 端口实例的唯一装配点」：`_make_port` 调 `build_core_port(...)`、`build_core_catalog(...)` 造目录端口，然后 `ctx.provide(CORE_PORT, ports)` / `ctx.provide(CORE_CATALOG, catalog)`。**依赖声明存在（`ghrah-subject/pyproject.toml` 的 `dependencies` 含 `ghrah-core`），但 import 被压到装配层这一个人为窄口**——这是本仓区分「可以依赖」与「可以 import」的实际做法。
 
 **④ 端口形状若住在提供方，消费方会被迫在 import 期拉起提供方。** 反推一遍：`CorePort` 若定义在 `ghrah-core`，则 `units/ledger.py`（一个普通的读投影 Unit）在模块导入时就要 `import ghrah.core...`，于是「只读账本」这一段的 import 依赖会牵入整个 Core 装配面；`port_transport.py` 同理。而现在的形态下，`ledger.py`/`port_transport.py` 的 import 只有协议包与标准库，它们在只有 `pydantic` + `ghrah-plugin` 的环境里就能被导入与测试——这正是 `ghrah-protocol/pyproject.toml:9`–`:12` 依赖集合的意义，也解释了为什么 `ghrah-protocol` 的测试不依赖任何提供方（`tests/test_port_contract.py`、`tests/test_interface.py` 全程只用端口面类型）。
 
@@ -828,7 +831,7 @@ TS 镜像包是 `ghrah-observer-webui/packages/protocol`（pnpm workspace 成员
 
 **⑥ 错误族的基类是最不能下沉到提供方的那一件。** `ApiError` 若定义在 Core，Subject 的 `except ApiError` 就要求 Core 的模块在导入链上；`Problem` 的 `code` 会被消费方当作唯一分支判据（`problem.py:1`–`:8`），一旦两处各有一份 `ProblemCode`，码表漂移会表现为「明明 catch 到了却分不清类型」。`errors.py:7` 给出的解法是「基类共享、子类各自派生」：`CoreApiError` 可以有（`ghrah-core/src/ghrah/core/api/errors.py` 由 `__init__.py:24` 导出），但继承自契约包的 `ApiError`。
 
-**一处遗留的不一致：** 注入键的字符串在同一仓库里出现两次字面量——`ports/keys.py:10` 的 `CORE_PORT = "core.port"`，以及 `ghrah-subject/src/ghrah/subject/runtime/service_keys.py:277`–`:278` 的 `CORE_PORT_SERVICE = SubjectServiceKey[Any]("core.port")`（注释自陈「名字就是协议包的 `core.port`」）。后者没有 import 前者，因此键名一旦变更，两处需要人工同步。这是 SubjectServiceKey 与容器字符串键两套命名空间并存的直接后果，不是笔误。
+**一处遗留的不一致：** 注入键的字符串在同一仓库里出现两次字面量——`ports/keys.py:10`/`:13` 的 `CORE_CATALOG = "core.catalog"` 与 `CORE_PORT = "core.port"`，以及 `ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278`–`:280` 的 `CORE_PORT_SERVICE` / `CORE_CATALOG_SERVICE`（注释自陈「名字就是协议包的 `core.port`」）。后者没有 import 前者，因此键名一旦变更，两处需要人工同步。这是 SubjectServiceKey 与容器字符串键两套命名空间并存的直接后果，不是笔误。
 
 **口径说明**：本章的类数、条目数、文件数与快照数以 `ghrah-protocol/src`、`ghrah-observer-webui/packages/protocol/src` 的当前工作树为准；注册表条目数由运行时枚举实测（`len(COMMAND_PAYLOAD_MAP) == 84`、`len(EVENT_PAYLOAD_MAP) == 67`、`len(PAYLOAD_MAP) == 151`、`len(CommandType) == 101`、`len(EventType) == 69`、`len(payloads.__all__) == 164`），可用同一条命令复现：
 
@@ -852,7 +855,7 @@ uv run python -c "from ghrah.protocol.envelope import PAYLOAD_MAP,COMMAND_PAYLOA
 | 分页 | 返回 `Page[T]` | 保留 |
 | 长动作 | 返回 `Operation` | 保留 |
 
-保留下来的不是传输细节，而是**资源命名纪律**：每条能力必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 50 条能力会退化成无法猜的 RPC 集合。
+保留下来的不是传输细节，而是**资源命名纪律**：每条能力必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 48 条作用域能力会退化成无法猜的 RPC 集合。
 
 ### 4.2 三个抽象与一次调用的四步
 
@@ -891,22 +894,23 @@ wiring       → 全部
 
 | 路径 | 职责 |
 | --- | --- |
-| `core/read/chain.py` | 只读链库：`ChainReadStore`、`ChainDatabaseUnavailableError`、`DbPathResolver` |
-| `core/read/mailbox.py` | 只读信箱/投递：`MailboxReadStore` 与三类未找到异常 |
-| `core/read/ability.py` | 能力关系库读面：`AbilityReadStore`、`AbilityConflictError`、`AbilityUnavailableError` |
+| `core/read/chain.py` | 只读链库：`ChainReadStore(db_path)`、`ChainDatabaseUnavailableError` |
+| `core/read/mailbox.py` | 只读信箱/投递：`MailboxReadStore(db_path, scope_id)` 与三类未找到异常 |
+| `core/read/ability.py` | 能力关系库读面：`AbilityReadStore(*, db_path, scope_id=…)`、`AbilityConflictError`、`AbilityUnavailableError` |
 | `core/read/ability_catalog.py` | 能力包目录读面：`CatalogError`（`not_found` / `invalid_request` / `unavailable` 三值） |
-| `core/api/interfaces.py` | `CORE_INTERFACES`：50 条能力声明 |
-| `core/api/handlers/` | 10 个处理器模块：`nodes`、`sessions`、`session_write`、`branches`、`mailbox`、`deliveries`、`manifests`、`abilities`、`agents`；`build_handlers(chain, mailbox, abilities, registry)` 汇总 |
-| `core/api/runtime.py` | `CoreRuntime(InterfaceRuntime)` + `build_runtime`：绑定 Core 的清单、翻译表、异常工厂 |
+| `core/api/interfaces.py` | `CORE_INTERFACES`：48 条作用域能力声明；`CORE_CATALOG_INTERFACES`：5 条目录能力声明 |
+| `core/api/handlers/` | 10 个处理器模块：`nodes`、`sessions`、`session_write`、`branches`、`mailbox`、`deliveries`、`manifests`、`abilities`、`agents`、`messages`；`build_handlers(chain, mailbox, abilities, registry)` 汇总作用域能力，`build_catalog_handlers(abilities)` 汇总目录能力 |
+| `core/api/runtime.py` | `CoreRuntime(InterfaceRuntime)` / `CoreCatalogRuntime` + `build_runtime` / `build_catalog_runtime`：各自绑定清单、翻译表、异常工厂 |
 | `core/api/errors.py` | `CoreApiError` + `translate()` 翻译表 |
-| `core/api/facade.py` | `CoreFacade` 与 10 个分组实现类；`_call` / `_call_global` / `project` / `aclose` |
-| `core/wiring.py` | `build_core_port(...)`：装配根唯一入口 |
+| `core/api/facade.py` | `CoreFacade`（作用域端口实现）与 10 个分组实现类；`_call` / `aclose` |
+| `core/api/catalog.py` | `CoreCatalog`（`CoreCatalogPort` 实现，无作用域）；`_call` / `aclose` |
+| `core/wiring.py` | `build_core_port(...)`（作用域端口）与 `build_core_catalog(...)`（目录端口）：装配层的两个唯一入口 |
 
-**读面与集群生命周期解耦**：`core/read/*` 只按 `resolve_db_path(project_id)` 打开只读连接，不需要先挂载 `CoreUnit`。因此读取一个已停止 Agent 的历史不会复活项目。带运行时状态的能力（`agents.runtime`、`abilities.tree`、`agents.tools`）是例外：它们经 `RuntimeRegistry` 读活跃单元，离线时按各自视图返回 `offline` 或抛 `NOT_FOUND`。
+**读面与集群生命周期解耦，作用域在构造期固定**：三个读 store 在 `build_core_port` 里按该作用域的数据根（`db_path`）与不透明 token（`scope_id`）直接构造，不需要先挂载 `CoreUnit`。因此读取一个已停止 Agent 的历史不会复活项目；也因为作用域是构造参数而不是方法参数，调用方无法在两次调用之间切换作用域。带运行时状态的能力（`agents.runtime`、`abilities.tree`、`agents.tools`）是例外：它们经 `RuntimeRegistry` 读活跃单元，离线时按各自视图返回 `offline` 或抛 `NOT_FOUND`。
 
 ### 4.4 能力面规模
 
-口径：`len(CORE_INTERFACES) == 50`，分组数等于 `CorePort` 上的属性数，均为 10。
+口径：`len(CORE_INTERFACES) == 48`（作用域能力），`len(CORE_CATALOG_INTERFACES) == 5`（目录能力）；作用域分组数等于 `CorePort` 上的属性数（10），目录能力不分组、直接挂在 `CoreCatalogPort` 的方法上。
 
 | 分组 | 条数 | 说明 |
 | --- | --- | --- |
@@ -915,82 +919,110 @@ wiring       → 全部
 | `branches` | 5 | 列表 / 分叉 / 激活 / 归档 / 删除 |
 | `mailbox` | 6 | 概览 / 分页列表 / 单条 / 外部发布 / 通知发布 / Room 投影补齐 |
 | `deliveries` | 3 | 读取 / 重试 / 恢复 |
-| `abilities` | 13 | 树 / 变更流 / 管理总览 / 包目录 / 包详情 / 包分组 / 实例 / 成员内容 / 可用性 / 授予 / 撤销 / 绑工具 / 解绑工具 |
+| `abilities` | 11 | 树 / 变更流 / 管理总览 / 包分组 / 实例 / 成员内容 / 可用性 / 授予 / 撤销 / 绑工具 / 解绑工具 |
 | `agents` | 9 | 创建 / 按模板创建 / 读取 / 列表 / 删除 / 运行时 / 工具 / 压缩 / 重置 |
 | `messages` | 3 | 发送 / 广播 / 委派 |
 | `rooms` | 1 | 投影修复 |
 | `manifests` | 1 | manifest 解析 |
 
-登记表本身是唯一权威：`ghrah-core/src/ghrah/core/api/interfaces.py`。名字规律是 `<分组>.<动作>`，与 `CorePort` 的属性名、方法名一一对应。
+目录能力（`CORE_CATALOG_INTERFACES`，无作用域，`CoreCatalogPort` 的五个方法）：
 
-### 4.5 作用域模型
+| 接口 | 说明 |
+| --- | --- |
+| `abilities.packages` | 已安装能力包目录 |
+| `abilities.package_detail` | 单个能力包详情 |
+| `abilities.package_version_profile` | 单个能力包版本的画像 |
+| `abilities.package_mcp_probe` | 只读探测该版本声明的 MCP 服务 |
+| `abilities.package_groups` | 全局包分组（不绑定项目） |
 
-装配根只构造**一个未绑定**的 `CoreFacade`；消费方按项目取绑定视图：
+登记表本身是唯一权威：`ghrah-core/src/ghrah/core/api/interfaces.py`（`CORE_INTERFACES` 在 `:543`，`CORE_CATALOG_INTERFACES` 在 `:612`）。名字规律是 `<分组>.<动作>`；作用域接口与 `CorePort` 的属性名、方法名一一对应，目录接口与 `CoreCatalogPort` 的方法一一对应。`abilities.package_groups` 在两份清单里各有一条：作用域形态注入项目 token，目录形态是全局读面（见 §4.5）。
+
+### 4.5 作用域模型：一个端口实例就是一个作用域
+
+装配层（Subject）为每个 Project 构造并缓存一个 `CorePort` 实例；**端口实例本身就携带作用域**，不存在"未绑定端口 + 绑定视图"两步：
 
 ```python
-port = ctx.get(CORE_PORT)  # 未绑定
-scoped = port.project(project_id)  # 绑定视图（轻量，共享收敛点与连接池）
-catalog = await scoped.sessions.catalog(agent_id=agent_id)
+from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
+
+ports = ctx.get(CORE_PORT)                # CorePorts：按项目懒建/缓存端口实例
+port = ports.for_project(project_id)      # 该项目的端口实例（无则构造）
+catalog = await port.sessions.catalog(agent_id=agent_id)
+packages = await ctx.get(CORE_CATALOG).packages()   # 无作用域目录读面
 ```
 
-绑定视图是 `CoreFacade(runtime=..., project_id=..., closer=...)`——共享同一个 `CoreRuntime` 与同一组只读连接，只多记一个字符串（`ghrah-core/src/ghrah/core/api/facade.py:183`）。因此不存在"一个进程只能有一个项目"的隐含约束。
-
-`CorePort` 的 50 个方法签名里**都没有 `project_id`**，注入点在唯一的地方：
+`CoreFacade(*, runtime, scope_id, closer)`（`ghrah-core/src/ghrah/core/api/facade.py:83`、`:95`）在构造时固定作用域 token；门面里的 `_call` 只做「装箱 → 转交」：
 
 ```python
 async def _call(self, capability: str, **kwargs: Any) -> dict[str, Any]:
-    if self._project_id is None:
-        raise CoreApiError(
-            Problem.make(
-                ProblemCode.FAILED_PRECONDITION,
-                capability=capability,
-                detail="capability requires a project-scoped port: call project(id) first",
-            )
-        )
-    return await self._runtime.invoke(capability, {"project_id": self._project_id, **kwargs})
+    return await self._runtime.invoke(capability, dict(kwargs))
 ```
 
-判据：漏传不可能（不是参数）；越权参数化不可能（只有一个来源）；忘了 `project()` 会得到 `FAILED_PRECONDITION` 且 detail 直接说明怎么修。
+作用域 token 在更下层生效：`RuntimeRegistry` 以 `scope_id` 构造；命令进入 `CoreUnit` 时在唯一入口补齐内部命令载荷的 `project_id`（`ghrah-core/src/ghrah/core/unit.py:697`–`:719`），读面则直接用构造期固定的 `db_path` / `scope_id`。
 
-无项目维度的能力（`abilities.packages`、`abilities.package_detail`）走 `_call_global`，不注入 `project_id`（`ghrah-core/src/ghrah/core/api/facade.py:224`）。
+判据因此从"调用方别忘了传"变成"调用方没有地方传"：
+
+- 漏传不可能——作用域不是方法参数；
+- 越权参数化不可能——一个实例只有一个作用域，跨作用域调用必须先取另一个实例；
+- 不存在"忘了调 `project()`"这种失败态，因为不存在未绑定实例。
+
+全局读面（能力包目录等 5 项）拆成独立的 `CoreCatalogPort`（实现 `ghrah-core/src/ghrah/core/api/catalog.py:32`）：没有作用域、不打开数据库、不建单元，因此**零项目时也可用**。同名接口 `abilities.package_groups` 在目录端口上是全局形态，在作用域端口上是项目形态。
 
 ### 4.6 装配与生命周期
 
+装配层有**两个**构造入口，对应两种端口：
+
 ```python
-def build_core_port(
+def build_core_port(          # 作用域端口：每个 Project 一个实例
     *,
-    resolve_db_path: DbPathResolver,
+    scope_id: str,
+    db_path: str,
     config_factory: ConfigFactory | None = None,
     unit_factory: UnitFactory | None = None,
     manager_factory: ManagerFactory | None = None,
     manifest_resolver: ManifestResolver | None = None,
     install_root: str | None = None,
+    agentconf_db_path: str | None = None,
+    grant_policy: Any = None,
     config_hook: ConfigHook | None = None,
+    emit: Callable[[str, dict[str, Any]], None] | None = None,
+    serial: Callable[..., Awaitable[Any]] | None = None,
 ) -> CoreFacade: ...
+
+
+def build_core_catalog(       # 目录端口：无作用域，进程内一个
+    *,
+    install_root: str | None = None,
+    agentconf_db_path: str | None = None,
+    grant_policy: Any = None,
+) -> CoreCatalog: ...
 ```
 
-组装顺序（`ghrah-core/src/ghrah/core/wiring.py:111`）：
+作用域端口的组装顺序（`ghrah-core/src/ghrah/core/wiring.py:133`–`:162`）：
 
-1. `ChainReadStore(resolve_db_path)` —— 链库只读；
-2. `MailboxReadStore(resolve_db_path)` —— 信箱/投递只读；
-3. `RuntimeRegistry(config_factory=…, manager_factory=…, manifest_resolver=…, config_hook=…)` —— 活跃单元注册表，也是 `agents.*` / `abilities.tree` 的运行时真相；
-4. `AbilityReadStore(resolve_db_path, resolve_run=registry.run_id_for, resolve_tools=registry.tools_for, install_root=…)`；
+1. `ChainReadStore(db_path)` —— 链库只读；
+2. `MailboxReadStore(db_path, scope_id)` —— 信箱/投递只读；
+3. `RuntimeRegistry(scope_id=…, config_factory=…, manager_factory=…, manifest_resolver=…, config_hook=…)` —— 单作用域活跃单元注册表，也是 `agents.*` / `abilities.tree` 的运行时真相；
+4. `AbilityReadStore(db_path=…, scope_id=…, resolve_run=registry.run_id_for, resolve_tools=registry.tools_for, install_root=…)`；
 5. `registry.set_ability_store_factory(...)` —— 授权关系库由 Core 自持，`reclaim_stale=True` 回收上一进程异常退出留下的 pending 占位；
-6. `CoreRuntime(build_handlers(chain, mailbox, abilities, registry))` —— 此处校验 50 条能力与处理器齐全；
-7. `CoreFacade(runtime=…, closer=lambda: _close_all(chain.aclose, abilities.aclose, registry.aclose))`。
+6. `CoreRuntime(build_handlers(chain, mailbox, abilities, registry))` —— 此处校验 48 条作用域能力与处理器齐全；
+7. `CoreFacade(runtime=…, scope_id=…, closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose))`。
 
-注入与关闭：
+目录端口只需三步：`AbilityReadStore(db_path=Path(""), scope_id=None, install_root=…)`（**不打开数据库**）→ `CoreCatalogRuntime(build_catalog_handlers(abilities))` → `CoreCatalog(runtime=…, closer=…`）。
+
+注入与关闭（`ghrah-subject` 装配侧）：
 
 ```python
-port = build_core_port(resolve_db_path=..., config_factory=...)
-ctx.provide(CORE_PORT, port)  # 键来自 ghrah.protocol.ports.keys
+self._ports = CorePorts(_make_port)        # 按项目懒建/缓存；_make_port 解析项目根后调 build_core_port
+self._catalog = build_core_catalog(install_root=..., agentconf_db_path=...)
+ctx.provide(CORE_PORT, self._ports)        # 键来自 ghrah.protocol.ports.keys
+ctx.provide(CORE_CATALOG, self._catalog)
 ...
-await port.aclose()  # 与创建逆序；幂等
+await port.aclose()                        # 单个项目端口：与创建逆序；幂等
 ```
 
-- `CORE_PORT` 是字符串常量 `"core.port"`，两侧共用同一字面量（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:10`）；
-- `CoreFacade.aclose()` 幂等；关闭任一绑定视图等价于关闭共享连接池，连接池可在下次调用时懒重开；
-- 端口对象**不做进程级全局单例**：由装配根创建、注入、关闭。这样测试可替换、多应用实例不串味、连接有明确负责人。
+- `CORE_CATALOG` / `CORE_PORT` 是字符串常量 `"core.catalog"` / `"core.port"`，两侧共用同一字面量（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:10`、`:13`）；
+- `CoreFacade.aclose()` 幂等；关闭后该实例的读连接随之释放，再次使用须由装配层重建实例（`CorePorts.for_project` 会新建）；
+- 端口对象**不做进程级全局单例**：作用域端口由装配层按项目创建、缓存、关闭；目录端口进程内一个。这样测试可替换、多应用实例不串味、连接有明确负责人。
 
 **部署设置不在 Core 里读**：HITL 策略、工作区根、能力安装目录由 `config_factory` / `config_hook` / `install_root` 注入。Core 不读环境变量、不猜配置。
 
@@ -1018,15 +1050,19 @@ class CoreApiError(ApiError): ...  # ghrah-core/src/ghrah/core/api/errors.py:36
 
 ### 4.9 Subject 侧怎么接
 
-```python
-from ghrah.protocol.ports.keys import CORE_PORT
+Subject 只认协议包的键与端口协议，不 import Core：
 
-port = ctx.get(CORE_PORT, strict=False)  # ghrah-subject/src/ghrah/subject/units/ledger.py:83
+```python
+from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
+
+ports = ctx.get(CORE_PORT, strict=False)     # ghrah-subject/src/ghrah/subject/units/ledger.py:83
+port = ports.for_project(project_id)         # -> CorePort（按项目懒建/缓存）
+catalog = ctx.get(CORE_CATALOG)              # -> CoreCatalogPort（无作用域）
 ```
 
-`CoreClusterUnit` 在 mount 时构造并注入端口，再把自己的 transport 提供给注册表（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:283` 起）。因此端口生命周期跟随 `CoreClusterUnit`：单元在则端口在，单元走则端口随之关闭。
+`ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28` 的 `CorePorts` 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，`for_project` 懒建、`close_project` 关闭并移除、`aclose` 关闭全部。`CoreClusterUnit` 在 `init` 里构造 `CorePorts(_make_port)`（`units/core_cluster.py:253`–`:272`）与目录端口，并 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:277`–`:278`）；端口生命周期因此跟随 `CoreClusterUnit`。
 
-`ghrah-subject/src/ghrah/subject/runtime/port_transport.py` 把历史的 cluster 命令面适配到端口：`PortClusterTransport` 实现 `CoreClusterRegistryService`、维护 `cluster_id → project_id` 映射、把命令转成能力调用；`PortMailbox` 是只实现实际用到的成员的最小替身（不给旁路留口子）；`build_port_transport(ctx)` 从 ctx 取端口构造传输层。
+`ghrah-subject/src/ghrah/subject/runtime/port_transport.py` 把历史的 cluster 命令面适配到端口：`PortClusterTransport` 实现 `CoreClusterRegistryService`、维护 `cluster_id → project_id` 映射、把命令转成能力调用（`port_for` 取端口实例，`:497`）；`PortMailbox` 是只实现实际用到的成员的最小替身（不给旁路留口子）；`build_port_transport(ctx)` 从 ctx 取注册表构造传输层（`:563`）。
 
 ## 5. Subject 运行时（效果半区）
 
@@ -1048,7 +1084,7 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 
 1. **生命周期钩子默认空实现且必须幂等**（`unit/base.py:107-114` 的 docstring 明写 idempotent）。挂载桥的 disposer 只调 `stop()`（`runtime/ouroboros_bridge.py:112-115`）。
 2. **`handle_command` 的默认回执是失败**（`unit/base.py:116-127`）：未覆写该命令的单元不会静默返回成功，而是 `{"success": False, "error": "Command '…' is not implemented by unit '…'"}`。
-3. **`meta.provides` 只是声明面**：挂载桥的 `inject` 只从 `meta.requires` 派生（`runtime/ouroboros_bridge.py:96-97`），`provides` 不参与激活判定。因此实际 `ctx.provide` 与声明可以不一致，例如 `taskstore` 声明为空却在 `init` 里 provide 两个键（`units/taskstore.py:70-73` 与 `:108-109`），`core_cluster_registry` 声明两个键却额外 provide 了 `CORE_PORT`（`units/core_cluster.py:180-185` 与 `:316`）。
+3. **`meta.provides` 只是声明面**：挂载桥的 `inject` 只从 `meta.requires` 派生（`runtime/ouroboros_bridge.py:96-97`），`provides` 不参与激活判定。因此实际 `ctx.provide` 与声明可以不一致，例如 `taskstore` 声明为空却在 `init` 里 provide 两个键（`units/taskstore.py:70-73` 与 `:108-109`）；`core_cluster_registry` 声明 `CORE_CLUSTER_REGISTRY`/`CORE_PORT`/`CORE_CATALOG` 三键并与实际 provide 一致（`units/core_cluster.py:152-155` 与 `:277-282`）。
 4. **`CommandContext` 在真实分发路径上是占位**：`_register_routes` 固定传 `CommandContext.internal()`（`runtime/ouroboros_bridge.py:146`），因为 Ouroboros listener 是单参签名；`request_id` / `session_id` 改由适配层合并进 payload（`units/websocket_observer_endpoint.py:56-68`）。
 
 ### 5.2 builtin 单元清单与职责
@@ -1066,7 +1102,7 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 | 7 | `desired_state` | `units/recovery.py:34-78` | 0 | `DESIRED_STATE_STORE` | — |
 | 8 | `shipped_abilities` | `units/shipped_abilities.py` | 0 | — | — |
 | 9 | `websocket_observer_endpoint` | `units/websocket_observer_endpoint.py` | 0 | `OBSERVER_ENDPOINT`、`OBSERVER_EVENT_BUS` | — |
-| 10 | `core_cluster_registry` | `units/core_cluster.py` | 21 | `CORE_CLUSTER_REGISTRY`、`ABILITY_ACCESS`（+`CORE_PORT`） | `MANIFEST_STORE`、`WORKSPACE_SERVICE`、`SANDBOX_EXECUTOR` |
+| 10 | `core_cluster_registry` | `units/core_cluster.py` | 21 | `CORE_CLUSTER_REGISTRY`、`CORE_PORT`、`CORE_CATALOG` | `MANIFEST_STORE`、`WORKSPACE_SERVICE`、`SANDBOX_EXECUTOR` |
 | 11 | `project` | `units/project.py` | 18 | `PROJECT_MANAGER`、`PROJECT_STORE` | 6 项（`units/project.py` `UnitMeta`） |
 | 12 | `ability_control` | `units/ability_control.py` | 0 | — | 5 项（`:538-550`） |
 | 13 | `agent_control` | `units/agent_control.py` | 0 | — | 5 项（`:504-516`） |
@@ -1079,18 +1115,18 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 
 #### `core_cluster`（`units/core_cluster.py`）
 
-- 职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。`init` 里构造 `PortClusterTransport` 并以 `CORE_CLUSTER_REGISTRY` 键 provide（`:319-322`），同时构造 Core 端口并 provide 到 `CORE_PORT`（`:311-316`）。
+- 职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。`init` 里构造 `CorePorts(_make_port)`（按项目懒建端口实例）与无作用域目录端口，分别 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:277`–`:278`），再构造 `PortClusterTransport` 并 provide 到 `CORE_CLUSTER_REGISTRY`（`:282`）。
 - 21 条命令 = `_PROJECT_AGENT_COMMANDS`（`:46-70`），是从 Subject 到 Core 的**唯一 Agent 运行命令面**。
 - 三道守卫，顺序固定：`register_ability` / `unregister_ability` 直接拒（`:347-353`，指向授权关系库）→ 命令名白名单（`:359-364`）→ `_project()` 校验项目存在/未归档/ACTIVE（`:417-440`）。`_RUNTIME_REVIVING_COMMANDS`（`:101-118`）要求项目处于 `ACTIVE`，防止一条消息惰性复活 stopped 项目；`_NO_MOUNT_COMMANDS`（`:122`，含 `get_agent_info` / `session_list` / `terminate_agent`）在无运行实例时走免挂载回执（`:384-385`、`:442-470`）。
 - 命令到端口的落地：`handle.dispatch(command, core_payload)`（`:397`），`PortClusterTransport` 里是一张「命令名 → 能力调用」的显式映射表（`runtime/port_transport.py:305-411`）。
 - `_spawn` 自带乐观锁重试（最多 3 次，`:508-538`），并把 `project_add_agent` 的回执归一成 `name`/`agent_id`/`runtime_pending`/`runtime_error`。
-- `start()` 预热项目定位符（`:324-333`），因为 Core 侧库路径由 locator 推导。
+- 每条命令分发前先登记项目定位符（`:327-333`）：Core 侧数据根由 locator 推导，端口实例懒建时要能解析——因此即使单元未挂载，读命令也能取到端口。
 
 #### `ledger`（`units/ledger.py`）
 
 - 职责：ActionChain 读侧投影，**只是 Core 端口的调用方**，自己不发布任何服务（`provides=frozenset()`，`:40-45`），避免出现绕过端口的第二条读路径。
 - 只有 1 条命令 `get_chain_history`（`units/_commands.py:21` ← `ghrah-protocol/src/ghrah/protocol/routing.py:137-141`）。
-- 端口按项目懒取并缓存（`_port_for_project`，`:62-88`）；端口缺失抛 `core_port_unavailable`，项目已冻结抛 `resource_archived`。
+- 端口经装配层注册表取（`_port_for_project` → `CorePorts.for_project`，`:62-88`）；注册表缺失抛 `core_port_unavailable`，项目已冻结抛 `resource_archived`。
 - 读前把显示名解析为稳定 `agent_id` 并校验归属（`_resolve_persistence_key`，`:158-184`）：项目内匹配数必须为 1 且 `name` 一致，否则 `agent_project_mismatch` / `agent_identity_mismatch`。
 - 会话不存在（`ProblemCode.NOT_FOUND`）按空历史返回，其它错误上抛（`:135-141`）。
 
@@ -1107,7 +1143,7 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 
 #### `ability_control`（`units/ability_control.py`）
 
-- 职责：能力域管理面的 **HTTP 形态适配**——不含业务逻辑，全部转 Core 能力端口（`:119-131` 的 docstring 与 `_port`）。因此 `RouteSpec()` 为空：它不新增任何 WS 命令。
+- 职责：能力域管理面的 **HTTP 形态适配**——不含业务逻辑，全部转 Core 能力端口（`:119-131` 的 docstring 与 `_port`）；四个全局目录端点（包目录 / 包详情 / 版本画像 / MCP 探测）走无作用域的 `_catalog()`（`:190`）。因此 `RouteSpec()` 为空：它不新增任何 WS 命令。
 - 挂载方式是把 `APIRouter(prefix="/api/v1")` 加到观察端持有的 FastAPI app 上（`:562-591`），并注册错误处理器与 CORS。
 - 鉴权：回环地址放行，否则要求 `Authorization: Bearer <observer_http_api_token>` 且用 `hmac.compare_digest` 比较（`:101-116`）。
 - 端点可用性分两级：`observer_http_api_enabled` 总开关，`ability_source == "builtin"` 才开目录/实例读面（`:133-152`）；`/abilities/status` 永远可达（`:205-230`）。
@@ -1381,17 +1417,18 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 
 > `ghrah-core/src/ghrah/core/units/` 下的实际模块只有 `context.py`、`registry.py`、`__init__.py`；`reg_frame.py` 不存在（未核实）。
 
-### 6.3 `api/`：`CoreFacade` 与能力面（单一端口）
+### 6.3 `api/`：`CoreFacade`、`CoreCatalog` 与能力面（两种端口）
 
-`CoreFacade` 是 `CorePort` 的唯一实现（`api/facade.py:89`），门面刻意做薄：装箱 → 转交 → 建模型，不含业务判断、不碰存储、不决定错误语义（`:4-8`）。
+`CoreFacade` 是 `CorePort` 的唯一实现（`api/facade.py:83`），门面刻意做薄：装箱 → 转交 → 建模型，不含业务判断、不碰存储、不决定错误语义（`:4-8`）。
 
-- 10 个分组属性：`nodes` / `sessions` / `branches` / `mailbox` / `deliveries` / `rooms` / `manifests` / `abilities` / `agents` / `messages`（`:121-169`）。
-- `project(project_id)` 返回绑定视图，共享同一收敛点与连接池，只多记一个字符串（`:171-187`）；`_call` 在这一层唯一注入 `project_id`（`:198-222`）；无项目维度的能力走 `_call_global`（`:224-226`）。
-- 接口清单 `CORE_INTERFACES`（`api/interfaces.py:564`）：实测 **50** 条，分组分布 `abilities 13 / agents 9 / sessions 8 / mailbox 6 / branches 5 / deliveries 3 / messages 3 / nodes 1 / rooms 1 / manifests 1`。
-- 收敛点 `api/runtime.py:18-31` 的 `CoreRuntime(InterfaceRuntime)` 在构造时校验「清单 == 处理器集合」；处理器由 `api/handlers/__init__.py:32-60` 的 `build_handlers(chain, mailbox, abilities, registry)` 汇总。
-- 装配根 `build_core_port(...)`（`wiring.py:111-159`）按固定顺序组装：`ChainReadStore` → `MailboxReadStore` → `RuntimeRegistry` → `AbilityReadStore(resolve_run=registry.run_id_for, resolve_tools=registry.tools_for)` → `set_ability_store_factory` → `CoreRuntime(build_handlers(...))` → `CoreFacade(closer=...)`。
+- 10 个分组属性：`nodes` / `sessions` / `branches` / `mailbox` / `deliveries` / `rooms` / `manifests` / `abilities` / `agents` / `messages`（`:121-167`）。
+- 构造入参固定作用域（`scope_id`，`:95-118`）；`_call` 只转交（`:177-189`），不再注入任何项目字段——内部命令载荷的作用域由单元入口补齐（§4.5）。
+- 接口清单 `CORE_INTERFACES`（`api/interfaces.py:543`）：实测 **48** 条，分组分布 `abilities 11 / agents 9 / sessions 8 / mailbox 6 / branches 5 / deliveries 3 / messages 3 / nodes 1 / rooms 1 / manifests 1`。
+- 目录端口 `CoreCatalog`（`api/catalog.py:32`）实现 `CoreCatalogPort`，收敛点 `CoreCatalogRuntime`，清单 `CORE_CATALOG_INTERFACES`（`api/interfaces.py:612`）：**5** 条。
+- 收敛点 `api/runtime.py:25` / `:41` 的两个 `InterfaceRuntime` 子类在构造时校验「清单 == 处理器集合」；处理器由 `api/handlers/__init__.py:32` 的 `build_handlers(chain, mailbox, abilities, registry)` 与 `:63` 的 `build_catalog_handlers(abilities)` 分别汇总。
+- 装配入口是 `build_core_port(...)`（`wiring.py:96-162`）与 `build_core_catalog(...)`（`wiring.py:165-189`）。
 
-**「单一端口」的边界**：Subject 只知道一个字符串键 `core.port`（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:10`），由 `core_cluster_registry` 单元在挂载时 provide（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:311-316`）；50 条能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是一个端口对象（用法 `ghrah-subject/src/ghrah/subject/units/ledger.py:83`）。
+**「端口」的边界**：Subject 只知道两个字符串键 `core.port` / `core.catalog`（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），由 `core_cluster_registry` 单元在 init 时 provide（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:277-282`）；48 条作用域能力 + 5 条目录能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是端口对象（用法 `ghrah-subject/src/ghrah/subject/units/ledger.py:83`）。
 
 ### 6.4 进程内 `/v1` 控制面（已退役）
 
@@ -2423,7 +2460,7 @@ flowchart TD
 `get_chain_history` 的当前实现是"调用方"而不是"第二读者"：
 
 1. 命令名集合 `CHAIN_HISTORY_COMMANDS` 只有一条（`ghrah-protocol/src/ghrah/protocol/routing.py:137`）；
-2. `LedgerUnit` 不发布任何实例级服务（`provides=frozenset()`），取端口经 `ctx.get(CORE_PORT)` → `base.project(project_id)`（`ghrah-subject/src/ghrah/subject/units/ledger.py:62`、`:83`）；
+2. `LedgerUnit` 不发布任何实例级服务（`provides=frozenset()`），取端口经 `ctx.get(CORE_PORT)` → `ports.for_project(project_id)`（`ghrah-subject/src/ghrah/subject/units/ledger.py:83`、`:86`）；
 3. 真正读历史的是 `port.sessions.history(agent_id, session_id, branch_id, limit)`（`ghrah-subject/src/ghrah/subject/units/ledger.py:129`），端口契约在 `ghrah-protocol/src/ghrah/protocol/ports/core.py:97`；
 4. 会话不存在按"空历史"返回而不是报错：只吞 `NOT_FOUND`，其它 `ApiError` 继续上抛（`ghrah-subject/src/ghrah/subject/units/ledger.py:135`）；
 5. 归属先解析后读：`_resolve_persistence_key` 用 `project_get` 校验 `agent_id` 唯一命中且 `name` 一致，否则 `agent_project_mismatch` / `agent_identity_mismatch`（`ghrah-subject/src/ghrah/subject/units/ledger.py:158`）。
@@ -2584,7 +2621,7 @@ Project 生命周期通过一个**作用域资源协议**下发，签名为三�
 | --- | --- | --- |
 | `ProjectScopedTaskStore` | 快照 `task → project` 归属，冻结后任何 `_project_store` 访问抛 `ProjectArchivedError`，并关闭已打开的 `TaskStore` | `ghrah-subject/src/ghrah/subject/project/scoped_stores.py:72`、`:52`、`:92` |
 | `ProjectScopedRoomStore` | 同构：快照 `room → project`、冻结、关闭 `RoomStore` | `ghrah-subject/src/ghrah/subject/project/scoped_stores.py:241`、`:261` |
-| `LedgerUnit` | 项目加入 `_frozen_projects` 并丢弃缓存的 Core 端口视图；`_port_for_project` 见冻结即 `resource_archived` | `ghrah-subject/src/ghrah/subject/units/ledger.py:90`、`:78` |
+| `LedgerUnit` | 项目加入 `_frozen_projects` 并丢弃缓存的端口引用；`_port_for_project` 见冻结即 `resource_archived` | `ghrah-subject/src/ghrah/subject/units/ledger.py:78`、`:62` |
 
 冻结是**纵深防御**：即使上层漏了状态判断，命中的 store 也会在取库句柄时拒绝。命令层还有一层前置闸：Room 写命令先查父 Project 的 `archived_at`/`deleted_at`（`ghrah-subject/src/ghrah/subject/room/manager.py:139`）；Task 命令同理（`ghrah-subject/src/ghrah/subject/units/task.py:105`）；Project 自身的 9 条 mutation 命令先过 `_get_active_project`（`archived_at != None` → `resource_archived`）（`ghrah-subject/src/ghrah/subject/project/manager.py:338`）。
 
@@ -2862,7 +2899,7 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 
 ### 14.10 同一个容器键在两个包里各写一份字面量
 
-- 现状：`CORE_PORT = "core.port"` 在协议包（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:10`），Subject 又在服务键表里重新写了一份同值字面量并加注释说明"名字就是协议包的 `core.port`"（`ghrah-subject/src/ghrah/subject/runtime/service_keys.py:277-278`）。两处都有使用方：`units/core_cluster.py:283-316` 用协议常量 provide，`units/agent_control.py:42`、`:512` 用 Subject 常量 requires。
+- 现状：`CORE_PORT = "core.port"` / `CORE_CATALOG = "core.catalog"` 在协议包（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），Subject 又在服务键表里重新写了两份同值字面量并加注释说明"名字就是协议包的 `core.port` / `core.catalog`"（`ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278`、`:280`）。两处都有使用方：`units/core_cluster.py:277-282` 用协议常量 provide，`units/ability_control.py`、`units/agent_control.py` 用 Subject 常量 requires。
 - 影响：容器键本应只有一处真相（`keys.py:4` 的 docstring 即如此声明），现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为"依赖未满足 / service not found"。
 
 ### 14.11 内置链挂载 TaskStore 与"目标形态是插件"自相矛盾
@@ -2895,9 +2932,9 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 | 门面（facade） | 端口的实现对象，每应用实例一个，由装配根创建 |
 | 装配根（composition root） | 唯一允许同时认识多个模块的位置：创建门面、注入、关闭 |
 | 契约包 | `ghrah-protocol`：端口协议、视图 DTO、错误码、接口骨架 |
-| 请求信封 | 一条接口的入参 DTO，形如 `SessionsCatalogRequest`，除全局接口外都含 `project_id` |
+| 请求信封 | 一条接口的入参 DTO，形如 `SessionsCatalogRequest`；**不含作用域字段**——作用域由端口实例决定 |
 | 出参信封 | 接口层统一返回的 DTO（如 `NodeIdView`），端口层拆壳成裸值 |
-| 作用域（scope） | 一条接口所属的项目边界；由 `project(project_id)` 绑定 |
+| 作用域（scope） | 一条接口所属的项目边界；由端口实例在构造时绑定（一个实例一个作用域），调用方不能更换 |
 | `run` | 一次 Agent 进程内实例的标识；能力关系库用它判定运行时态 |
 | 工具面（tool surface） | 真正发给模型的工具 schema 集合，由 `Ability.bind_tool()` 的返回值决定 |
 | 定义面（definition surface） | 能力在 `ability.yaml` / manifest 里的声明（名称、参数、权限） |
