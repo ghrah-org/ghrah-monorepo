@@ -26,6 +26,7 @@ from ghrah.subject.config import SubjectConfig
 from ghrah.subject.core_cluster.registry import default_core_unit_factory
 from ghrah.subject.errors import StableError
 from ghrah.subject.runtime.service_keys import (
+    CORE_CATALOG_SERVICE,
     CORE_CLUSTER_REGISTRY,
     CORE_PORT_SERVICE,
     MANIFEST_STORE,
@@ -144,11 +145,13 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 显式 unit_factory 优先，本参数被忽略（工厂自持全部 CoreUnitConfig）。
         self._llm_factory = llm_factory
         self._transport: Any | None = None
+        self._ports: Any | None = None
+        self._catalog: Any | None = None
         self._ctx: Any | None = None
         self._meta = UnitMeta(
             name="core_cluster_registry",
             requires=frozenset({MANIFEST_STORE, WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
-            provides=frozenset({CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
+            provides=frozenset({CORE_CATALOG_SERVICE, CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
             routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS),
         )
 
@@ -228,10 +231,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 room_projector=project_room,
                 shell_cwd_lookup=shell_cwd_lookup,
             )
-        from ghrah.core.wiring import build_core_assembly, build_core_port
-        from ghrah.protocol.ports.keys import CORE_PORT
+        from ghrah.core.wiring import build_core_catalog, build_core_port
+        from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
         from ghrah.subject.project.paths import ProjectPaths
+        from ghrah.subject.runtime.core_ports import CorePorts
 
         def _locator_for(project_id: str) -> str | None:
             """取已登记的项目根定位符（由 cluster 登记提供）。"""
@@ -263,21 +267,27 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 serial=ctx.serial,
             )
 
-        core_port = build_core_assembly(
-            port_factory=_make_port,
+        # 按项目懒建/缓存作用域端口；目录端口无作用域，零项目时也可用。
+        self._ports = CorePorts(_make_port)
+        self._catalog = build_core_catalog(
             install_root=self._config.ability.install_root,
             agentconf_db_path=self._config.agentconf_db_path,
             grant_policy=self._config.ability_grant_policy,
         )
-        ctx.provide(CORE_PORT, core_port)
+        ctx.provide(CORE_PORT, self._ports)
+        ctx.provide(CORE_CATALOG, self._catalog)
         from ghrah.subject.runtime.port_transport import PortClusterTransport
 
-        self._transport = PortClusterTransport(core_port)
+        self._transport = PortClusterTransport(self._ports)
         ctx.provide(CORE_CLUSTER_REGISTRY.name, self._transport)
 
     async def stop(self) -> None:
         if self._transport is not None:
             await self._transport.stop()
+        if self._catalog is not None:
+            await self._catalog.aclose()
+            self._catalog = None
+        self._ports = None
 
     async def handle_command(
         self,

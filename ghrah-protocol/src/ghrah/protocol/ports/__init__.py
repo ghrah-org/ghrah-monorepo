@@ -9,20 +9,23 @@ from ghrah.protocol.ports.core import (
     AgentId,
     BranchId,
     BranchOperations,
+    CoreCatalogPort,
     CorePort,
     NodeId,
     NodeOperations,
     SessionId,
     SessionOperations,
 )
-from ghrah.protocol.ports.keys import CORE_PORT, SUBJECT_PORT
+from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT, SUBJECT_PORT
 
 __all__ = [
+    "CORE_CATALOG",
     "CORE_PORT",
     "SUBJECT_PORT",
     "AgentId",
     "BranchId",
     "BranchOperations",
+    "CoreCatalogPort",
     "CorePort",
     "NodeId",
     "NodeOperations",

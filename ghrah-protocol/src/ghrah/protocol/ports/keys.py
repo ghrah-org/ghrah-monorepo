@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
-__all__ = ["CORE_PORT", "SUBJECT_PORT"]
+__all__ = ["CORE_CATALOG", "CORE_PORT", "SUBJECT_PORT"]
+
+CORE_CATALOG = "core.catalog"
+"""Core 全局目录端口在容器中的键（无作用域）。"""
 
 CORE_PORT = "core.port"
 """Core 端口在容器中的键。"""

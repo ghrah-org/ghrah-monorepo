@@ -17,12 +17,7 @@ from ghrah.protocol.ability_control import (
     AbilityApiStatus,
     AbilityChangesPage,
     AbilityInstancesView,
-    AbilityMcpProbeRequest,
-    AbilityMcpProbeView,
-    AbilityPackageCatalogView,
-    AbilityPackageDetailView,
     AbilityPackageGroupsView,
-    AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
 from ghrah.protocol.ability_tree import (
@@ -38,7 +33,6 @@ from ghrah.protocol.ports.core import (
     AgentOperations,
     BranchId,
     BranchOperations,
-    CorePort,
     DeliveriesOperations,
     DeliveryId,
     MailboxOperations,
@@ -51,7 +45,6 @@ from ghrah.protocol.ports.core import (
     SessionId,
     SessionOperations,
 )
-from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import (
     AgentIdView,
     BranchIdView,
@@ -82,40 +75,33 @@ from ghrah.protocol.views.core import (
     ToolView,
 )
 
-from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.runtime import CoreRuntime
 
 __all__ = ["CoreFacade"]
 
-type PortFactory = Callable[[str], CorePort]
-
 
 class CoreFacade:
-    """``CorePort`` 的实现。
+    """``CorePort`` 的实现：一个实例对应一个作用域。
 
-    一个实例对应一个**作用域**：``scope_id`` 由装配层在构造时确定，对 Core 是
-    不透明 token——它不出现在能力请求里，也不由调用方传入。
+    ``scope_id`` 由装配层在构造时确定，对 Core 是不透明 token——它不出现在能力
+    请求里，也不由调用方传入。无作用域的全局读面见 :class:`CoreCatalog`。
 
     Args:
         runtime: 模块内收敛点
-        scope_id: 作用域 token；``None`` 表示装配根（只服务全局能力）
-        closer: 关闭内部资源的回调（只有装配层创建的实例持有）
-        port_factory: 装配根用于按作用域创建端口实例的工厂（过渡形态）
+        scope_id: 作用域 token
+        closer: 关闭内部资源的回调（由装配层持有）
     """
 
     def __init__(
         self,
         *,
         runtime: CoreRuntime,
-        scope_id: str | None = None,
+        scope_id: str,
         closer: Callable[[], Awaitable[None]] | None = None,
-        port_factory: PortFactory | None = None,
     ) -> None:
         self._runtime = runtime
         self._scope_id = scope_id
         self._closer = closer
-        self._port_factory = port_factory
-        self._ports: dict[str, CorePort] = {}
         self._nodes = _Nodes(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
@@ -179,54 +165,12 @@ class CoreFacade:
         """消息投递。"""
         return self._messages
 
-    def project(self, project_id: str) -> CorePort:
-        """取（或惰性创建）某作用域的端口实例。
-
-        过渡接口：只应由装配根调用。装配层在下一轮改为直接按
-        ``for_project(project_id)`` 取实例后，本方法删除。
-
-        Args:
-            project_id: 作用域 token（装配层通常传 Project 标识）
-
-        Returns:
-            该作用域的端口实例
-        """
-        if self._port_factory is None:
-            raise ValueError("port is already scoped: project() is only on the assembly root")
-        port = self._ports.get(project_id)
-        if port is None:
-            port = self._port_factory(project_id)
-            self._ports[project_id] = port
-        return port
-
     # ── 生命周期 ──
 
-    async def stop_project(self) -> None:
-        """停止并释放本作用域实例。"""
-        if self._scope_id is None:
-            raise ValueError("assembly root has no scope to stop")
-        await self.aclose()
-
     async def aclose(self) -> None:
-        """释放内部资源（幂等）。
-
-        装配根会一并关闭它创建的全部作用域实例；单个实例只关自己的资源。
-        """
-        errors: list[Exception] = []
-        ports = list(self._ports.values())
-        self._ports.clear()
-        for port in ports:
-            try:
-                await port.aclose()
-            except Exception as exc:
-                errors.append(exc)
+        """释放内部资源（幂等）。"""
         if self._closer is not None:
-            try:
-                await self._closer()
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise ExceptionGroup("failed to close Core port", errors)
+            await self._closer()
 
     # ── 内部 ──
 
@@ -239,22 +183,7 @@ class CoreFacade:
 
         Returns:
             JSON 形状的出参
-
-        Raises:
-            CoreApiError: 端口没有作用域时抛 ``FAILED_PRECONDITION``
         """
-        if self._scope_id is None:
-            raise CoreApiError(
-                Problem.make(
-                    ProblemCode.FAILED_PRECONDITION,
-                    capability=capability,
-                    detail="capability requires a scoped Core port",
-                ),
-            )
-        return await self._runtime.invoke(capability, dict(kwargs))
-
-    async def _call_global(self, capability: str, **kwargs: Any) -> Any:
-        """调用不绑定作用域的全局能力（如能力包目录）。"""
         return await self._runtime.invoke(capability, dict(kwargs))
 
 
@@ -726,51 +655,9 @@ class _Abilities:
         raw = await self._facade._call("abilities.status")
         return AbilityApiStatus.model_validate(raw)
 
-    async def packages(self) -> AbilityPackageCatalogView:
-        """已安装能力包目录。"""
-        raw = await self._facade._call_global("abilities.packages")
-        return AbilityPackageCatalogView.model_validate(raw)
-
-    async def package_detail(self, *, namespace: str, name: str) -> AbilityPackageDetailView:
-        """单个能力包详情。"""
-        raw = await self._facade._call_global(
-            "abilities.package_detail",
-            namespace=namespace,
-            name=name,
-        )
-        return AbilityPackageDetailView.model_validate(raw)
-
-    async def package_version_profile(
-        self, *, namespace: str, name: str, version: str
-    ) -> AbilityPackageVersionProfileView:
-        """读取单个能力包版本的画像。"""
-        raw = await self._facade._call_global(
-            "abilities.package_version_profile", namespace=namespace, name=name, version=version
-        )
-        return AbilityPackageVersionProfileView.model_validate(raw)
-
-    async def package_mcp_probe(
-        self, *, namespace: str, name: str, version: str, request: AbilityMcpProbeRequest
-    ) -> AbilityMcpProbeView:
-        """只读探测指定能力包版本声明的 MCP 服务。"""
-        raw = await self._facade._call_global(
-            "abilities.package_mcp_probe",
-            namespace=namespace,
-            name=name,
-            version=version,
-            request=request.model_dump(mode="json"),
-        )
-        return AbilityMcpProbeView.model_validate(raw)
-
-    async def package_groups(
-        self,
-        *,
-        agent_id: AgentId | None = None,
-        scoped: bool = True,
-    ) -> AbilityPackageGroupsView:
-        """能力包分组视图；``scoped=False`` 走全局通道。"""
-        call = self._facade._call if scoped else self._facade._call_global
-        raw = await call("abilities.package_groups", agent_id=agent_id)
+    async def package_groups(self, *, agent_id: AgentId | None = None) -> AbilityPackageGroupsView:
+        """作用域内的能力包分组视图（含实例事实）。"""
+        raw = await self._facade._call("abilities.package_groups", agent_id=agent_id)
         return AbilityPackageGroupsView.model_validate(raw)
 
     async def instances(self) -> AbilityInstancesView:

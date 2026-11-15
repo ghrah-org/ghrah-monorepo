@@ -26,7 +26,7 @@ from ghrah.core.read.ability_catalog import (
     build_package_catalog,
     build_package_groups,
 )
-from ghrah.core.wiring import build_core_assembly, build_core_port
+from ghrah.core.wiring import build_core_catalog, build_core_port
 from ghrah.protocol.ability_control import (
     AbilityMcpProbeView,
     AbilityMcpServerInfoView,
@@ -45,8 +45,10 @@ from ouroboros_testutil import wait_active
 from starlette.requests import Request
 
 from ghrah.subject.config import SubjectConfig
+from ghrah.subject.runtime.core_ports import CorePorts
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
 from ghrah.subject.runtime.service_keys import (
+    CORE_CATALOG_SERVICE,
     CORE_PORT_SERVICE,
     OBSERVER_EVENT_BUS,
     PROJECT_STORE,
@@ -188,10 +190,11 @@ async def _request(
 
 @pytest.fixture
 async def make_app():
-    ports = []
+    ports: list[CorePorts] = []
+    catalogs: list[Any] = []
 
     def build(config: SubjectConfig, handle: _Handle, bus: _Bus, probe: Any = None) -> FastAPI:
-        # 关系库由测试布置事实，HTTP 通过独立的真实 Core 端口读取。
+        # 关系库由测试布置事实，HTTP 通过作用域端口 / 目录端口读取。
         def make_port(project_id: str):
             return build_core_port(
                 scope_id=project_id,
@@ -199,58 +202,68 @@ async def make_app():
                 install_root=config.ability.install_root,
             )
 
-        port = build_core_assembly(
-            port_factory=make_port,
+        base_ports = CorePorts(make_port)
+        ports.append(base_ports)
+
+        base_catalog = build_core_catalog(
             install_root=config.ability.install_root,
+            agentconf_db_path=config.agentconf_db_path,
         )
-        ports.append(port)
+        catalogs.append(base_catalog)
 
-        class RoutedPort:
-            @property
-            def abilities(self):
-                if probe is None:
-                    return port.abilities
+        if probe is None:
+            catalog: Any = base_catalog
+        else:
 
-                async def run_probe(*, namespace, name, version, request):
-                    try:
-                        return await probe(
-                            config.ability.install_root,
-                            namespace,
-                            name,
-                            version,
-                            request,
-                            db_path=config.agentconf_db_path,
-                        )
-                    except CatalogError as exc:
-                        code = (
-                            ProblemCode.FAILED_PRECONDITION
+            async def run_probe(*, namespace, name, version, request):
+                try:
+                    return await probe(
+                        config.ability.install_root,
+                        namespace,
+                        name,
+                        version,
+                        request,
+                        db_path=config.agentconf_db_path,
+                    )
+                except CatalogError as exc:
+                    code = (
+                        ProblemCode.FAILED_PRECONDITION
+                        if exc.code == "invalid_change"
+                        else ProblemCode.NOT_FOUND
+                    )
+                    raise ApiError(
+                        Problem.make(
+                            code,
+                            capability="abilities.package_mcp_probe",
+                            detail=exc.message,
+                            details={"reason": "definition_not_mcp"}
                             if exc.code == "invalid_change"
-                            else ProblemCode.NOT_FOUND
+                            else {},
                         )
-                        raise ApiError(
-                            Problem.make(
-                                code,
-                                capability="abilities.package_mcp_probe",
-                                detail=exc.message,
-                                details={"reason": "definition_not_mcp"}
-                                if exc.code == "invalid_change"
-                                else {},
-                            )
-                        ) from exc
+                    ) from exc
 
-                return SimpleNamespace(package_mcp_probe=run_probe)
+            catalog = SimpleNamespace(
+                packages=base_catalog.packages,
+                package_detail=base_catalog.package_detail,
+                package_version_profile=base_catalog.package_version_profile,
+                package_groups=base_catalog.package_groups,
+                package_mcp_probe=run_probe,
+                aclose=base_catalog.aclose,
+            )
 
-            def project(self, project_id):
+        class RoutedPorts:
+            def for_project(self, project_id: str):
                 if isinstance(handle.store, _FakeStore):
                     return SimpleNamespace(abilities=handle.store)
-                return port.project(project_id)
+                return base_ports.for_project(project_id)
 
         app = FastAPI()
         app.include_router(
             build_ability_control_router(
                 config=config,
                 project_store=_ProjectStore(handle.project_id, "/tmp/project"),
-                core_port=RoutedPort(),
+                core_ports=RoutedPorts(),
+                catalog=catalog,
                 event_bus=bus,
             )
         )
@@ -260,6 +273,8 @@ async def make_app():
     yield build
     for port in ports:
         await port.aclose()
+    for catalog in catalogs:
+        await catalog.aclose()
 
 
 def _request_with_host(host: str, headers: dict[str, str] | None = None) -> Request:
@@ -289,6 +304,7 @@ async def test_unit_mounts_router_and_status_route_on_observer_app() -> None:
             _ProjectStore("proj", "/tmp/proj"),
         )
         ctx.provide(CORE_PORT_SERVICE.name, object())
+        ctx.provide(CORE_CATALOG_SERVICE.name, build_core_catalog())
         unit = AbilityControlUnit(config)
         fiber = ctx.plugin(mount_unit(unit))
         await wait_active(fiber)

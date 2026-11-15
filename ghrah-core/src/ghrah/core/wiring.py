@@ -9,9 +9,8 @@
 
 - :func:`build_core_port`：**一个作用域一个实例**。数据根（sqlite 路径）与
   作用域 token 在构造时固定，能力请求里不再出现作用域。
-- :func:`build_core_assembly`：**装配根**。它只服务不需要作用域的全局能力
-  （能力包目录等），并按 ``port_factory`` 为各作用域产出 / 缓存端口实例。
-  这是迁移期的过渡形态；目录端口拆分后装配根会退化为纯工厂。
+- :func:`build_core_catalog`：**全局目录端口**。无作用域、不打开数据库，
+  只读能力包安装根与受信配置（零项目时也可用）。
 
 ``config_factory`` 是部署设置注入点：装配层（Subject 或进程入口）在此提供
 HITL 策略、工作区根、能力安装目录等，Core 自己不读环境变量、不猜配置。
@@ -23,11 +22,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ghrah.protocol.ports.core import CorePort
-
+from ghrah.core.api.catalog import CoreCatalog
 from ghrah.core.api.facade import CoreFacade
-from ghrah.core.api.handlers import build_handlers
-from ghrah.core.api.runtime import CoreRuntime
+from ghrah.core.api.handlers import build_catalog_handlers, build_handlers
+from ghrah.core.api.runtime import CoreCatalogRuntime, CoreRuntime
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.chain import ChainReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
@@ -41,7 +39,7 @@ from ghrah.core.units.registry import (
     UnitFactory,
 )
 
-__all__ = ["build_core_assembly", "build_core_port"]
+__all__ = ["build_core_catalog", "build_core_port"]
 
 
 async def _close_all(*closers: Callable[[], Awaitable[None]]) -> None:
@@ -93,11 +91,6 @@ def _default_config_factory(db_path: str, scope_id: str) -> ConfigFactory:
         )
 
     return factory
-
-
-def _unavailable_config() -> CoreUnitConfig:
-    """装配根没有作用域：被误调用时立刻失败，而不是造一个空单元。"""
-    raise RuntimeError("assembly root has no scope: scoped capability cannot be invoked")
 
 
 def build_core_port(
@@ -169,26 +162,22 @@ def build_core_port(
     )
 
 
-def build_core_assembly(
+def build_core_catalog(
     *,
-    port_factory: Callable[[str], CorePort],
     install_root: str | None = None,
     agentconf_db_path: str | None = None,
     grant_policy: Any = None,
-) -> CoreFacade:
-    """构造**装配根**：只服务全局能力，并按作用域产出端口实例。
+) -> CoreCatalog:
+    """构造全局目录端口（无作用域）。
 
     Args:
-        port_factory: ``project_id -> 作用域端口实例`` 的工厂（由装配层提供）
         install_root: 能力包安装根
         agentconf_db_path: MCP 探测使用的受信配置库路径
         grant_policy: 部署显式配置的启动授权策略
 
     Returns:
-        装配根门面；作用域能力在根上调用会以 ``FAILED_PRECONDITION`` 拒绝
+        目录端口；零项目时也可用，不打开数据库、不建单元
     """
-    chain = ChainReadStore(db_path=Path(""))
-    mailbox = MailboxReadStore(db_path=Path(""), scope_id="")
     abilities = AbilityReadStore(
         db_path=Path(""),
         scope_id=None,
@@ -196,11 +185,5 @@ def build_core_assembly(
         agentconf_db_path=agentconf_db_path,
         grant_policy=grant_policy,
     )
-    registry = RuntimeRegistry(scope_id="", config_factory=_unavailable_config)
-    runtime = CoreRuntime(build_handlers(chain, mailbox, abilities, registry))
-    return CoreFacade(
-        runtime=runtime,
-        scope_id=None,
-        closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose),
-        port_factory=port_factory,
-    )
+    runtime = CoreCatalogRuntime(build_catalog_handlers(abilities))
+    return CoreCatalog(runtime=runtime, closer=abilities.aclose)

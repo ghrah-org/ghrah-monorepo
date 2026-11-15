@@ -305,7 +305,7 @@ async def test_subject_bootstrap_recovers_agent_and_message_history(tmp_path: Pa
         restored = await start(ctx)
         assert restored.project_id == project_id
         assert restored.project_root_locator == project.project_root_locator
-        port = ctx.get("core.port").project(project_id)
+        port = ctx.get("core.port").for_project(project_id)
         assert set((await port.agents.list()).items) == {source_id, target_id}
         catalog = await port.sessions.catalog(agent_id=source_id)
         branch = next(b for b in catalog.branches if b.session_id == catalog.active_session_id)
@@ -357,7 +357,7 @@ async def test_subject_bootstrap_recovers_agent_and_message_history(tmp_path: Pa
     async with Context() as ctx:
         project = await start(ctx)
         assert project.project_id == project_id
-        port = ctx.get("core.port").project(project_id)
+        port = ctx.get("core.port").for_project(project_id)
         assert (await port.agents.list()).items == [source_id]
         assert (
             next(agent for agent in project.agents if agent.agent_id == target_id).desired_state
@@ -400,4 +400,4 @@ async def test_reconcile_reports_legacy_name_collisions_without_spawning(tmp_pat
         assert report.agents_failed == 2
         assert {item["agent_id"] for item in report.agent_results} == {"old-id", ""}
         assert all(project_id in message and "worker" in message for message in report.errors)
-        assert (await ctx.get("core.port").project(project_id).agents.list()).items == []
+        assert (await ctx.get("core.port").for_project(project_id).agents.list()).items == []

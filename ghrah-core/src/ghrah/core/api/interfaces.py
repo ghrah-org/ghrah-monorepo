@@ -63,8 +63,10 @@ from ghrah.protocol.views.core import (
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "CORE_CATALOG_INTERFACES",
     "CORE_INTERFACES",
     "AbilitiesAdminRequest",
+    "AbilitiesPackageGroupsGlobalRequest",
     "AbilitiesChangesRequest",
     "AbilitiesContentRequest",
     "AbilitiesTreeRequest",
@@ -466,6 +468,12 @@ class AbilitiesPackageGroupsRequest(BaseModel):
     agent_id: str | None = None
 
 
+class AbilitiesPackageGroupsGlobalRequest(BaseModel):
+    """``abilities.package_groups`` 的目录侧请求信封（全局视图，无作用域）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class DeliveriesRetryRequest(BaseModel):
     """``deliveries.retry`` 的请求信封。"""
 
@@ -562,22 +570,6 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("abilities.tree", AbilitiesTreeRequest, AbilityTreeView),
         Interface("abilities.changes", AbilitiesChangesRequest, AbilityChangesPage),
         Interface("abilities.admin", AbilitiesAdminRequest, AbilityAdminView),
-        Interface("abilities.packages", AbilitiesPackagesRequest, AbilityPackageCatalogView),
-        Interface(
-            "abilities.package_detail",
-            AbilitiesPackageDetailRequest,
-            AbilityPackageDetailView,
-        ),
-        Interface(
-            "abilities.package_version_profile",
-            AbilitiesPackageVersionRequest,
-            AbilityPackageVersionProfileView,
-        ),
-        Interface(
-            "abilities.package_mcp_probe",
-            AbilitiesPackageMcpProbeRequest,
-            AbilityMcpProbeView,
-        ),
         Interface(
             "abilities.package_groups",
             AbilitiesPackageGroupsRequest,
@@ -616,3 +608,30 @@ CORE_INTERFACES = InterfaceRegistry(
 
 它是 mypy 之外的第二道契约（运行时可查）、契约测试的分母、parity 测试的比对对象。
 """
+
+CORE_CATALOG_INTERFACES = InterfaceRegistry(
+    (
+        Interface("abilities.packages", AbilitiesPackagesRequest, AbilityPackageCatalogView),
+        Interface(
+            "abilities.package_detail",
+            AbilitiesPackageDetailRequest,
+            AbilityPackageDetailView,
+        ),
+        Interface(
+            "abilities.package_version_profile",
+            AbilitiesPackageVersionRequest,
+            AbilityPackageVersionProfileView,
+        ),
+        Interface(
+            "abilities.package_mcp_probe",
+            AbilitiesPackageMcpProbeRequest,
+            AbilityMcpProbeView,
+        ),
+        Interface(
+            "abilities.package_groups",
+            AbilitiesPackageGroupsGlobalRequest,
+            AbilityPackageGroupsView,
+        ),
+    )
+)
+"""Core 全局目录端口的能力清单（无作用域：只读安装根与受信配置，不打开数据库）。"""

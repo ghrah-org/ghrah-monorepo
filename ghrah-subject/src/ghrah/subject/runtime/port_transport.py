@@ -4,8 +4,9 @@
 """``CoreClusterRegistryService`` 的端口实现：运行时归 Core，Subject 只转发。
 
 Subject 不再自己创建/挂载 CoreUnit 实例。所有对「某个 Agent 的运行时操作」
-都转成 ``CORE_PORT`` 的能力调用：端口内部持有单元生命周期，Subject 只保留
-cluster 标识到项目标识的映射。
+都转成 ``CORE_PORT`` 的能力调用：端口实例本身就是作用域，由
+:class:`~ghrah.subject.runtime.core_ports.CorePorts` 按项目懒建并缓存；
+Subject 只保留 cluster 标识到项目标识的映射。
 
 ``entity_context`` 接受的是历史遗留的操作字典；这里把它拆成能力调用，
 返回值统一是协议视图的 ``model_dump``——与观察端/WS 契约同源，不再有
@@ -21,6 +22,8 @@ from typing import Any
 from ghrah.protocol.errors import ApiError
 from ghrah.protocol.ports.keys import CORE_PORT
 from ghrah.protocol.views.core import AgentSpawnSpec, BranchListView
+
+from ghrah.subject.runtime.core_ports import CorePorts
 
 logger = logging.getLogger(__name__)
 
@@ -50,19 +53,18 @@ class _Published:
 
 
 class PortMailbox:
-    """按项目访问投递的端口替身（替代直接持有 ``MessageManager``）。
+    """已绑定项目端口实例的投递替身（替代直接持有 ``MessageManager``）。
 
-    只实现 Subject 实际用到的成员，其余一律不暴露——避免又开出一条
-    绕过能力层的旁路。
+    端口实例本身就是作用域，因此这里不再记录 project_id；只实现 Subject
+    实际用到的成员，其余一律不暴露——避免又开出一条绕过能力层的旁路。
     """
 
-    def __init__(self, port: Any, project_id: str) -> None:
+    def __init__(self, port: Any) -> None:
         self._port = port
-        self.project_id = project_id
 
     async def get_progress(self, delivery_id: str, *, agent_id: str) -> _Progress:
         """读取一条投递的当前状态。"""
-        view = await self._port.project(self.project_id).deliveries.get(
+        view = await self._port.deliveries.get(
             agent_id=agent_id,
             delivery_id=delivery_id,
         )
@@ -70,14 +72,14 @@ class PortMailbox:
 
     async def retry(self, delivery_id: str, *, agent_id: str) -> None:
         """重试一条投递。"""
-        await self._port.project(self.project_id).deliveries.retry(
+        await self._port.deliveries.retry(
             agent_id=agent_id,
             delivery_id=delivery_id,
         )
 
     async def resume(self, delivery_id: str, *, agent_id: str) -> None:
         """恢复一条投递。"""
-        await self._port.project(self.project_id).deliveries.resume(
+        await self._port.deliveries.resume(
             agent_id=agent_id,
             delivery_id=delivery_id,
         )
@@ -92,7 +94,7 @@ class PortMailbox:
         metadata: dict[str, Any] | None = None,
     ) -> _Published:
         """以外部（人）身份发布消息：转 ``mailbox.publish_external``。"""
-        view = await self._port.project(self.project_id).mailbox.publish_external(
+        view = await self._port.mailbox.publish_external(
             sender=sender,
             recipient_ids=[str(item) for item in recipient_ids],
             content=content,
@@ -113,7 +115,7 @@ class PortMailbox:
     ) -> _Published:
         """发布通知类消息：转 ``mailbox.publish_notification``。"""
         raw_kind = getattr(kind, "value", kind)
-        view = await self._port.project(self.project_id).mailbox.publish_notification(
+        view = await self._port.mailbox.publish_notification(
             sender_id=sender_id,
             recipient_ids=list(recipient_ids),
             content=content,
@@ -125,7 +127,7 @@ class PortMailbox:
 
     async def recover_room_projections(self) -> None:
         """补齐 Room 投影日志：转 ``mailbox.recover_room_projections``。"""
-        await self._port.project(self.project_id).mailbox.recover_room_projections()
+        await self._port.mailbox.recover_room_projections()
 
 
 class PortClusterHandle:
@@ -146,8 +148,8 @@ class PortClusterHandle:
 
     @property
     def _port(self) -> Any:
-        """绑定到本项目的作用域端口。"""
-        return self._transport.port.project(self._entry.project_id)
+        """取本项目作用域的端口实例（按项目懒建/缓存）。"""
+        return self._transport.port_for(self._entry.project_id)
 
     @property
     def project_id(self) -> str:
@@ -482,17 +484,19 @@ class PortClusterHandle:
 
 
 class PortClusterTransport:
-    """``CoreClusterRegistryService`` 的端口实现。"""
+    """``CoreClusterRegistryService`` 的端口实现。
 
-    def __init__(self, port: Any) -> None:
-        self._port = port
+    端口实例由 :class:`CorePorts` 按项目懒建并缓存：cluster 只登记标识与
+    项目根定位符，真正的 Core 单元生命周期归各项目端口实例。
+    """
+
+    def __init__(self, ports: CorePorts) -> None:
+        self._ports = ports
         self._clusters: dict[str, _ClusterEntry] = {}
-        self._locators: dict[str, str] = {}
 
-    @property
-    def port(self) -> Any:
-        """底层 Core 端口。"""
-        return self._port
+    def port_for(self, project_id: str) -> Any:
+        """按项目取（或懒建）端口实例。"""
+        return self._ports.for_project(project_id)
 
     def _entry(self, cluster_id: str) -> _ClusterEntry:
         entry = self._clusters.get(cluster_id)
@@ -515,17 +519,16 @@ class PortClusterTransport:
             project_id=project_id,
             project_root_locator=project_root_locator,
         )
-        self._locators[project_id] = project_root_locator
+        self._ports.remember_locator(project_id, project_root_locator)
         return PortClusterHandle(self, cluster_id)
 
     def remember_locator(self, project_id: str, locator: str) -> None:
         """登记项目根定位符（供 Core 侧库路径解析）。"""
-        if project_id and locator:
-            self._locators[project_id] = locator
+        self._ports.remember_locator(project_id, locator)
 
     def locator_for(self, project_id: str) -> str | None:
         """按项目取已登记的根定位符。"""
-        return self._locators.get(project_id)
+        return self._ports.locator_for(project_id)
 
     def get_handle(self, cluster_id: str) -> PortClusterHandle:
         """取已登记的 handle；不存在 raise ``KeyError``。"""
@@ -534,7 +537,7 @@ class PortClusterTransport:
 
     def get_message_manager(self, project_id: str) -> PortMailbox:
         """返回按项目的投递访问替身（不再外泄 ``MessageManager``）。"""
-        return PortMailbox(self._port, project_id)
+        return PortMailbox(self._ports.for_project(project_id))
 
     def has_cluster(self, cluster_id: str) -> bool:
         """cluster 是否已登记。"""
@@ -545,17 +548,16 @@ class PortClusterTransport:
         return sorted(self._clusters)
 
     async def shutdown_cluster(self, cluster_id: str) -> None:
-        """注销 cluster；Core 单元生命周期由端口自行收口。"""
+        """注销 cluster 并关闭其项目端口实例（单元生命周期随端口收口）。"""
         entry = self._clusters.get(cluster_id)
         if entry is not None:
-            await self._port.project(entry.project_id).stop_project()
+            await self._ports.close_project(entry.project_id)
             self._clusters.pop(cluster_id, None)
 
     async def stop(self) -> None:
-        """关闭 Core 端口持有的全部项目资源。"""
-        await self._port.aclose()
+        """关闭全部项目端口实例并清空 cluster 登记。"""
+        await self._ports.aclose()
         self._clusters.clear()
-        self._locators.clear()
 
 
 def build_port_transport(transport_ctx: Any) -> PortClusterTransport:

@@ -52,7 +52,7 @@ class Interface:
 
     Attributes:
         name: 能力名，形如 ``"nodes.get"``
-        request: 请求信封模型（含被注入的 ``project_id``）
+        request: 请求信封模型
         response: 出参模型；Port 层可能进一步拆壳成裸 id 或 ``None``
     """
 

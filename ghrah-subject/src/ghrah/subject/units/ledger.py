@@ -55,8 +55,8 @@ class LedgerUnit(SubjectUnit):
         pass
 
     async def stop(self) -> None:
-        # 作用域端口是轻量视图，共享 Core 根端口的连接池；
-        # 关闭由装配层负责，这里只丢弃引用。
+        # 端口实例由 CorePorts 按项目缓存，生命周期归装配层；
+        # 这里只丢弃本单元的引用。
         self._ports.clear()
 
     async def _port_for_project(self, project_id: str) -> CorePort:
@@ -80,10 +80,10 @@ class LedgerUnit(SubjectUnit):
         existing = self._ports.get(project_id)
         if existing is not None:
             return existing
-        base: CorePort | None = self._ctx.get(CORE_PORT, strict=False)
-        if base is None:
+        ports: Any | None = self._ctx.get(CORE_PORT, strict=False)
+        if ports is None:
             raise ValueError("core_port_unavailable")
-        port = base.project(project_id)
+        port = ports.for_project(project_id)
         self._ports[project_id] = port
         return port
 

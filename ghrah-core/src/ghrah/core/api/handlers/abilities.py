@@ -32,6 +32,7 @@ from ghrah.core.api.interfaces import (
     AbilitiesGrantRequest,
     AbilitiesInstancesRequest,
     AbilitiesPackageDetailRequest,
+    AbilitiesPackageGroupsGlobalRequest,
     AbilitiesPackageGroupsRequest,
     AbilitiesPackageMcpProbeRequest,
     AbilitiesPackagesRequest,
@@ -42,7 +43,7 @@ from ghrah.core.api.interfaces import (
 )
 from ghrah.core.read.ability import AbilityReadStore
 
-__all__ = ["make_ability_handlers"]
+__all__ = ["make_ability_handlers", "make_catalog_handlers"]
 
 
 def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
@@ -121,32 +122,8 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
             change=request.change,
         )
 
-    async def packages(request: AbilitiesPackagesRequest) -> AbilityPackageCatalogView:
-        """已安装能力包目录。"""
-        del request
-        return await store.packages()
-
-    async def package_detail(request: AbilitiesPackageDetailRequest) -> AbilityPackageDetailView:
-        """单个能力包详情。"""
-        return await store.package_detail(namespace=request.namespace, name=request.name)
-
-    async def package_version_profile(
-        request: AbilitiesPackageVersionRequest,
-    ) -> AbilityPackageVersionProfileView:
-        return await store.package_version_profile(
-            namespace=request.namespace, name=request.name, version=request.version
-        )
-
-    async def package_mcp_probe(request: AbilitiesPackageMcpProbeRequest) -> AbilityMcpProbeView:
-        return await store.package_mcp_probe(
-            namespace=request.namespace,
-            name=request.name,
-            version=request.version,
-            request=request.request,
-        )
-
     async def package_groups(request: AbilitiesPackageGroupsRequest) -> AbilityPackageGroupsView:
-        """能力包分组视图。"""
+        """作用域内的能力包分组视图（含实例事实）。"""
         return await store.package_groups(agent_id=request.agent_id)
 
     async def instances(request: AbilitiesInstancesRequest) -> AbilityInstancesView:
@@ -163,10 +140,58 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         "abilities.revoke": revoke,
         "abilities.enable_tool": enable_tool,
         "abilities.disable_tool": disable_tool,
+        "abilities.package_groups": package_groups,
+        "abilities.instances": instances,
+    }
+
+
+def make_catalog_handlers(store: AbilityReadStore) -> dict[str, Handler]:
+    """构造全局目录端口（无作用域）的能力处理器。
+
+    Args:
+        store: 能力关系库只读适配层（``scope_id=None``，只用于安装根/受信配置）
+
+    Returns:
+        能力名到处理器的映射
+    """
+
+    async def packages(request: AbilitiesPackagesRequest) -> AbilityPackageCatalogView:
+        """已安装能力包目录。"""
+        del request
+        return await store.packages()
+
+    async def package_detail(request: AbilitiesPackageDetailRequest) -> AbilityPackageDetailView:
+        """单个能力包详情。"""
+        return await store.package_detail(namespace=request.namespace, name=request.name)
+
+    async def package_version_profile(
+        request: AbilitiesPackageVersionRequest,
+    ) -> AbilityPackageVersionProfileView:
+        """单个包版本的画像。"""
+        return await store.package_version_profile(
+            namespace=request.namespace, name=request.name, version=request.version
+        )
+
+    async def package_mcp_probe(request: AbilitiesPackageMcpProbeRequest) -> AbilityMcpProbeView:
+        """探测指定包版本声明的 MCP 服务。"""
+        return await store.package_mcp_probe(
+            namespace=request.namespace,
+            name=request.name,
+            version=request.version,
+            request=request.request,
+        )
+
+    async def package_groups(
+        request: AbilitiesPackageGroupsGlobalRequest,
+    ) -> AbilityPackageGroupsView:
+        """全局能力包分组视图（不挂实例事实）。"""
+        del request
+        return await store.package_groups()
+
+    return {
         "abilities.packages": packages,
         "abilities.package_detail": package_detail,
         "abilities.package_version_profile": package_version_profile,
         "abilities.package_mcp_probe": package_mcp_probe,
         "abilities.package_groups": package_groups,
-        "abilities.instances": instances,
     }

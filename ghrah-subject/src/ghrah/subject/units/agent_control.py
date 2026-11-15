@@ -118,7 +118,7 @@ def build_agent_control_router(
     config: SubjectConfig,
     project_store: Any,
     projects: Any,
-    core_port: Any = None,
+    core_ports: Any = None,
 ) -> APIRouter:
     """构造 Agent 资源路由。认证与能力管理面相同。"""
     router = APIRouter(prefix="/api/v1")
@@ -163,10 +163,10 @@ def build_agent_control_router(
     ) -> tuple[AgentAbilitySummary | None, str | None]:
         if not builtin:
             return None, "能力来源不是 builtin，授权摘要不可用"
-        if core_port is None:
+        if core_ports is None:
             return None, "Core 能力端口不可用"
         try:
-            port = core_port.project(project.project_id)
+            port = core_ports.for_project(project.project_id)
             view = await port.abilities.admin(agent_id=agent_id)
         except ApiError as error:
             code = str(getattr(error.problem.code, "value", error.problem.code))
@@ -528,7 +528,7 @@ class AgentControlUnit(SubjectUnit):
             config=self._config,
             project_store=ctx.get(PROJECT_STORE.name),
             projects=ctx.get(PROJECT_MANAGER.name),
-            core_port=ctx.get(CORE_PORT_SERVICE.name),
+            core_ports=ctx.get(CORE_PORT_SERVICE.name),
         )
         endpoint.app.include_router(router)
         self._router = router

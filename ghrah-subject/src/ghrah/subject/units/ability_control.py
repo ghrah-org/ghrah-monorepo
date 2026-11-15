@@ -37,6 +37,7 @@ from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.service_keys import (
+    CORE_CATALOG_SERVICE,
     CORE_PORT_SERVICE,
     OBSERVER_ENDPOINT,
     OBSERVER_EVENT_BUS,
@@ -142,7 +143,8 @@ def build_ability_control_router(
     *,
     config: SubjectConfig,
     project_store: Any,
-    core_port: Any = None,
+    core_ports: Any = None,
+    catalog: Any = None,
     event_bus: Any = None,
 ) -> APIRouter:
     """构造管理面路由。
@@ -178,21 +180,21 @@ def build_ability_control_router(
         project = await project_store.get(project_id)
         if project is None:
             raise AbilityApiError("not_found", f"项目不存在：{project_id}")
-        if core_port is None:
+        if core_ports is None:
             raise AbilityApiError(
                 "capability_unavailable",
                 "Core 能力端口不可用（未装配 core.port 服务）",
             )
-        return core_port.project(project_id)
+        return core_ports.for_project(project_id)
 
-    def _global_port() -> Any:
-        """全局读面（能力包目录）用的端口；未装配时明确拒绝。"""
-        if core_port is None:
+    def _catalog() -> Any:
+        """无作用域的全局目录端口；未装配时明确拒绝。"""
+        if catalog is None:
             raise AbilityApiError(
                 "capability_unavailable",
-                "Core 能力端口不可用（未装配 core.port 服务）",
+                "Core 目录端口不可用（未装配 core.catalog 服务）",
             )
-        return core_port
+        return catalog
 
     async def _call(awaitable: Any) -> Any:
         """把 Core 的 ApiError 转成 HTTP 形状的错误（保持既有状态码语义）。"""
@@ -241,7 +243,7 @@ def build_ability_control_router(
             versions_write=False,
             packages_read=ready,
             packages_install=False,
-            mcp_probe=ready and core_port is not None and _mcp_probe_ready(),
+            mcp_probe=ready and catalog is not None and _mcp_probe_ready(),
             surface_write=False,
         )
         payload = AbilityApiStatus(
@@ -442,7 +444,7 @@ def build_ability_control_router(
     )
 
     async def _packages(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
-        return _jsonable(await _call(_global_port().abilities.packages()))
+        return _jsonable(await _call(_catalog().packages()))
 
     router.add_api_route("/ability-packages", _packages, methods=["GET"])
 
@@ -451,7 +453,7 @@ def build_ability_control_router(
         name: str,
         _: None = Depends(_ensure_catalog),
     ) -> dict[str, Any]:
-        view = await _call(_global_port().abilities.package_detail(namespace=namespace, name=name))
+        view = await _call(_catalog().package_detail(namespace=namespace, name=name))
         return _jsonable(view)
 
     router.add_api_route("/ability-packages/{namespace}/{name}", _package_detail, methods=["GET"])
@@ -461,9 +463,7 @@ def build_ability_control_router(
         namespace: str, name: str, version: str, _: None = Depends(_ensure_catalog)
     ) -> dict[str, Any]:
         profile = await _call(
-            _global_port().abilities.package_version_profile(
-                namespace=namespace, name=name, version=version
-            )
+            _catalog().package_version_profile(namespace=namespace, name=name, version=version)
         )
         return _jsonable(profile)
 
@@ -481,7 +481,7 @@ def build_ability_control_router(
         if not _mcp_probe_ready():
             raise AbilityApiError("capability_unavailable", "MCP 探测未启用：缺少 MCP SDK")
         view = await _call(
-            _global_port().abilities.package_mcp_probe(
+            _catalog().package_mcp_probe(
                 namespace=namespace, name=name, version=version, request=body
             )
         )
@@ -498,7 +498,7 @@ def build_ability_control_router(
     router.add_api_route("/projects/{project_id}/ability-instances", _instances, methods=["GET"])
 
     async def _package_groups(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
-        return _jsonable(await _call(_global_port().abilities.package_groups(scoped=False)))
+        return _jsonable(await _call(_catalog().package_groups()))
 
     router.add_api_route("/ability-package-groups", _package_groups, methods=["GET"])
 
@@ -598,6 +598,7 @@ class AbilityControlUnit(SubjectUnit):
                 {
                     OBSERVER_ENDPOINT,
                     CORE_PORT_SERVICE,
+                    CORE_CATALOG_SERVICE,
                     PROJECT_STORE,
                     OBSERVER_EVENT_BUS,
                 }
@@ -620,12 +621,14 @@ class AbilityControlUnit(SubjectUnit):
         endpoint = ctx.get(OBSERVER_ENDPOINT.name)
         app: FastAPI = endpoint.app
         project_store = ctx.get(PROJECT_STORE.name)
-        core_port = ctx.get(CORE_PORT_SERVICE.name)
+        core_ports = ctx.get(CORE_PORT_SERVICE.name)
+        catalog = ctx.get(CORE_CATALOG_SERVICE.name)
         event_bus = ctx.get(OBSERVER_EVENT_BUS.name)
         router = build_ability_control_router(
             config=self._config,
             project_store=project_store,
-            core_port=core_port,
+            core_ports=core_ports,
+            catalog=catalog,
             event_bus=event_bus,
         )
         app.add_middleware(

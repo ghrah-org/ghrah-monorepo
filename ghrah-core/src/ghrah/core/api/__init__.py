@@ -20,23 +20,34 @@ wiring   → 全部
 
 from __future__ import annotations
 
+from ghrah.core.api.catalog import CoreCatalog
 from ghrah.core.api.errors import CoreApiError, translate
 from ghrah.core.api.facade import CoreFacade
-from ghrah.core.api.handlers import build_handlers
-from ghrah.core.api.interfaces import CORE_INTERFACES
-from ghrah.core.api.runtime import CoreRuntime, build_runtime
+from ghrah.core.api.handlers import build_catalog_handlers, build_handlers
+from ghrah.core.api.interfaces import CORE_CATALOG_INTERFACES, CORE_INTERFACES
+from ghrah.core.api.runtime import (
+    CoreCatalogRuntime,
+    CoreRuntime,
+    build_catalog_runtime,
+    build_runtime,
+)
 from ghrah.core.read.chain import (
     ChainDatabaseUnavailableError,
     ChainReadStore,
 )
 
 __all__ = [
+    "CORE_CATALOG_INTERFACES",
     "CORE_INTERFACES",
     "ChainDatabaseUnavailableError",
     "ChainReadStore",
     "CoreApiError",
+    "CoreCatalog",
+    "CoreCatalogRuntime",
     "CoreFacade",
     "CoreRuntime",
+    "build_catalog_handlers",
+    "build_catalog_runtime",
     "build_handlers",
     "build_runtime",
     "translate",

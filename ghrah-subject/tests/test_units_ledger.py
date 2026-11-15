@@ -9,13 +9,14 @@ from pathlib import Path
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend  # type: ignore[import-untyped]
 from ghrah.context.session_runtime import SessionRuntime
-from ghrah.core.wiring import build_core_assembly, build_core_port
+from ghrah.core.wiring import build_core_port
 from ghrah.protocol.ports.keys import CORE_PORT
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.paths import ProjectPaths
+from ghrah.subject.runtime.core_ports import CorePorts
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command, mount_unit
 from ghrah.subject.runtime.service_keys import PROJECT_MANAGER
 from ghrah.subject.units.ledger import LedgerUnit
@@ -67,7 +68,7 @@ def _provide_core(ctx, resolve_db_path) -> None:
             db_path=str(resolve_db_path(project_id)),
         )
 
-    ctx.provide(CORE_PORT, build_core_assembly(port_factory=make_port))
+    ctx.provide(CORE_PORT, CorePorts(make_port))
 
 
 async def test_ledger_unit_reads_explicit_session_branch(tmp_path: Path) -> None:

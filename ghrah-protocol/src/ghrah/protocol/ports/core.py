@@ -63,6 +63,7 @@ __all__ = [
     "AgentOperations",
     "BranchId",
     "BranchOperations",
+    "CoreCatalogPort",
     "CorePort",
     "DeliveriesOperations",
     "DeliveryId",
@@ -293,33 +294,12 @@ class AbilityOperations(Protocol):
         """读取某授权下的成员内容；未授权抛 ``NOT_FOUND``。"""
         ...
 
-    async def packages(self) -> AbilityPackageCatalogView:
-        """已安装能力包目录（全局）。"""
-        ...
-
-    async def package_detail(self, *, namespace: str, name: str) -> AbilityPackageDetailView:
-        """单个能力包详情（全局）；不存在抛 ``NOT_FOUND``。"""
-        ...
-
-    async def package_version_profile(
-        self, *, namespace: str, name: str, version: str
-    ) -> AbilityPackageVersionProfileView:
-        """读取单个能力包版本的画像。"""
-        ...
-
-    async def package_mcp_probe(
-        self, *, namespace: str, name: str, version: str, request: AbilityMcpProbeRequest
-    ) -> AbilityMcpProbeView:
-        """只读探测指定能力包版本声明的 MCP 服务。"""
-        ...
-
     async def package_groups(
         self,
         *,
         agent_id: AgentId | None = None,
-        scoped: bool = True,
     ) -> AbilityPackageGroupsView:
-        """能力包分组视图；``scoped=False`` 时是全局视图（不绑定项目）。"""
+        """本项目的能力包分组视图（可限定到某 Agent）；全局形态见目录端口。"""
         ...
 
     async def instances(self) -> AbilityInstancesView:
@@ -449,13 +429,10 @@ class ManifestOperations(Protocol):
 
 
 class CorePort(Protocol):
-    """Core 对外能力的唯一入口。
+    """Core 作用域端口：一个端口实例对应一个作用域。
 
-    当前落地项目读面（``nodes`` / ``sessions`` / ``branches``）；
-    其余分组随各自阶段追加。
-
-    作用域：装配层提供一个**未绑定**的端口实例，消费方按项目取绑定视图。
-    这样同一实例可服务多个项目，避免「一个进程只能有一个项目」的隐含约束。
+    作用域由装配层在构造实例时注入，能力签名里不出现；
+    全局读面（能力包目录等）见 :class:`CoreCatalogPort`。
     """
 
     @property
@@ -492,17 +469,43 @@ class CorePort(Protocol):
         """关闭本端口实例（停单元 + 释放读面资源；幂等）。"""
         ...
 
-    async def stop_project(self) -> None:
-        """停止绑定项目的 Core 单元并释放写侧资源（过渡接口，下一轮删除）。"""
+
+class CoreCatalogPort(Protocol):
+    """Core 全局目录端口（无作用域）。
+
+    目录读面不打开数据库、不建单元，只读安装根与受信配置，
+    因此在零作用域（尚未创建任何项目）时也可用。
+    """
+
+    async def packages(self) -> AbilityPackageCatalogView:
+        """已安装能力包目录（全局）。"""
         ...
 
-    def project(self, project_id: str) -> CorePort:
-        """返回绑定了项目作用域的端口视图。
+    async def package_detail(self, *, namespace: str, name: str) -> AbilityPackageDetailView:
+        """单个能力包详情（全局）；不存在抛 ``NOT_FOUND``。"""
+        ...
 
-        Args:
-            project_id: 项目标识
+    async def package_version_profile(
+        self, *, namespace: str, name: str, version: str
+    ) -> AbilityPackageVersionProfileView:
+        """读取单个能力包版本的画像。"""
+        ...
 
-        Returns:
-            绑定后的端口；未绑定时调用能力会抛 ``FAILED_PRECONDITION``
-        """
+    async def package_mcp_probe(
+        self,
+        *,
+        namespace: str,
+        name: str,
+        version: str,
+        request: AbilityMcpProbeRequest,
+    ) -> AbilityMcpProbeView:
+        """只读探测指定能力包版本声明的 MCP 服务。"""
+        ...
+
+    async def package_groups(self, *, agent_id: AgentId | None = None) -> AbilityPackageGroupsView:
+        """能力包分组视图（全局形态，不绑定项目）。"""
+        ...
+
+    async def aclose(self) -> None:
+        """关闭目录端口（不触碰数据库；幂等）。"""
         ...

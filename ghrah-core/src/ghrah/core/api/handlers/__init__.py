@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from ghrah.protocol.interface import Handler
 
-from ghrah.core.api.handlers.abilities import make_ability_handlers
+from ghrah.core.api.handlers.abilities import make_ability_handlers, make_catalog_handlers
 from ghrah.core.api.handlers.agents import make_agent_handlers
 from ghrah.core.api.handlers.branches import make_branch_handlers
 from ghrah.core.api.handlers.deliveries import make_delivery_handlers
@@ -26,7 +26,7 @@ from ghrah.core.read.chain import ChainReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
 from ghrah.core.units.registry import RuntimeRegistry
 
-__all__ = ["build_handlers"]
+__all__ = ["build_catalog_handlers", "build_handlers"]
 
 
 def build_handlers(
@@ -58,3 +58,15 @@ def build_handlers(
         **make_message_handlers(agents),
         **make_manifest_handlers(agents),
     }
+
+
+def build_catalog_handlers(abilities: AbilityReadStore) -> dict[str, Handler]:
+    """汇总全局目录端口的处理器（无作用域，不打开数据库）。
+
+    Args:
+        abilities: 能力关系库只读适配层（``scope_id=None``）
+
+    Returns:
+        能力名到处理器的映射
+    """
+    return make_catalog_handlers(abilities)

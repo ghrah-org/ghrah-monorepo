@@ -335,9 +335,8 @@ class AgentEntityManager:
                     raise StableError("agent_not_running")
                 if (await self._runtime(project, agent))["availability"] != "online":
                     raise StableError("agent_offline")
+                # 消息管理器按项目取端口实例，归属恒等，不再做项目一致性校验。
                 mm = self._projects._cluster_transport.get_message_manager(project.project_id)
-                if mm.project_id != project.project_id:
-                    raise StableError("mailbox_project_mismatch")
                 from ghrah.protocol.errors import ApiError
 
                 try:
