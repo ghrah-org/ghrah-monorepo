@@ -446,7 +446,7 @@ export default {
       remove: "移除附件",
       retry: "重试",
       tooLarge: "图片过大（base64 编码后上限 4 MiB）。",
-      unsupported: "不支持的文件类型。",
+      unsupported: "聊天仅支持图片和视频。",
       totalTooLarge: "附件数量过多，或总大小超过上限。",
       uploading: "正在处理附件…",
       uploadingPercent: "上传中… {percent}%",

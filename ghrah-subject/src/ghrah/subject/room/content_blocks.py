@@ -262,11 +262,14 @@ def _validate_video_block(block: dict[str, Any], label: str) -> int:
     return _validate_video_frames(block, label)
 
 
-def validate_content_blocks(raw: object) -> list[dict[str, Any]] | None:
+def validate_content_blocks(
+    raw: object, *, visual_only: bool = False
+) -> list[dict[str, Any]] | None:
     """校验并规范化 ``content_blocks``。
 
     Args:
         raw: wire 上收到的原始值（``None`` / 数组 / 任意非法值）。
+        visual_only: 新发聊天只接受文本、图片和视频块。
 
     Returns:
         规范化后的块列表（元素为浅拷贝的 dict，未知字段原样保留，便于
@@ -313,6 +316,9 @@ def validate_content_blocks(raw: object) -> list[dict[str, Any]] | None:
                 UNSUPPORTED_BLOCK_TYPE,
                 f"{label} type={block_type!r}",
             )
+
+        if visual_only and block_type not in {"text", "image", "video"}:
+            raise StableError(UNSUPPORTED_BLOCK_TYPE, "聊天目前只支持图片和视频附件")
 
         block = dict(item)
         _validate_attachment_id(block, label)

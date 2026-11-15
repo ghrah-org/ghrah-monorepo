@@ -471,7 +471,7 @@ export default {
       remove: "Remove attachment",
       retry: "Retry",
       tooLarge: "Image is too large (max 4 MiB after base64 encoding).",
-      unsupported: "Unsupported file type.",
+      unsupported: "Chat supports images and videos only.",
       totalTooLarge: "Too many attachments or total size exceeds the limit.",
       uploading: "Processing attachment…",
       uploadingPercent: "Uploading… {percent}%",

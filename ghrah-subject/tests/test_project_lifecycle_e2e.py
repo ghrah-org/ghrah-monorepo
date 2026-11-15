@@ -506,6 +506,28 @@ async def test_omni_messages_through_project_ports(tmp_path: Path) -> None:
             "author_type": "human",
             "data": {"content_blocks": [video], "targets": [agent_id]},
         }
+        for attachment in (
+            {"type": "file", "filename": "report.docx", "base64": "aGVsbG8="},
+            {"type": "file", "filename": "report.pdf", "base64": "aGVsbG8="},
+            {"type": "audio", "data": "aGVsbG8=", "mime_type": "audio/wav"},
+        ):
+            rejected_direct = await bridge_command(
+                ctx, "send_message", {**target, "content": "", "content_blocks": [attachment]}
+            )
+            rejected_room = await bridge_command(
+                ctx, "room_send", {**message, "data": {"content_blocks": [attachment]}}
+            )
+            assert rejected_direct["error"] == rejected_room["error"] == "unsupported_block_type"
+        assert (
+            _data(await bridge_command(ctx, "room_get_log", {"room_id": room_id}))["entries"] == []
+        )
+        assert (
+            _data(await bridge_command(ctx, "send_message", {**target, "content": "继续"}))[
+                "content"
+            ]
+            == "ready"
+        )
+
         bad_video = {**video, "attachment_id": "f" * 64}
         rejected = await bridge_command(
             ctx, "room_send", {**message, "data": {"content_blocks": [bad_video]}}

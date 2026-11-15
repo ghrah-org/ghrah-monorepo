@@ -134,6 +134,7 @@ export interface UploadOptions {
 }
 
 export interface UseAttachmentsOptions {
+  visualOnly?: boolean;
   /** 当前项目（惰性读取，项目切换后仍取最新值）。 */
   projectId?: string | (() => string | undefined);
   deps?: AttachmentDeps;
@@ -625,6 +626,8 @@ export function useAttachments(options: UseAttachmentsOptions = {}) {
           pushError("chat.attachment.unsupported");
         } else if (isVideoFile(file)) {
           await addVideo(file);
+        } else if (options.visualOnly) {
+          pushError("chat.attachment.unsupported");
         } else {
           await addFileBlock(file);
         }

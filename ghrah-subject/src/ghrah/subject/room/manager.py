@@ -443,7 +443,9 @@ class RoomManager:
         # 入站内容块：形状/类型/数量/体积（稳定错误码），并归一化后透传给
         # publish / append_log / 投递闭包，避免下游各自重复解析。
         data = dict(p.data)
-        blocks = validate_content_blocks(data.pop("content_blocks", None))
+        blocks = validate_content_blocks(
+            data.pop("content_blocks", None), visual_only=p.author_type == RoomSubjectType.HUMAN
+        )
         if blocks is not None:
             data["content_blocks"] = blocks
         elif "message" in data and not str(data.get("message") or "").strip():

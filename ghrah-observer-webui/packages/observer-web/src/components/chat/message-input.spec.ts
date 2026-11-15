@@ -309,7 +309,7 @@ describe("MessageInput", () => {
     const wrapper = mountInput();
     const text = new File(["hello"], "icon.svg", { type: "image/svg+xml" });
     await selectFiles(wrapper, [text]);
-    await vi.waitFor(() => expect(wrapper.text()).toContain("Unsupported file type"));
+    await vi.waitFor(() => expect(wrapper.text()).toContain("images and videos only"));
     expect(wrapper.find(".attachment-chip").exists()).toBe(false);
     await wrapper.find("textarea").setValue("still works");
     await wrapper.find("form").trigger("submit");
@@ -329,36 +329,29 @@ describe("MessageInput", () => {
     ]);
   });
 
-  it("accept 扩展为图片、视频与常见文件类型", () => {
+  it("文件选择器接受支持的图片及视频格式", () => {
     const wrapper = mountInput();
-    const accept = wrapper.find('input[type="file"]').attributes("accept") ?? "";
-    expect(accept).toContain("image/*");
-    expect(accept).toContain("video/*");
-    expect(accept).toContain(".pdf");
+    expect(wrapper.find('input[type="file"]').attributes("accept")).toBe(
+      "image/png,image/jpeg,image/webp,image/gif,video/*",
+    );
   });
 
-  it("小文件内联为 file 块并允许随文字发送", async () => {
-    const wrapper = mountInput({
-      attachmentDeps: {
-        readAsDataUrl: async () => "data:text/markdown;base64,ZmlsZQ==",
-      },
-    });
-    await selectFiles(wrapper, [new File(["file"], "notes.md", { type: "text/markdown" })]);
-    await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
-    await wrapper.find("textarea").setValue("看这个文件");
+  it.each([
+    ["sample.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ["sample.pdf", "application/pdf"],
+    ["sample.wav", "audio/wav"],
+  ])("拒绝不支持的附件 %s，纯文本仍可发送", async (name, type) => {
+    const readAsDataUrl = vi.fn();
+    const upload = vi.fn();
+    const wrapper = mountInput({ attachmentDeps: { readAsDataUrl, upload } });
+    await selectFiles(wrapper, [new File(["attachment"], name, { type })]);
+    expect(wrapper.text()).toContain("images and videos only");
+    expect(wrapper.find(".attachment-chip").exists()).toBe(false);
+    expect(readAsDataUrl).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    await wrapper.find("textarea").setValue("still works");
     await wrapper.find("form").trigger("submit");
-    expect(wrapper.emitted("send")![0]).toEqual([
-      ["frontend"],
-      "看这个文件",
-      [
-        {
-          type: "file",
-          base64: "ZmlsZQ==",
-          mime_type: "text/markdown",
-          filename: "notes.md",
-        },
-      ],
-    ]);
+    expect(wrapper.emitted("send")![0]).toEqual([["frontend"], "still works", []]);
   });
 
   it("视频抽帧 + 上传后 emit video 块", async () => {

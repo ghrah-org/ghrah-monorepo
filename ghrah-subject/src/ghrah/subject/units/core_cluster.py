@@ -335,7 +335,9 @@ class CoreClusterRegistryUnit(SubjectUnit):
             # 且在 ensure_cluster（可能挂载 Core）之前拒绝，避免为坏消息挂载。
             send_blocks: list[dict[str, Any]] | None = None
             if command == "send_message":
-                send_blocks = validate_content_blocks(payload.get("content_blocks"))
+                send_blocks = validate_content_blocks(
+                    payload.get("content_blocks"), visual_only=True
+                )
                 if send_blocks is not None:
                     send_blocks = await resolve_content_attachments(
                         send_blocks, str(project["project_root_locator"])

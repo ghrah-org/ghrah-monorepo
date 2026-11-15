@@ -13,7 +13,11 @@ import AttachmentChip from "./attachment-chip.vue";
 import UiButton from "@/components/ui/button.vue";
 import UiIconButton from "@/components/ui/icon-button.vue";
 import UiTextField from "@/components/ui/text-field.vue";
-import { type AttachmentDeps, useAttachments } from "@/composables/useAttachments";
+import {
+  SUPPORTED_IMAGE_TYPES,
+  type AttachmentDeps,
+  useAttachments,
+} from "@/composables/useAttachments";
 
 const { t } = useI18n();
 
@@ -35,6 +39,7 @@ const selectedTargets = ref<Set<string>>(new Set());
 const targetMenuOpen = ref(false);
 const targetRoot = ref<HTMLElement | null>(null);
 const attachments = useAttachments({
+  visualOnly: true,
   projectId: () => props.projectId,
   deps: props.attachmentDeps,
 });
@@ -348,7 +353,7 @@ const placeholder = computed(() =>
         ref="fileInput"
         class="chat-file-input"
         type="file"
-        accept="image/*,video/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.zip"
+        :accept="[...SUPPORTED_IMAGE_TYPES, 'video/*'].join(',')"
         multiple
         :disabled="props.disabled"
         @change="onFileChange"
