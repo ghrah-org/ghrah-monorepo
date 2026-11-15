@@ -1,5 +1,7 @@
 # Runtime 管理契约与验证链路交付说明
 
+> **已退役（2026-11-14，M7，提交 `872abfc`）**：`/v1` 进程内 Runtime 控制面、Subject `runtime_http`、`RuntimeObserverClient` 与 Runtime 调试页均已删除，`VITE_GHRAH_RUNTIME_URL` 入口亦不存在。本文仅作历史记录，不代表当前交付边界；需要调试面时应基于能力端口重新设计。
+
 本文记录 Runtime `/v1` 管理扩展、Subject HTTP 宿主、Observer Runtime 调试页与 Observer Mock 的当前交付边界。它不是正式 Observer API 的迁移结论；普通 Observer 仍以 Subject `/ws` 和 `/api/v1/*` 为唯一外部边界。
 
 ## 通信形态
