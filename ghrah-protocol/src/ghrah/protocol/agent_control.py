@@ -116,6 +116,8 @@ class AgentCreateRequest(TreeModel):
     endpoint_name: str | None = None
     system_prompt: str = ""
     desired_state: Literal["running", "stopped"] = "stopped"
+    manifest_ref: str = ""
+    """Agent v2 模板的完整名（``namespace.name``）；空表示暂不绑定模板。"""
 
 
 class AgentSpecPatch(TreeModel):
