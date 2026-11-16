@@ -13,6 +13,7 @@ import {
   extractValidationResult,
   type ListProjectsOptions,
   ObserverClient,
+  HttpClient,
   type SessionTarget,
   useActionChainsStore,
   useAgentsStore,
@@ -161,6 +162,35 @@ export function useObserver() {
 
   async function registerAbility(target: AgentTarget, ability: AbilityDefinitionPayload) {
     return withClient((c) => c.registerAbility(target, ability));
+  }
+
+  async function listShellAllow(projectId: string) {
+    const http = new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
+    return http.get<{
+      project_id: string;
+      entries: { kind: "exact" | "class"; key: string; label: string; created_at: string }[];
+      builtins: { key: string; label: string; readonly: boolean }[];
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/shell-allow`);
+  }
+  async function deleteShellAllow(projectId: string, kind: "exact" | "class", key: string) {
+    const http = new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
+    await http.delete(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/shell-allow/${kind}/${encodeURIComponent(key)}`,
+    );
+  }
+
+  async function rememberShellCommand(
+    projectId: string,
+    kind: "exact" | "class",
+    key: string,
+    label: string,
+  ) {
+    const http = new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
+    await http.post(`/api/v1/projects/${encodeURIComponent(projectId)}/shell-allow`, {
+      kind,
+      key,
+      label,
+    });
   }
 
   async function sendHitlResponse(promiseId: string, approved: boolean, reason?: string) {
@@ -499,6 +529,9 @@ export function useObserver() {
     getAgentInfo,
     registerAbility,
     sendHitlResponse,
+    rememberShellCommand,
+    listShellAllow,
+    deleteShellAllow,
     spawnAgent,
     terminateAgent,
     agentCompactContext,

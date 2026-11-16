@@ -10,21 +10,23 @@
 - CommandSafetyChecker: 命令安全分类器（bash-classify 前端 + 范围外壳）
 - CommandApprovalHook: PRE_EXECUTE Hook，拦截 execute_command Ability
 
-分类模型（判定顺序，2026-11-08 阶段 4）：
+分类模型（判定顺序）：
 1. 空命令 → 硬拒绝
 2. ``denied_commands`` 命中任一段 → 硬拒绝
 3. 仅 ``--version`` / ``-V`` / ``--help``、无委托无重定向 → 自动批准
 4. 无位置参数的 ``git branch`` / ``git tag`` 列表 → 自动批准
-5. bash-classify 判 DANGEROUS，或 ghrah 危险叠加 → 硬拒绝
-6. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
-7. 无法确定写入范围的 cd 组合或 sed 原地编辑 → 审批或硬拒绝；
+5. 不可逆命令、敏感路径或已证实的越界写入 → 硬拒绝
+6. 内置脚本或项目记忆覆盖整式 → 自动批准
+7. 库 DANGEROUS 的其余入口 → 审批；关闭审批时硬拒绝
+8. ``allowed_commands`` 覆盖全部顶层段 → 自动批准（``UNKNOWN`` 除外）
+9. 无法确定写入范围的 cd 组合或 sed 原地编辑 → 审批或硬拒绝；
    其余整式 READONLY+LOW（无 parse_warnings / 敏感路径）→ 自动批准
-8. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
+10. 部署级 SAFE 名单抬升：每段须先过段级门禁（READONLY+LOW 或
    LOCAL_EFFECTS+LOW），再匹配名单；重定向 / 敏感路径 / READONLY+HIGH 禁止抬升
-9. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
-10. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
+11. ``UNKNOWN``：需审批时 HITL，关闭审批时硬拒绝
+12. 工作区写入投影：LOCAL_EFFECTS 且已注入 FS checker 时，路径均在授权
     范围内则自动批准；越界硬拒绝；无法投影则继续
-11. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
+13. 其余：``require_approval`` 为真时审批，否则按 ``deny_out_of_scope`` 决定拒绝或放行
 """
 
 from __future__ import annotations
@@ -32,12 +34,14 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bash_classify import Classification, Risk
+from bash_classify.models import ExpressionResult
 
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.permissions.bash_classify_frontend import (
@@ -49,6 +53,15 @@ from ghrah.ability.permissions.bash_classify_frontend import (
     segment_base_sub,
 )
 from ghrah.ability.permissions.command_scope import command_entry_covers, parse_command_entry
+from ghrah.ability.permissions.shell_allow import (
+    DEFAULT_DANGEROUS_COMMANDS,
+    DEFAULT_DANGEROUS_SUB_COMMANDS,
+    ShellAllowLookup,
+    ShellRememberOptions,
+    build_shell_remember_options,
+    irreversible_reason,
+    is_shell_expression_allowed,
+)
 from ghrah.ability.permissions.shell_write_projection import try_workspace_write_approval
 
 if TYPE_CHECKING:
@@ -157,6 +170,7 @@ class CommandSafetyVerdict:
     base_command: str
     sub_command: str | None = None
     reason: str = ""
+    shell_remember: ShellRememberOptions | None = None
 
 
 DEFAULT_SAFE_COMMANDS: set[str] = {
@@ -212,34 +226,6 @@ DEFAULT_SAFE_COMMANDS: set[str] = {
     "readlink",
 }
 
-DEFAULT_DANGEROUS_COMMANDS: set[str] = {
-    "rm",
-    "rmdir",
-    "chmod",
-    "chown",
-    "chgrp",
-    "mkfs",
-    "dd",
-    "format",
-    "fdisk",
-    "parted",
-    "shutdown",
-    "reboot",
-    "halt",
-    "poweroff",
-    "kill",
-    "killall",
-    "pkill",
-    "useradd",
-    "userdel",
-    "usermod",
-    "groupadd",
-    "groupdel",
-    "passwd",
-    "su",
-    "sudo",
-    "doas",
-}
 
 DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
     "git": {
@@ -310,21 +296,6 @@ DEFAULT_SAFE_SUB_COMMANDS: dict[str, set[str]] = {
     },
 }
 
-DEFAULT_DANGEROUS_SUB_COMMANDS: dict[str, set[str]] = {
-    "git": {
-        "clean",
-    },
-    "npm": {
-        "publish",
-    },
-    "docker": {
-        "rmi",
-    },
-    "kubectl": {
-        "delete",
-    },
-}
-
 
 class CommandSafetyChecker:
     """命令安全分类器：bash-classify 前端 + 声明范围与危险叠加。"""
@@ -385,11 +356,16 @@ class CommandSafetyChecker:
             self._safe_sub_commands = merged
 
     def check_command(
-        self, command: str, *, working_dir: str | None = None
+        self,
+        command: str,
+        *,
+        working_dir: str | None = None,
+        shell_allow: Sequence[Mapping[str, str]] = (),
     ) -> CommandSafetyVerdict:
         """检查命令安全性。
 
         ``working_dir`` 是相对写路径的解析起点；缺省时用注入的 ``workspace_root``。
+        ``shell_allow`` 是本次调用所属项目的记忆记录，不保存在检查器中。
         """
         if not command or not command.strip():
             return CommandSafetyVerdict(
@@ -399,8 +375,23 @@ class CommandSafetyChecker:
             )
 
         expression = classify_command_expression(command)
+        verdict = self._check_expression(
+            expression, command=command, working_dir=working_dir, shell_allow=shell_allow
+        )
+        if verdict.category is CommandSafetyCategory.REQUIRE_HITL:
+            verdict.shell_remember = build_shell_remember_options(expression, command=command)
+        return verdict
+
+    def _check_expression(
+        self,
+        expression: ExpressionResult,
+        *,
+        command: str,
+        working_dir: str | None,
+        shell_allow: Sequence[Mapping[str, str]],
+    ) -> CommandSafetyVerdict:
         segments = iter_classified_segments(expression)
-        if not segments:
+        if not segments or expression.parse_warnings:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
                 base_command="",
@@ -433,16 +424,70 @@ class CommandSafetyChecker:
                 reason=f"Read-only git listing: {command}",
             )
 
-        overlay = self._dangerous_overlay(segments, command)
-        if overlay is not None:
-            return overlay
-
-        if expression_is_dangerous(expression):
+        reason = irreversible_reason(
+            expression,
+            dangerous_commands=self._dangerous_commands,
+            dangerous_sub_commands=self._dangerous_sub_commands,
+        )
+        if reason is not None:
             return CommandSafetyVerdict(
                 category=CommandSafetyCategory.DANGEROUS,
                 base_command=primary_base,
                 sub_command=primary_sub,
-                reason=f"Dangerous command: {command}",
+                reason=reason,
+            )
+
+        # 路径硬拒绝先于内置和项目放行；其余投影结果在原位置处理。
+        unverified_write = _unverified_write_reason(expression.classification, segments)
+        projected = (
+            None
+            if unverified_write
+            else self._project_workspace_write(
+                expression,
+                working_dir=working_dir,
+                base_command=primary_base,
+                sub_command=primary_sub,
+            )
+        )
+        if projected is not None and projected.category is CommandSafetyCategory.DANGEROUS:
+            return projected
+        # 脚本入口可能仍是 DANGEROUS，单独检查它显式声明的输出路径。
+        if (
+            projected is None
+            and unverified_write is None
+            and self._fs_checker is not None
+            and self._workspace_root
+        ):
+            cwd = Path(working_dir or self._workspace_root).expanduser().resolve()
+            for path in expression.write_paths:
+                target = cwd / Path(path).expanduser()
+                allowed, status = self._fs_checker.check_access(str(target), "write")
+                if not allowed:
+                    return CommandSafetyVerdict(
+                        category=CommandSafetyCategory.DANGEROUS,
+                        base_command=primary_base,
+                        sub_command=primary_sub,
+                        reason=f"Workspace write denied: {target}: {status}",
+                    )
+
+        if is_shell_expression_allowed(expression, shell_allow, command=command):
+            return CommandSafetyVerdict(
+                category=CommandSafetyCategory.SAFE,
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason="Command covered by builtin or project shell allow",
+            )
+
+        if expression_is_dangerous(expression):
+            return CommandSafetyVerdict(
+                category=(
+                    CommandSafetyCategory.REQUIRE_HITL
+                    if self._require_approval
+                    else CommandSafetyCategory.DANGEROUS
+                ),
+                base_command=primary_base,
+                sub_command=primary_sub,
+                reason=f"Script entry requires approval: {command}",
             )
 
         if self._allowed_commands is not None and not expression_is_unknown(expression):
@@ -454,7 +499,6 @@ class CommandSafetyChecker:
                     reason=f"Command in declared scope: {command}",
                 )
 
-        unverified_write = _unverified_write_reason(expression.classification, segments)
         if unverified_write is not None:
             return CommandSafetyVerdict(
                 category=(
@@ -503,12 +547,6 @@ class CommandSafetyChecker:
                 reason=f"Unknown command structure cannot auto-execute: {command}",
             )
 
-        projected = self._project_workspace_write(
-            expression,
-            working_dir=working_dir,
-            base_command=primary_base,
-            sub_command=primary_sub,
-        )
         if projected is not None:
             return projected
 
@@ -596,54 +634,6 @@ class CommandSafetyChecker:
             checked.append(segment)
         return checked or list(segments)
 
-    def _dangerous_overlay(self, segments: list[Any], command: str) -> CommandSafetyVerdict | None:
-        for segment in segments:
-            argv = list(segment.argv)
-            base, sub = segment_base_sub(argv)
-            base_lower = base.lower()
-            sub_lower = sub.lower() if sub else None
-            arguments = tuple(argv[1:]) if len(argv) > 1 else ()
-
-            if base_lower in self._dangerous_commands:
-                return CommandSafetyVerdict(
-                    category=CommandSafetyCategory.DANGEROUS,
-                    base_command=base_lower,
-                    sub_command=sub_lower,
-                    reason=f"Dangerous command: {base_lower}",
-                )
-
-            destructive = (
-                (base_lower == "git" and sub_lower == "reset" and "--hard" in arguments)
-                or (
-                    base_lower == "git"
-                    and sub_lower == "push"
-                    and any(
-                        arg.startswith("--force")
-                        or (arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:])
-                        for arg in arguments
-                    )
-                )
-                or (base_lower == "docker" and sub_lower == "rm")
-                or (base_lower == "docker" and sub_lower == "system" and "prune" in arguments)
-            )
-            if destructive:
-                return CommandSafetyVerdict(
-                    category=CommandSafetyCategory.DANGEROUS,
-                    base_command=base_lower,
-                    sub_command=sub_lower,
-                    reason=f"Dangerous command: {command}",
-                )
-
-            dangerous_subs = self._dangerous_sub_commands.get(base_lower, set())
-            if sub_lower and sub_lower in dangerous_subs:
-                return CommandSafetyVerdict(
-                    category=CommandSafetyCategory.DANGEROUS,
-                    base_command=base_lower,
-                    sub_command=sub_lower,
-                    reason=f"Dangerous sub-command: {base_lower} {sub_lower}",
-                )
-        return None
-
     @staticmethod
     def _blocks_legacy_safe_promote(expression: Any) -> bool:
         if getattr(expression, "redirects", None):
@@ -719,8 +709,11 @@ class CommandApprovalHook(Hook):
 
     hook_point = HookPoint.PRE_EXECUTE
 
-    def __init__(self, checker: CommandSafetyChecker) -> None:
+    def __init__(
+        self, checker: CommandSafetyChecker, *, shell_allow_lookup: ShellAllowLookup | None = None
+    ) -> None:
         self._checker = checker
+        self._shell_allow_lookup = shell_allow_lookup
 
     async def should_trigger(self, call: OperationCall, services: ExecutionServices) -> bool:
         return call.member.member == "execute_command"
@@ -734,7 +727,8 @@ class CommandApprovalHook(Hook):
         tool_args = call.arguments
         command = tool_args.get("command", "")
         working_dir = tool_args.get("working_dir")
-        verdict = self._checker.check_command(command, working_dir=working_dir)
+        entries = await self._shell_allow_lookup() if self._shell_allow_lookup is not None else ()
+        verdict = self._checker.check_command(command, working_dir=working_dir, shell_allow=entries)
 
         if verdict.category == CommandSafetyCategory.SAFE:
             return HookResult.continue_()
@@ -742,4 +736,4 @@ class CommandApprovalHook(Hook):
         if verdict.category == CommandSafetyCategory.DANGEROUS:
             return HookResult.stop(message=verdict.reason)
 
-        return HookResult.hitl(message=verdict.reason)
+        return HookResult.hitl(message=verdict.reason, shell_remember=verdict.shell_remember)

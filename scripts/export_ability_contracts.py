@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """从 Python 作者模型单向生成 Ability 消费者的 Zod 校验器。
 
-四组生成物共享同一个受限 schema 子集：
+五组生成物共享同一个受限 schema 子集：
 - ``ability-tree.generated.ts``：既有 Scheme 能力树契约；
 - ``ability-control.generated.ts``：观察端能力管理面契约；
 - ``agent-control.generated.ts``：观察端 Agent 资源契约；
-- ``agentconf-control.generated.ts``：观察端 Agentconf 连接配置契约。
+- ``agentconf-control.generated.ts``：观察端 Agentconf 连接配置契约；
+- ``hitl.generated.ts``：命令审批记忆候选契约。
 """
 
 from __future__ import annotations
@@ -121,6 +122,7 @@ from ghrah.protocol.agentconf_control import (
     BindingView,
     McpProviderReferenceView,
 )
+from ghrah.protocol.payloads.agent import ShellRememberOptions
 from pydantic import BaseModel
 
 TREE_MODELS = (
@@ -355,7 +357,7 @@ def _generate(
 
 
 def _targets() -> list[tuple[Path, str]]:
-    """返回四组生成物的目标路径与预期内容。"""
+    """返回五组生成物的目标路径与预期内容。"""
     root = Path(__file__).resolve().parents[1]
     tree_text = _generate(
         TREE_MODELS,
@@ -373,6 +375,10 @@ def _targets() -> list[tuple[Path, str]]:
         (root / CONTROL_TARGET, control_text),
         (root / AGENT_TARGET, agent_text),
         (root / AGENTCONF_TARGET, agentconf_text),
+        (
+            root / "ghrah-observer-webui/packages/protocol/src/hitl.generated.ts",
+            _generate((ShellRememberOptions,)),
+        ),
     ]
 
 

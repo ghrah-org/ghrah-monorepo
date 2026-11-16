@@ -13,11 +13,23 @@ DesiredStateStore），把 manager 的 ``on_event`` 回调桥到 internal event_
 from __future__ import annotations
 
 import logging
-from typing import Any
+import shlex
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+from fastapi import APIRouter, Request, Response
+from ghrah.ability.permissions.bash_classify_frontend import classify_command_expression
+from ghrah.ability.permissions.shell_allow import (
+    extract_shell_class,
+    irreversible_reason,
+    is_builtin_shell_expression,
+)
+from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.manager import ProjectManager
-from ghrah.subject.project.store import ProjectStore
+from ghrah.subject.project.models import ProjectRecord, ShellAllowEntry
+from ghrah.subject.project.store import ConcurrentModificationError, ProjectStore
 from ghrah.subject.recovery.desired_state import DesiredStateRecord, DesiredStateStore
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
@@ -31,13 +43,115 @@ from ghrah.subject.runtime.service_keys import (
 )
 from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, UnitMeta
 from ghrah.subject.units._commands import PROJECT_COMMANDS
+from ghrah.subject.units.ability_control import AbilityApiError, _authorized
 
-__all__ = ["ProjectUnit"]
+__all__ = ["ProjectUnit", "build_project_shell_allow_router"]
 
 logger = logging.getLogger(__name__)
 
 # 不改变 ProjectStore 权威状态的命令：跳过 DesiredStateStore 全量重投影。
 _READ_ONLY_COMMANDS = frozenset({"project_get", "project_list", "agent_entity_list"})
+
+
+def build_project_shell_allow_router(*, config: SubjectConfig, store: ProjectStore) -> APIRouter:
+    """提供项目 Shell 记忆增删查，直接复用 ProjectStore。"""
+    router = APIRouter(prefix="/api/v1/projects/{project_id}/shell-allow")
+
+    async def project_record(request: Request, project_id: str) -> ProjectRecord:
+        if not config.observer_http_api_enabled:
+            raise AbilityApiError("capability_unavailable", "Observer HTTP API is disabled")
+        if not _authorized(request, config):
+            raise AbilityApiError("access_denied", "A valid Bearer token is required")
+        record = await store.get(project_id)
+        if record is None:
+            raise AbilityApiError("not_found", "Project not found")
+        return record
+
+    @router.get("")
+    async def get_shell_allow(project_id: str, request: Request) -> dict[str, Any]:
+        """读取项目记忆并附带只读内置规则说明。"""
+        record = await project_record(request, project_id)
+        return {
+            "project_id": project_id,
+            "entries": [entry.model_dump(mode="json") for entry in record.shell_allow],
+            "builtins": [
+                {"key": "uv:run:pytest", "label": "uv run pytest", "readonly": True},
+                {
+                    "key": "uv:run:ruff",
+                    "label": "uv run ruff (recognized subcommands)",
+                    "readonly": True,
+                },
+                {"key": "pnpm:script:test", "label": "pnpm test", "readonly": True},
+            ],
+        }
+
+    @router.post("")
+    async def post_shell_allow(
+        project_id: str, request: Request, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """校验并追加一条记忆，相同 kind/key 不重复写入。"""
+        record = await project_record(request, project_id)
+        try:
+            entry = ShellAllowEntry.model_validate({**payload, "created_at": datetime.now(UTC)})
+        except ValidationError as error:
+            raise AbilityApiError("invalid_request", str(error)) from error
+        command = entry.key
+        if entry.kind == "class":
+            parts = entry.key.split(":", 2)
+            prefixes = {
+                "uv:run": ["uv", "run"],
+                "pnpm:script": ["pnpm", "run"],
+                "npm:script": ["npm", "run"],
+            }
+            if len(parts) != 3:
+                raise AbilityApiError("invalid_request", "Invalid shell class key")
+            family, name = ":".join(parts[:2]), parts[2]
+            if family not in prefixes or not name:
+                raise AbilityApiError("invalid_request", "Invalid shell class key")
+            command = shlex.join([*prefixes[family], name])
+        expression = classify_command_expression(command)
+        reason = irreversible_reason(expression)
+        if reason is not None:
+            raise AbilityApiError("invalid_request", reason)
+        if entry.kind == "class" and extract_shell_class(expression) != entry.key:
+            raise AbilityApiError("invalid_request", "Unsupported shell class")
+        if is_builtin_shell_expression(expression):
+            raise AbilityApiError("invalid_request", "Builtin rules do not need project memory")
+        for existing in record.shell_allow:
+            if (existing.kind, existing.key) == (entry.kind, entry.key):
+                return existing.model_dump(mode="json")
+        try:
+            await store.update(
+                project_id,
+                record.version,
+                lambda current: current.model_copy(
+                    update={"shell_allow": [*current.shell_allow, entry]}
+                ),
+            )
+        except ConcurrentModificationError as error:
+            raise AbilityApiError("conflict", str(error)) from error
+        return entry.model_dump(mode="json")
+
+    @router.delete("/{kind}/{key:path}", status_code=204)
+    async def delete_shell_allow(
+        project_id: str, kind: Literal["exact", "class"], key: str, request: Request
+    ) -> Response:
+        """只删除匹配 kind/key 的一条记忆。"""
+        record = await project_record(request, project_id)
+        entries = [entry for entry in record.shell_allow if (entry.kind, entry.key) != (kind, key)]
+        if len(entries) == len(record.shell_allow):
+            raise AbilityApiError("not_found", "Shell memory not found")
+        try:
+            await store.update(
+                project_id,
+                record.version,
+                lambda current: current.model_copy(update={"shell_allow": entries}),
+            )
+        except ConcurrentModificationError as error:
+            raise AbilityApiError("conflict", str(error)) from error
+        return Response(status_code=204)
+
+    return router
 
 
 class ProjectUnit(SubjectUnit):

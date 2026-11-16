@@ -909,3 +909,22 @@ describe("Manifest payload schemas", () => {
     expect(result.manifest_ref).toBeUndefined();
   });
 });
+
+describe("shell approval candidates", () => {
+  it("preserves exact and optional class candidates", () => {
+    const shell_remember = {
+      exact_key: "python demo.py",
+      exact_label: "python demo.py",
+      class_key: null,
+      class_label: null,
+    };
+    const request = { promise_id: "h1", agent_name: "coder", ability_name: "execute_command" };
+    expect(HITLRequestPayloadSchema.parse({ ...request, shell_remember }).shell_remember).toEqual(
+      shell_remember,
+    );
+    expect(
+      HITLRequestPayloadSchema.parse({ ...request, shell_remember: null }).shell_remember,
+    ).toBeNull();
+    expect(HITLRequestPayloadSchema.parse(request).shell_remember).toBeUndefined();
+  });
+});

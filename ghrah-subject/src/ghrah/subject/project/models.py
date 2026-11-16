@@ -33,6 +33,7 @@ __all__ = [
     "ProjectStatus",
     "RecoveryAction",
     "RecoverySpec",
+    "ShellAllowEntry",
     "WorkspaceMount",
     "WritableWorkspaceSpec",
     "can_transition",
@@ -216,6 +217,17 @@ class ProjectRuntimeConfig(BaseModel):
     plugins: PluginAssembly = Field(default_factory=PluginAssembly)
 
 
+class ShellAllowEntry(BaseModel):
+    """单个项目显式保存的 Shell 放行记忆。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["exact", "class"]
+    key: str
+    label: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class ProjectRecord(BaseModel):
     """Subject 内部 project 记录（对齐 protocol ``ProjectInfoPayload``）。
 
@@ -227,6 +239,7 @@ class ProjectRecord(BaseModel):
     - ``recovery`` 内部用 ``RecoverySpec``，序列化为 ``RecoveryAction.value``。
     - ``archived_at`` 是资源可用性轴；``deleted_at`` 仅保留旧数据兼容读取。
     - ``config`` 是内部装配语义（plugins 装配清单），``to_wire()`` 不输出。
+    - ``shell_allow`` 保存项目 Shell 记忆，由专用接口访问，``to_wire()`` 不输出。
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -237,6 +250,7 @@ class ProjectRecord(BaseModel):
     project_root_locator: str = ""
     # 空字符串表示 execute_command 不覆盖进程 cwd。
     shell_cwd: str = ""
+    shell_allow: list[ShellAllowEntry] = Field(default_factory=list)
     manifest_ref: str = ""
     cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMount] = Field(default_factory=list)
@@ -287,9 +301,9 @@ class ProjectRecord(BaseModel):
         recovery 为 ``RecoveryAction.value`` 字符串，时间戳 ISO str，含
         version/archived_at/deleted_at/cluster_ids/workspaces/agents/task_ids。
         ``isolation`` 已纳入 ``ProjectInfoPayload``，Observer 可对运行时实际返回的
-        隔离配置进行强类型读取。``config``（内部装配语义）不进 wire。
+        隔离配置进行强类型读取。``config`` 与 ``shell_allow`` 不进此 wire。
         """
-        return self.model_dump(mode="json", exclude={"config"})
+        return self.model_dump(mode="json", exclude={"config", "shell_allow"})
 
 
 def make_project_record(

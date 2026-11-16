@@ -67,6 +67,7 @@ from ghrah.ability.assembly import (
     AbilityAssembly,
     AbilitySourceMode,
 )
+from ghrah.ability.permissions.shell_allow import ShellAllowLookup
 from ghrah.ability.surface.assembly import SurfaceThresholds
 from ghrah.ability.surface.config import (
     DEFAULT_DEFINITION_TOKEN_RATIO,
@@ -151,6 +152,7 @@ class CoreUnitConfig:
         command_runner: execute_command 能力的命令执行器注入（per-cluster
             构造期注入，duck-typed ``run_command``；None = standalone 直跑
             subprocess）。Subject 挂载模式下传 SandboxExecutor。
+        shell_allow_lookup: 每次命令检查前读取当前项目 Shell 记忆的函数。
         shell_cwd_provider: execute_command 省略 working_dir 时读取的 shell
             初始目录。每次调用重新读取；None 或空字符串表示不覆盖进程 cwd。
         persistence_factory: per-agent 持久化后端工厂
@@ -194,6 +196,7 @@ class CoreUnitConfig:
     environment_injection: bool = False
     command_runner: Any = None
     shell_cwd_provider: Callable[[], Awaitable[str | None]] | None = None
+    shell_allow_lookup: ShellAllowLookup | None = None
     persistence_factory: Callable[[Any], Any] | None = None
     # per-cluster LLM 工厂注入（(AgentConfig) -> LLMProtocol；None = Core 内建
     # 默认，即 agentconf 解析）。与 persistence_factory 同范式：部署方显式
@@ -334,6 +337,9 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
                 "context": event.context,
                 "promise_id": event.promise_id,
                 "reason": event.reason,
+                "shell_remember": event.shell_remember.model_dump()
+                if event.shell_remember is not None
+                else None,
             }
         )
     elif isinstance(event, HITLResolvedEvent):
@@ -639,6 +645,7 @@ class CoreUnit:
                 require_approval_by_default=self._config.require_approval_by_default,
                 command_runner=self._config.command_runner,
                 shell_cwd_provider=self._config.shell_cwd_provider,
+                shell_allow_lookup=self._config.shell_allow_lookup,
                 safe_extra_commands=self._config.safe_extra_commands,
                 safe_extra_sub_commands=self._config.safe_extra_sub_commands,
                 mcp_deployment=self._mcp_deployment,

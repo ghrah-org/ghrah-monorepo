@@ -16,9 +16,11 @@ import shlex
 from functools import lru_cache
 from pathlib import Path
 
+import tree_sitter_bash
 from bash_classify import Classification, Risk, classify_expression
 from bash_classify.database import CommandDatabase, get_default_commands_dir
 from bash_classify.models import CommandResult, ExpressionResult, InnerCommandResult
+from tree_sitter import Language, Node, Parser
 
 from ghrah.ability.permissions.command_scope import parse_command_entry
 
@@ -37,7 +39,6 @@ OVERRIDES_DIR = Path(__file__).resolve().parent / "bash_classify_commands"
 
 _Segment = CommandResult | InnerCommandResult
 _SHELLS_WITH_C = frozenset({"bash", "sh", "dash"})
-_SHELL_SEPARATORS = frozenset({"&&", "||", "|", ";", "&"})
 _CLUSTERED_SHORT = re.compile(r"^-[A-Za-z]+$")
 
 
@@ -58,41 +59,34 @@ def classify_command_expression(command: str) -> ExpressionResult:
 
 def _expand_clustered_shell_c(command: str) -> str:
     """把含 ``c`` 的粘连短选项拆开，便于 ``-c`` 委托展开。"""
-    if "\n" in command:
-        return command
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return command
-    expanded: list[str] = []
-    changed = False
-    expect_command = True
-    index = 0
-    while index < len(parts):
-        token = parts[index]
-        if token in _SHELL_SEPARATORS:
-            expanded.append(token)
-            expect_command = True
-            index += 1
-            continue
-        expanded.append(token)
-        index += 1
-        if not expect_command:
-            continue
-        expect_command = False
-        if Path(token).name.lower() not in _SHELLS_WITH_C:
-            continue
-        while index < len(parts) and _CLUSTERED_SHORT.fullmatch(parts[index]):
-            cluster = parts[index]
-            if "c" in cluster[1:]:
-                expanded.extend(f"-{letter}" for letter in cluster[1:])
-                changed = True
-            else:
-                expanded.append(cluster)
-            index += 1
-    if not changed:
-        return command
-    return shlex.join(expanded)
+    source = command.encode("utf-8")
+    tree = Parser(Language(tree_sitter_bash.language())).parse(source)
+    edits: list[tuple[int, int, bytes]] = []
+
+    def visit(node: Node) -> None:
+        if node.type == "command":
+            name = node.child_by_field_name("name")
+            if (
+                name is not None
+                and Path(source[name.start_byte : name.end_byte].decode()).name in _SHELLS_WITH_C
+            ):
+                for argument in node.named_children:
+                    if argument.start_byte <= name.end_byte:
+                        continue
+                    token = source[argument.start_byte : argument.end_byte].decode()
+                    if not _CLUSTERED_SHORT.fullmatch(token):
+                        break
+                    if "c" in token[1:]:
+                        expanded = " ".join(f"-{letter}" for letter in token[1:]).encode()
+                        edits.append((argument.start_byte, argument.end_byte, expanded))
+                        break
+        for child in node.named_children:
+            visit(child)
+
+    visit(tree.root_node)
+    for start, end, replacement in sorted(edits, reverse=True):
+        source = source[:start] + replacement + source[end:]
+    return source.decode("utf-8")
 
 
 def iter_classified_segments(expression_result: ExpressionResult) -> list[_Segment]:

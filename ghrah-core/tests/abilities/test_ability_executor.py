@@ -1070,3 +1070,40 @@ class TestHitlConsecutiveTimeoutCircuit:
         error = result.data.get("error", "")
         assert "likely offline" in error
         assert "end_task" in error
+
+
+@pytest.mark.parametrize(
+    "command,category", [("python demo.py", None), ("pnpm run lint", "pnpm:script:lint")]
+)
+async def test_shell_remember_reaches_wire_payload(command, category):
+    """真实命令检查结果经 Hook 合并、执行器和 Core 发布器完整传到协议载荷。"""
+    from ghrah.protocol.payloads.agent import HITLRequestPayload
+
+    from ghrah.ability.permissions.command_safety import CommandApprovalHook, CommandSafetyChecker
+    from ghrah.core.unit import UnitEventPublisher
+
+    emitted = []
+    publisher = UnitEventPublisher(
+        emit=lambda name, payload: emitted.append((name, payload)),
+        project_id="project-a",
+        cluster_id="cluster-a",
+        agent_id_resolver=lambda _: "agent-a",
+    )
+    executor = LocalAbilityExecutor(
+        agent_name="coder", event_publisher=publisher, hitl_timeout=0.01
+    )
+    call, services = _make_context(member="execute_command", tool_args={"command": command})
+    hook = CommandApprovalHook(CommandSafetyChecker())
+    result = await hook.execute(call, services)
+    assert result.requires_hitl
+    result = HookResult.continue_().merge(result).merge(HookResult.continue_())
+    await executor.handle_hitl_hook_result(result, call, services)
+    name, payload = emitted[0]
+    assert name == "core:hitl_request"
+    wire = HITLRequestPayload.model_validate_json(
+        HITLRequestPayload.model_validate(payload).model_dump_json()
+    )
+    assert wire.project_id == "project-a"
+    assert wire.shell_remember.exact_key == command
+    assert wire.shell_remember.class_key == category
+    assert wire.tool_args == {"command": command}

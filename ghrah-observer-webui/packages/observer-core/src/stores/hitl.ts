@@ -16,6 +16,7 @@ export interface HitlRequest {
   toolArgs: Record<string, unknown>;
   context: Record<string, unknown>;
   reason: string;
+  shellRemember?: HITLRequestPayload["shell_remember"];
 }
 
 export const useHitlStore = defineStore("ghrah-hitl", () => {
@@ -35,6 +36,7 @@ export const useHitlStore = defineStore("ghrah-hitl", () => {
       toolArgs: payload.tool_args,
       context: payload.context,
       reason: payload.reason ?? "",
+      shellRemember: payload.shell_remember ?? null,
     });
     return true;
   }

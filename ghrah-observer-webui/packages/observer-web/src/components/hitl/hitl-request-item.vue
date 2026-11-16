@@ -17,11 +17,12 @@ const props = defineProps<{ request: HitlRequest; selectable?: boolean; selected
 
 const emit = defineEmits<{ toggleSelect: [promiseId: string] }>();
 
-const { sendHitlResponse } = useObserver();
+const { sendHitlResponse, rememberShellCommand } = useObserver();
 
 const showRejectForm = ref(false);
 const rejectReason = ref("");
 const loading = ref(false);
+const saveError = ref("");
 
 const toolArgsSummary = computed(() => {
   const args = props.request.toolArgs;
@@ -50,6 +51,21 @@ async function handleApprove() {
   loading.value = true;
   try {
     await sendHitlResponse(props.request.promiseId, true);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function handleRemember(kind: "exact" | "class", key: string, label: string) {
+  loading.value = true;
+  saveError.value = "";
+  try {
+    await rememberShellCommand(props.request.projectId, kind, key, label);
+    await sendHitlResponse(props.request.promiseId, true);
+  } catch (error) {
+    saveError.value = t("hitl.rememberFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     loading.value = false;
   }
@@ -113,13 +129,45 @@ async function handleRejectSubmit() {
       </div>
     </div>
 
-    <div v-else class="flex gap-2 pl-5">
+    <div v-else class="flex flex-wrap gap-2 pl-5">
       <UiButton variant="primary" :disabled="loading" @click="handleApprove">
-        {{ t("hitl.approve") }}
+        {{ request.shellRemember ? t("hitl.approveOnce") : t("hitl.approve") }}
       </UiButton>
+      <template v-if="request.shellRemember">
+        <UiButton
+          variant="secondary"
+          :disabled="loading"
+          :title="request.shellRemember.exact_label"
+          @click="
+            handleRemember(
+              'exact',
+              request.shellRemember.exact_key,
+              request.shellRemember.exact_label,
+            )
+          "
+        >
+          {{ t("hitl.rememberExact") }}
+        </UiButton>
+        <UiButton
+          v-if="request.shellRemember.class_key && request.shellRemember.class_label"
+          variant="secondary"
+          :disabled="loading"
+          :title="request.shellRemember.class_label"
+          @click="
+            handleRemember(
+              'class',
+              request.shellRemember.class_key,
+              request.shellRemember.class_label,
+            )
+          "
+        >
+          {{ t("hitl.rememberClass") }}
+        </UiButton>
+      </template>
       <UiButton variant="danger" :disabled="loading" @click="showRejectForm = true">
         {{ t("hitl.reject") }}
       </UiButton>
     </div>
+    <p v-if="saveError" role="alert" class="text-sm pl-5">{{ saveError }}</p>
   </li>
 </template>
