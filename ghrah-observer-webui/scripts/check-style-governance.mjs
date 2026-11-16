@@ -32,7 +32,9 @@ import { fileURLToPath } from "node:url";
 
 const WEBUI_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join(WEBUI_ROOT, "style-baseline.json");
-const TOKEN_FILE = join("packages", "observer-web", "src", "styles", "tokens.css");
+// 相对路径在 scanFile 里统一成 "/"，这里也必须用同一形状，否则 Windows 上
+// join() 产生的反斜杠会让 tokens.css 的整文件豁免失效（Linux CI 不暴露）。
+const TOKEN_FILE = "packages/observer-web/src/styles/tokens.css";
 
 const PALETTE =
   "(?:gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)";

@@ -598,6 +598,7 @@ dependencies = [
     { name = "ghrah-plugin" },
     { name = "ghrah-protocol" },
     { name = "ghrah-taskstore" },
+    { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
@@ -620,6 +621,7 @@ requires-dist = [
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "ghrah-protocol", editable = "ghrah-protocol" },
     { name = "ghrah-taskstore", editable = "ghrah-taskstore" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]

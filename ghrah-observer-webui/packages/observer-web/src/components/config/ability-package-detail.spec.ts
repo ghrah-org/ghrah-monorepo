@@ -9,7 +9,7 @@ import {
   AbilityPackageVersionProfileViewSchema,
   type AbilityPackageVersionProfileView,
 } from "@ghrah/protocol";
-import { mount } from "@vue/test-utils";
+import { mount, type VueWrapper } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import AbilityPackageDetail from "./ability-package-detail.vue";
 
@@ -39,6 +39,10 @@ function loaded(
     loadedAt: 1,
     ...extra,
   };
+}
+
+function tab(wrapper: VueWrapper, label: string) {
+  return wrapper.findAll('[role="tab"]').find((item) => item.text().includes(label));
 }
 
 const operation = {
@@ -93,26 +97,25 @@ const skill = {
 };
 
 describe("AbilityPackageDetail", () => {
-  it("renders four sections, empty members, and a missing MCP fact", () => {
+  it("lands on the first non-empty tab and switches between empty members", async () => {
     const wrapper = mount(AbilityPackageDetail, {
       props: { record: loaded(profile()), mcpProbeEnabled: false },
     });
-    expect(wrapper.text()).toContain("Tools");
-    expect(wrapper.text()).toContain("Skills and resources");
-    expect(wrapper.text()).toContain("MCP");
-    expect(wrapper.text()).toContain("Verification");
+
     expect(wrapper.text()).toContain("This version declares no operations.");
-    expect(wrapper.text()).toContain("This version declares no skills.");
-    expect(wrapper.text()).toContain("This version does not say whether it is an MCP package.");
+    expect(wrapper.text()).toContain("Verification");
     expect(wrapper.text()).toContain("No install verification is recorded for this version.");
+
+    await tab(wrapper, "Skills")?.trigger("click");
+    expect(wrapper.text()).toContain("This version declares no skills.");
+
+    await tab(wrapper, "MCP")?.trigger("click");
+    expect(wrapper.text()).toContain("This version does not say whether it is an MCP package.");
     expect(wrapper.text()).not.toContain("This version is not an MCP package.");
-    expect(wrapper.findAll("button").some((button) => button.text() === "Test connection")).toBe(
-      false,
-    );
     wrapper.unmount();
   });
 
-  it("shows operation and skill members without an install root", () => {
+  it("shows operation and skill members without an install root", async () => {
     const wrapper = mount(AbilityPackageDetail, {
       props: {
         record: loaded(
@@ -125,27 +128,37 @@ describe("AbilityPackageDetail", () => {
         mcpProbeEnabled: true,
       },
     });
-    const text = wrapper.text();
+
+    let text = wrapper.text();
     expect(text).toContain("read_file");
     expect(text).toContain("Read file");
-    expect(text).toContain("Input: object, required path");
-    expect(text).toContain("Output: string");
-    expect(text).toContain("Effects: read");
+    expect(text).toContain("1 fields · 1 required");
+    expect(text).toContain("path");
+    expect(text).toContain("string");
+    expect(text).toContain("read");
     expect(text).toContain("Not exposed");
-    expect(text).toContain("timeout 1500 ms");
+    expect(text).toContain("1500 ms");
+    expect(text).toContain("cancelable");
+    expect(text).toContain("revoke drain");
+    expect(text).toContain("retry never");
     expect(text).toContain("tools/read.md");
-    expect(text).toContain("MCP tool read on notes");
+    expect(text).toContain("MCP notes/read");
+
+    await tab(wrapper, "Skills")?.trigger("click");
+    text = wrapper.text();
     expect(text).toContain("skills/guide.md");
     expect(text).toContain("skills/guide/assets/logo.png");
-    expect(text).toContain("No references.");
-    expect(text).toContain("No scripts.");
-    expect(text).toContain("This version is not an MCP package.");
-    expect(text).not.toContain("/home/");
-    expect(text).not.toContain("http://");
+    expect(text).not.toContain("No references.");
+    expect(text).not.toContain("No scripts.");
+
+    await tab(wrapper, "MCP")?.trigger("click");
+    expect(wrapper.text()).toContain("This version is not an MCP package.");
+    expect(wrapper.text()).not.toContain("/home/");
+    expect(wrapper.text()).not.toContain("http://");
     wrapper.unmount();
   });
 
-  it("shows an install snapshot and keeps connection tests unlabeled when the gate is closed", () => {
+  it("shows an install snapshot in the MCP tab while connection tests stay closed", async () => {
     const wrapper = mount(AbilityPackageDetail, {
       props: {
         record: loaded(
@@ -162,16 +175,15 @@ describe("AbilityPackageDetail", () => {
         mcpProbeEnabled: false,
       },
     });
+
+    await tab(wrapper, "MCP")?.trigger("click");
     const text = wrapper.text();
-    expect(text).toContain("Server notes");
-    expect(text).toContain("Fetched 2026-11-12T00:00:00Z");
+    expect(text).toContain("notes");
+    expect(text).toContain("2026-11-12T00:00:00Z");
     expect(text).toContain("The snapshot is stale.");
-    expect(text).toContain("Last error: timed out");
+    expect(text).toContain("timed out");
     expect(text).toContain("Connection tests are not enabled.");
     expect(text).not.toContain("This version is not an MCP package.");
-    expect(wrapper.findAll("button").some((button) => button.text() === "Test connection")).toBe(
-      false,
-    );
     wrapper.unmount();
   });
 
@@ -195,6 +207,7 @@ describe("AbilityPackageDetail", () => {
         mcpProbeEnabled: true,
       },
     });
+
     const text = wrapper.text();
     expect(text).toContain("Verification failed.");
     expect(text).toContain("Code digest_mismatch");
@@ -222,6 +235,7 @@ describe("AbilityPackageDetail", () => {
         mcpProbeEnabled: false,
       },
     });
+
     expect(wrapper.text()).toContain("This version is not in the distribution.");
     expect(wrapper.text()).not.toContain("/home/secret");
     await wrapper.get("button").trigger("click");

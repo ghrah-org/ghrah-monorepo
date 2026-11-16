@@ -5,6 +5,8 @@ import {
   AbilityMcpProbeRequestSchema,
   AbilityMcpProbeViewSchema,
   AbilityPackageGroupsViewSchema,
+  AbilityPackageImportViewSchema,
+  type AbilityPackageImportView,
   AbilityPackageVersionProfileViewSchema,
   AbilityTreeChangeResultSchema,
   AbilityTreeIdSchema,
@@ -80,11 +82,18 @@ export class AbilityConflictError extends HttpError {
   }
 }
 
+/** 上传选项：进度回调只用于界面，不参与契约。 */
+export interface AbilityImportOptions {
+  onProgress?: (ratio: number) => void;
+  timeoutMs?: number;
+}
+
 export interface AbilityControlClient {
   status(): Promise<AbilityApiStatus>;
   packageGroups(): Promise<AbilityPackageGroupsView>;
   projectPackageGroups(): Promise<AbilityPackageGroupsView>;
   agentPackageGroups(agentId: string): Promise<AbilityPackageGroupsView>;
+  importPackage(body: unknown, options?: AbilityImportOptions): Promise<AbilityPackageImportView>;
   packageVersion(
     namespace: string,
     name: string,
@@ -230,6 +239,14 @@ export function createAbilityControlClient(
     },
     async agentPackageGroups(agentId) {
       return readGroups(agentPath(agentId, "/ability-package-groups"), "agent", agentId);
+    },
+    async importPackage(body, options = {}) {
+      return AbilityPackageImportViewSchema.parse(
+        await http.upload<unknown>("/api/v1/ability-packages/import", body, {
+          timeoutMs: options.timeoutMs,
+          onProgress: options.onProgress,
+        }),
+      );
     },
     async packageVersion(namespace, name, version) {
       const view = AbilityPackageVersionProfileViewSchema.parse(

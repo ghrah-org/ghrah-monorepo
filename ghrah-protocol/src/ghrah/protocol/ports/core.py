@@ -25,6 +25,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageImportView,
     AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
@@ -506,6 +507,23 @@ class CoreCatalogPort(Protocol):
 
     async def package_groups(self, *, agent_id: AgentId | None = None) -> AbilityPackageGroupsView:
         """能力包分组视图（全局形态，不绑定项目）。"""
+        ...
+
+    async def package_import(
+        self, *, archive_path: str, source_name: str
+    ) -> AbilityPackageImportView:
+        """导入一个能力包归档。
+
+        Args:
+            archive_path: 归档在本机的绝对路径（调用方负责落地与清理）
+            source_name: 用户看到的原始文件名，只用于识别格式与写进安装记录
+
+        Returns:
+            安装结果；解包、格式校验、安装与安装记录都由 Core 完成
+
+        Raises:
+            ApiError: 归档格式不支持、包内容不合法或安装失败
+        """
         ...
 
     async def aclose(self) -> None:
