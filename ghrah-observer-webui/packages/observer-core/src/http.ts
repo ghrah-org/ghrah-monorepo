@@ -201,7 +201,9 @@ interface UploadRequestLike {
   timeout: number;
   readonly status: number;
   readonly responseText: string;
-  readonly upload: { addEventListener(type: "progress", handler: (event: UploadProgressEvent) => void): void };
+  readonly upload: {
+    addEventListener(type: "progress", handler: (event: UploadProgressEvent) => void): void;
+  };
   open(method: string, url: string, async: boolean): void;
   setRequestHeader(name: string, value: string): void;
   addEventListener(type: string, handler: () => void): void;
@@ -218,8 +220,9 @@ function uploadError(status: number, text: string): HttpError {
   } catch {
     body = undefined;
   }
-  const part = (body as { error?: { code?: unknown; message?: unknown; detail?: unknown } } | undefined)
-    ?.error;
+  const part = (
+    body as { error?: { code?: unknown; message?: unknown; detail?: unknown } } | undefined
+  )?.error;
   const code = typeof part?.code === "string" && part.code ? part.code : "internal";
   const message =
     typeof part?.message === "string" && part.message > ""
