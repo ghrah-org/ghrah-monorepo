@@ -420,6 +420,8 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-bash" },
 ]
 
 [package.optional-dependencies]
@@ -453,6 +455,8 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.3" },
+    { name = "tree-sitter", specifier = ">=0.26.0" },
+    { name = "tree-sitter-bash", specifier = ">=0.25.1" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
 ]
 provides-extras = ["mcp", "scheme", "dev"]
@@ -560,14 +564,20 @@ name = "ghrah-protocol"
 version = "0.2.0a0"
 source = { editable = "ghrah-protocol" }
 dependencies = [
+    { name = "bash-classify" },
     { name = "ghrah-plugin" },
     { name = "pydantic" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-bash" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "bash-classify", specifier = ">=0.14.1" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tree-sitter", specifier = ">=0.26.0" },
+    { name = "tree-sitter-bash", specifier = ">=0.25.1" },
 ]
 
 [[package]]

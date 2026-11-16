@@ -82,3 +82,20 @@ describe("hitl batch selection", () => {
     expect(store.selectedIds.has("h1")).toBe(false);
   });
 });
+
+describe("shell approval data", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  it("keeps remember candidates available to the approval UI", () => {
+    const store = useHitlStore();
+    const shell_remember = {
+      exact_key: "pnpm run lint",
+      exact_label: "pnpm run lint",
+      class_key: "pnpm:script:lint",
+      class_label: "pnpm:script:lint",
+    };
+    store.onHitlRequest(payload({ shell_remember }));
+    expect(store.requests[0].shellRemember).toEqual(shell_remember);
+    store.onHitlRequest(payload({ promise_id: "legacy" }));
+    expect(store.requests[1].shellRemember).toBeNull();
+  });
+});

@@ -157,15 +157,15 @@ class TestCheckCommandDangerous:
         assert verdict.category == CommandSafetyCategory.DANGEROUS
         assert verdict.sub_command == "publish"
 
-    def test_npm_run_and_test_are_dangerous(self) -> None:
-        # bash-classify ≥0.14：package 脚本不可静态证明安全。
+    def test_npm_run_and_test_require_approval(self) -> None:
+        # package 脚本不可静态证明安全，交给用户审批。
         assert (
             CommandSafetyChecker().check_command("npm run build").category
-            is CommandSafetyCategory.DANGEROUS
+            is CommandSafetyCategory.REQUIRE_HITL
         )
         assert (
             CommandSafetyChecker().check_command("npm test").category
-            is CommandSafetyCategory.DANGEROUS
+            is CommandSafetyCategory.REQUIRE_HITL
         )
 
     def test_dangerous_subcommand_docker_rmi(self) -> None:
@@ -198,10 +198,10 @@ class TestCheckCommandRequireHitl:
         assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
         assert verdict.sub_command == "install"
 
-    def test_python_script_is_dangerous(self) -> None:
-        # bash-classify 将「解释器跑脚本」定为 DANGEROUS；阶段 1 直接硬拒绝。
+    def test_python_script_requires_approval(self) -> None:
+        # 解释器脚本入口不再直接拒绝，保留人工审批。
         verdict = CommandSafetyChecker().check_command("python script.py")
-        assert verdict.category == CommandSafetyCategory.DANGEROUS
+        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
         assert verdict.base_command == "python"
 
     def test_bash_unwraps_readonly_inner_as_safe(self) -> None:
@@ -209,10 +209,10 @@ class TestCheckCommandRequireHitl:
         verdict = CommandSafetyChecker().check_command("bash -c 'echo hello'")
         assert verdict.category == CommandSafetyCategory.SAFE
 
-    def test_git_no_args_is_dangerous(self) -> None:
-        # bash-classify ≥0.14：裸 `git` 视为危险/不可自动执行。
+    def test_git_no_args_requires_approval(self) -> None:
+        # 裸 git 不自动执行，由用户审批。
         verdict = CommandSafetyChecker().check_command("git")
-        assert verdict.category == CommandSafetyCategory.DANGEROUS
+        assert verdict.category == CommandSafetyCategory.REQUIRE_HITL
 
 
 class TestCheckCommandEdgeCases:
@@ -358,8 +358,8 @@ class TestExtendSafeLists:
         )
         assert checker.check_command("rm -rf /").category == CommandSafetyCategory.DANGEROUS
         assert checker.check_command("git clean -fdx").category == CommandSafetyCategory.DANGEROUS
-        assert checker.check_command("pnpm build").category == CommandSafetyCategory.DANGEROUS
-        assert checker.check_command("npm run build").category == CommandSafetyCategory.DANGEROUS
+        assert checker.check_command("pnpm build").category == CommandSafetyCategory.REQUIRE_HITL
+        assert checker.check_command("npm run build").category == CommandSafetyCategory.REQUIRE_HITL
         assert (
             checker.check_command("git config --global user.email a@b").category
             == CommandSafetyCategory.REQUIRE_HITL
@@ -661,7 +661,7 @@ def test_node_version_is_safe_via_extends() -> None:
     verdict = CommandSafetyChecker().check_command("node --version")
     assert verdict.category is CommandSafetyCategory.SAFE
     assert CommandSafetyChecker().check_command("node script.js").category is (
-        CommandSafetyCategory.DANGEROUS
+        CommandSafetyCategory.REQUIRE_HITL
     )
 
 
@@ -712,3 +712,243 @@ def test_phase4_mutations_and_exec_stay_unapproved(command: str) -> None:
 )
 def test_phase4_destructive_forms_stay_dangerous(command: str) -> None:
     assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run pytest",
+        "uv run pytest -q",
+        "uv run --directory . pytest",
+        "uv run ruff check .",
+        "uv run ruff format .",
+        "pnpm test",
+        "pnpm -r test",
+        "pnpm --recursive test",
+        "pnpm --filter foo test",
+        "pnpm run test",
+        "uv run pytest -q && uv run ruff check .",
+    ],
+)
+def test_builtin_scripts_auto_approve(command: str) -> None:
+    verdict = CommandSafetyChecker().check_command(command)
+    assert verdict.category is CommandSafetyCategory.SAFE
+    assert verdict.shell_remember is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python script.py",
+        "python -m pytest",
+        "node script.js",
+        "pnpm build",
+        "npm run build",
+        "npm test",
+        "pnpm run lint",
+        "uv run python script.py",
+        "git",
+        "python script.py > output.txt",
+        "pnpm run t",
+    ],
+)
+@pytest.mark.parametrize("require_approval", [True, False])
+def test_script_entry_respects_approval_setting(command: str, require_approval: bool) -> None:
+    verdict = CommandSafetyChecker(require_approval=require_approval).check_command(command)
+    expected = (
+        CommandSafetyCategory.REQUIRE_HITL if require_approval else CommandSafetyCategory.DANGEROUS
+    )
+    assert verdict.category is expected
+    if require_approval:
+        assert verdict.shell_remember is not None
+        assert verdict.shell_remember.exact_key == command
+    else:
+        assert verdict.shell_remember is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf /tmp/x",
+        "sudo ls",
+        "git clean -fd",
+        "git reset --hard",
+        "git push --force",
+        "git push --force-with-lease",
+        "npm publish",
+        "docker rmi image",
+        "docker rm container",
+        "kubectl delete pod x",
+        "uv run rm -rf /tmp/x",
+        "uv run --directory . --with foo rm -rf /tmp/x",
+        "pnpm exec rm -rf /tmp/x",
+        "bash -lc 'rm -rf /tmp/x'",
+        "echo hi > /etc/passwd",
+        "uv run pytest && rm -rf /tmp/x",
+        "bash -lc 'python script.py > /etc/passwd'",
+        "git branch -D main",
+    ],
+)
+@pytest.mark.parametrize("require_approval", [True, False])
+def test_project_memory_never_overrides_irreversible_commands(
+    command: str, require_approval: bool
+) -> None:
+    checker = CommandSafetyChecker(
+        require_approval=require_approval, allowed_commands=("uv", "pnpm", "rm")
+    )
+    verdict = checker.check_command(command, shell_allow=[{"kind": "exact", "key": command}])
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+    assert verdict.shell_remember is None
+
+
+@pytest.mark.parametrize(
+    ("command", "key"),
+    [
+        ("uv run project_check .", "uv:run:project_check"),
+        ("pnpm -r --filter foo lint", "pnpm:script:lint"),
+        ("uv run pytest && pnpm run lint", "pnpm:script:lint"),
+    ],
+)
+def test_project_class_memory(command: str, key: str) -> None:
+    checker = CommandSafetyChecker()
+    assert checker.check_command(command).category is CommandSafetyCategory.REQUIRE_HITL
+    assert (
+        checker.check_command(command, shell_allow=[{"kind": "class", "key": key}]).category
+        is CommandSafetyCategory.SAFE
+    )
+    # 下一次调用重新提供所属项目的记录，检查器不保留上次的记忆。
+    assert checker.check_command(command).category is CommandSafetyCategory.REQUIRE_HITL
+
+
+def test_denied_command_overrides_builtin_and_memory() -> None:
+    checker = CommandSafetyChecker(denied_commands=("pnpm",))
+    command = "pnpm test"
+    assert (
+        checker.check_command(command, shell_allow=[{"kind": "exact", "key": command}]).category
+        is CommandSafetyCategory.DANGEROUS
+    )
+
+
+@pytest.mark.parametrize(
+    ("approved", "other"),
+    [
+        ("echo '&&' touch file.txt", "echo && touch file.txt"),
+        ("python script.py '$HOME'", "python script.py $HOME"),
+    ],
+)
+def test_exact_memory_keeps_shell_semantics(approved: str, other: str) -> None:
+    checker = CommandSafetyChecker()
+    entries = [{"kind": "exact", "key": approved}]
+    assert (
+        checker.check_command(approved, shell_allow=entries).category is CommandSafetyCategory.SAFE
+    )
+    assert (
+        checker.check_command(other, shell_allow=entries).category
+        is CommandSafetyCategory.REQUIRE_HITL
+    )
+
+
+@pytest.mark.parametrize("command", ["mkdir ../outside", "python script.py > ../outside.txt"])
+def test_project_memory_cannot_override_workspace_boundary(tmp_path, command: str) -> None:
+    assert (
+        _workspace_checker(tmp_path)
+        .check_command(command, shell_allow=[{"kind": "exact", "key": command}])
+        .category
+        is CommandSafetyCategory.DANGEROUS
+    )
+
+
+def test_project_memory_cannot_override_readonly_filesystem(tmp_path) -> None:
+    command = "python script.py > output.txt"
+    verdict = _workspace_checker(tmp_path, read_only=True).check_command(
+        command, shell_allow=[{"kind": "exact", "key": command}]
+    )
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+def test_project_memory_cannot_override_denied_path(tmp_path) -> None:
+    from ghrah.ability.permissions.fs_permissions import FSPermissionChecker
+
+    checker = CommandSafetyChecker(
+        workspace_root=str(tmp_path),
+        fs_checker=FSPermissionChecker(
+            workspace_root=str(tmp_path), denied_paths=[str(tmp_path / "secret")]
+        ),
+    )
+    command = "python script.py > secret"
+    assert (
+        checker.check_command(command, shell_allow=[{"kind": "exact", "key": command}]).category
+        is CommandSafetyCategory.DANGEROUS
+    )
+
+
+def test_approval_options_only_offer_closed_classes() -> None:
+    checker = CommandSafetyChecker()
+    options = checker.check_command("python script.py").shell_remember
+    assert options is not None
+    assert options.class_key is None
+    options = checker.check_command("pnpm run lint").shell_remember
+    assert options is not None
+    assert options.class_key == "pnpm:script:lint"
+
+
+def test_custom_dangerous_commands_apply_inside_uv() -> None:
+    checker = CommandSafetyChecker(dangerous_commands={"mydanger"})
+    assert checker.check_command("uv run mydanger").category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize("command", ["rm -rf /tmp/x", "npm publish"])
+def test_custom_dangerous_lists_keep_builtin_veto(command: str) -> None:
+    checker = CommandSafetyChecker(dangerous_commands=set(), dangerous_sub_commands={})
+    verdict = checker.check_command(command, shell_allow=[{"kind": "exact", "key": command}])
+    assert verdict.category is CommandSafetyCategory.DANGEROUS
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -lc 'echo ok' && rm -rf /tmp/x",
+        "bash -lc 'echo ok' > /etc/passwd",
+        "bash -lc 'echo ok' $(rm -rf /tmp/x)",
+        "echo 中文 && bash -lc 'echo ok' && rm -rf /tmp/x",
+    ],
+)
+def test_clustered_shell_options_preserve_outer_structure(command: str) -> None:
+    assert CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.DANGEROUS
+
+
+def test_clustered_shell_options_preserve_other_script_approval() -> None:
+    command = "bash -lc 'echo ok' && pnpm run lint"
+    assert (
+        CommandSafetyChecker().check_command(command).category is CommandSafetyCategory.REQUIRE_HITL
+    )
+
+
+async def test_hook_reads_memory_again_for_each_command() -> None:
+    entries = []
+    lookups = 0
+
+    async def lookup():
+        nonlocal lookups
+        lookups += 1
+        return entries
+
+    hook = CommandApprovalHook(CommandSafetyChecker(), shell_allow_lookup=lookup)
+    call, services = _make_context(member="execute_command", tool_args={"command": "pnpm run lint"})
+    assert (await hook.execute(call, services)).requires_hitl
+    entries.append({"kind": "class", "key": "pnpm:script:lint"})
+    assert (await hook.execute(call, services)).should_continue
+    entries.clear()
+    assert (await hook.execute(call, services)).requires_hitl
+    assert lookups == 3
+
+
+async def test_hook_keeps_dangerous_veto_with_memory() -> None:
+    async def lookup():
+        return [{"kind": "exact", "key": "rm -rf /tmp/x"}]
+
+    hook = CommandApprovalHook(CommandSafetyChecker(), shell_allow_lookup=lookup)
+    call, services = _make_context(member="execute_command", tool_args={"command": "rm -rf /tmp/x"})
+    result = await hook.execute(call, services)
+    assert not result.should_continue
+    assert not result.requires_hitl

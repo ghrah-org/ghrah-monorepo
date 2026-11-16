@@ -1,3 +1,4 @@
+import { ShellRememberOptionsSchema } from "../hitl.generated.js";
 // SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -351,7 +352,9 @@ export const HITLRequestPayloadSchema = z.object({
   tool_args: z.record(z.unknown()).optional().default({}),
   context: z.record(z.unknown()).optional().default({}),
   reason: z.string().optional().default(""),
+  shell_remember: ShellRememberOptionsSchema.nullable().optional(),
 });
+export type HITLRequestPayload = z.infer<typeof HITLRequestPayloadSchema>;
 
 export type AgentConfigPayload = z.infer<typeof AgentConfigPayloadSchema>;
 export type AbilityDefinitionPayload = z.infer<typeof AbilityDefinitionPayloadSchema>;
@@ -380,5 +383,4 @@ export type ContextUsageUpdatedPayload = z.infer<typeof ContextUsageUpdatedPaylo
 export type AgentErrorPayload = z.infer<typeof AgentErrorPayloadSchema>;
 export type HealthStatusPayload = z.infer<typeof HealthStatusPayloadSchema>;
 export type AbilityResultPayload = z.infer<typeof AbilityResultPayloadSchema>;
-export type HITLRequestPayload = z.infer<typeof HITLRequestPayloadSchema>;
 export type HITLResolvedPayload = z.infer<typeof HITLResolvedPayloadSchema>;

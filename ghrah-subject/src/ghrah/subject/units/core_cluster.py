@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -233,12 +234,27 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 path = str(getattr(record, "shell_cwd", "") or "").strip()
                 return path or None
 
+            async def shell_allow_lookup(project_id: str) -> list[dict[str, str]]:
+                """每次现读当前项目记忆，不经 HTTP，也不复制到启动配置。"""
+                project_store = ctx.get(PROJECT_STORE.name)
+                try:
+                    record = await project_store.get(project_id)
+                except sqlite3.Error, OSError:
+                    logger.warning(
+                        "shell allow lookup failed for project %s", project_id, exc_info=True
+                    )
+                    return []
+                if record is None:
+                    return []
+                return [entry.model_dump(mode="json") for entry in record.shell_allow]
+
             self._unit_factory = default_core_unit_factory(
                 self._config,
                 manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
                 shell_cwd_lookup=shell_cwd_lookup,
+                shell_allow_lookup=shell_allow_lookup,
             )
         from ghrah.core.wiring import build_core_catalog, build_core_port
         from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT

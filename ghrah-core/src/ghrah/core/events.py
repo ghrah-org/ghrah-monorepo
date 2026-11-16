@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
+
 __all__ = [
     "CoreEventType",
     "CoreEvent",
@@ -100,6 +102,7 @@ class HITLRequestEvent(CoreEvent):
     ability_name: str = ""
     tool_call: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict)
+    shell_remember: ShellRememberOptions | None = None
     promise_id: str = ""
     """审批响应定位键：Observer 凭此回发 hitl_response"""
     reason: str = ""

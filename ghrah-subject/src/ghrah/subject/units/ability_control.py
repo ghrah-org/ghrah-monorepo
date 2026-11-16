@@ -643,6 +643,11 @@ class AbilityControlUnit(SubjectUnit):
         )
         register_ability_control_error_handlers(app)
         app.include_router(router)
+        from ghrah.subject.units.project import build_project_shell_allow_router
+
+        app.include_router(
+            build_project_shell_allow_router(config=self._config, store=project_store)
+        )
         self._router = router
         logger.info(
             "ability control REST mounted (enabled=%s, ability_source=%s)",

@@ -52,6 +52,7 @@ from ghrah.ability.execution.invocation import (
 from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.permissions.hitl import HITLRequiredAbility, PermissionDeniedAbility
 from ghrah.ability.permissions.scope import resolve_effective_permission
+from ghrah.ability.permissions.shell_allow import ShellAllowLookup
 from ghrah.ability.surface.assembly import SurfaceThresholds
 from ghrah.ability.surface.naming import META_TOOL_NAMES, assign_tool_names
 from ghrah.ability.surface.projection import project_surface
@@ -456,6 +457,7 @@ class StartupGrantMaterializer:
         safe_extra_commands: tuple[str, ...] = (),
         safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
         shell_cwd_provider: Any = None,
+        shell_allow_lookup: ShellAllowLookup | None = None,
         mcp_deployment: Any = None,
         surface_thresholds: SurfaceThresholds | None = None,
         surface_search_limit: int = 8,
@@ -474,6 +476,7 @@ class StartupGrantMaterializer:
         self._require_approval_by_default = require_approval_by_default
         self._command_runner = command_runner
         self._shell_cwd_provider = shell_cwd_provider
+        self._shell_allow_lookup = shell_allow_lookup
         self._safe_extra_commands = safe_extra_commands
         self._safe_extra_sub_commands = safe_extra_sub_commands
         self._mcp_deployment = mcp_deployment
@@ -966,6 +969,7 @@ class StartupGrantMaterializer:
             safe_extra_commands=self._safe_extra_commands,
             safe_extra_sub_commands=self._safe_extra_sub_commands,
             shell_cwd_provider=self._shell_cwd_provider,
+            shell_allow_lookup=self._shell_allow_lookup,
         )
         for binding in bindings:
             instance = definitions[binding.alias]
@@ -1019,6 +1023,7 @@ class StartupGrantMaterializer:
                     safe_extra_sub_commands=self._safe_extra_sub_commands,
                     permission_scopes={resolved.ability_name: scope},
                     shell_cwd_provider=self._shell_cwd_provider,
+                    shell_allow_lookup=self._shell_allow_lookup,
                 )
             if not built:
                 raise StartupGrantError(

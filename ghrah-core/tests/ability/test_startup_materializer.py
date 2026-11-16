@@ -1117,3 +1117,46 @@ async def test_no_policy_rebuild_filters_members_removed_in_new_version(store, t
     )
     desired = await materializer._existing_desired(agent, [new_version])
     assert desired == {}
+
+
+async def test_shell_memory_reaches_hook_and_execution_recheck(store, tmp_path):
+    from types import SimpleNamespace
+
+    from ghrah.ability.execution.executor import LocalAbilityExecutor
+
+    entries = [{"kind": "class", "key": "pnpm:script:lint"}]
+    executed = []
+
+    async def lookup():
+        return entries
+
+    async def run_command(*, command, cwd, timeout):
+        executed.append(command)
+        return SimpleNamespace(success=True, exit_code=0, stdout="ok", stderr="", timed_out=False)
+
+    assembly, resolved = _resolved(
+        AGENT_YAML[: AGENT_YAML.index("abilities:")]
+        + "abilities:\n  - type: conversation\n  - ref: ghrah.shell.execute_command\n"
+    )
+    materializer = _materializer(
+        store,
+        assembly,
+        tmp_path,
+        shell_allow_lookup=lookup,
+        command_runner=SimpleNamespace(execute_command=run_command),
+        auto_approve_abilities=("execute_command",),
+    )
+    table = await materializer.materialize(
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
+    )
+    tool = next(t for t in table.abilities if t.name == "execute_command")
+    executor = LocalAbilityExecutor("shell", hooks=tool.get_hooks())
+    call = make_call(member="execute_command", arguments={"command": "pnpm run lint"})
+    services = make_services()
+    allowed = await executor.execute_ability(tool, call, services)
+    assert allowed.outcome.value == "success"
+    assert len(executed) == 1
+    entries.clear()
+    denied = await executor.execute_ability(tool, call, services)
+    assert denied.outcome.value == "failure"
+    assert len(executed) == 1

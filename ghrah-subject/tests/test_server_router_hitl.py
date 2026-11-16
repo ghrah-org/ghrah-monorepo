@@ -134,3 +134,31 @@ async def test_observer_router_preserves_stable_error_detail() -> None:
     assert result is not None
     assert result.payload.error == "project_version_conflict"
     assert result.payload.error_detail == "expected version 2, got 3"
+
+
+async def test_shell_remember_survives_observer_broadcast() -> None:
+    """项目记忆候选经 Subject 的原有事件转发到 Observer 广播数据。"""
+    from unittest.mock import AsyncMock
+
+    from ghrah.protocol.payloads.agent import HITLRequestPayload, ShellRememberOptions
+
+    connections = ConnectionManager()
+    connections.broadcast = AsyncMock(return_value=1)
+    bus = EventBus(connections)
+    candidates = ShellRememberOptions(exact_key="python demo.py", exact_label="python demo.py")
+    request = HITLRequestPayload(
+        project_id="project-a",
+        agent_id="agent-a",
+        promise_id="promise-a",
+        agent_name="coder",
+        ability_name="execute_command",
+        shell_remember=candidates,
+    )
+    assert await bus.emit_core_event(Message(type="hitl_request", payload=request)) == 1
+    sent = connections.broadcast.call_args.kwargs["message"]["payload"]
+    assert sent["shell_remember"] == candidates.model_dump()
+    assert sent["project_id"] == "project-a"
+    old_request = HITLRequestPayload(
+        promise_id="old", agent_name="coder", ability_name="write_file"
+    )
+    assert old_request.shell_remember is None

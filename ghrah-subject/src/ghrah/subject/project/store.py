@@ -6,7 +6,7 @@
 
 独立 aiosqlite 连接到主库（``ctx.config.persistence.db_path``，由调用方传入）。
 ``subject_projects`` 存全局 project 注册表；本 store 不连接 Project Root 内业务 DB。
-JSON 列保存复数资源（workspaces/agents/task_ids/isolation/config）；
+JSON 列保存复数资源与配置（含 shell_allow）；
 ``recovery`` 存单值字符串（``RecoveryAction.value``，利于 SQL 过滤）。
 
 模式镜像 ``ghrah.subject.task.store.TaskStore``：乐观锁 + 显式归档 + 幂等 DDL。
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS subject_projects (
     description           TEXT NOT NULL DEFAULT '',
     project_root_locator  TEXT NOT NULL DEFAULT '',
     shell_cwd             TEXT NOT NULL DEFAULT '',
+    shell_allow           TEXT NOT NULL DEFAULT '[]',
     manifest_ref          TEXT NOT NULL DEFAULT '',
     workspaces            TEXT NOT NULL DEFAULT '[]',
     agents                TEXT NOT NULL DEFAULT '[]',
@@ -83,6 +84,7 @@ _COLUMNS = (
     "description",
     "project_root_locator",
     "shell_cwd",
+    "shell_allow",
     "manifest_ref",
     "workspaces",
     "agents",
@@ -99,15 +101,16 @@ _COLUMNS = (
 )
 # JSON 列：复数资源与结构化字段经 json.dumps/json.loads 往返。
 # recovery 不在此列（单值字符串列）。
-_JSON_COLUMNS = ("workspaces", "agents", "task_ids", "isolation", "config")
+_JSON_COLUMNS = ("workspaces", "agents", "task_ids", "isolation", "config", "shell_allow")
 _SCHEMA_COMPONENT = "project_store"
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 _MIGRATION_COLUMNS: dict[int, tuple[str, str]] = {
     1: ("description", "TEXT NOT NULL DEFAULT ''"),
     2: ("project_root_locator", "TEXT NOT NULL DEFAULT ''"),
     3: ("archived_at", "TEXT"),
     4: ("config", "TEXT"),
     5: ("shell_cwd", "TEXT NOT NULL DEFAULT ''"),
+    6: ("shell_allow", "TEXT NOT NULL DEFAULT '[]'"),
 }
 
 

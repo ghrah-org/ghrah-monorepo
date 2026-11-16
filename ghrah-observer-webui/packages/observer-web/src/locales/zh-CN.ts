@@ -490,7 +490,25 @@ export default {
     compactContext: "压缩上下文",
     compactFailed: "触发上下文压缩失败",
   },
+  shellAllow: {
+    title: "命令放行记忆",
+    hint: "记忆对本项目生效。删除后撤销该条记忆，其他放行规则仍有效。",
+    remembered: "已记住的命令",
+    empty: "暂无命令记忆",
+    exact: "这条命令",
+    class: "这类命令",
+    builtins: "内置放行规则",
+    readonly: "只读",
+    deleteEntry: "删除 {label}",
+    loadFailed: "读取记忆失败：{error}",
+    deleteFailed: "删除记忆失败：{error}",
+  },
   hitl: {
+    approveOnce: "仅本次允许",
+    rememberExact: "记住这条并允许",
+    rememberClass: "记住这类并允许",
+    rememberFailed: "保存命令记忆失败：{error}",
+
     inbox: "HITL 收件箱",
     bar: {
       pending: "{count} 条待审批",

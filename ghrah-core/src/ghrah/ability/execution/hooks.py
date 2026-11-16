@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
+
 if TYPE_CHECKING:
     from ghrah.ability.execution.execution_services import ExecutionServices
     from ghrah.ability.execution.invocation import OperationCall
@@ -130,6 +132,7 @@ class HookResult:
     data_updates: dict[str, Any] | None = None
     message: str | None = None
     requires_hitl: bool = False
+    shell_remember: ShellRememberOptions | None = None
 
     def __post_init__(self) -> None:
         if self.modified_context is not None and self.data_updates is not None:
@@ -152,12 +155,19 @@ class HookResult:
         return cls(should_continue=False, message=message)
 
     @classmethod
-    def hitl(cls, *, message: str | None = None) -> HookResult:
+    def hitl(
+        cls, *, message: str | None = None, shell_remember: ShellRememberOptions | None = None
+    ) -> HookResult:
         """创建一个"需要 HITL 审批"的结果。
 
         与 stop() 不同，hitl() 表示执行被拦截但需要等待人工审批后才能决定是否继续。
         """
-        return cls(should_continue=False, requires_hitl=True, message=message)
+        return cls(
+            should_continue=False,
+            requires_hitl=True,
+            message=message,
+            shell_remember=shell_remember,
+        )
 
     @classmethod
     def route(cls, target: str, *, message: str | None = None) -> HookResult:
@@ -185,6 +195,9 @@ class HookResult:
             else None,
             message=other.message if other.message is not None else self.message,
             requires_hitl=self.requires_hitl or other.requires_hitl,
+            shell_remember=other.shell_remember
+            if other.shell_remember is not None
+            else self.shell_remember,
         )
 
 

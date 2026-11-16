@@ -35,6 +35,7 @@ from ghrah.ability.permissions.command_safety import (
     CommandSafetyCategory,
     CommandSafetyChecker,
 )
+from ghrah.ability.permissions.shell_allow import ShellAllowLookup
 from ghrah.types.results import ActionOutcome, ActionResult
 
 if TYPE_CHECKING:
@@ -159,12 +160,14 @@ class ExecuteCommandAbility(Ability):
         timeout: float = 300.0,
         fold_stdout_lines: int = 100,
         shell_cwd_provider: Callable[[], Awaitable[str | None]] | None = None,
+        shell_allow_lookup: ShellAllowLookup | None = None,
     ) -> None:
         self._hooks = hooks or []
         self._checker = command_checker or CommandSafetyChecker()
         self._command_runner = command_runner
         self._timeout = timeout
         self._shell_cwd_provider = shell_cwd_provider
+        self._shell_allow_lookup = shell_allow_lookup
         # 0 = 关闭折叠（保留旧行为：仅字节截断）；stderr 永不折叠
         self._fold_stdout_lines = fold_stdout_lines
 
@@ -219,7 +222,8 @@ class ExecuteCommandAbility(Ability):
                 data={"error": "command is required"},
             )
 
-        verdict = self._checker.check_command(command, working_dir=working_dir)
+        entries = await self._shell_allow_lookup() if self._shell_allow_lookup is not None else ()
+        verdict = self._checker.check_command(command, working_dir=working_dir, shell_allow=entries)
         if verdict.category == CommandSafetyCategory.DANGEROUS:
             return ActionResult(
                 outcome=ActionOutcome.FAILURE,
