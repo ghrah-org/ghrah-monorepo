@@ -49,7 +49,6 @@ ARCHIVE_SUFFIXES: dict[str, ArchiveFormat] = {".zip": "zip"}
 MAX_TREE_DEPTH = 16
 
 
-
 class ArchiveError(ValueError):
     """归档不可用；``code`` 映射到 Core 的错误码。"""
 
@@ -62,6 +61,14 @@ class ArchiveError(ValueError):
 @dataclass(frozen=True)
 class ArchiveLimits:
     """解包预算。
+
+    这些是**解压后**的预算，与 Subject 的**上传字节**上限
+    （``ability_upload_max_bytes``，默认 256 MiB）是两个口径：上传上限管
+    「一次请求往磁盘上写多少归档字节」，这里的预算管「一个归档最多能展开成
+    多大目录树」。默认值下 256 MiB 的归档理论上最多展开到 1 GiB（约 4 倍），
+    这是有意的余量：正常能力包在几 MB 量级，留足压缩比与多文件的空间，同时
+    仍由 ``max_ratio`` 拦住压缩炸弹。两份上限不联动，调整 Subject 上传上限
+    时须同时评估这里的解压预算。
 
     Attributes:
         max_entries: 条目数上限
@@ -93,7 +100,7 @@ def detect_format(archive: Path, *, name: str | None = None) -> ArchiveFormat:
         name: 原始文件名（可省）；只用于扩展名兜底
 
     Returns:
-        ``"zip"`` / ``"7z"`` / ``"rar"``
+        ``"zip"``
 
     Raises:
         ArchiveError: 既不是已知魔数，也不是已知扩展名
@@ -111,7 +118,7 @@ def detect_format(archive: Path, *, name: str | None = None) -> ArchiveFormat:
     if fmt is None:
         raise ArchiveError(
             "unsupported_format",
-            f"不支持的归档格式: {suffix or '（无扩展名）'}；支持 zip / 7z / rar",
+            f"不支持的归档格式: {suffix or '（无扩展名）'}；当前只支持 zip",
         )
     return fmt
 
@@ -182,8 +189,11 @@ def _extract_zip(archive: Path, dest: Path, limits: ArchiveLimits) -> None:
             if _is_symlink_entry(info):
                 raise ArchiveError("invalid_package", f"压缩包含符号链接: {info.filename}")
             target = _target_path(dest, info.filename)
-            target.parent.mkdir(parents=True, exist_ok=True)
             try:
+                # 归档可能先写「文件 a」，再写「a/child」：前一个条目留下的文件
+                # 会让这里的 mkdir 抛 FileExistsError。它必须和后续写入失败一样
+                # 映射成 invalid_package(422)，而不是冒泡成 500。
+                target.parent.mkdir(parents=True, exist_ok=True)
                 with handle.open(info) as source, target.open("wb") as sink:
                     copied = 0
                     while chunk := source.read(1 << 20):
