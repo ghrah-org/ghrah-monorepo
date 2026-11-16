@@ -98,10 +98,12 @@ class CoreFacade:
         runtime: CoreRuntime,
         scope_id: str,
         closer: Callable[[], Awaitable[None]] | None = None,
+        registry: Any = None,
     ) -> None:
         self._runtime = runtime
         self._scope_id = scope_id
         self._closer = closer
+        self._registry = registry
         self._nodes = _Nodes(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
@@ -171,6 +173,27 @@ class CoreFacade:
         """释放内部资源（幂等）。"""
         if self._closer is not None:
             await self._closer()
+
+    async def dispatch_command(
+        self, command: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """把旧协议命令直达已启动的单元（过渡期回程通道）。
+
+        供装配层转发 Observer 回程命令（如 ``hitl_response``）：不懒启动
+        本作用域单元；单元未启动或按穿透约定返回 ``None`` 时返回 ``None``，
+        由调用方继续扇出到其他作用域或兜底失败回执。命令成功被认领时
+        返回单元的结果字典。
+
+        Args:
+            command: 命令名（``CommandType`` 的值字符串）
+            payload: 命令载荷（作用域由单元在入口补齐）
+
+        Returns:
+            结果字典；未被认领时为 ``None``
+        """
+        if self._registry is None:
+            return None
+        return await self._registry.try_dispatch_command(command=command, payload=payload)
 
     # ── 内部 ──
 

@@ -75,6 +75,10 @@ class CorePorts:
         """该项目是否已构造端口实例。"""
         return project_id in self._ports
 
+    def started_project_ids(self) -> list[str]:
+        """列出已构造端口实例的项目（快照；用于回程命令扇出）。"""
+        return list(self._ports)
+
     async def close_project(self, project_id: str) -> None:
         """关闭并移除项目端口实例（未构造时无操作）。"""
         port = self._ports.pop(project_id, None)

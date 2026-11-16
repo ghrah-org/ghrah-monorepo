@@ -145,3 +145,60 @@ async def test_unit_fills_scope_at_command_entry(
         assert (result.get("data") or {}).get("agents") == []
     finally:
         await unit.stop()
+
+
+async def test_dispatch_command_reaches_started_unit_only(
+    tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
+) -> None:
+    """``dispatch_command``：只直达已启动单元，不懒启动、None 穿透透传。
+
+    回程命令（hitl_response）的过渡期通道语义：单元未启动 → None（扇出方
+    继续下一项目）；单元已启动但 promise 未被持有 → 单元返回 None 穿透，
+    原样透传给扇出方。载荷缺定位键（校验失败）则被单元转为显式失败回执。
+    """
+    db_path = tmp_path / "dispatch-channel.db"
+
+    def persistence_factory(_config: Any) -> SqliteBackend:
+        return SqliteBackend(db_path=db_path)
+
+    def config_factory() -> CoreUnitConfig:
+        return ability_core_config(persistence_factory=persistence_factory)
+
+    async def manager_factory() -> Any:
+        from ghrah.communication import MessageManager
+
+        return await MessageManager(
+            db_path,
+            project_id="default",
+            agent_ids=(),
+            session_routing=True,
+            allow_persisted_agents=True,
+        ).__aenter__()
+
+    port = build_core_port(
+        scope_id="default",
+        db_path=str(db_path),
+        config_factory=config_factory,
+        manager_factory=manager_factory,
+    )
+    try:
+        # 1. 未启动单元：回程命令返回 None（不懒启动、不报错）。
+        assert await port.dispatch_command("hitl_response", {"promise_id": "p-1"}) is None
+
+        # 2. 启动单元（经能力调用触发 ensure）：promise 未被持有时单元穿透
+        #    （None），dispatch_command 原样透传。
+        await port.agents.list()
+        result = await port.dispatch_command(
+            "hitl_response",
+            {"promise_id": "p-unknown", "approved": True},
+        )
+        assert result is None
+
+        # 3. 参数校验失败（定位键缺失）被单元转为失败回执（非 None）：
+        #    认领与格式错误是两回事，格式错误应显式回报。
+        result = await port.dispatch_command("hitl_response", {"approved": True})
+        assert result is not None
+        assert result["success"] is False
+        assert "promise_id" in str(result.get("error"))
+    finally:
+        await port.aclose()

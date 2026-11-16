@@ -159,6 +159,7 @@ def build_core_port(
         runtime=runtime,
         scope_id=scope_id,
         closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose),
+        registry=registry,
     )
 
 
