@@ -18,8 +18,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from ghrah.ability.permissions.bash_classify_frontend import classify_command_expression
-from ghrah.ability.permissions.shell_allow import (
+from ghrah.protocol.shell.bash_classify_frontend import classify_command_expression
+from ghrah.protocol.shell.shell_allow import (
     extract_shell_class,
     irreversible_reason,
     is_builtin_shell_expression,

@@ -475,7 +475,7 @@ class CommandSafetyChecker:
                 category=CommandSafetyCategory.SAFE,
                 base_command=primary_base,
                 sub_command=primary_sub,
-                reason="Command covered by builtin or project shell allow",
+                reason="Command covered by builtin or supplied shell allow",
             )
 
         if expression_is_dangerous(expression):

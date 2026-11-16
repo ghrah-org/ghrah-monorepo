@@ -9,13 +9,11 @@ vi.mock("@/composables/useObserver", () => ({
 }));
 import Panel from "./project-shell-allow.vue";
 beforeEach(() => {
-  list
-    .mockReset()
-    .mockImplementation(async () => ({
-      project_id: "p1",
-      entries: [{ kind: "exact", key: "python a/b.py", label: "python a/b.py", created_at: "" }],
-      builtins: [{ key: "test", label: "pnpm test", readonly: true }],
-    }));
+  list.mockReset().mockImplementation(async () => ({
+    project_id: "p1",
+    entries: [{ kind: "exact", key: "python a/b.py", label: "python a/b.py", created_at: "" }],
+    builtins: [{ key: "test", label: "pnpm test", readonly: true }],
+  }));
   remove.mockReset().mockResolvedValue(undefined);
 });
 it("loads current project and only offers deletion for stored entries", async () => {

@@ -1085,8 +1085,6 @@ async def test_shell_remember_reaches_wire_payload(command, category):
     emitted = []
     publisher = UnitEventPublisher(
         emit=lambda name, payload: emitted.append((name, payload)),
-        project_id="project-a",
-        cluster_id="cluster-a",
         agent_id_resolver=lambda _: "agent-a",
     )
     executor = LocalAbilityExecutor(
@@ -1103,7 +1101,8 @@ async def test_shell_remember_reaches_wire_payload(command, category):
     wire = HITLRequestPayload.model_validate_json(
         HITLRequestPayload.model_validate(payload).model_dump_json()
     )
-    assert wire.project_id == "project-a"
+    assert wire.agent_id == "agent-a"
+    assert "project_id" not in payload
     assert wire.shell_remember.exact_key == command
     assert wire.shell_remember.class_key == category
     assert wire.tool_args == {"command": command}

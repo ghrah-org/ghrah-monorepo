@@ -910,7 +910,6 @@ describe("Manifest payload schemas", () => {
   });
 });
 
-
 describe("shell approval candidates", () => {
   it("preserves exact and optional class candidates", () => {
     const shell_remember = {
@@ -991,6 +990,5 @@ describe("SendMessagePayload video content_blocks", () => {
       content_blocks: [{ type: "image", attachment_id: "b".repeat(64), mime_type: "image/png" }],
     });
     expect(parsed.content_blocks).toHaveLength(1);
-
   });
 });
