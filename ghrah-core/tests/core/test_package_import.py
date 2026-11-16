@@ -17,7 +17,7 @@ from ghrah.protocol.problem import ProblemCode
 
 from ghrah.ability.package.installed_store import parse_full_name
 from ghrah.ability.package.lock import lock_filename, read_lock
-from ghrah.ability.package.provider import strip_schema_metadata
+from ghrah.ability.package.provider import InstalledAbilityProvider, strip_schema_metadata
 from ghrah.core.wiring import build_core_catalog
 
 OP_SOURCE = '''\
@@ -299,15 +299,23 @@ def test_import_rejects_schema_that_does_not_match_module(tmp_path: Path) -> Non
     assert not (tmp_path / "ability" / "acme").exists()
 
 
-def test_import_rejects_skill_member(tmp_path: Path) -> None:
-    """skill 成员没有 ref 授予入口：装进去也进不了模型，直接拒。"""
+def test_import_accepts_skill_member_and_projects_it(tmp_path: Path) -> None:
+    """纯 skill 成员也能装、也能被投影成可授予成员（type=skill）。"""
     source = write_package(tmp_path / "src", with_skill=True)
     archive = zip_package(source, tmp_path / "with-skill.zip")
     catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
 
-    with pytest.raises(ApiError) as failure:
-        asyncio.run(catalog.package_import(archive_path=str(archive), source_name="with-skill.zip"))
+    view = asyncio.run(
+        catalog.package_import(archive_path=str(archive), source_name="with-skill.zip")
+    )
 
-    assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
-    assert "skill" in (failure.value.problem.detail or "").lower()
-    assert not (tmp_path / "ability" / "acme").exists()
+    assert view.operation_count == 1
+    assert view.skill_count == 1
+
+    provider = InstalledAbilityProvider(tmp_path / "ability")
+    members = provider.package_members("acme.demo")
+    kinds = {(item.metadata.name, item.implementation.type) for item in members}
+    assert kinds == {("ping", "python"), ("guide", "skill")}
+    skill_member = next(item for item in members if item.implementation.type == "skill")
+    assert skill_member.implementation.handler == "guide"
+    assert skill_member.tool is None

@@ -23,6 +23,15 @@ class AbilityCatalogPort(Protocol):
         """根据 full_name 加载 AbilityManifest。"""
         ...
 
+    def load_package_members(self, full_name: str) -> list[AbilityManifest]:
+        """按**包全名**取该包全部可授予成员（工具 + 技能）。
+
+        与 :meth:`load_ability` 的分工：后者取单个成员，本方法用于「一个 ref 即整包」。
+        不是包名（或包里没有成员）时抛 ``ManifestNotFoundError``，调用方据此区分
+        「成员写错」与「包名指向整包」。
+        """
+        ...
+
 
 class ManifestStoreProtocol(Protocol):
     """Agent 模板存储接口。"""

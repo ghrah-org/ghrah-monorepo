@@ -24,6 +24,7 @@ import pytest
 
 from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.core.config import AgentConfig
+from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.agent import (
     AbilityRef,
     AgentManifest,
@@ -35,7 +36,7 @@ from ghrah.manifest.agent import (
 )
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.resolver import ManifestResolver, ResolvedAbility, ResolvedAgent
-from ghrah.manifest.types import PermissionFlags
+from ghrah.manifest.types import ImplementationDef, PermissionFlags
 
 
 def _make_agent_manifest(
@@ -409,3 +410,71 @@ class TestWindowConfigZeroValues:
         result = resolver.resolve(manifest)
 
         assert result.config.communication_timeout == -1
+
+class _PackageCatalog:
+    """最小目录：一个包 = 1 个工具成员 + 1 个技能成员。"""
+
+    def __init__(self) -> None:
+        self._members = [
+            AbilityManifest(
+                manifest="ability",
+                version="1",
+                metadata=AbilityMetadata(
+                    namespace="acme.demo",
+                    name="ping",
+                    title="Ping",
+                    description="工具",
+                    permissions=PermissionFlags(),
+                ),
+                tool=None,
+                implementation=ImplementationDef(type="python", handler="ping"),
+            ),
+            AbilityManifest(
+                manifest="ability",
+                version="1",
+                metadata=AbilityMetadata(
+                    namespace="acme.demo",
+                    name="guide",
+                    title="Guide",
+                    description="技能",
+                    permissions=PermissionFlags(),
+                ),
+                tool=None,
+                implementation=ImplementationDef(type="skill", handler="guide"),
+            ),
+        ]
+
+    def load_builtin(self, ability_type: str) -> AbilityManifest:
+        raise ManifestNotFoundError(ability_type)
+
+    def load_ability(self, full_name: str) -> AbilityManifest:
+        for member in self._members:
+            if member.full_name == full_name:
+                return member
+        raise ManifestNotFoundError(full_name)
+
+    def load_package_members(self, full_name: str) -> list[AbilityManifest]:
+        matched = [item for item in self._members if item.full_name.startswith(f"{full_name}.")]
+        if not matched:
+            raise ManifestNotFoundError(full_name)
+        return matched
+
+
+def test_ref_to_package_expands_operations_and_skills() -> None:
+    """ref 指到包时按成员种类自动分流：工具与技能都成为已解析能力。"""
+    resolver = ManifestResolver(_PackageCatalog())
+    agent = _make_agent_manifest([AbilityRef(ref="acme.demo")])
+
+    resolved = resolver.resolve(agent)
+
+    kinds = [(item.ability_name, item.implementation.type) for item in resolved.abilities]
+    assert kinds == [("acme.demo.ping", "python"), ("acme.demo.guide", "skill")]
+
+
+def test_ref_to_missing_member_still_raises() -> None:
+    """成员名写错时不能退化成整包展开，必须继续报缺失。"""
+    resolver = ManifestResolver(_PackageCatalog())
+    agent = _make_agent_manifest([AbilityRef(ref="acme.demo.nope")])
+
+    with pytest.raises(ManifestNotFoundError):
+        resolver.resolve(agent)

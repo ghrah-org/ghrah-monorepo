@@ -147,7 +147,7 @@ class ToolSchema(BaseModel):
 class ImplementationDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["builtin", "python", "sandbox", "wasm"]
+    type: Literal["builtin", "python", "sandbox", "wasm", "skill"]
     handler: str | None = None
     entrypoint: str | None = None
     source: str | None = None
