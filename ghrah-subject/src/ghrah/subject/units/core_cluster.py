@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -70,6 +71,10 @@ _PROJECT_AGENT_COMMANDS = frozenset(
         "branch_delete",
     }
 )
+
+# HITL 审批回程：命令不带 project_id（Observer 只凭 promise_id 回发），
+# 经端口实例扇出到所有已启动单元，由持有 promise 的单元认领。
+_HITL_RESPONSE_COMMAND = "hitl_response"
 
 
 def _room_missing(error: str) -> bool:
@@ -157,7 +162,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
             name="core_cluster_registry",
             requires=frozenset({MANIFEST_STORE, WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
             provides=frozenset({CORE_CATALOG_SERVICE, CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
-            routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS),
+            routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS | {_HITL_RESPONSE_COMMAND}),
         )
 
     @property
@@ -229,12 +234,27 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 path = str(getattr(record, "shell_cwd", "") or "").strip()
                 return path or None
 
+            async def shell_allow_lookup(project_id: str) -> list[dict[str, str]]:
+                """每次现读当前项目记忆，不经 HTTP，也不复制到启动配置。"""
+                project_store = ctx.get(PROJECT_STORE.name)
+                try:
+                    record = await project_store.get(project_id)
+                except sqlite3.Error, OSError:
+                    logger.warning(
+                        "shell allow lookup failed for project %s", project_id, exc_info=True
+                    )
+                    return []
+                if record is None:
+                    return []
+                return [entry.model_dump(mode="json") for entry in record.shell_allow]
+
             self._unit_factory = default_core_unit_factory(
                 self._config,
                 manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
                 shell_cwd_lookup=shell_cwd_lookup,
+                shell_allow_lookup=shell_allow_lookup,
             )
         from ghrah.core.wiring import build_core_catalog, build_core_port
         from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
@@ -314,6 +334,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
             if getattr(cmd_ctx, "request_id", None):
                 metadata["request_id"] = cmd_ctx.request_id
             payload = {**payload, "metadata": metadata}
+        if command == _HITL_RESPONSE_COMMAND:
+            return await self._hitl_response(payload)
         if command not in _PROJECT_AGENT_COMMANDS:
             return {
                 "success": False,
@@ -591,3 +613,42 @@ class CoreClusterRegistryUnit(SubjectUnit):
             },
         )
         return dict(result)
+
+    async def _hitl_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """HITL 审批回程：扇出到所有已启动单元，由持有 promise 的单元认领。
+
+        命令不带 ``project_id``（Observer 只凭 ``promise_id`` 回发，归
+        属项目未知），因此不能走 ``_project()`` 的单项目解析。单元按
+        「返回 None = 不是我的」穿透约定逐个尝试；全部未认领时返回显式
+        失败（对齐 CoreUnit 的既有文案），不伪装成功。
+        """
+        started = self.service.started_project_ids()
+        if not started:
+            return {
+                "success": False,
+                "data": None,
+                "error": "HITL promise not found or expired: no active project runtime",
+            }
+        errors: list[str] = []
+        for project_id in started:
+            port = self._ports.for_project(project_id)
+            try:
+                result = await port.dispatch_command(_HITL_RESPONSE_COMMAND, payload)
+            except Exception as exc:  # noqa: BLE001 - 单个项目失败不阻断扇出
+                errors.append(f"{project_id}: {exc}")
+                continue
+            if result is None:
+                # 单元未启动或穿透（promise 不在此单元）——继续下一个项目。
+                continue
+            return result
+        if errors:
+            return {
+                "success": False,
+                "data": None,
+                "error": f"HITL response dispatch failed: {'; '.join(errors)}",
+            }
+        return {
+            "success": False,
+            "data": None,
+            "error": "HITL promise not found or expired: no unit claimed the response",
+        }

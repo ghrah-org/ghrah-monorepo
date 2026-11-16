@@ -44,6 +44,7 @@ from ghrah.ability.permissions.hitl import (
     PermissionDeniedAbility,
 )
 from ghrah.ability.permissions.scope import EffectivePermission, resolve_effective_permission
+from ghrah.ability.permissions.shell_allow import ShellAllowLookup
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.manifest.resolver import ResolvedAbility
 
@@ -81,6 +82,7 @@ def instantiate_resolved_abilities(
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
     permission_scopes: Mapping[str, EffectivePermission] | None = None,
     shell_cwd_provider: Any = None,
+    shell_allow_lookup: ShellAllowLookup | None = None,
 ) -> list[AbilityProtocol]:
     """ResolvedAbility → Ability 实例列表（对齐独立库 runner 范式）。
 
@@ -135,6 +137,7 @@ def instantiate_resolved_abilities(
             safe_extra_commands=safe_extra_commands,
             safe_extra_sub_commands=safe_extra_sub_commands,
             shell_cwd_provider=shell_cwd_provider,
+            shell_allow_lookup=shell_allow_lookup,
         )
         required = _REQUIRED_PERMISSION.get(handler)
         if required is not None and not getattr(effective, required):
@@ -160,6 +163,7 @@ def _instantiate_ability(
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
     shell_cwd_provider: Any = None,
+    shell_allow_lookup: ShellAllowLookup | None = None,
 ) -> AbilityProtocol:
     """单个 ResolvedAbility → Ability（对齐 runner._instantiate_ability）。"""
     permissions = ra.permissions
@@ -192,10 +196,12 @@ def _instantiate_ability(
             command_runner=command_runner,
             safe_extra_commands=safe_extra_commands,
             safe_extra_sub_commands=safe_extra_sub_commands,
+            shell_allow_lookup=shell_allow_lookup,
         )
         params: dict[str, Any] = {
             "command_checker": command_checker,
             "hooks": hooks,
+            "shell_allow_lookup": shell_allow_lookup,
         }
         if command_runner is not None:
             params["command_runner"] = command_runner
@@ -259,6 +265,7 @@ def _make_command_approval(
     command_runner: Any,
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    shell_allow_lookup: ShellAllowLookup | None = None,
 ) -> tuple[CommandSafetyChecker, list[CommandApprovalHook]]:
     """execute_command 审批构造（对齐 _create_ability_from_def 的 execute_command 分支）。"""
     effective = scope or resolve_effective_permission(permissions, workspace_root=workspace_root)
@@ -289,4 +296,6 @@ def _make_command_approval(
             extra_commands=safe_extra_commands,
             extra_sub_commands=sub_map,
         )
-    return command_checker, [CommandApprovalHook(command_checker)]
+    return command_checker, [
+        CommandApprovalHook(command_checker, shell_allow_lookup=shell_allow_lookup)
+    ]

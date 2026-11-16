@@ -515,7 +515,25 @@ export default {
     compactContext: "Compact Context",
     compactFailed: "Failed to trigger context compaction",
   },
+  shellAllow: {
+    title: "Command allow memory",
+    hint: "Remembered commands apply to this project. Deletion removes this entry; other allow rules still apply.",
+    remembered: "Remembered commands",
+    empty: "No remembered commands",
+    exact: "Exact command",
+    class: "Command class",
+    builtins: "Built-in allow rules",
+    readonly: "Read only",
+    deleteEntry: "Delete {label}",
+    loadFailed: "Could not load memory: {error}",
+    deleteFailed: "Could not delete memory: {error}",
+  },
   hitl: {
+    approveOnce: "Allow once",
+    rememberExact: "Remember this command and allow",
+    rememberClass: "Remember this class and allow",
+    rememberFailed: "Could not remember command: {error}",
+
     inbox: "HITL Inbox",
     bar: {
       pending: "{count} pending approval",

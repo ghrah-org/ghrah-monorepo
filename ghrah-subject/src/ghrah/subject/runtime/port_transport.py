@@ -554,6 +554,10 @@ class PortClusterTransport:
         """cluster 是否已登记。"""
         return cluster_id in self._clusters
 
+    def started_project_ids(self) -> list[str]:
+        """列出已构造端口实例的项目（委托 CorePorts，供回程命令扇出）。"""
+        return self._ports.started_project_ids()
+
     def cluster_ids(self) -> list[str]:
         """已登记的 cluster 标识列表。"""
         return sorted(self._clusters)

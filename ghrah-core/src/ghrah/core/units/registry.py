@@ -217,6 +217,33 @@ class RuntimeRegistry:
             raise RuntimeError(f"unexpected result for {command}")
         return result
 
+    async def try_dispatch_command(
+        self, *, command: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """把命令转交给**已启动**的单元；未启动或单元穿透时返回 ``None``。
+
+        与 :meth:`handle_command` 的差异：不懒启动单元（Observer 回程命令
+        不应激活任何作用域），且把单元的 ``None`` 回执（「不是我的」穿透
+        约定，如 ``hitl_response`` 的 promise 未被本单元持有）原样透传，
+        由调用方继续扇出或兜底。
+
+        Args:
+            command: 命令名
+            payload: 命令载荷（作用域由单元自身补齐，调用方不传）
+
+        Returns:
+            单元的结果字典；单元未启动或返回 ``None`` 时为 ``None``
+        """
+        handle = self._handle
+        if handle is None:
+            return None
+        result = await handle.unit.handle_command(command, payload, handle.context)
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise RuntimeError(f"unexpected result for {command}")
+        return result
+
     def tools_for(self, agent_id: str) -> tuple[str, ...] | None:
         """同步读取某 Agent 当前装载的工具名（离线返回 ``None``）。
 

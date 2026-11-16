@@ -25,6 +25,7 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from ghrah.protocol.enums import CommandType
@@ -447,6 +448,7 @@ def default_core_unit_factory(
     room_projector: Callable[[Any], Awaitable[None]] | None = None,
     ability_store_resolver: Callable[[str, str], Awaitable[Any]] | None = None,
     shell_cwd_lookup: Callable[[str], Awaitable[str | None]] | None = None,
+    shell_allow_lookup: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None,
 ) -> Callable[[str, str, str], Any]:
     """生产工厂：(cluster_id, project_id, root_locator) → CoreUnit。
 
@@ -584,6 +586,9 @@ def default_core_unit_factory(
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
             shell_cwd_provider=shell_cwd_provider if shell_cwd_lookup is not None else None,
+            shell_allow_lookup=partial(shell_allow_lookup, project_id)
+            if shell_allow_lookup is not None
+            else None,
             manifest_store=manifest_store,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_install_root=config.ability.install_root,

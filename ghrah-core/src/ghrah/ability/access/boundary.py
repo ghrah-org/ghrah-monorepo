@@ -21,6 +21,7 @@ from ghrah.ability.access.startup import (
     StartupGrantMaterializer,
 )
 from ghrah.ability.access.store import AccessIdentity
+from ghrah.ability.permissions.shell_allow import ShellAllowLookup
 
 __all__ = [
     "AuthorizedToolTable",
@@ -42,6 +43,7 @@ def build_startup_materializer(
     safe_extra_commands: tuple[str, ...] = (),
     safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
     shell_cwd_provider: Any = None,
+    shell_allow_lookup: ShellAllowLookup | None = None,
     mcp_deployment: Any = None,
     surface_thresholds: Any = None,
     surface_search_limit: int = 8,
@@ -79,6 +81,7 @@ def build_startup_materializer(
         safe_extra_commands=safe_extra_commands,
         safe_extra_sub_commands=safe_extra_sub_commands,
         shell_cwd_provider=shell_cwd_provider,
+        shell_allow_lookup=shell_allow_lookup,
         mcp_deployment=mcp_deployment,
         surface_thresholds=surface_thresholds,
         surface_search_limit=surface_search_limit,

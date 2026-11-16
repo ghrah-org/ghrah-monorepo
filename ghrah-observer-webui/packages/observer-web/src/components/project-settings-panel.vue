@@ -9,6 +9,7 @@ import { useProjectsStore, useRoomsStore } from "@ghrah/observer-core";
 import type { RoomInfoPayload } from "@ghrah/protocol";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import ProjectShellAllow from "./project-shell-allow.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import { useObserver } from "@/composables/useObserver";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
@@ -314,6 +315,7 @@ async function refreshAfterConflict() {
         </form>
       </section>
 
+      <ProjectShellAllow :key="projectId" :project-id="projectId" @changed="refreshAfterConflict" />
       <section class="project-settings-section project-storage-summary">
         <h3>{{ t("projectSettings.storage") }}</h3>
         <dl>

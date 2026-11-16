@@ -47,7 +47,7 @@ const RULES = {
   "color-no-hex": {
     description: "裸十六进制色值",
     scan: (text, file) => {
-      if (file.endsWith(TOKEN_FILE)) return 0;
+      if (file.replaceAll("\\", "/").endsWith(TOKEN_FILE.replaceAll("\\", "/"))) return 0;
       return (text.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).length;
     },
   },

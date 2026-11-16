@@ -707,6 +707,7 @@ class LocalAbilityExecutor(AbilityExecutor):
                 context={"tool_call_id": tool_call_id},
                 promise_id=promise_id,
                 reason=hook_result.message or "",
+                shell_remember=hook_result.shell_remember,
             )
         )
 

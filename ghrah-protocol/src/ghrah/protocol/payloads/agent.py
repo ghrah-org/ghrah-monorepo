@@ -243,6 +243,15 @@ class AbilityResultPayload(BaseModel):
     error: str | None = None
 
 
+class ShellRememberOptions(BaseModel):
+    """命令审批时可供用户选择的项目记忆候选。"""
+
+    exact_key: str
+    exact_label: str
+    class_key: str | None = None
+    class_label: str | None = None
+
+
 class HITLRequestPayload(BaseModel):
     """hitl_request 事件载荷。
 
@@ -255,6 +264,7 @@ class HITLRequestPayload(BaseModel):
     promise_id: str
     agent_name: str
     ability_name: str
+    shell_remember: ShellRememberOptions | None = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
