@@ -37,7 +37,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -92,10 +92,47 @@ __all__ = [
     "RemovedVersion",
     "UninstallResult",
     "VerifyResult",
+    "relock_source",
 ]
 
 MAX_ABSOLUTE_UTF16: int = 240
 """安装后绝对路径上限（UTF-16 码元）；给 Windows 默认 ``MAX_PATH=260`` 留余量。"""
+
+
+def relock_source(
+    root: str | Path,
+    *,
+    namespace: str,
+    name: str,
+    version: str,
+    kind: str,
+    ref: str | None = None,
+) -> None:
+    """重写某个已安装版本的安装记录来源。
+
+    安装器默认把来源写成 ``directory`` + 解包后的临时目录，那对上传场景没有意义；
+    导入完成后用本函数把来源改写成 ``archive`` + 用户上传的文件名，
+    摘要与文件清单沿用安装时算好的值，不重算。
+
+    Args:
+        root: 能力包安装根
+        namespace: 包命名空间
+        name: 包名（退化为命名空间时与它相同）
+        version: 版本号
+        kind: 新的来源种类（``archive`` / ``directory`` / ``mcp``）
+        ref: 新的来源引用（上传文件名等）
+
+    Raises:
+        InstallerError: 安装记录缺失或写不回去
+    """
+    lock_path = Path(root) / namespace / name / lock_filename(version)
+    if not lock_path.is_file():
+        raise InstallerError("install_failed", f"安装记录不存在: {lock_path.name}")
+    try:
+        lock = read_lock(lock_path)
+        write_lock(lock_path, replace(lock, source=InstallSource(kind=kind, ref=ref)))
+    except LockError as exc:
+        raise InstallerError("install_failed", f"安装记录重写失败: {exc}") from exc
 
 
 class InstallOrigin(StrEnum):

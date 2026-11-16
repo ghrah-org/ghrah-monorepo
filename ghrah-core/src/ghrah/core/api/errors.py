@@ -106,6 +106,10 @@ def translate(capability: str) -> Iterator[None]:
             "not_found": ProblemCode.NOT_FOUND,
             "invalid_request": ProblemCode.INVALID_ARGUMENT,
             "unavailable": ProblemCode.UNAVAILABLE,
+            "conflict": ProblemCode.CONFLICT,
+            "unsupported_format": ProblemCode.UNSUPPORTED_FORMAT,
+            "invalid_package": ProblemCode.INVALID_PACKAGE,
+            "too_large": ProblemCode.TOO_LARGE,
         }
         raise CoreApiError(
             Problem.make(

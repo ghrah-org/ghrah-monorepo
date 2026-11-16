@@ -14,9 +14,11 @@ from __future__ import annotations
 import hmac
 import importlib.util
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -63,6 +65,9 @@ _ERROR_STATUS: dict[str, int] = {
     "unavailable": 503,
     "capability_unavailable": 503,
     "internal": 500,
+    "too_large": 413,
+    "unsupported_archive": 415,
+    "invalid_package": 422,
 }
 
 #: Core 的 ``ProblemCode`` → 本单元的 HTTP 错误码（保持既有状态码语义）。
@@ -75,8 +80,13 @@ PROBLEM_TO_HTTP: dict[str, str] = {
     "UNIMPLEMENTED": "capability_unavailable",
     "UNAVAILABLE": "unavailable",
     "INTERNAL": "internal",
+    "TOO_LARGE": "too_large",
+    "UNSUPPORTED_FORMAT": "unsupported_archive",
+    "INVALID_PACKAGE": "invalid_package",
+    "CONFLICT": "conflict",
 }
 
+_ARCHIVE_SUFFIXES = frozenset({".zip"})
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 
 
@@ -229,6 +239,23 @@ def build_ability_control_router(
         except Exception:  # pragma: no cover - 事件只是失效信号，不阻断写入
             logger.warning("ability tree change event publish failed", exc_info=True)
 
+    async def _publish_package(result: dict[str, Any]) -> None:
+        """导入成功后发失效信号，观察端据此重读列表。"""
+        if event_bus is None:
+            return
+        try:
+            await event_bus.publish(
+                EventType.ABILITY_PACKAGE_CHANGED.value,
+                {
+                    "namespace": result.get("namespace"),
+                    "name": result.get("name"),
+                    "version": result.get("version"),
+                    "reason": "package_import",
+                },
+            )
+        except Exception:  # pragma: no cover - 事件只是失效信号，不阻断结果
+            logger.warning("ability package change event publish failed", exc_info=True)
+
     async def status() -> dict[str, Any]:
         """管理面可用性：能力来源 × 本进程启用开关。"""
         reason = ""
@@ -242,7 +269,7 @@ def build_ability_control_router(
             versions_read=ready,
             versions_write=False,
             packages_read=ready,
-            packages_install=False,
+            packages_install=ready and catalog is not None and config.ability_packages_install,
             mcp_probe=ready and catalog is not None and _mcp_probe_ready(),
             surface_write=False,
         )
@@ -542,7 +569,50 @@ def build_ability_control_router(
         del namespace, name, version, project_id, instance_id
         raise AbilityApiError("capability_unavailable", "该写入尚未开放")
 
-    router.add_api_route("/ability-packages/import", _closed_write, methods=["POST"])
+    async def _import_package(
+        file: UploadFile = File(...),
+        _: None = Depends(_ensure_catalog),
+    ) -> dict[str, Any]:
+        """导入上传的能力包归档。
+
+        上传字节流式落盘（内存不随文件变大），解包、格式校验、安装与安装记录
+        全部在 Core；本单元只做体积上限、扩展名快筛与错误映射。
+        """
+        if not config.ability_packages_install:
+            raise AbilityApiError("capability_unavailable", "能力包导入未启用")
+        source_name = file.filename or "package.zip"
+        suffix = Path(source_name).suffix.lower()
+        if suffix not in _ARCHIVE_SUFFIXES:
+            raise AbilityApiError("unsupported_archive", "只支持 zip 归档")
+        limit = max(1, int(config.ability_upload_max_bytes))
+        spool = tempfile.NamedTemporaryFile(
+            prefix="ghrah-ability-upload-", suffix=suffix, delete=False
+        )
+        target = Path(spool.name)
+        total = 0
+        try:
+            while chunk := await file.read(1 << 20):
+                total += len(chunk)
+                if total > limit:
+                    raise AbilityApiError("too_large", f"上传文件超过上限（{limit} 字节）")
+                spool.write(chunk)
+        except BaseException:
+            spool.close()
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            spool.close()
+        try:
+            result = await _call(
+                _catalog().package_import(archive_path=str(target), source_name=source_name)
+            )
+        finally:
+            target.unlink(missing_ok=True)
+        payload = _jsonable(result)
+        await _publish_package(payload)
+        return payload
+
+    router.add_api_route("/ability-packages/import", _import_package, methods=["POST"])
     router.add_api_route(
         "/ability-packages/{namespace}/{name}/versions/{version}/verify",
         _closed_write,

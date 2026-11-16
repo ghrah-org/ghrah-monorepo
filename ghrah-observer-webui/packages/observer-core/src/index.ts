@@ -30,6 +30,7 @@ export {
   type HttpQuery,
   type HttpQueryValue,
   type HttpRequestOptions,
+  type HttpUploadOptions,
 } from "./http.js";
 export {
   artifactContentUrl,

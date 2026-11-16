@@ -263,6 +263,57 @@ class McpSnapshotOperation(Ability):
         return await execute_mcp_member(call, services)
 
 
+def validate_source_tree(root: Path) -> None:
+    """安装期 ABI 预检：装进去的每个成员都必须能被 ``ref`` 授予并执行。
+
+    安装是唯一能拦住「装得进去、建 agent 才报错」的时机，因此这里做两件事：
+
+    - **skill 成员一律拒绝**：provider 只把 ``operations`` 投影成可授予的成员，
+      skill 没有 ``ref`` 入口，装进来也进不了模型；
+    - **operation 成员做入口 ABI 校验**：``async def execute(call, services)``
+      且 ``Input`` / ``Output`` 的 pydantic schema 与 ``ability.yaml`` 声明逐字段一致。
+
+    下面复用运行时同一个加载器（``_load_module``）与同一套校验（``_validate_entry``），
+    保证「安装期通过」与「建 agent 期通过」是同一个判定。
+
+    Args:
+        root: 解包后的源包根目录
+
+    Raises:
+        ManifestValidationError: 任一成员不能被授予或 ABI 不一致
+    """
+    definition = parse_definition(
+        (root / "ability.yaml").read_text(encoding="utf-8"), source=str(root)
+    )
+    if definition.skills:
+        names = ", ".join(sorted(definition.skills))
+        raise ManifestValidationError(
+            f"skill 成员暂不可授予：{names}。安装包目前只把 operations 投影成可授予成员，"
+            "skill 装进去进不了模型；请改为 operation，或从包中移除该成员。"
+        )
+    token = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+    namespace = f"_ghrah_ability_precheck_{token}"
+    for member, operation in definition.operations.items():
+        path = root / operation.entry.path
+        if not path.is_file():
+            raise ManifestValidationError(f"成员 {member} 的入口文件不存在：{operation.entry.path}")
+        for name, directory in (
+            (namespace, root),
+            (namespace + ".operations", path.parent),
+        ):
+            if name not in sys.modules:
+                parent = ModuleType(name)
+                parent.__path__ = [str(directory)]
+                sys.modules[name] = parent
+        module_name = f"{namespace}.operations.{member}"
+        try:
+            module = _load_module(module_name, path)
+            _validate_entry(module, operation.input_schema, operation.output_schema)
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
+
+
 def _load_module(name: str, path: Path) -> ModuleType:
     """在私有命名空间加载源码，包内 _helper 导入不污染全局模块名或 sys.path。"""
     existing = sys.modules.get(name)

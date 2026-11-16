@@ -14,6 +14,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageImportView,
     AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
@@ -34,6 +35,7 @@ from ghrah.core.api.interfaces import (
     AbilitiesPackageDetailRequest,
     AbilitiesPackageGroupsGlobalRequest,
     AbilitiesPackageGroupsRequest,
+    AbilitiesPackageImportRequest,
     AbilitiesPackageMcpProbeRequest,
     AbilitiesPackagesRequest,
     AbilitiesPackageVersionRequest,
@@ -188,10 +190,19 @@ def make_catalog_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         del request
         return await store.package_groups()
 
+    async def package_import(
+        request: AbilitiesPackageImportRequest,
+    ) -> AbilityPackageImportView:
+        """导入上传的能力包归档（解包 + 校验 + 安装 + 安装记录）。"""
+        return await store.package_import(
+            archive_path=request.archive_path, source_name=request.source_name
+        )
+
     return {
         "abilities.packages": packages,
         "abilities.package_detail": package_detail,
         "abilities.package_version_profile": package_version_profile,
         "abilities.package_mcp_probe": package_mcp_probe,
         "abilities.package_groups": package_groups,
+        "abilities.package_import": package_import,
     }

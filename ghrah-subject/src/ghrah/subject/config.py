@@ -325,6 +325,26 @@ class TaskStoreConfig:
     db_path: str = os.path.expanduser("~/.ghrah/taskstore.sqlite3")
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    """读一个正整数环境变量；缺失或非法时回落到默认值。
+
+    Args:
+        name: 环境变量名
+        default: 默认值（必须为正）
+
+    Returns:
+        正整数
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 @dataclass
 class SubjectConfig:
     """Subject 运行时配置（各 Unit 配置切片的容器）。
@@ -395,6 +415,12 @@ class SubjectConfig:
     # ``GHRAH_SUBJECT_OBSERVER_HTTP_API_ENABLED`` 设为 false，或配置 token，
     # 并使用 TLS 或同源反代。
     observer_http_api_enabled: bool = True
+    # 能力包导入：上传归档 → 解包校验 → 安装进 ``GHRAH_SUBJECT_ABILITY_INSTALL_ROOT``。
+    # 解包与安装都在 Core；Subject 只负责把上传字节安全落盘并透传。
+    ability_packages_install: bool = True
+    #: 单个上传归档的体积上限（字节，默认 256 MiB）。
+    #: 流式落盘、边写边判，内存占用不随文件变大。
+    ability_upload_max_bytes: int = 256 << 20
     observer_http_api_token: str = ""
     observer_cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
@@ -807,6 +833,13 @@ class SubjectConfig:
                 if item.strip()
             ),
             agentconf_db_path=os.environ.get("GHRAH_SUBJECT_AGENTCONF_DB_PATH") or None,
+            ability_packages_install=os.environ.get(
+                "GHRAH_SUBJECT_ABILITY_PACKAGES_INSTALL", "true"
+            ).lower()
+            in ("true", "1", "yes"),
+            ability_upload_max_bytes=_env_positive_int(
+                "GHRAH_SUBJECT_ABILITY_UPLOAD_MAX_BYTES", 256 << 20
+            ),
         )
 
 

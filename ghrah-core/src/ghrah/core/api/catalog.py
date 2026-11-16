@@ -21,6 +21,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageImportView,
     AbilityPackageVersionProfileView,
 )
 from ghrah.protocol.shell_allow import ShellAllowValidationRequest, ShellBuiltinRulesView
@@ -91,6 +92,17 @@ class CoreCatalog:
         """全局能力包分组视图（不挂实例事实）。"""
         raw = await self._call("abilities.package_groups")
         return AbilityPackageGroupsView.model_validate(raw)
+
+    async def package_import(
+        self, *, archive_path: str, source_name: str
+    ) -> AbilityPackageImportView:
+        """导入能力包归档：解包、校验、安装、改写安装记录。"""
+        raw = await self._call(
+            "abilities.package_import",
+            archive_path=archive_path,
+            source_name=source_name,
+        )
+        return AbilityPackageImportView.model_validate(raw)
 
     async def aclose(self) -> None:
         """释放内部资源（幂等）。"""
