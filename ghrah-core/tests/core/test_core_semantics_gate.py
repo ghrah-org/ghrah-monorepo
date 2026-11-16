@@ -92,3 +92,20 @@ def test_gate_update_then_check_roundtrips(tmp_path: Path) -> None:
     )
     violations = gate["check"](root=root, baseline_path=baseline)["violations"]
     assert any("room_id(s)" in item and "增加" in item for item in violations)
+
+
+def test_uv_cli_flags_are_not_subject_identity(tmp_path: Path) -> None:
+    """识别命令行选项与 Subject 语义；真正的项目字段仍然被拦截。"""
+    gate = _gate()
+    root = tmp_path / "src"
+    root.mkdir()
+    source = root / "cli.py"
+    source.write_text('flags = {"--project", "--no-project"}\n', encoding="utf-8")
+    assert "project" not in gate["scan"](root)
+    source.write_text(
+        'flags = {"--project", "--no-project"}\nproject_id = "p"\nvalue = "project"\n',
+        encoding="utf-8",
+    )
+    counts = gate["scan"](root)
+    assert counts["project"]["cli.py"] == 1
+    assert counts["project_id"]["cli.py"] == 1

@@ -12,6 +12,10 @@ from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI
+from ghrah.core.api.catalog import CoreCatalog
+from ghrah.core.wiring import build_core_catalog
+from ghrah.protocol.errors import ApiError
+from ghrah.protocol.problem import Problem, ProblemCode
 from test_units_ability_control import _request, _serve
 
 from ghrah.subject.config import SubjectConfig
@@ -37,11 +41,12 @@ async def api(tmp_path):
     await store.upsert(second)
     app = FastAPI()
     config = SubjectConfig(observer_http_api_enabled=True)
+    catalog = build_core_catalog()
     services = {
         OBSERVER_ENDPOINT.name: SimpleNamespace(app=app),
         PROJECT_STORE.name: store,
         CORE_PORT_SERVICE.name: object(),
-        CORE_CATALOG_SERVICE.name: object(),
+        CORE_CATALOG_SERVICE.name: catalog,
         OBSERVER_EVENT_BUS.name: object(),
     }
     # 通过生产 Unit 挂载，避免只测了独立 router，却没有实际注册接口。
@@ -53,6 +58,7 @@ async def api(tmp_path):
         server.should_exit = True
         await task
         await store.stop()
+        await catalog.aclose()
 
 
 async def test_query_add_deduplicate_and_delete(api):
@@ -202,3 +208,22 @@ async def test_concurrent_additions_do_not_overwrite_each_other(api):
     assert saved_keys
     record = await store.get(first.project_id)
     assert {entry.key for entry in record.shell_allow} == saved_keys
+
+
+async def test_core_validation_unavailable_does_not_write_memory(api, monkeypatch):
+    """Core 未能完成校验时返回服务错误，不能把未校验记忆写入项目库。"""
+    store, _, root, first, _ = api
+
+    async def unavailable(self, *, request):
+        raise ApiError(Problem.make(ProblemCode.UNAVAILABLE, detail="Core unavailable"))
+
+    monkeypatch.setattr(CoreCatalog, "validate_shell_allow", unavailable)
+    status, _ = await _request(
+        f"{root}/{first.project_id}/shell-allow",
+        method="POST",
+        body={"kind": "exact", "key": "python demo.py", "label": "demo"},
+    )
+    assert status == 503
+    record = await store.get(first.project_id)
+    assert record.shell_allow == []
+    assert record.version == first.version

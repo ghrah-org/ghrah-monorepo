@@ -72,7 +72,9 @@ def scan(root: Path) -> dict[str, dict[str, int]]:
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root).as_posix()
         for name, pattern in compiled.items():
-            n = len(pattern.findall(text))
+            # uv 的两个字面命令行选项不代表 Subject 项目身份；其余文本照常扫描。
+            source = re.sub(r"(['\"])--(?:no-)?project\1", "", text) if name == "project" else text
+            n = len(pattern.findall(source))
             if n:
                 counts[name][rel] = n
     return {name: files for name, files in counts.items() if files}

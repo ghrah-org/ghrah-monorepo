@@ -646,7 +646,9 @@ class AbilityControlUnit(SubjectUnit):
         from ghrah.subject.units.project import build_project_shell_allow_router
 
         app.include_router(
-            build_project_shell_allow_router(config=self._config, store=project_store)
+            build_project_shell_allow_router(
+                config=self._config, store=project_store, catalog=catalog
+            )
         )
         self._router = router
         logger.info(
