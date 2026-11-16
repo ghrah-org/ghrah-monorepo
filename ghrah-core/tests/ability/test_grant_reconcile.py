@@ -153,7 +153,7 @@ async def test_template_with_unknown_operation_fails_closed(store):
     """模板申请不存在的成员属于装配错误，不能静默丢弃。"""
     _, version, root = store
     instances = [_instance(version, root)]
-    with pytest.raises(GrantReconcileError, match="不可暴露"):
+    with pytest.raises(GrantReconcileError, match="成员不存在"):
         desired_grants(
             instances=instances,
             template={"demos": {"missing"}},
@@ -327,3 +327,21 @@ def test_template_and_instances_must_align() -> None:
             policy=GrantPolicy(),
             agent="a",
         )
+
+async def test_template_grants_skill_members_as_content(store):
+    """模板点名 Skill 成员时按内容授予，节点带技能。"""
+    db, version, root = store
+    instances = [_instance(version, root)]
+
+    desired = desired_grants(
+        instances=instances,
+        template={"demos": {"guide"}},
+        policy=GrantPolicy(),
+        agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    assert desired["demos"].members == frozenset()
+    assert desired["demos"].content == frozenset({"skill/guide"})
+    await apply_grants(db, DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", desired, instances=instances)
+    record = (await db.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))[0]
+    assert record.members == ()
