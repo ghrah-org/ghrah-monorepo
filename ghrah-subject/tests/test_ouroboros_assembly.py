@@ -79,6 +79,7 @@ async def test_full_assembly_all_fibers_active(
             "project",
             "project_control",
             "ability_control",
+            "agent_template_control",
             "agent_control",
             "agentconf_control",
             "media_control",
