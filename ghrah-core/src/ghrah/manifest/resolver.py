@@ -159,9 +159,14 @@ class ManifestResolver:
             if ref.ref:
                 try:
                     ability_manifest = self._catalog.load_ability(ref.ref)
-                except ManifestNotFoundError:
-                    # 不是成员名，就按「整包」解释：有 operation 造工具，有 skill 造技能节点
-                    members = self._catalog.load_package_members(ref.ref)
+                except (ManifestNotFoundError, ManifestValidationError) as error:
+                    # 两段名天然有歧义：``cutting-tool.requirement`` 既是包全名，也能被
+                    # 读成「包 cutting-tool 的成员 requirement」。先按成员试，失败再按整包解释；
+                    # 两种解释都不成立时抛回原始错误，保留它给出的具体原因。
+                    try:
+                        members = self._catalog.load_package_members(ref.ref)
+                    except (ManifestNotFoundError, ManifestValidationError):
+                        raise error from None
                     resolved.extend(self._from_manifest(item, ref) for item in members)
                     continue
                 r = self._from_manifest(ability_manifest, ref)

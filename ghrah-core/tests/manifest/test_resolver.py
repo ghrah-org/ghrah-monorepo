@@ -414,7 +414,8 @@ class TestWindowConfigZeroValues:
 class _PackageCatalog:
     """最小目录：一个包 = 1 个工具成员 + 1 个技能成员。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, ambiguous_two_segment: bool = False) -> None:
+        self._ambiguous = ambiguous_two_segment
         self._members = [
             AbilityManifest(
                 manifest="ability",
@@ -451,6 +452,9 @@ class _PackageCatalog:
         for member in self._members:
             if member.full_name == full_name:
                 return member
+        if self._ambiguous and full_name.count(".") == 1:
+            # 真实 provider 把 ``acme.demo`` 读成「包 acme + 成员 demo」时的报错形态
+            raise ManifestValidationError(f"安装包 acme 有 0 个候选版本：{full_name}")
         raise ManifestNotFoundError(full_name)
 
     def load_package_members(self, full_name: str) -> list[AbilityManifest]:
@@ -478,3 +482,12 @@ def test_ref_to_missing_member_still_raises() -> None:
 
     with pytest.raises(ManifestNotFoundError):
         resolver.resolve(agent)
+
+def test_two_segment_package_ref_still_expands_when_member_lookup_fails_hard() -> None:
+    """``ns.name`` 既是包全名又像成员名：成员查找抛校验错误时也要退到整包展开。"""
+    resolver = ManifestResolver(_PackageCatalog(ambiguous_two_segment=True))
+    agent = _make_agent_manifest([AbilityRef(ref="acme.demo")])
+
+    resolved = resolver.resolve(agent)
+
+    assert [item.implementation.type for item in resolved.abilities] == ["python", "skill"]
