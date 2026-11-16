@@ -35,7 +35,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ghrah.protocol.types import (
-    AGENT_SCOPED_EVENT_TYPES,
     AbilityResultPayload,
     AgentCompactContextPayload,
     AgentResetPayload,
@@ -99,9 +98,9 @@ from ghrah.core.events import (
     SessionDeletedEvent,
 )
 from ghrah.core.hitl import HITLPromiseRegistry
+from ghrah.core.host_command_bridge import HostCommandBridge
 from ghrah.core.host_command_port import HostCommandPort
 from ghrah.core.room_protocol import SerialRoomBridge
-from ghrah.core.subject_bridge import SubjectCommandBridge
 from ghrah.types.config_types import AgentConfig
 from ghrah.types.results import ActionOutcome
 
@@ -125,7 +124,6 @@ class CoreUnitConfig:
     """CoreUnit 配置。
 
     Attributes:
-        cluster_id: SupervisorActor 的集群标识
         default_timeout: Agent 间通信默认超时（秒）
         hitl_timeout: HITL 审批等待超时（秒）。
             AgentBuilder 不透传 hitl_timeout 到 LocalAbilityExecutor，
@@ -180,9 +178,8 @@ class CoreUnitConfig:
         surface_loaded_limit: 已加载集默认上限。
     """
 
-    cluster_id: str = "default"
     # 空 = 未归属：Agent 作用域事件将按契约跳过发布（绝不猜测归属）。
-    # Subject 挂载模式由 registry 工厂显式注入；standalone 显式传入。
+    # 装配层显式传入；standalone 亦须传入。
     project_id: str = ""
     default_timeout: float = 300.0
     hitl_timeout: float = 300.0
@@ -224,6 +221,9 @@ class CoreUnitConfig:
     ability_store: Any = None
     # 启动授权策略（SubjectConfig.ability_grant_policy 透传）。None = 不授予。
     ability_grant_policy: Any = None
+    # Room 投影器：``async (message) -> None``。None = 不投影（Room 日志留 pending）。
+    # 房间状态归 Subject 所有，投影目标由装配方注入。
+    room_projector: Any = None
     # 受信 MCP 装配配置；None = 关闭，不读取 agentconf、不发现端点。
     mcp: Any = None
     # 宿主命令授权表：key = instance_id 或 f"{instance_id}/{member}"；
@@ -410,39 +410,26 @@ class UnitEventPublisher(EventPublisher):
         self,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
         *,
-        project_id: str = "",
-        cluster_id: str = "",
         agent_id_resolver: Callable[[str], str] | None = None,
     ) -> None:
         """初始化 UnitEventPublisher。
 
+        事件只携带 Agent 的不透明身份（``agent_id``），不携带 Project 归属：
+        Project 是 Subject 的组织方式，由 Subject 在转发给 Observer 前补齐。
+
         Args:
             emit: 宿主事件发射回调（通常为 ``ctx.emit``），None 表示 Null 模式
+            agent_id_resolver: agent 名 → 不透明 agent_id 的解析器
         """
         self._emit = emit
-        self._project_id = project_id
-        self._cluster_id = cluster_id
         self._agent_id_resolver = agent_id_resolver
 
     async def publish(self, event: CoreEvent) -> None:
         """发布事件到宿主 ctx。"""
         event_type, payload = _core_event_to_dict(event)
-        payload["project_id"] = self._project_id
-        payload["cluster_id"] = self._cluster_id
         payload["agent_id"] = (
             self._agent_id_resolver(event.agent_name) if self._agent_id_resolver is not None else ""
         )
-        # Agent 作用域事件缺失归属（project_id/agent_id 任一为空）时跳过发布：
-        # 不以空值污染下游 Project 分桶，也不猜测归属（如 shutdown 后解析失败）。
-        if event_type in AGENT_SCOPED_EVENT_TYPES and (
-            not payload["project_id"] or not payload["agent_id"]
-        ):
-            logger.warning(
-                "Dropped unattributed core event '%s' for agent '%s' (missing project_id/agent_id)",
-                event_type,
-                event.agent_name,
-            )
-            return
         if self._emit is None:
             logger.debug(f"Event published (unit-null): {event_type} for agent {event.agent_name}")
             return
@@ -591,17 +578,15 @@ class CoreUnit:
         self._emit = emit if callable(emit) else None
         self._publisher = UnitEventPublisher(
             emit=self._emit,
-            project_id=self._config.project_id,
-            cluster_id=self._config.cluster_id,
             agent_id_resolver=self._agent_id_for_name,
         )
 
-        # Room bridge（send 工具回路）：宿主 ctx 有 serial 时桥接 Subject RoomUnit
+        # Room bridge（send 工具回路）：宿主 ctx 有 serial 时桥接宿主 Room 命令面
         # （duck-typed；standalone 场景无 serial → bridge 为 None，send 工具明确报错）
         serial = getattr(ctx, "serial", None)
         room_bridge = SerialRoomBridge(serial) if callable(serial) else None
         self._host_command_port = (
-            HostCommandPort(SubjectCommandBridge(serial)) if callable(serial) else None
+            HostCommandPort(HostCommandBridge(serial)) if callable(serial) else None
         )
 
         if (
@@ -624,9 +609,7 @@ class CoreUnit:
                 raise TypeError("mcp 必须是 McpDeploymentConfig 或 None")
             if self._config.ability_store is None:
                 raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
-            self._mcp_deployment = McpDeployment(
-                self._config.mcp, self._config.ability_store, self._config.cluster_id
-            )
+            self._mcp_deployment = McpDeployment(self._config.mcp, self._config.ability_store)
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
         # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
         # （不再回退按模板实例化）。
@@ -657,7 +640,6 @@ class CoreUnit:
 
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
-            cluster_id=self._config.cluster_id,
             event_publisher=self._publisher,
             room_bridge=room_bridge,
             max_cluster_members=self._config.max_cluster_members,
@@ -671,7 +653,7 @@ class CoreUnit:
         )
         self._supervisor = supervisor
 
-        logger.info(f"CoreUnit initialized (cluster_id={self._config.cluster_id})")
+        logger.info("CoreUnit initialized (project_id=%s)", self._config.project_id)
 
     async def start(self) -> None:
         """启动 Unit（幂等空实现 — 路由注册由 bridge 完成）。"""
@@ -735,6 +717,9 @@ class CoreUnit:
             None = 不是我的」约定，当前仅 hitl_response 的多 cluster
             穿透使用）。
         """
+        # 作用域由本实例确定：命令载荷里的 ``project_id`` 是 wire 模型的必填位，
+        # 在唯一入口统一补齐；handler 不再接收、也不传递作用域参数。
+        payload = {"project_id": self._config.project_id, **payload}
         handler = self._handlers.get(command)
         if handler is None:
             return {"success": False, "error": f"Unknown command: {command}"}
@@ -759,40 +744,22 @@ class CoreUnit:
         return self._supervisor
 
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        """经宿主 emit 发送 core 域事件（``core:{event_type}``，fire-and-forget）。"""
+        """经宿主 emit 发送 core 域事件（``core:{event_type}``，fire-and-forget）。
+
+        只补 Agent 的不透明身份（``agent_id``）；Project 归属由 Subject 在转发前
+        补齐（M1），Core 不注入、也不判定归属。
+        """
         if self._emit is None:
             logger.debug(f"Event emitted (unit-null): core:{event_type}")
             return
         try:
             enriched = dict(payload)
-            # 注意不能用 setdefault：wire payload 的 model_dump 自带空串字段
-            # （协议默认 project_id=""），已存在的空键不会被 setdefault 覆盖。
-            if not enriched.get("project_id"):
-                enriched["project_id"] = self._config.project_id
-            if not enriched.get("cluster_id"):
-                enriched["cluster_id"] = self._config.cluster_id
             agent_name = str(enriched.get("agent_name") or enriched.get("name") or "")
             if agent_name and not enriched.get("agent_id"):
                 enriched["agent_id"] = self._agent_id_for_name(agent_name)
-            # Agent 作用域事件缺失归属时跳过（与 UnitEventPublisher 同一契约）。
-            if event_type in AGENT_SCOPED_EVENT_TYPES and (
-                not enriched.get("project_id") or not enriched.get("agent_id")
-            ):
-                logger.warning(
-                    "Dropped unattributed core event '%s' for agent '%s' "
-                    "(missing project_id/agent_id)",
-                    event_type,
-                    agent_name,
-                )
-                return
             session = enriched.get("session")
-            if isinstance(session, dict):
-                if not session.get("project_id"):
-                    session["project_id"] = self._config.project_id
-                if not session.get("cluster_id"):
-                    session["cluster_id"] = self._config.cluster_id
-                if not session.get("agent_id"):
-                    session["agent_id"] = enriched.get("agent_id", "")
+            if isinstance(session, dict) and not session.get("agent_id"):
+                session["agent_id"] = enriched.get("agent_id", "")
             self._emit(f"core:{event_type}", enriched)
         except Exception:
             logger.exception(f"Failed to emit core:{event_type}")
@@ -804,14 +771,7 @@ class CoreUnit:
         except Exception:
             return ""
 
-    def _validate_project(self, project_id: str) -> None:
-        if not project_id:
-            raise ValueError("project_id required")
-        if project_id != self._config.project_id:
-            raise ValueError("cluster_project_mismatch")
-
-    def _validate_agent(self, project_id: str, agent_id: str, agent_name: str) -> None:
-        self._validate_project(project_id)
+    def _validate_agent(self, agent_id: str, agent_name: str) -> None:
         if not agent_id:
             raise ValueError("agent_id required")
         if self._agent_id_for_name(agent_name) != agent_id:
@@ -853,7 +813,6 @@ class CoreUnit:
         return {
             "deployment": deployment,
             "project_id": self._config.project_id,
-            "cluster_id": self._config.cluster_id,
             "workspace_root": self._config.workspace_root,
             "default_working_dir": self._config.workspace_root,
             "allowed_roots": roots,
@@ -948,9 +907,6 @@ class CoreUnit:
         """在持有预留时解析模板并核定启动授权。"""
         source = self._require_assembly().source
         supervisor = self._require_supervisor()
-        self._validate_project(sp.project_id)
-        if sp.cluster_id and sp.cluster_id != self._config.cluster_id:
-            raise ValueError("cluster_id_mismatch")
         if sp.abilities:
             AbilityAssembly.refuse(
                 "direct-abilities spawn",
@@ -1069,7 +1025,7 @@ class CoreUnit:
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         tp = TerminateAgentPayload.model_validate(payload)
-        self._validate_agent(tp.project_id, tp.agent_id, tp.name)
+        self._validate_agent(tp.agent_id, tp.name)
         info = supervisor._registry.get_info(tp.name)
         agent_id = info.config.effective_agent_id
         incarnation_id = info.incarnation_id
@@ -1078,7 +1034,7 @@ class CoreUnit:
             EventType.AGENT_TERMINATED.value,
             {
                 "name": tp.name,
-                "project_id": tp.project_id,
+                "project_id": self._config.project_id,
                 "agent_id": agent_id,
                 "incarnation_id": incarnation_id,
             },
@@ -1099,7 +1055,7 @@ class CoreUnit:
     async def _handle_send_message(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SendMessagePayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.target)
+        self._validate_agent(sp.agent_id, sp.target)
         invocation = (sp.metadata or {}).get("execute_ability")
         if invocation is not None:
             agent = await supervisor.get_agent_handle(sp.target)
@@ -1112,12 +1068,18 @@ class CoreUnit:
                     "error_detail": f"Agent '{sp.target}' has no registered ability '{name}'",
                     "data": {"agent_name": sp.target, "ability_name": name},
                 }
+        content_blocks = (
+            [block.model_dump(mode="json", exclude_none=True) for block in sp.content_blocks]
+            if sp.content_blocks
+            else None
+        )
         result = await supervisor.send(
             target=sp.target,
             content=sp.content,
             sender=sp.sender,
             timeout=sp.timeout,
             metadata=sp.metadata,
+            content_blocks=content_blocks,
         )
         return self._ok({"content": result})
 
@@ -1126,15 +1088,14 @@ class CoreUnit:
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BroadcastMessagePayload.model_validate(payload)
-        self._validate_project(bp.project_id)
         results = await supervisor.broadcast(content=bp.content, sender=bp.sender)
         return self._ok({"responses": results})
 
     async def _handle_delegate(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         dp = DelegatePayload.model_validate(payload)
-        self._validate_agent(dp.project_id, dp.from_agent_id, dp.from_agent)
-        self._validate_agent(dp.project_id, dp.to_agent_id, dp.to_agent)
+        self._validate_agent(dp.from_agent_id, dp.from_agent)
+        self._validate_agent(dp.to_agent_id, dp.to_agent)
         result = await supervisor.delegate(
             from_agent=dp.from_agent,
             to_agent=dp.to_agent,
@@ -1180,15 +1141,13 @@ class CoreUnit:
 
     async def _handle_list_agents(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
-        request = ListAgentsPayload.model_validate(payload)
-        self._validate_project(request.project_id)
+        ListAgentsPayload.model_validate(payload)
         result = await supervisor.list_agents()
         for agent in result:
             name = str(agent.get("name") or "")
             agent.update(
                 {
-                    "project_id": request.project_id,
-                    "cluster_id": self._config.cluster_id,
+                    "project_id": self._config.project_id,
                     "agent_id": self._agent_id_for_name(name),
                 }
             )
@@ -1203,7 +1162,6 @@ class CoreUnit:
         """按实体身份读取当前执行实例，不返回可写 Actor 引用。"""
         from ghrah.communication.errors import AgentNotFoundError
 
-        self._validate_project(project_id)
         try:
             info = self._require_supervisor()._registry.get_info_by_id(agent_id)
         except AgentNotFoundError:
@@ -1227,7 +1185,6 @@ class CoreUnit:
         from ghrah.communication.errors import AgentNotFoundError
         from ghrah.context.persistence.serialization import serialize_action_session
 
-        self._validate_project(project_id)
         try:
             info = self._require_supervisor()._registry.get_info_by_id(agent_id)
         except AgentNotFoundError as exc:
@@ -1254,7 +1211,7 @@ class CoreUnit:
     async def _handle_get_agent_info(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         gp = GetAgentInfoPayload.model_validate(payload)
-        self._validate_agent(gp.project_id, gp.agent_id, gp.name)
+        self._validate_agent(gp.agent_id, gp.name)
         agent_handle = await supervisor.get_agent_handle(gp.name)
         state = agent_handle.get_state()
         abilities = agent_handle.get_abilities()
@@ -1279,7 +1236,7 @@ class CoreUnit:
         """
         supervisor = self._require_supervisor()
         cp = AgentCompactContextPayload.model_validate(payload)
-        self._validate_agent(cp.project_id, cp.agent_id, cp.agent_name)
+        self._validate_agent(cp.agent_id, cp.agent_name)
         agent_handle = await supervisor.get_agent_handle(cp.agent_name)
         result = await agent_handle.request_compact()
         return self._ok(result)
@@ -1299,7 +1256,6 @@ class CoreUnit:
         """
         supervisor = self._require_supervisor()
         rp = AgentResetPayload.model_validate(payload)
-        self._validate_project(rp.project_id)
         if not rp.agent_id:
             raise ValueError("agent_id required")
         info = supervisor._registry.get_info_by_id(rp.agent_id)
@@ -1450,10 +1406,9 @@ class CoreUnit:
             triplet = self._hitl_promises.resolve(promise_id)
             if triplet is None and not (agent_name and ability_name and tool_call_id):
                 logger.debug(
-                    "hitl_response: promise '%s' not held by cluster '%s'; "
+                    "hitl_response: promise '%s' not held by this CoreUnit; "
                     "passing through to next CoreUnit",
                     promise_id,
-                    self._config.cluster_id,
                 )
                 return None
             if triplet is not None:
@@ -1504,7 +1459,7 @@ class CoreUnit:
     async def _handle_session_create(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SessionCreatePayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.agent_name)
+        self._validate_agent(sp.agent_id, sp.agent_name)
         data = await supervisor.create_session(
             agent_name=sp.agent_name,
             name=sp.name,
@@ -1520,14 +1475,14 @@ class CoreUnit:
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SessionActivatePayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.agent_name)
+        self._validate_agent(sp.agent_id, sp.agent_name)
         data = await supervisor.activate_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok(data)
 
     async def _handle_session_list(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SessionListPayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.agent_name)
+        self._validate_agent(sp.agent_id, sp.agent_name)
         data = await supervisor.list_sessions(sp.agent_name)
         return self._ok(data)
 
@@ -1536,21 +1491,21 @@ class CoreUnit:
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SessionArchivePayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.agent_name)
+        self._validate_agent(sp.agent_id, sp.agent_name)
         await supervisor.archive_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok({"session_id": sp.session_id, "archived": True})
 
     async def _handle_session_delete(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         sp = SessionDeletePayload.model_validate(payload)
-        self._validate_agent(sp.project_id, sp.agent_id, sp.agent_name)
+        self._validate_agent(sp.agent_id, sp.agent_name)
         await supervisor.delete_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok({"session_id": sp.session_id, "deleted": True})
 
     async def _handle_branch_create(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BranchCreatePayload.model_validate(payload)
-        self._validate_agent(bp.project_id, bp.agent_id, bp.agent_name)
+        self._validate_agent(bp.agent_id, bp.agent_name)
         data = await supervisor.create_branch(
             agent_name=bp.agent_name,
             session_id=bp.session_id,
@@ -1566,28 +1521,28 @@ class CoreUnit:
     ) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BranchActivatePayload.model_validate(payload)
-        self._validate_agent(bp.project_id, bp.agent_id, bp.agent_name)
+        self._validate_agent(bp.agent_id, bp.agent_name)
         data = await supervisor.activate_branch(bp.agent_name, bp.session_id, bp.branch_id)
         return self._ok(data)
 
     async def _handle_branch_list(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BranchListPayload.model_validate(payload)
-        self._validate_agent(bp.project_id, bp.agent_id, bp.agent_name)
+        self._validate_agent(bp.agent_id, bp.agent_name)
         data = await supervisor.list_branches(bp.agent_name, bp.session_id)
         return self._ok(data)
 
     async def _handle_branch_archive(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BranchArchivePayload.model_validate(payload)
-        self._validate_agent(bp.project_id, bp.agent_id, bp.agent_name)
+        self._validate_agent(bp.agent_id, bp.agent_name)
         await supervisor.archive_branch(bp.agent_name, bp.session_id, bp.branch_id)
         return self._ok({"session_id": bp.session_id, "branch_id": bp.branch_id, "archived": True})
 
     async def _handle_branch_delete(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()
         bp = BranchDeletePayload.model_validate(payload)
-        self._validate_agent(bp.project_id, bp.agent_id, bp.agent_name)
+        self._validate_agent(bp.agent_id, bp.agent_name)
         await supervisor.delete_branch(bp.agent_name, bp.session_id, bp.branch_id)
         return self._ok({"session_id": bp.session_id, "branch_id": bp.branch_id, "deleted": True})
 

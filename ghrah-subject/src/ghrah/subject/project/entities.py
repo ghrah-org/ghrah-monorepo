@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -75,7 +74,7 @@ class AgentEntityManager:
 
     async def create(self, request: AgentEntityCreatePayload) -> AgentEntity:
         """经原 ProjectManager 创建持久规格，显式选择初始启停状态。"""
-        async with self._projects._lifecycle_lock(request.project_id):
+        async with self._projects.lifecycle_lock(request.project_id):
             project, error = await self._projects._get_active_project(request.project_id)
             if error or project is None:
                 raise StableError("project_unavailable", str(error))
@@ -86,7 +85,6 @@ class AgentEntityManager:
                     "project_id": request.project_id,
                     "agent": {
                         "name": request.name,
-                        "cluster_id": request.cluster_id,
                         "manifest_ref": request.manifest_ref,
                         "endpoint_name": request.endpoint_name,
                         "model_overrides": request.model_overrides,
@@ -114,8 +112,8 @@ class AgentEntityManager:
                 "runtime": AgentRuntimeSnapshot.model_validate(
                     {
                         k: v
-                        for k, v in self._runtime(project, agent).items()
-                        if k != "loaded_abilities"
+                        for k, v in (await self._runtime(project, agent)).items()
+                        if k not in {"agent_id", "loaded_abilities"}
                     }
                 ).model_dump(mode="json"),
             }
@@ -134,14 +132,14 @@ class AgentEntityManager:
 
     def _handle(self, project: ProjectRecord, agent: AgentSpec) -> Any | None:
         try:
-            handle = self._projects._cluster_transport.get_handle(agent.cluster_id)
+            handle = self._projects._cluster_transport.get_handle(project.project_id)
         except KeyError:
             return None
         if handle.project_id != project.project_id:
-            raise StableError("cluster_project_mismatch")
+            raise StableError("agent_project_mismatch")
         return handle if handle.is_connected else None
 
-    def _runtime(self, project: ProjectRecord, agent: AgentSpec) -> dict[str, Any]:
+    async def _runtime(self, project: ProjectRecord, agent: AgentSpec) -> dict[str, Any]:
         handle = self._handle(project, agent)
         if handle is None:
             return {
@@ -151,7 +149,7 @@ class AgentEntityManager:
                 "loaded_abilities": None,
             }
         try:
-            return handle.get_entity_runtime(agent.agent_id)
+            return await handle.get_entity_runtime(agent.agent_id)
         except Exception as exc:
             return {
                 "availability": "unknown",
@@ -174,7 +172,7 @@ class AgentEntityManager:
     async def _context(
         self, project: ProjectRecord, agent: AgentSpec, operation: dict[str, Any]
     ) -> dict[str, Any]:
-        runtime = self._runtime(project, agent)
+        runtime = await self._runtime(project, agent)
         if runtime["availability"] == "online":
             handle = self._handle(project, agent)
             return await handle.entity_context(agent.agent_id, operation)
@@ -236,7 +234,7 @@ class AgentEntityManager:
             )
 
     async def _snapshot(self, project: ProjectRecord, agent: AgentSpec) -> dict[str, Any]:
-        runtime = self._runtime(project, agent)
+        runtime = await self._runtime(project, agent)
         try:
             catalog = await self._context(project, agent, {"type": "context.list_sessions"})
             context = {
@@ -255,7 +253,9 @@ class AgentEntityManager:
             identity=AgentIdentity(project_id=project.project_id, agent_id=agent.agent_id),
             specification=agent.model_dump(mode="json"),
             specification_revision=project.version,
-            runtime={k: v for k, v in runtime.items() if k != "loaded_abilities"},
+            # 运行时快照只保留 AgentRuntimeSnapshot 的字段：
+            # ``agent_id`` 已由 identity 承载，``loaded_abilities`` 单独投影。
+            runtime={k: v for k, v in runtime.items() if k not in {"agent_id", "loaded_abilities"}},
             context=context,
             mailbox=mailbox,
             abilities=self._abilities(agent, runtime),
@@ -291,7 +291,7 @@ class AgentEntityManager:
 
         省略参数使用 ``...``。空字符串的端点视为清除。
         """
-        async with self._projects._lifecycle_lock(project_id):
+        async with self._projects.lifecycle_lock(project_id):
             project, agent = await self._load(
                 AgentIdentity(project_id=project_id, agent_id=agent_id)
             )
@@ -314,14 +314,14 @@ class AgentEntityManager:
     async def execute(self, request: AgentEntityPayload) -> dict[str, Any]:
         """对同一项目串行执行实体操作，与既有生命周期命令共用锁。"""
         identity = AgentIdentity(project_id=request.project_id, agent_id=request.agent_id)
-        async with self._projects._lifecycle_lock(identity.project_id):
+        async with self._projects.lifecycle_lock(identity.project_id):
             project, agent = await self._load(identity)
             op = request.operation.model_dump(mode="json")
             kind = op["type"]
             if kind == "snapshot":
                 return await self._snapshot(project, agent)
             if kind == "abilities.list":
-                return self._abilities(agent, self._runtime(project, agent))
+                return self._abilities(agent, await self._runtime(project, agent))
             if kind.startswith("context."):
                 if kind in {"context.create_session", "context.activate_session"} and (
                     project.status != ProjectStatus.ACTIVE or agent.desired_state != "running"
@@ -333,26 +333,28 @@ class AgentEntityManager:
             if kind in {"mailbox.retry", "mailbox.resume"}:
                 if project.status != ProjectStatus.ACTIVE or agent.desired_state != "running":
                     raise StableError("agent_not_running")
-                if self._runtime(project, agent)["availability"] != "online":
+                if (await self._runtime(project, agent))["availability"] != "online":
                     raise StableError("agent_offline")
+                # 消息管理器按项目取端口实例，归属恒等，不再做项目一致性校验。
                 mm = self._projects._cluster_transport.get_message_manager(project.project_id)
-                if mm.project_id != project.project_id:
-                    raise StableError("mailbox_project_mismatch")
+                from ghrah.protocol.errors import ApiError
+
                 try:
-                    progress = await mm.get_progress(op["delivery_id"])
-                except KeyError as exc:
+                    progress = await mm.get_progress(op["delivery_id"], agent_id=agent.agent_id)
+                except ApiError as exc:
                     raise StableError("delivery_not_found") from exc
                 if progress.delivery.recipient_id != agent.agent_id:
                     raise StableError("delivery_not_found")
                 if kind == "mailbox.retry":
-                    await mm.retry(op["delivery_id"])
+                    await mm.retry(op["delivery_id"], agent_id=agent.agent_id)
                 else:
-                    await mm.resume_delivery(op["delivery_id"])
-                return {"delivery": asdict((await mm.get_progress(op["delivery_id"])).delivery)}
+                    await mm.resume(op["delivery_id"], agent_id=agent.agent_id)
+                final = await mm.get_progress(op["delivery_id"], agent_id=agent.agent_id)
+                return {"delivery": final.delivery.model_dump(mode="json")}
             expected = op.get("expected_revision")
             if expected is not None and expected != project.version:
                 raise StableError("agent_specification_conflict")
-            runtime = self._runtime(project, agent)
+            runtime = await self._runtime(project, agent)
             if runtime["availability"] == "unknown":
                 raise StableError("agent_runtime_unavailable", runtime.get("error", ""))
             incarnation = op.get("expected_incarnation_id")

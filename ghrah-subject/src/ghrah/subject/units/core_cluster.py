@@ -19,20 +19,22 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 from ghrah.protocol.types import ProjectStatus
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.core_cluster.registry import (
-    CoreClusterRegistry,
-    default_core_unit_factory,
-)
+from ghrah.subject.core_cluster.registry import default_core_unit_factory
 from ghrah.subject.errors import StableError
+from ghrah.subject.room.content_blocks import (
+    CONTENT_TEXT_REQUIRED,
+    resolve_content_attachments,
+    validate_content_blocks,
+)
 from ghrah.subject.runtime.service_keys import (
-    ABILITY_ACCESS,
+    CORE_CATALOG_SERVICE,
     CORE_CLUSTER_REGISTRY,
+    CORE_PORT_SERVICE,
     MANIFEST_STORE,
     PROJECT_STORE,
     SANDBOX_EXECUTOR,
@@ -69,6 +71,13 @@ _PROJECT_AGENT_COMMANDS = frozenset(
         "branch_delete",
     }
 )
+
+
+def _room_missing(error: str) -> bool:
+    """房间不存在属永久条件，不重试（删除是 Subject 的权威决定）。"""
+    text = error.strip().lower()
+    return text.startswith("room not found") or "room_not_found" in text
+
 
 _TARGET_FIELDS = {
     "terminate_agent": "name",
@@ -124,35 +133,8 @@ def _is_version_conflict(project_id: str, error: str) -> bool:
     )
 
 
-@dataclass(frozen=True)
-class _AbilityHandle:
-    """ability_control unit 消费的项目能力句柄。"""
-
-    project_id: str
-    store: Any
-    operator: Any
-
-
-class _AbilityAccessService:
-    """ABILITY_ACCESS 服务实现：按项目懒打开 store，操作员身份由服务端注入。"""
-
-    def __init__(self, registry: CoreClusterRegistry) -> None:
-        self._registry = registry
-
-    async def acquire(self, project_id: str, project_root_locator: str) -> _AbilityHandle:
-        store = await self._registry.ability_store(project_id, project_root_locator)
-        operator = self._registry.operator_identity(project_id)
-        return _AbilityHandle(project_id=project_id, store=store, operator=operator)
-
-    async def agent_tool_snapshot(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
-        return await self._registry.agent_tool_snapshot(project_id, agent_id)
-
-    async def close(self) -> None:
-        await self._registry.close_ability_stores()
-
-
 class CoreClusterRegistryUnit(SubjectUnit):
-    """Provides the CORE_CLUSTER_REGISTRY / ABILITY_ACCESS services."""
+    """装配 Core 端口和 Subject 命令适配器。"""
 
     def __init__(
         self,
@@ -168,12 +150,14 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 可选 per-cluster LLM 工厂透传（None = Core 内建默认 agentconf 解析）；
         # 显式 unit_factory 优先，本参数被忽略（工厂自持全部 CoreUnitConfig）。
         self._llm_factory = llm_factory
-        self._registry: CoreClusterRegistry | None = None
+        self._transport: Any | None = None
+        self._ports: Any | None = None
+        self._catalog: Any | None = None
         self._ctx: Any | None = None
         self._meta = UnitMeta(
             name="core_cluster_registry",
             requires=frozenset({MANIFEST_STORE, WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
-            provides=frozenset({CORE_CLUSTER_REGISTRY, ABILITY_ACCESS}),
+            provides=frozenset({CORE_CATALOG_SERVICE, CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
             routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS),
         )
 
@@ -182,10 +166,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
         return self._meta
 
     @property
-    def service(self) -> CoreClusterRegistry:
-        if self._registry is None:
+    def service(self) -> Any:
+        """当前主干传输层：命令路由走 Core 能力端口。"""
+        if self._transport is None:
             raise RuntimeError("CoreClusterRegistryUnit has not been initialized.")
-        return self._registry
+        return self._transport
 
     async def init(self, ctx: Any) -> None:
         self._ctx = ctx
@@ -209,13 +194,23 @@ class CoreClusterRegistryUnit(SubjectUnit):
                             "data": {"mm_message_id": message.message_id},
                         },
                     )
-                    if not isinstance(result, dict) or not result.get("success"):
-                        raise RuntimeError(str(result))
-
-            registry_holder: list[CoreClusterRegistry] = []
-
-            async def resolve_ability_store(project_id: str, locator: str) -> Any:
-                return await registry_holder[0].ability_store(project_id, locator)
+                    if isinstance(result, dict) and result.get("success"):
+                        continue
+                    error = (
+                        str((result or {}).get("error") or "")
+                        if isinstance(result, dict)
+                        else str(result)
+                    )
+                    if _room_missing(error):
+                        # 房间删除是 Subject 的权威决定；历史消息的 room_ids 是不可变
+                        # 事实，重放投影不得复活已删除的房间，也不该当作可重试错误。
+                        logger.info(
+                            "room projection skipped (room deleted): %s -> %s",
+                            message.message_id,
+                            room_id,
+                        )
+                        continue
+                    raise RuntimeError(error or str(result))
 
             async def shell_cwd_lookup(project_id: str) -> str | None:
                 # Project unit 在本 unit 之后才 provide store；读取发生在命令执行时。
@@ -254,28 +249,66 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
-                ability_store_resolver=resolve_ability_store,
                 shell_cwd_lookup=shell_cwd_lookup,
                 shell_allow_lookup=shell_allow_lookup,
             )
-        registry = CoreClusterRegistry(
-            unit_factory=self._unit_factory,
-            ability_grant_policy=self._config.ability_grant_policy,
-        )
-        if self._unit_factory is not None and "registry_holder" in locals():
-            registry_holder.append(registry)
-        registry.bind(ctx)
-        self._registry = registry
-        ctx.provide(CORE_CLUSTER_REGISTRY.name, registry)
-        ctx.provide(ABILITY_ACCESS.name, _AbilityAccessService(registry))
+        from ghrah.core.wiring import build_core_catalog, build_core_port
+        from ghrah.protocol.ports.keys import CORE_CATALOG, CORE_PORT
 
-    async def start(self) -> None:
-        # CoreUnit 实例按需懒挂载（ensure_cluster），无启动期动作。
-        pass
+        from ghrah.subject.project.paths import ProjectPaths
+        from ghrah.subject.runtime.core_ports import CorePorts
+
+        def _locator_for(project_id: str) -> str | None:
+            """取已登记的项目根定位符（由 cluster 登记提供）。"""
+            if self._transport is not None:
+                return self._transport.locator_for(project_id)
+            return None
+
+        def _build_config(project_id: str, locator: str) -> Any:
+            """Core 单元配置：复用 legacy 工厂的项目级装配（含 manifest_store）。"""
+            build = getattr(self._unit_factory, "build_config", None)
+            if build is None:
+                raise ValueError("core unit factory 未提供 build_config")
+            return build(project_id, locator)
+
+        def _make_port(project_id: str) -> Any:
+            """按项目构造作用域端口实例（数据根 + 不透明作用域 token）。"""
+            locator = _locator_for(project_id)
+            if not locator:
+                raise ValueError(f"project locator unavailable: {project_id}")
+            db_path = str(ProjectPaths.from_locator(locator).action_chain_db_path)
+            return build_core_port(
+                scope_id=project_id,
+                db_path=db_path,
+                config_factory=lambda: _build_config(project_id, locator),
+                install_root=self._config.ability.install_root,
+                agentconf_db_path=self._config.agentconf_db_path,
+                grant_policy=self._config.ability_grant_policy,
+                emit=ctx.emit,
+                serial=ctx.serial,
+            )
+
+        # 按项目懒建/缓存作用域端口；目录端口无作用域，零项目时也可用。
+        self._ports = CorePorts(_make_port)
+        self._catalog = build_core_catalog(
+            install_root=self._config.ability.install_root,
+            agentconf_db_path=self._config.agentconf_db_path,
+            grant_policy=self._config.ability_grant_policy,
+        )
+        ctx.provide(CORE_PORT, self._ports)
+        ctx.provide(CORE_CATALOG, self._catalog)
+        from ghrah.subject.runtime.port_transport import PortClusterTransport
+
+        self._transport = PortClusterTransport(self._ports)
+        ctx.provide(CORE_CLUSTER_REGISTRY.name, self._transport)
 
     async def stop(self) -> None:
-        if self._registry is not None:
-            await self._registry.stop()
+        if self._transport is not None:
+            await self._transport.stop()
+        if self._catalog is not None:
+            await self._catalog.aclose()
+            self._catalog = None
+        self._ports = None
 
     async def handle_command(
         self,
@@ -290,11 +323,13 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 "error": "legacy_ability_registration_disabled",
                 "error_detail": "Manage grants and tool selection in the ability access store",
             }
-        if command == "send_message" and getattr(cmd_ctx, "request_id", None):
-            payload = {
-                **payload,
-                "metadata": {**(payload.get("metadata") or {}), "request_id": cmd_ctx.request_id},
-            }
+        if command == "send_message":
+            metadata = dict(payload.get("metadata") or {})
+            # 公开命令只接受已校验的顶层内容块，禁止借用旧数据的 metadata 入口。
+            metadata.pop("content_blocks", None)
+            if getattr(cmd_ctx, "request_id", None):
+                metadata["request_id"] = cmd_ctx.request_id
+            payload = {**payload, "metadata": metadata}
         if command not in _PROJECT_AGENT_COMMANDS:
             return {
                 "success": False,
@@ -312,7 +347,30 @@ class CoreClusterRegistryUnit(SubjectUnit):
             if command == "delegate":
                 return await self._delegate(project, payload)
             agent = self._resolve_agent(project, payload, _TARGET_FIELDS[command])
-            cluster_id = str(agent["cluster_id"])
+            # 直聊入站内容块：与 Room 通路同一套策略校验（稳定错误码），
+            # 且在 ensure_cluster（可能挂载 Core）之前拒绝，避免为坏消息挂载。
+            send_blocks: list[dict[str, Any]] | None = None
+            if command == "send_message":
+                send_blocks = validate_content_blocks(
+                    payload.get("content_blocks"), visual_only=True
+                )
+                if send_blocks is not None:
+                    send_blocks = await resolve_content_attachments(
+                        send_blocks, str(project["project_root_locator"])
+                    )
+                if send_blocks is None and not str(payload.get("content") or "").strip():
+                    raise StableError(
+                        CONTENT_TEXT_REQUIRED,
+                        "content is required when content_blocks is empty",
+                    )
+            cluster_id = str(project["project_id"])
+            # 先登记定位符：Core 的库路径由项目定位符推导，未挂载单元也要能解析。
+            remember = getattr(self.service, "remember_locator", None)
+            if remember is not None:
+                remember(
+                    str(project["project_id"]),
+                    str(project["project_root_locator"]),
+                )
             if command in _NO_MOUNT_COMMANDS and not self.service.has_cluster(cluster_id):
                 return self._no_mount_result(command, project, agent)
             handle = await self.service.ensure_cluster(
@@ -321,6 +379,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 project_root_locator=str(project["project_root_locator"]),
             )
             core_payload = dict(payload)
+            if send_blocks is not None:
+                core_payload["content_blocks"] = send_blocks
             core_payload["project_id"] = project["project_id"]
             core_payload["agent_id"] = agent["agent_id"]
             target_field = _TARGET_FIELDS[command]
@@ -333,7 +393,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                         "project_id": project["project_id"],
                         "agent_id": agent["agent_id"],
                         "agent_name": agent["name"],
-                        "cluster_id": agent["cluster_id"],
                     }
                 )
             return result
@@ -385,7 +444,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
             "project_id": project["project_id"],
             "agent_id": agent["agent_id"],
             "agent_name": agent["name"],
-            "cluster_id": agent["cluster_id"],
         }
         if command == "terminate_agent":
             return {"success": True, "data": {**identity, "terminated": True}}
@@ -440,14 +498,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 合法的不同 name 并发 spawn 不应因陈旧 version 快照被误拒；
         # 重试中同名重复由 add_agent 的 name 唯一性校验正常拦截。
         for attempt in range(3):
-            cluster_id = str(payload.get("cluster_id") or "")
-            cluster_ids = [str(value) for value in project.get("cluster_ids") or []]
-            if not cluster_id:
-                if len(cluster_ids) != 1:
-                    raise ValueError("cluster_id required")
-                cluster_id = cluster_ids[0]
-            if cluster_id not in cluster_ids:
-                raise ValueError("cluster_project_mismatch")
+            # 单元按项目唯一：运行键就是 project_id，不需要再校验集群归属。
             result = await manager.handle_command(
                 "project_add_agent",
                 {
@@ -458,7 +509,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                         "endpoint_name": config.get("endpoint_name"),
                         "model_overrides": config.get("model_overrides"),
                         "name": name,
-                        "cluster_id": cluster_id,
                         "manifest_ref": str(payload.get("manifest_ref") or ""),
                         "system_prompt": str(config.get("system_prompt") or ""),
                     },
@@ -485,7 +535,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 "name": data.get("agent_name", name),
                 "agent_id": data.get("agent_id", ""),
                 "project_id": project["project_id"],
-                "cluster_id": cluster_id,
                 "runtime_pending": bool(data.get("runtime_pending")),
                 "runtime_error": data.get("runtime_error"),
             },
@@ -494,11 +543,11 @@ class CoreClusterRegistryUnit(SubjectUnit):
 
     async def _list(self, project: dict[str, Any]) -> dict[str, Any]:
         running: dict[str, dict[str, Any]] = {}
-        for cluster_id in project.get("cluster_ids") or []:
+        for cluster_id in (str(project["project_id"]),):
             try:
-                handle = self.service.get_handle(str(cluster_id))
+                handle = self.service.get_handle(cluster_id)
             except KeyError:
-                # has_cluster→get_handle 之间 cluster 可能被并发 shutdown。
+                # has_cluster→get_handle 之间单元可能被并发 shutdown。
                 continue
             for item in await handle.list_agents(str(project["project_id"])):
                 identity = str(item.get("agent_id") or "")
@@ -508,15 +557,12 @@ class CoreClusterRegistryUnit(SubjectUnit):
         for spec in project.get("agents") or []:
             item = dict(spec)
             runtime = running.get(str(spec.get("agent_id") or ""))
-            item["runtime_state"] = (
-                runtime.get("state", "running") if runtime is not None else "stopped"
-            )
+            item["runtime_state"] = "running" if runtime is not None else "stopped"
             if runtime is not None:
                 item.update(runtime)
             item.update(
                 {
                     "project_id": project["project_id"],
-                    "cluster_id": spec.get("cluster_id", ""),
                     "agent_id": spec.get("agent_id", ""),
                     "name": spec.get("name", ""),
                 }
@@ -525,20 +571,18 @@ class CoreClusterRegistryUnit(SubjectUnit):
         return {"success": True, "data": {"agents": agents}, "error": None}
 
     async def _broadcast(self, project: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        responses: dict[str, Any] = {}
-        cluster_ids = {str(agent.get("cluster_id") or "") for agent in project.get("agents") or []}
-        for cluster_id in sorted(cluster_ids - {""}):
-            handle = await self.service.ensure_cluster(
-                cluster_id,
-                project_id=str(project["project_id"]),
-                project_root_locator=str(project["project_root_locator"]),
-            )
-            result = await handle.dispatch(
-                "broadcast_message",
-                {**payload, "project_id": project["project_id"]},
-            )
-            responses[cluster_id] = result
-        return {"success": True, "data": {"clusters": responses}, "error": None}
+        project_id = str(project["project_id"])
+        handle = await self.service.ensure_cluster(
+            project_id,
+            project_id=project_id,
+            project_root_locator=str(project["project_root_locator"]),
+        )
+        result = await handle.dispatch("broadcast_message", {**payload, "project_id": project_id})
+        return {
+            "success": result["success"],
+            "data": {"clusters": {project_id: result}},
+            "error": result.get("error"),
+        }
 
     async def _delegate(self, project: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         from_id = str(payload.get("from_agent_id") or "")
@@ -548,10 +592,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
         target = next((agent for agent in agents if agent.get("agent_id") == to_id), None)
         if source is None or target is None:
             raise ValueError("agent_project_mismatch")
-        if source.get("cluster_id") != target.get("cluster_id"):
-            raise ValueError("cross_cluster_delegate_unsupported")
         handle = await self.service.ensure_cluster(
-            str(source["cluster_id"]),
+            str(project["project_id"]),
             project_id=str(project["project_id"]),
             project_root_locator=str(project["project_root_locator"]),
         )

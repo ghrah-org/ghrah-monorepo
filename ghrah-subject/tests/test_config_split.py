@@ -26,8 +26,10 @@ from ghrah.subject.config import (
     CoreTransportConfig,
     HITLPolicyConfig,
     ManifestConfig,
+    MediaConfig,
     PersistenceConfig,
     PluginTrustConfig,
+    ProjectConfig,
     SandboxUnitConfig,
     SubjectConfig,
     TransportKindConfig,
@@ -280,6 +282,38 @@ class TestFromEnv:
         config = SubjectConfig.from_env()
         assert config.project.default_root_locator_template == "/srv/ghrah/projects/{project_id}"
 
+    def test_from_env_project_bootstrap_locator_derived(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """未显式给 locator 时，从 workspace_root 派生默认项目工作区。"""
+        monkeypatch.setenv("GHRAH_SUBJECT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        monkeypatch.delenv("GHRAH_SUBJECT_PROJECT_BOOTSTRAP_WORKSPACE_LOCATOR", raising=False)
+
+        config = SubjectConfig.from_env()
+        assert config.project.bootstrap_workspace_locator == str(
+            tmp_path / "ws" / "projects" / "default"
+        )
+
+    def test_from_env_project_bootstrap_locator_explicit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "GHRAH_SUBJECT_PROJECT_BOOTSTRAP_WORKSPACE_LOCATOR", "/srv/ghrah/ws/default"
+        )
+
+        config = SubjectConfig.from_env()
+        assert config.project.bootstrap_workspace_locator == "/srv/ghrah/ws/default"
+
+    def test_project_slice_empty_locator_derived(self, tmp_path: Path) -> None:
+        """显式传入空 locator 的切片也要派生，避免 from_env 路径漏配。"""
+        config = SubjectConfig(
+            workspace_root=str(tmp_path / "ws"),
+            project_slice=ProjectConfig(bootstrap_workspace_locator=""),
+        )
+        assert config.project.bootstrap_workspace_locator == str(
+            tmp_path / "ws" / "projects" / "default"
+        )
+
     def test_from_env_sandbox_timeout_fallback_to_core(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -434,6 +468,64 @@ class TestFromEnv:
         monkeypatch.delenv("GHRAH_SUBJECT_TASKSTORE_DB", raising=False)
         config = SubjectConfig.from_env()
         assert config.taskstore.enabled is True
+
+    def test_media_defaults(self) -> None:
+        """media slice：默认开放 + 64 MiB 上限 + 常用 MIME 前缀 + Range 开启。"""
+        media = SubjectConfig().media
+        assert media.enabled is True
+        assert media.max_upload_bytes == 64 * 1024 * 1024
+        assert {"image/", "audio/", "video/", "text/", "application/"} == set(
+            media.allowed_mime_prefixes
+        )
+        assert media.range_requests is True
+
+    def test_media_slice_explicit(self) -> None:
+        config = SubjectConfig(
+            media_slice=MediaConfig(
+                enabled=False,
+                max_upload_bytes=1024,
+                allowed_mime_prefixes=(),
+                range_requests=False,
+            )
+        )
+        assert config.media.enabled is False
+        assert config.media.max_upload_bytes == 1024
+        assert config.media.allowed_mime_prefixes == ()
+        assert config.media.range_requests is False
+
+    def test_from_env_media(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ENABLED", "false")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES", "4096")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES", "video/, IMAGE/")
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS", "false")
+        media = SubjectConfig.from_env().media
+        assert media.enabled is False
+        assert media.max_upload_bytes == 4096
+        assert media.allowed_mime_prefixes == ("video/", "image/")
+        assert media.range_requests is False
+
+    def test_from_env_media_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in (
+            "GHRAH_SUBJECT_MEDIA_ENABLED",
+            "GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES",
+            "GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES",
+            "GHRAH_SUBJECT_MEDIA_RANGE_REQUESTS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        media = SubjectConfig.from_env().media
+        assert media.enabled is True
+        assert media.max_upload_bytes == 64 * 1024 * 1024
+        assert media.range_requests is True
+
+    def test_from_env_media_empty_prefixes_means_unrestricted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_ALLOWED_MIME_PREFIXES", "")
+        assert SubjectConfig.from_env().media.allowed_mime_prefixes == ()
+
+    def test_from_env_media_invalid_max_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GHRAH_SUBJECT_MEDIA_MAX_UPLOAD_BYTES", "not-a-number")
+        assert SubjectConfig.from_env().media.max_upload_bytes == 64 * 1024 * 1024
 
     def test_from_env_reports_retired_skill_root(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

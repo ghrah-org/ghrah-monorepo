@@ -71,3 +71,9 @@ async def ability_core_config(tmp_path: Path) -> AsyncIterator[Callable[..., Cor
         yield config
     finally:
         await store.close()
+
+
+@pytest.fixture
+def runtime_unit_config() -> CoreUnitConfig:
+    """新 Runtime 显式注入模板来源，授权连接仍由 Runtime 管理。"""
+    return CoreUnitConfig(manifest_store=_TestAgentStore(()))

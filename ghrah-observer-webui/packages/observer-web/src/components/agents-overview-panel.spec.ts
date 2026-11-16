@@ -27,8 +27,8 @@ describe("AgentsOverviewPanel", () => {
         status: "active",
         archived_at: null,
         agents: [
-          { name: "Coder", agent_id: "a1", cluster_id: "c1", runtime_status: "running" },
-          { name: "Reviewer", agent_id: "a2", cluster_id: "c2", runtime_status: "stopped" },
+          { name: "Coder", agent_id: "a1", runtime_status: "running" },
+          { name: "Reviewer", agent_id: "a2", runtime_status: "stopped" },
         ],
       } as never,
       {
@@ -146,7 +146,6 @@ describe("AgentsOverviewPanel", () => {
       {
         project_id: "p1",
         agent_id: "a1",
-        cluster_id: "c1",
         agent_name: "Coder",
         phase: "post_call",
         occupied_tokens: 4096,
@@ -164,7 +163,6 @@ describe("AgentsOverviewPanel", () => {
       {
         project_id: "p1",
         agent_id: "a2",
-        cluster_id: "c2",
         agent_name: "Reviewer",
         phase: "post_call",
         occupied_tokens: null,
@@ -202,7 +200,6 @@ describe("AgentsOverviewPanel", () => {
       {
         project_id: "p1",
         agent_id: "a1",
-        cluster_id: "c1",
         agent_name: "Coder",
         phase: "post_call",
         occupied_tokens: 4096,
@@ -277,7 +274,6 @@ describe("AgentsOverviewPanel", () => {
         {
           project_id: "p1",
           agent_id: agentId,
-          cluster_id: "c1",
           agent_name: agentId,
           phase: "post_call",
           occupied_tokens: null,

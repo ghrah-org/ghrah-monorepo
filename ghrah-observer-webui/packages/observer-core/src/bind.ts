@@ -44,6 +44,7 @@ import type {
 } from "@ghrah/protocol";
 import { CommandType, EventType, SystemType } from "@ghrah/protocol";
 import { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
+import { applyProjectListResult } from "./project-projection.js";
 import type { ObserverClient } from "./client.js";
 import { createFrameBatcher, type FrameBatcher } from "./frame-batcher.js";
 import {
@@ -279,7 +280,6 @@ export function connectStores(
           {
             project_id: target.projectId,
             agent_id: target.agentId,
-            cluster_id: "",
             agent_name: target.agentName ?? "",
             phase: "post_call",
             occupied_tokens:
@@ -323,22 +323,10 @@ export function connectStores(
     }
 
     if (command === CommandType.PROJECT_LIST && Array.isArray(data.projects)) {
-      const list = data.projects as ProjectInfoPayload[];
-      const archived = boolField(context?.payload.archived) ?? false;
-      const previous = new Set(
-        (archived ? projects.archivedProjectList : projects.projectList).map(
-          (project) => project.project_id,
-        ),
+      applyProjectListResult(
+        { projects: data.projects as ProjectInfoPayload[] },
+        boolField(context?.payload.archived) ?? false,
       );
-      projects.replaceProjects(list, archived);
-      const retained = new Set(
-        list
-          .filter((project) => (project.archived_at != null) === archived)
-          .map((project) => project.project_id),
-      );
-      for (const projectId of previous) {
-        if (!retained.has(projectId)) clearProjectDerived(projectId);
-      }
     }
 
     // 插件协商回执 → plugins store（权威结果，覆盖旧投影）。

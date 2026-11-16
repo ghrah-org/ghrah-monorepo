@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AgentEntity } from "./agent-entity.js";
+import { toProjectCreatePayload } from "./project-control.js";
 import {
   type AbilityDefinitionPayload,
   type AgentEntityCreatePayload,
@@ -11,6 +12,7 @@ import {
   ClientType,
   type CommandResultPayload,
   CommandType,
+  type ContentBlock,
   generateRequestId,
   type RoomSubjectType,
   ServerClient,
@@ -204,7 +206,12 @@ export class ObserverClient extends ServerClient {
     target: AgentTarget,
     content: string,
     sender = "user",
-    options: { timeout?: number | null; metadata?: Record<string, unknown> | null } = {},
+    options: {
+      timeout?: number | null;
+      metadata?: Record<string, unknown> | null;
+      /** 入站内容块；与 content 并存时 content 仍是人类可读正文。 */
+      contentBlocks?: ContentBlock[] | null;
+    } = {},
   ): Promise<CommandResultPayload> {
     const payload: Record<string, unknown> = {
       project_id: target.projectId,
@@ -215,6 +222,9 @@ export class ObserverClient extends ServerClient {
     };
     if (options.timeout != null) payload.timeout = options.timeout;
     if (options.metadata != null) payload.metadata = options.metadata;
+    if (options.contentBlocks != null && options.contentBlocks.length > 0) {
+      payload.content_blocks = options.contentBlocks;
+    }
     const msg: ServerMessage = {
       type: CommandType.SEND_MESSAGE,
       payload,
@@ -454,49 +464,6 @@ export class ObserverClient extends ServerClient {
       },
       30_000,
     );
-  }
-
-  async initCluster(
-    clusterId: string,
-    config?: Record<string, unknown>,
-  ): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.INIT_CLUSTER,
-      payload: { cluster_id: clusterId, config: config ?? {} },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async shutdownCluster(clusterId: string): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.SHUTDOWN_CLUSTER,
-      payload: { cluster_id: clusterId, config: {} },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async clusterStatus(clusterId: string): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.CLUSTER_STATUS,
-      payload: { cluster_id: clusterId },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async listClusters(): Promise<CommandResultPayload> {
-    const msg: ServerMessage = {
-      type: CommandType.LIST_CLUSTERS,
-      payload: {},
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
   }
 
   async createWorkspace(target: AgentTarget): Promise<CommandResultPayload> {
@@ -925,23 +892,7 @@ export class ObserverClient extends ServerClient {
   // ── Project ──
 
   async createProject(name: string, options: CreateProjectOptions): Promise<CommandResultPayload> {
-    const payload: Record<string, unknown> = { name };
-    if (options.description) payload["description"] = options.description;
-    if (options.manifestRef != null) payload["manifest_ref"] = options.manifestRef;
-    if (options.projectRootLocator) {
-      payload["project_root_locator"] = options.projectRootLocator;
-    }
-    if (options.writableWorkspaces !== undefined) {
-      payload["writable_workspaces"] = options.writableWorkspaces.map((workspace) => ({
-        locator: workspace.locator,
-        ...(workspace.name ? { name: workspace.name } : {}),
-        ...(workspace.role !== undefined ? { role: workspace.role } : {}),
-        ...(workspace.defaultForAgents !== undefined
-          ? { default_for_agents: workspace.defaultForAgents }
-          : {}),
-      }));
-    }
-    if (options.shellCwd) payload["shell_cwd"] = options.shellCwd;
+    const payload = toProjectCreatePayload(name, options);
     const msg: ServerMessage = {
       type: CommandType.PROJECT_CREATE,
       payload,

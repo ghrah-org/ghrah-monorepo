@@ -383,6 +383,17 @@ class TestShow:
         assert versions[0]["root"] == str(_version_root(ability_root))
         assert versions[0]["lock_state"] == "ok"
         assert versions[0]["definition"]["identity"]["namespace"] == "fixtures"
+        definition = versions[0]["definition"]
+        assert "render" in definition["operations"]
+        assert "reporting-guide" in definition["skills"]
+        assert "members" not in definition
+
+    def test_show_human_counts_parsed_members(self, package_root: Path, ability_root: Path) -> None:
+        """人类输出数解析后的顶层成员，不读磁盘上的 ``members`` 键。"""
+        assert _install(package_root, ability_root).returncode == 0
+        result = _run("show", f"{_FULL_NAME}@{_VERSION}", "--root", str(ability_root))
+        assert result.returncode == 0, result.stderr
+        assert "成员：1 个 Operation、1 个 Skill" in result.stdout
 
     def test_show_without_version_lists_all(self, package_root: Path, ability_root: Path) -> None:
         """省略版本：列出该身份全部已安装版本（这里只有一个）。"""

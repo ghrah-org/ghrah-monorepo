@@ -5,12 +5,12 @@
 """内核私有非阻塞 OS pipe；不把 FD 交给客户端。"""
 
 import asyncio
-import fcntl
 import math
 import os
 from dataclasses import dataclass, field, replace
 
 from ..protocol import ErrorRecord
+from .pipe import create_pipe
 from .tables import KernelFault, ObjectRecord
 
 
@@ -23,6 +23,8 @@ class Stream:
     read_fd: int
     write_fd: int
     capacity: int
+    # FD 不交给客户端，全部读写经本内核核算；只计实际成功写入但尚未读取的字节。
+    buffered: int = 0
     closed: set[str] = field(default_factory=set)
     terminal: str | None = None
     reading: bool = False
@@ -88,14 +90,8 @@ class Streams:
             accepted = result["effective_quota"]
             if type(accepted) is not int or not 4096 <= accepted <= quota:
                 raise KernelFault("PROTOCOL_ERROR", "提供者返回无效容量")
-            fds = list(os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC))
-            try:
-                fcntl.fcntl(fds[1], fcntl.F_SETPIPE_SZ, accepted)
-            except PermissionError:
-                pass
-            capacity = fcntl.fcntl(fds[1], fcntl.F_GETPIPE_SZ)
-            if capacity > quota:
-                raise KernelFault("NOT_SUPPORTED", "宿主无法提供请求范围内的 pipe 容量")
+            read_fd, write_fd, capacity = create_pipe(accepted)
+            fds = [read_fd, write_fd]
             obj = ObjectRecord(
                 self.kernel.new_id("object"), scheme.scheme_id, opened, kind="channel"
             )
@@ -152,8 +148,9 @@ class Streams:
 
     def wake(self, stream):
         loop = asyncio.get_running_loop()
-        for fd, (writing, future) in list(stream.watchers.items()):
-            (loop.remove_writer if writing else loop.remove_reader)(fd)
+        for fd, (writing, future, registered) in list(stream.watchers.items()):
+            if registered:
+                (loop.remove_writer if writing else loop.remove_reader)(fd)
             if not future.done():
                 future.set_result(None)
         stream.watchers.clear()
@@ -163,6 +160,8 @@ class Streams:
         if fd >= 0:
             os.close(fd)
             setattr(stream, name, -1)
+            if name == "read_fd":
+                stream.buffered = 0
 
     def stop(self, stream, status):
         if stream.terminal is not None:
@@ -220,7 +219,7 @@ class Streams:
         if operation == "write" and stream.reader in stream.closed:
             raise KernelFault("CHANNEL_CLOSED", "读端已经关闭")
 
-    async def ready(self, stream, fd, writing, deadline):
+    async def ready(self, stream, fd, writing, deadline, *, credit=False):
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
@@ -228,15 +227,18 @@ class Streams:
             if not future.done():
                 future.set_result(None)
 
-        stream.watchers[fd] = (writing, future)
-        (loop.add_writer if writing else loop.add_reader)(fd, notify)
+        stream.watchers[fd] = (writing, future, not credit)
+        # 额度满时 OS 管道可能仍可写；等待读取释放额度，不能监听 writable 空转。
+        if not credit:
+            (loop.add_writer if writing else loop.add_reader)(fd, notify)
         try:
             await asyncio.wait_for(future, max(0, deadline - loop.time()))
         except TimeoutError:
             raise KernelFault("TIMED_OUT", "流零进度等待到期") from None
         finally:
             if stream.watchers.get(fd, (None, None))[1] is future:
-                (loop.remove_writer if writing else loop.remove_reader)(fd)
+                if not credit:
+                    (loop.remove_writer if writing else loop.remove_reader)(fd)
                 stream.watchers.pop(fd, None)
 
     async def io(self, session, request):
@@ -273,8 +275,16 @@ class Streams:
                 try:
                     if operation == "read":
                         chunk = os.read(stream.read_fd, size)
+                        stream.buffered -= len(chunk)
+                        if chunk:
+                            self.wake(stream)
                         return {"eof": chunk == b"", "stream_handle": node.handle_id}, chunk
-                    accepted = os.write(stream.write_fd, data)
+                    remaining = stream.capacity - stream.buffered
+                    if remaining == 0:
+                        await self.ready(stream, stream.write_fd, True, deadline, credit=True)
+                        continue
+                    accepted = os.write(stream.write_fd, data[:remaining])
+                    stream.buffered += accepted
                     return {"accepted_bytes": accepted}, None
                 except BlockingIOError:
                     await self.ready(

@@ -40,7 +40,6 @@ function snapshot(online = false) {
     identity: { project_id: "p1", agent_id: "a1" },
     specification: {
       name: "Designer",
-      cluster_id: "c1",
       desired_state: online ? "running" : "stopped",
       abilities: ["send_message"],
       manifest_ref: "",
@@ -82,7 +81,6 @@ beforeEach(() => {
       project_id: "p1",
       name: "Project",
       status: "active",
-      cluster_ids: ["c1"],
       agents: [],
     } as never,
   ]);
@@ -238,7 +236,6 @@ it("creates a persistent entity with explicit start and selected cluster", async
   });
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
-  await w.find("select").setValue("c1");
   await w.find('[data-testid="model-config"]').setValue("shared-model");
   await w.find('input[value="send_message"]').setValue(true);
   api.create.mockResolvedValue({ success: false, error: "name already exists" });
@@ -247,7 +244,6 @@ it("creates a persistent entity with explicit start and selected cluster", async
   expect(api.create).toHaveBeenCalledWith(
     expect.objectContaining({
       project_id: "p1",
-      cluster_id: "c1",
       name: "new-agent",
       endpoint_name: "shared-model",
       start: false,
@@ -267,7 +263,6 @@ it("creates from a template when the server offers no configurable types", async
   await flushPromises();
   expect(w.find('option[value="types"]').exists()).toBe(false);
   await w.get("input[data-autofocus]").setValue("new-agent");
-  await w.get("select").setValue("c1");
   await w.get("input[required]:not([data-autofocus])").setValue("agents.coder");
   await w.get("form").trigger("submit");
   await flushPromises();
@@ -335,7 +330,6 @@ it("opens the created identity after a successful creation receipt", async () =>
   });
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
-  await w.find("select").setValue("c1");
   await w.find('[data-testid="model-config"]').setValue("shared-model");
   await w.find('input[value="send_message"]').setValue(true);
   api.create.mockResolvedValue({ success: true, data: snapshot() });

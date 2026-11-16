@@ -10,6 +10,7 @@
     "lint": "pnpm --dir ghrah-observer-webui lint",
     "lint:css-budget": "pnpm --dir ghrah-observer-webui lint:css-budget",
     "test": "pnpm --dir ghrah-observer-webui test",
+    "test:mock": "pnpm --dir ghrah-observer-webui test:mock",
     "type-check": "pnpm --dir ghrah-observer-webui type-check"
   },
   "engines": {

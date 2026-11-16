@@ -201,6 +201,10 @@ class WeightedTokenEstimator:
                 return max(1, effective_length(getattr(block, "content", "")))
             case "image" | "file":
                 return _IMAGE_FILE_BLOCK_TOKENS
+            case "video":
+                # 视频不直接进模型：按抽帧数计，避免落 case _ 严重低估。
+                frames = getattr(block, "frames", None) or []
+                return max(1, len(frames)) * _IMAGE_FILE_BLOCK_TOKENS
             case "audio":
                 return max(1, effective_length(getattr(block, "data", "")))
             case _:

@@ -60,7 +60,6 @@ export const WorkspaceListPayloadSchema = z.object({
 export const WorkspaceCreatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   path: z.string(),
 });
@@ -68,14 +67,12 @@ export const WorkspaceCreatedPayloadSchema = z.object({
 export const WorkspaceDestroyedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
 });
 
 export const WorkspaceSnapshotCreatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   snapshot_id: z.string(),
   message: z.string().optional().default(""),
@@ -84,7 +81,6 @@ export const WorkspaceSnapshotCreatedPayloadSchema = z.object({
 export const WorkspaceRolledBackPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   snapshot_id: z.string(),
 });

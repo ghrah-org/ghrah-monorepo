@@ -9,6 +9,7 @@ interface ImportMetaEnv {
   readonly VITE_GHRAH_SUBJECT_WS_URL?: string;
   readonly VITE_GHRAH_SUBJECT_HTTP_URL?: string;
   readonly VITE_GHRAH_SUBJECT_HTTP_API_TOKEN?: string;
+  readonly VITE_GHRAH_PROJECT_API?: string;
 }
 
 interface ImportMeta {
@@ -20,4 +21,5 @@ interface ImportMeta {
 // reads it defensively via a globalThis cast (no DOM lib dependency here).
 interface Window {
   readonly __GHRAH_SUBJECT_WS_URL__?: string;
+  readonly __GHRAH_PROJECT_API__?: string;
 }

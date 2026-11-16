@@ -41,4 +41,4 @@ def test_entity_wire_samples() -> None:
                 {"project_id": "p1", "agent_id": "a1", "operation": operation}
             )
     with pytest.raises(ValidationError):
-        AgentEntityCreatePayload(project_id="p1", name="a", cluster_id="c1")
+        AgentEntityCreatePayload(project_id="p1", name="a")

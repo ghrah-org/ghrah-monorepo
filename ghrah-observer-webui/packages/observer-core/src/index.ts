@@ -20,6 +20,7 @@ export {
   type AbilityChangesQuery,
   type AbilityControlClient,
   type AbilityControlClientOptions,
+  type AbilityMcpProbeOptions,
 } from "./ability-control.js";
 export {
   deriveHttpBase,
@@ -30,6 +31,48 @@ export {
   type HttpQueryValue,
   type HttpRequestOptions,
 } from "./http.js";
+export {
+  artifactContentUrl,
+  artifactsClient,
+  createArtifactsClient,
+  listArtifacts,
+  listWorkspaceFiles,
+  publishArtifact,
+  readArtifact,
+  readWorkspaceFile,
+  setArtifactsClientForTest,
+  workspaceFileContentUrl,
+  workspaceFileUrl,
+  type ArtifactBytes,
+  type ArtifactSourceView,
+  type ArtifactsClient,
+  type ArtifactsClientOptions,
+  type ArtifactsFetch,
+  type ArtifactsFetchInit,
+  type ArtifactsFetchResponse,
+  type ArtifactView,
+  type PublishArtifactRequest,
+  type WorkspaceEntryView,
+  type WorkspaceListingView,
+} from "./artifacts.js";
+export {
+  attachmentClient,
+  attachmentPath,
+  attachmentUrl,
+  createAttachmentClient,
+  DEFAULT_ATTACHMENT_TIMEOUT_MS,
+  MAX_ATTACHMENT_BYTES,
+  setAttachmentClientForTest,
+  uploadAttachment,
+  type AttachmentClient,
+  type AttachmentClientOptions,
+  type AttachmentUploadProgress,
+  type UploadAttachmentOptions,
+  type UploadBody,
+  type UploadedAttachment,
+  type UploadXhr,
+  type UploadXhrProgressEvent,
+} from "./attachments.js";
 export { type ConnectStoresOptions, connectStores } from "./bind.js";
 export { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 export {
@@ -41,6 +84,27 @@ export {
   type ProjectLifecycleTarget,
   type RoomLifecycleTarget,
 } from "./client.js";
+export { RestProjectObserverClient } from "./client-project-rest.js";
+export {
+  createProjectControlClient,
+  projectControlClient,
+  projectErrorResult,
+  type ProjectControlClient,
+  type ProjectCreateOptionsLike,
+  type ProjectDeleteQuery,
+  type ProjectListQuery,
+  toProjectCreatePayload,
+} from "./project-control.js";
+export {
+  applyProjectListResult,
+  applyProjectRemoved,
+  applyProjectUpsert,
+} from "./project-projection.js";
+export {
+  DEFAULT_PROJECT_API_MODE,
+  type ProjectApiMode,
+  resolveProjectApiMode,
+} from "./project-api.js";
 export {
   createFrameBatcher,
   createSyncBatcher,
@@ -48,8 +112,18 @@ export {
   type ScheduleFn,
 } from "./frame-batcher.js";
 export {
+  type ChatBlock,
+  isVideoBlock,
+  parseChatBlock,
+  parseVideoBlock,
+  textFromChatBlocks,
+  type VideoBlockLike,
+  type VideoFrameBlockLike,
+} from "./block-compat.js";
+export {
   type ChatEntry,
   type ChatEntryKind,
+  contentBlocksFromData,
   type FileChange,
   type FileChangeScope,
   projectNodeToChatEntries,
@@ -57,6 +131,8 @@ export {
   type RoomLogProjectionScope,
   rebuildChatEntriesFromChain,
   roomLogToChatEntries,
+  textFromBlocks,
+  withTextContent,
 } from "./projection.js";
 export {
   type AgentKey,
@@ -85,7 +161,12 @@ export {
   replacementGrant,
   useAbilityAdminStore,
 } from "./stores/ability-admin.js";
-export { useAbilityPackagesStore } from "./stores/ability-packages.js";
+export {
+  abilityPackageVersionKey,
+  type ProbeRecord,
+  type VersionProfileRecord,
+  useAbilityPackagesStore,
+} from "./stores/ability-packages.js";
 export { type AgentInfo, type AgentListItem, useAgentsStore } from "./stores/agents.js";
 export { type BranchProjection, useBranchesStore } from "./stores/branches.js";
 export { useChangesStore } from "./stores/changes.js";

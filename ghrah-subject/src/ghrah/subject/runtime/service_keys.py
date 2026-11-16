@@ -199,7 +199,7 @@ class ClusterHandle(Protocol):
     def project_id(self) -> str:
         """返回 cluster 所属项目。"""
 
-    def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
+    async def get_entity_runtime(self, agent_id: str) -> dict[str, Any]:
         """查询稳定身份当前对应的执行实例。"""
 
     async def entity_context(self, agent_id: str, operation: dict[str, Any]) -> dict[str, Any]:
@@ -274,6 +274,10 @@ TASK_STORE = SubjectServiceKey[TaskStore]("task_store", TaskStore)
 TASKSTORE_SERVICE = SubjectServiceKey[Any]("taskstore_service")
 TASKSTORE_CHECKERS = SubjectServiceKey[Any]("taskstore_checkers")
 CORE_CLUSTER_REGISTRY = SubjectServiceKey[CoreClusterRegistryService]("core_cluster_registry")
+# Core 作用域端口注册表的注入键：名字就是协议包的 ``core.port``。
+CORE_PORT_SERVICE = SubjectServiceKey[Any]("core.port")
+# Core 全局目录端口的注入键（无作用域）。
+CORE_CATALOG_SERVICE = SubjectServiceKey[Any]("core.catalog")
 ABILITY_ACCESS = SubjectServiceKey[AbilityAccessService]("ability_access")
 PROJECT_MANAGER = SubjectServiceKey[ProjectManagerService]("project_manager")
 PROJECT_STORE = SubjectServiceKey["ProjectStore"]("project_store")
@@ -303,6 +307,7 @@ DESIRED_STATE_STORE = SubjectServiceKey[DesiredStateStore](
     "desired_state_store",
     DesiredStateStore,
 )
+RECOVERY_START = SubjectServiceKey[Any]("recovery_start")
 RECONCILIATION_SERVICE = SubjectServiceKey[ReconciliationService](
     "reconciliation_service",
     ReconciliationService,

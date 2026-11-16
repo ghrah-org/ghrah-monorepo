@@ -28,7 +28,7 @@ from ouroboros import FiberState  # type: ignore[import-untyped]
 from ghrah.subject.runtime.plugin_mount import PluginSessionState, mount_enabled_plugins
 from ghrah.subject.runtime.plugin_session import PluginSession
 from ghrah.subject.runtime.route_registry import UnitRouteRegistry
-from ghrah.subject.runtime.service_keys import PROJECT_STORE, RECONCILIATION_SERVICE
+from ghrah.subject.runtime.service_keys import PROJECT_STORE, RECOVERY_START
 from ghrah.subject.runtime.third_party import mount_third_party_units
 from ghrah.subject.units import mount_builtin_units
 
@@ -69,17 +69,11 @@ async def assemble_subject(
     await _assemble_plugins(ctx, config, fibers, route_registry)
 
     if config.recovery.enabled and config.recovery.reconcile_on_start:
-        reconcile_service = ctx.get(RECONCILIATION_SERVICE.name, strict=False)
-        if reconcile_service is not None:
-            try:
-                await reconcile_service.reconcile()
-            except Exception:
-                logger.exception("reconcile on start failed (non-fatal)")
+        start_recovery = ctx.get(RECOVERY_START.name, strict=False)
+        if start_recovery is not None:
+            start_recovery()
         else:
-            logger.info(
-                "reconcile_on_start enabled but recovery unit not mounted (profile=%s)",
-                profile,
-            )
+            logger.info("reconcile_on_start enabled but recovery unit not mounted")
 
     logger.info("Subject assembled (profile=%s, units=%d)", profile, len(fibers))
 

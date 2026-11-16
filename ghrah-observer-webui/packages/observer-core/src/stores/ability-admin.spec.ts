@@ -103,6 +103,11 @@ function client(overrides: Partial<AbilityControlClient> = {}): AbilityControlCl
     revokeGrant: vi.fn(),
     bindTool: vi.fn(),
     unbindTool: vi.fn(),
+    packageGroups: vi.fn(),
+    projectPackageGroups: vi.fn(),
+    agentPackageGroups: vi.fn(),
+    packageVersion: vi.fn(),
+    probePackageMcp: vi.fn(),
     ...overrides,
   } as AbilityControlClient;
 }

@@ -223,6 +223,13 @@ def _text(value: Any) -> str | None:
     return str(value)
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    """只把映射当成员表；缺键、空值或其他类型按空表计。"""
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
 def _items(value: Any) -> list[Any]:
     """把可选序列/单值归一成列表（None → []，标量 → [标量]）。"""
     if value is None:
@@ -448,11 +455,9 @@ def _print_show(payload: Mapping[str, Any]) -> None:
             title = definition.get("title")
             if title:
                 print(f"  标题：{title}")
-            members = definition.get("members") or {}
-            if isinstance(members, Mapping):
-                operations = members.get("operations") or {}
-                skills = members.get("skills") or {}
-                print(f"  成员：{len(operations)} 个 Operation、{len(skills)} 个 Skill")
+            operations = _mapping(definition.get("operations"))
+            skills = _mapping(definition.get("skills"))
+            print(f"  成员：{len(operations)} 个 Operation、{len(skills)} 个 Skill")
 
 
 def _print_verify(payload: Mapping[str, Any]) -> None:

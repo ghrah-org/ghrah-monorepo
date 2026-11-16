@@ -3,8 +3,162 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { PythonHalfInfo, TaskClaimPayload, TaskInfoPayload } from "@ghrah/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockState } from "./state.js";
+import { AgentSnapshotSchema, CommandType } from "@ghrah/protocol";
+
+describe("stable mock entities", () => {
+  it("keeps chain iterations increasing across messages and restarts", () => {
+    vi.useFakeTimers();
+    const state = new MockState({ simulateChains: true, chainIntervalMs: 100 });
+    try {
+      const project = state.handleCommand(CommandType.PROJECT_CREATE, { name: "iterations" })
+        .data as { project: { project_id: string } };
+      const snapshot = AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: project.project.project_id,
+          name: "worker",
+          manifest_ref: "mock.agent",
+          start: true,
+        }).data,
+      );
+      const iterations: number[] = [];
+      state.emit = (type, payload) => {
+        if (type === "action_chain_updated")
+          iterations.push((payload.node as { iteration: number }).iteration);
+      };
+      vi.advanceTimersByTime(100);
+      expect(
+        state.handleCommand(CommandType.SEND_MESSAGE, {
+          ...snapshot.identity,
+          target: "worker",
+          content: "hello",
+        }).success,
+      ).toBe(true);
+      const operation = (type: string) =>
+        state.handleCommand(CommandType.AGENT_ENTITY, {
+          ...snapshot.identity,
+          operation: { type },
+        });
+      operation("stop");
+      operation("start");
+      vi.advanceTimersByTime(100);
+      expect(iterations).toEqual([1, 2, 3]);
+    } finally {
+      state.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it("rejects malformed and cross-project messages without committing a turn", () => {
+    const state = new MockState();
+    const first = state.handleCommand(CommandType.PROJECT_CREATE, { name: "first" }).data as {
+      project: { project_id: string };
+    };
+    const second = state.handleCommand(CommandType.PROJECT_CREATE, { name: "second" }).data as {
+      project: { project_id: string };
+    };
+    const create = (projectId: string, name: string) =>
+      AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: projectId,
+          name,
+          manifest_ref: "mock.agent",
+          system_prompt: "Default prompt",
+          start: true,
+        }).data,
+      );
+    const source = create(first.project.project_id, "worker");
+    const foreign = create(second.project.project_id, "peer");
+    const payload = { ...source.identity, target: "worker", content: "hello" };
+    const before = state.handleCommand(CommandType.AGENT_ENTITY, {
+      ...source.identity,
+      operation: { type: "snapshot" },
+    });
+    for (const execute of [
+      null,
+      "bad",
+      { name: "send_message", args: { target: foreign.identity.agent_id, content: "hello" } },
+    ]) {
+      expect(
+        state.handleCommand(CommandType.SEND_MESSAGE, {
+          ...payload,
+          metadata: { execute_ability: execute },
+        }).success,
+      ).toBe(false);
+    }
+    const after = AgentSnapshotSchema.parse(
+      state.handleCommand(CommandType.AGENT_ENTITY, {
+        ...source.identity,
+        operation: { type: "snapshot" },
+      }).data,
+    );
+    expect(after.context).toEqual(AgentSnapshotSchema.parse(before.data).context);
+    const inbox = state.handleCommand(CommandType.AGENT_ENTITY, {
+      ...source.identity,
+      operation: { type: "mailbox.list_inbox" },
+    });
+    expect(inbox.data).toEqual({ items: [], next_before_seq: null });
+    const session = state.handleCommand(CommandType.AGENT_ENTITY, {
+      ...source.identity,
+      operation: { type: "context.create_session" },
+    }).data as { session: { system_prompt: string } };
+    expect(session.session.system_prompt).toBe("Default prompt");
+    state.dispose();
+  });
+  it("preserves identity and history across stop/start, checks revisions and incarnations", () => {
+    const state = new MockState();
+    const created = state.handleCommand(CommandType.PROJECT_CREATE, { name: "entities" });
+    const projectId = (created.data as { project: { project_id: string } }).project.project_id;
+    const entity = (agentId: string, operation: Record<string, unknown>) =>
+      state.handleCommand(CommandType.AGENT_ENTITY, {
+        project_id: projectId,
+        agent_id: agentId,
+        operation,
+      });
+    const result = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+      project_id: projectId,
+      name: "worker",
+      manifest_ref: "mock.agent",
+      start: false,
+    });
+    expect(result.success).toBe(true);
+    const stopped = AgentSnapshotSchema.parse(result.data);
+    expect(stopped.runtime.availability).toBe("offline");
+    expect(stopped.context.session_count).toBe(0);
+    const agentId = stopped.identity.agent_id;
+    const running = AgentSnapshotSchema.parse(
+      entity(agentId, {
+        type: "start",
+        expected_revision: stopped.specification_revision,
+      }).data,
+    );
+    expect(running.runtime.availability).toBe("online");
+    expect(
+      entity(agentId, { type: "stop", expected_revision: stopped.specification_revision }).error,
+    ).toBe("agent_specification_conflict");
+    expect(entity(agentId, { type: "stop", expected_incarnation_id: "obsolete" }).error).toBe(
+      "agent_incarnation_conflict",
+    );
+    const stoppedAgain = AgentSnapshotSchema.parse(entity(agentId, { type: "stop" }).data);
+    expect(stoppedAgain.specification.desired_state).toBe("stopped");
+    expect(stoppedAgain.runtime.incarnation_id).toBeNull();
+    expect(stoppedAgain.context.active_session_id).toBe(running.context.active_session_id);
+    expect(entity(agentId, { type: "context.list_sessions" }).success).toBe(true);
+    expect(entity(agentId, { type: "context.create_session" }).error).toBe("agent_not_running");
+    const restarted = AgentSnapshotSchema.parse(entity(agentId, { type: "start" }).data);
+    expect(restarted.identity).toEqual(running.identity);
+    expect(restarted.runtime.incarnation_id).not.toBe(running.runtime.incarnation_id);
+    expect(restarted.context.active_session_id).toBe(running.context.active_session_id);
+    expect(
+      state.handleCommand(CommandType.AGENT_ENTITY, {
+        project_id: "other-project",
+        agent_id: agentId,
+        operation: { type: "snapshot" },
+      }).success,
+    ).toBe(false);
+    state.dispose();
+  });
+});
 
 function pyHalf(overrides: Partial<PythonHalfInfo> = {}): PythonHalfInfo {
   return {

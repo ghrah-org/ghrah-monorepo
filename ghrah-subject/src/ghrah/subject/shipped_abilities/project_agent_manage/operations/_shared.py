@@ -51,7 +51,7 @@ def default_cluster_id(services: Any) -> str:
     context = getter()
     if not isinstance(context, dict):
         return ""
-    return str(context.get("cluster_id") or "")
+    return str(context.get("project_id") or "")
 
 
 def project_from_get_receipt(receipt: dict[str, Any]) -> dict[str, Any]:

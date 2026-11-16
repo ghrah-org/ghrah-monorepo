@@ -27,7 +27,8 @@ if [[ "${1:-}" == "--mock" ]]; then
   done
 
   echo "=== Starting Mock Server (scenario: $SCENARIO, ws: $PORT, http: $HTTP_PORT) ==="
-  (cd "$ROOT_DIR/packages/mock-server" && pnpm build >/dev/null && node dist/cli.js --port "$PORT" --http-port "$HTTP_PORT" --scenario "$SCENARIO") &
+  (cd "$ROOT_DIR" && pnpm build:deps)
+  (cd "$ROOT_DIR/packages/mock-server" && exec node dist/cli.js --port "$PORT" --http-port "$HTTP_PORT" --scenario "$SCENARIO") &
   MOCK_PID=$!
 
   echo "=== Starting Observer SPA dev server (WS/HTTP -> mock) ==="

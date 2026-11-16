@@ -252,11 +252,14 @@ class AbilityAccessStore:
         project_id: str,
         operators: frozenset[str],
         runs: Callable[[str], str | None],
+        *,
+        reclaim_stale: bool = False,
     ) -> None:
         self._db = db
         self.project_id = TypeAdapter(TreeId).validate_python(project_id)
         self._operators = operators
         self._runs = runs
+        self._reclaim_stale = reclaim_stale
         self._lock = asyncio.Lock()
         self._startup_context: ContextVar[tuple[str, str, asyncio.Task[Any] | None] | None] = (
             ContextVar("ability_startup", default=None)
@@ -301,6 +304,7 @@ class AbilityAccessStore:
         operators: frozenset[str],
         runs: Callable[[str], str | None],
         read_limit: int = 65536,
+        reclaim_stale: bool = False,
     ) -> AbilityAccessStore:
         """显式初始化项目表；不修改既有上下文 schema 或启动 Agent。"""
         if type(read_limit) is not int or not 1 <= read_limit <= 65536:
@@ -339,7 +343,7 @@ class AbilityAccessStore:
             except BaseException:
                 await db.rollback()
                 raise
-            store = cls(db, project_id, operators, runs)
+            store = cls(db, project_id, operators, runs, reclaim_stale=reclaim_stale)
             store.read_limit = read_limit
             return store
         except BaseException:
@@ -463,8 +467,21 @@ class AbilityAccessStore:
         token = uuid4().hex
         snapshots: dict[str, list[dict[str, Any]]] = {}
         async with self._tx(write=True):
-            if await self._row("ability_registrations", "agent=?", agent):
-                raise AccessError("conflict")
+            row = await self._row("ability_registrations", "agent=?", agent)
+            if row is not None:
+                if not self._reclaim_stale:
+                    raise AccessError("conflict")
+                # 显式回收：宿主进程已重启（本进程内没有该主体的活 Actor），
+                # 上一进程异常退出留下的 pending 占位必须释放，否则永远无法重启。
+                logger.warning(
+                    "ability registration: 回收残留占位 agent=%s state=%s",
+                    agent,
+                    row["state"],
+                )
+                await self._db.execute(
+                    "DELETE FROM ability_registrations WHERE project=? AND agent=?",
+                    (self.project_id, agent),
+                )
             for table, key in (
                 ("ability_agents", "id"),
                 ("ability_grants", "agent"),
@@ -705,6 +722,32 @@ class AbilityAccessStore:
                 (self.project_id, agent),
             ) as cursor:
                 return tuple(row[0] for row in await cursor.fetchall())
+
+    async def tool_bindings(self, actor: AccessIdentity, agent: str) -> tuple[BoundToolNode, ...]:
+        """读取持久工具选择，不要求活跃运行实例，也不重建默认选择。"""
+        self._require_operator(actor)
+        async with self._tx():
+            rows = await (
+                await self._db.execute(
+                    "SELECT name,alias,member,grant_revision,revision FROM ability_tools "
+                    "WHERE project=? AND agent=? ORDER BY name",
+                    (self.project_id, agent),
+                )
+            ).fetchall()
+            return tuple(BoundToolNode.model_validate(dict(row)) for row in rows)
+
+    async def has_admin_changes(self, actor: AccessIdentity, agent: str) -> bool:
+        """从既有审计判断是否经过管理员维护，不保存第二份配置标记。"""
+        self._require_operator(actor)
+        async with self._tx():
+            row = await (
+                await self._db.execute(
+                    "SELECT 1 FROM ability_changes "
+                    "WHERE project=? AND agent=? AND source='admin' LIMIT 1",
+                    (self.project_id, agent),
+                )
+            ).fetchone()
+            return row is not None
 
     async def grants(self, actor: AccessIdentity, agent: str) -> list[GrantRecord]:
         """读取 Agent 的全部获授事实快照；不要求运行实例已存在。

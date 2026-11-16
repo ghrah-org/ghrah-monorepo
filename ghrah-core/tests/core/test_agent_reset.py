@@ -129,7 +129,7 @@ class TestAgentResetReceipt:
         assert result["error"]
         await unit.stop()
 
-    async def test_reset_project_mismatch_replies_error(
+    async def test_payload_scope_is_ignored_instance_scope_wins(
         self, tmp_path: Path, ability_core_config: Callable[..., CoreUnitConfig]
     ) -> None:
         config = _make_unit(tmp_path, ability_core_config)
@@ -137,10 +137,12 @@ class TestAgentResetReceipt:
         await unit.init(FakeCtx())
         await unit.handle_command("spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None)
 
+        # 作用域由实例持有：载荷里的 project_id 由单元在入口统一覆盖，
+        # 不再出现「请求作用域与实例不一致」的失败（绑定即作用域）。
         result = await unit.handle_command(
             "agent_reset", {"project_id": "other", "agent_id": "a" * 32}, None
         )
-        assert result["success"] is False
+        assert result["success"] is True
         await unit.stop()
 
 

@@ -11,6 +11,8 @@ unit.start；本 unit 仅装配服务 + 透传 reconcile 命令。
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from ghrah.subject.config import SubjectConfig
@@ -22,6 +24,7 @@ from ghrah.subject.runtime.service_keys import (
     MANIFEST_STORE,
     PROJECT_MANAGER,
     RECONCILIATION_SERVICE,
+    RECOVERY_START,
     TASK_STORE,
     WORKSPACE_MANAGER,
 )
@@ -29,6 +32,8 @@ from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, Unit
 from ghrah.subject.units._commands import RECONCILE_COMMANDS
 
 __all__ = ["DesiredStateUnit", "RecoveryUnit"]
+
+logger = logging.getLogger(__name__)
 
 
 class DesiredStateUnit(SubjectUnit):
@@ -90,6 +95,7 @@ class RecoveryUnit(SubjectUnit):
         self._config = config
         self._ctx: Any | None = None
         self._service: ReconciliationService | None = None
+        self._startup_task: asyncio.Task[None] | None = None
         self._meta = UnitMeta(
             name="recovery",
             requires=frozenset(
@@ -102,7 +108,7 @@ class RecoveryUnit(SubjectUnit):
                     MANIFEST_STORE,
                 }
             ),
-            provides=frozenset({RECONCILIATION_SERVICE}),
+            provides=frozenset({RECONCILIATION_SERVICE, RECOVERY_START}),
             routes=RouteSpec(commands=RECONCILE_COMMANDS),
         )
 
@@ -136,13 +142,27 @@ class RecoveryUnit(SubjectUnit):
             config=self._config.recovery,
         )
         ctx.provide(RECONCILIATION_SERVICE.name, self._service)
+        ctx.provide(RECOVERY_START.name, self.start_recovery)
 
-    async def start(self) -> None:
-        # DesiredStateStore 由 DesiredStateUnit 管理；reconcile 由 engine.start 触发。
-        pass
+    def start_recovery(self) -> None:
+        """全部单元与插件就绪后启动一次后台恢复。"""
+        if self._startup_task is None:
+            self._startup_task = asyncio.create_task(
+                self._reconcile_on_start(), name="subject-reconcile-on-start"
+            )
+
+    async def _reconcile_on_start(self) -> None:
+        try:
+            await self.service.reconcile()
+        except Exception:
+            logger.exception("reconcile on start failed (non-fatal)")
 
     async def stop(self) -> None:
-        pass
+        task = self._startup_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._startup_task = None
 
     async def handle_command(
         self,

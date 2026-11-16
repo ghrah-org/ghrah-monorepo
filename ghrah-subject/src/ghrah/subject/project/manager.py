@@ -41,6 +41,7 @@ from ghrah.protocol.types import (
     ProjectListPayload,
     ProjectRemoveAgentPayload,
     ProjectSetRecoveryPayload,
+    ProjectTransitionPayload,
     ProjectUnlinkTaskPayload,
     ProjectUpdatePayload,
     RecoveryAction,
@@ -264,7 +265,7 @@ class ProjectManager:
         try:
             project_id = str(payload.get("project_id") or "")
             if command in _LOCKED_PROJECT_MUTATIONS and project_id:
-                async with self._lifecycle_lock(project_id):
+                async with self.lifecycle_lock(project_id):
                     return await handler(self, payload)
             return await handler(self, payload)
         except ValidationError as e:
@@ -317,7 +318,6 @@ class ProjectManager:
                 "project_id": record.project_id,
                 "agent_name": agent.name,
                 "agent_id": agent.agent_id,
-                "cluster_id": agent.cluster_id,
             },
         )
 
@@ -329,7 +329,8 @@ class ProjectManager:
         if room_store:
             self._room_store = resource
 
-    def _lifecycle_lock(self, project_id: str) -> asyncio.Lock:
+    def lifecycle_lock(self, project_id: str) -> asyncio.Lock:
+        """串行化项目目录写入与归档、恢复、删除。"""
         lock = self._lifecycle_locks.get(project_id)
         if lock is None:
             lock = asyncio.Lock()
@@ -359,7 +360,7 @@ class ProjectManager:
 
     async def _shutdown_project_clusters(self, record: ProjectRecord) -> str | None:
         failures: list[str] = []
-        for cluster_id in record.cluster_ids:
+        for cluster_id in (record.project_id,):
             try:
                 if self._cluster_transport.has_cluster(cluster_id):
                     await self._cluster_transport.shutdown_cluster(cluster_id)
@@ -424,12 +425,10 @@ class ProjectManager:
         return canonical_file_locator(value)
 
     def _validate_agent(self, agent: AgentSpec, project: ProjectRecord) -> None:
-        """agent_id/name 在 Project 内唯一 + cluster 归属/授权校验。"""
+        """agent_id/name 在 Project 内唯一 + 授权校验。"""
         from ghrah.ability.access.identity import validate_agent_id
 
         validate_agent_id(agent.agent_id)
-        if agent.cluster_id not in project.cluster_ids:
-            raise ValueError(f"agent {agent.name!r} cluster_id {agent.cluster_id!r} not in project")
         for existing in project.agents:
             if agent.agent_id and existing.agent_id == agent.agent_id:
                 raise StableError(
@@ -489,7 +488,7 @@ class ProjectManager:
         root_locator = self._root_locator_for(record.project_id, p.project_root_locator)
         project_paths = ProjectPaths.from_locator(root_locator)
         record = record.model_copy(update={"project_root_locator": root_locator})
-        cluster_id = uuid4().hex
+        cluster_id = record.project_id
         await self._check_create_paths(
             root_locator, [str(w["locator"]) for w in normalized_workspaces]
         )
@@ -521,7 +520,6 @@ class ProjectManager:
             WorkspaceMount.validate_single_default(mounts)
             record = record.model_copy(
                 update={
-                    "cluster_ids": [cluster_id],
                     "workspaces": mounts,
                     "recovery": RecoverySpec(on_restart=RecoveryAction(p.recovery)),
                     "shell_cwd": shell_cwd,
@@ -667,7 +665,7 @@ class ProjectManager:
 
     async def _handle_archive(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectLifecyclePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(p.project_id, include_archived=True)
             if existing is None:
                 return _err(f"project not found: {p.project_id}")
@@ -698,7 +696,7 @@ class ProjectManager:
 
     async def _handle_restore(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectLifecyclePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(p.project_id, include_archived=True)
             if existing is None:
                 return _err(f"project not found: {p.project_id}")
@@ -732,7 +730,7 @@ class ProjectManager:
 
     async def _handle_delete(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectDeletePayload.model_validate(payload)
-        async with self._lifecycle_lock(p.project_id):
+        async with self.lifecycle_lock(p.project_id):
             existing = await self._store.get(
                 p.project_id, include_archived=True, include_deleted=True
             )
@@ -751,7 +749,7 @@ class ProjectManager:
             except Exception as exc:  # noqa: BLE001
                 return _err(f"project_room_count_failed: {exc}")
             if room_count and not p.cascade_rooms:
-                return _err("project_has_rooms")
+                return _err_code("project_has_rooms", str(room_count))
             shutdown_error = await self._shutdown_project_clusters(existing)
             if shutdown_error is not None:
                 return _err_code("project_shutdown_failed", str(shutdown_error))
@@ -788,7 +786,10 @@ class ProjectManager:
     async def _handle_add_agent(
         self, payload: dict[str, Any], *, validate_model: bool = False
     ) -> dict[str, Any]:
-        p = ProjectAddAgentPayload.model_validate(payload)
+        agent_payload = dict(payload.get("agent") or {})
+        # 集群概念已退役：旧客户端仍可能带上 cluster_id，入站直接忽略。
+        agent_payload.pop("cluster_id", None)
+        p = ProjectAddAgentPayload.model_validate({**payload, "agent": agent_payload})
         existing, error = await self._get_active_project(p.project_id)
         if error is not None:
             return error
@@ -796,7 +797,7 @@ class ProjectManager:
         expected = p.expected_version if p.expected_version is not None else existing.version
         agent = AgentSpec(
             name=p.agent.name,
-            cluster_id=p.agent.cluster_id,
+            # 集群概念已退役：忽略客户端传来的 cluster_id，统一归一到项目自身的。
             agent_id=p.agent.agent_id or uuid4().hex,
             manifest_ref=p.agent.manifest_ref,
             instance_manifest_path=(
@@ -908,7 +909,7 @@ class ProjectManager:
         self, project_id: str, agent_id: str, agent_name: str
     ) -> tuple[str | None, str | None]:
         """在生命周期锁内重读权威；已停止或移除的实体不会被旧快照拉起。"""
-        async with self._lifecycle_lock(project_id):
+        async with self.lifecycle_lock(project_id):
             project, error = await self._get_active_project(project_id)
             if error or project is None or project.status != ProjectStatus.ACTIVE:
                 return "skipped", None
@@ -926,7 +927,7 @@ class ProjectManager:
             if not agent.agent_id and (start_error := self._agent_start_error(agent)):
                 return None, str(start_error)
             handle = await self._cluster_transport.ensure_cluster(
-                agent.cluster_id,
+                project_id,
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
@@ -952,12 +953,12 @@ class ProjectManager:
         """启动 desired Agent；失败保留定义并返回可诊断 pending 原因。"""
         try:
             handle = await self._cluster_transport.ensure_cluster(
-                agent.cluster_id,
+                project_id,
                 project_id=project_id,
                 project_root_locator=project_root_locator,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("add_agent: ensure_cluster %s failed: %s", agent.cluster_id, exc)
+            logger.warning("add_agent: ensure_cluster %s failed: %s", project_id, exc)
             return str(exc)
         _, error = await self._spawn_agent_spec(
             handle, agent, project_id, validate_model=validate_model
@@ -972,7 +973,6 @@ class ProjectManager:
         spawn_payload = SpawnAgentPayload(
             validate_model=validate_model or bool(agent.endpoint_name),
             project_id=project_id,
-            cluster_id=agent.cluster_id,
             config=AgentConfigPayload(
                 name=agent.name,
                 agent_id=agent.agent_id,
@@ -1016,7 +1016,7 @@ class ProjectManager:
             def is_target(candidate: AgentSpec) -> bool:
                 if target.agent_id:
                     return candidate.agent_id == target.agent_id
-                return candidate.name == target.name and candidate.cluster_id == target.cluster_id
+                return candidate.name == target.name
 
             return r.model_copy(update={"agents": [a for a in r.agents if not is_target(a)]})
 
@@ -1025,9 +1025,9 @@ class ProjectManager:
         # Agent。cluster 未挂载（stopped/archived 后）视为无 runtime。
         # 运行侧已无该 agent（shutdown 竞态/已被终止）视为已终止，继续删除。
         handle = None
-        if self._cluster_transport.has_cluster(target.cluster_id):
+        if self._cluster_transport.has_cluster(existing.project_id):
             try:
-                candidate_handle = self._cluster_transport.get_handle(target.cluster_id)
+                candidate_handle = self._cluster_transport.get_handle(existing.project_id)
                 if candidate_handle.is_connected:
                     handle = candidate_handle
             except KeyError:
@@ -1145,25 +1145,29 @@ class ProjectManager:
         shutdown_clusters: bool = False,
         reinit_clusters: bool = False,
     ) -> dict[str, Any]:
-        p = ProjectIdPayload.model_validate(payload)
+        p = ProjectTransitionPayload.model_validate(_strip_envelope(payload))
         existing, error = await self._get_active_project(p.project_id)
         if error is not None:
             return error
         assert existing is not None
+        if p.expected_version is not None:
+            conflict = self._check_expected_version(existing, p.expected_version)
+            if conflict is not None:
+                return conflict
         if not can_transition(existing.status, target):
             return _err(f"illegal transition: {existing.status.value} -> {target.value}")
         updated = await self._store.update(
             p.project_id, existing.version, lambda r: r.model_copy(update={"status": target})
         )
         if shutdown_clusters:
-            for cluster_id in existing.cluster_ids:
+            for cluster_id in (existing.project_id,):
                 try:
                     if self._cluster_transport.has_cluster(cluster_id):
                         await self._cluster_transport.shutdown_cluster(cluster_id)
                 except Exception:  # noqa: BLE001
                     logger.warning("status: shutdown cluster %s failed", cluster_id)
         if reinit_clusters:
-            for cluster_id in existing.cluster_ids:
+            for cluster_id in (existing.project_id,):
                 try:
                     await self._cluster_transport.ensure_cluster(
                         cluster_id,
@@ -1191,7 +1195,7 @@ class ProjectManager:
         root_locator = self._root_locator_for(record.project_id)
         project_paths = ProjectPaths.from_locator(root_locator)
         record = record.model_copy(update={"project_root_locator": root_locator})
-        cluster_id = "default"
+        cluster_id = record.project_id
         await self._check_create_paths(root_locator, [locator])
         receipt = None
         registered_id: str | None = None
@@ -1211,7 +1215,7 @@ class ProjectManager:
                 role="default",
                 default_for_agents=True,
             )
-            record = record.model_copy(update={"cluster_ids": [cluster_id], "workspaces": [mount]})
+            record = record.model_copy(update={"workspaces": [mount]})
             await self._store.upsert(record)
             stored = True
             cluster_attempted = True
@@ -1246,14 +1250,14 @@ class ProjectManager:
             logger.exception("bootstrap project_created event delivery failed")
         return record
 
-    async def adopt_existing_agents(self, project_id: str, cluster_id: str) -> list[AgentSpec]:
-        """经 ClusterHandle.list_agents 从 Core 取现有 agent，构造 AgentSpec 并加入 project。"""
+    async def adopt_existing_agents(self, project_id: str) -> list[AgentSpec]:
+        """经运行时句柄从 Core 取现有 agent，构造 AgentSpec 并加入 project。"""
         existing, error = await self._get_active_project(project_id)
         if error is not None:
             raise ValueError(str(error["error"]))
         assert existing is not None
         handle = await self._cluster_transport.ensure_cluster(
-            cluster_id,
+            existing.project_id,
             project_id=existing.project_id,
             project_root_locator=existing.project_root_locator,
         )
@@ -1270,7 +1274,6 @@ class ProjectManager:
                 continue
             spec = AgentSpec(
                 name=name,
-                cluster_id=cluster_id,
                 agent_id=(str(info.get("agent_id")) if info.get("agent_id") else uuid4().hex),
                 manifest_ref="",
                 instance_manifest_path="",

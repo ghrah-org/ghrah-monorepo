@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ghrah.protocol.payloads.content import InputContentBlock
 from ghrah.protocol.payloads.model import EndpointReferenceModel
 
 # ─── 命令载荷模型 ───
@@ -36,7 +37,6 @@ class SpawnAgentPayload(EndpointReferenceModel):
     """spawn_agent 命令载荷。"""
 
     project_id: str
-    cluster_id: str = ""
     config: AgentConfigPayload
     validate_model: bool = False
     abilities: list[AbilityDefinitionPayload] | None = None
@@ -63,12 +63,19 @@ class AgentResetPayload(BaseModel):
 
 
 class SendMessagePayload(BaseModel):
-    """send_message 命令载荷。"""
+    """send_message 命令载荷。
+
+    ``content`` 是纯文本正文；``content_blocks`` 是可选的结构化内容块
+    （text / image / audio / file / video）。两者并存：纯文本消息只带 ``content``；
+    多模态消息可让 ``content`` 为空字符串，由 ``content_blocks`` 承载内容。
+    块的大小、MIME 与总量校验属于 Subject 入口策略，不在协议层。
+    """
 
     project_id: str
     agent_id: str
     target: str
     content: str
+    content_blocks: list[InputContentBlock] | None = None
     sender: str = "user"
     timeout: float | None = None
     metadata: dict[str, Any] | None = None
@@ -161,7 +168,6 @@ class AgentSpawnedPayload(BaseModel):
     """agent_spawned 事件载荷。"""
 
     project_id: str = ""
-    cluster_id: str = ""
     name: str
     agent_id: str = ""
     incarnation_id: str = ""
@@ -173,7 +179,6 @@ class AgentTerminatedPayload(BaseModel):
     """agent_terminated 事件载荷。"""
 
     project_id: str = ""
-    cluster_id: str = ""
     name: str
     agent_id: str = ""
     incarnation_id: str = ""
@@ -184,7 +189,6 @@ class AgentResponsePayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     sender: str
     recipient: str
     content: str
@@ -202,7 +206,6 @@ class ActionChainUpdatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     node: dict[str, Any] = Field(default_factory=dict)
     branch: dict[str, Any] | None = None
@@ -213,7 +216,6 @@ class AgentErrorPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     error: str
 
@@ -233,7 +235,6 @@ class AbilityResultPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     request_id: str
     agent_name: str
     ability_name: str
@@ -260,7 +261,6 @@ class HITLRequestPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     promise_id: str
     agent_name: str
     ability_name: str
@@ -286,7 +286,6 @@ class ContextUsageUpdatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     phase: str
     """发布相位："pre_call"（发送前，占用锚点口径）/ "post_call"（响应后，真实值口径）"""
@@ -358,7 +357,6 @@ class HITLResolvedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     promise_id: str
     agent_name: str
     ability_name: str
@@ -395,45 +393,3 @@ class AgentCompactContextPayload(BaseModel):
     project_id: str
     agent_id: str
     agent_name: str
-    cluster_id: str = ""
-
-
-class InitClusterPayload(BaseModel):
-    """init_cluster 命令载荷。"""
-
-    cluster_id: str
-    config: dict[str, Any] = Field(default_factory=dict)
-
-
-class ShutdownClusterPayload(BaseModel):
-    """shutdown_cluster 命令载荷。"""
-
-    cluster_id: str
-    config: dict[str, Any] = Field(default_factory=dict)
-
-
-class ClusterStatusPayload(BaseModel):
-    """cluster_status 命令载荷。"""
-
-    cluster_id: str
-
-
-class ListClustersPayload(BaseModel):
-    """list_clusters 命令载荷（空载荷）。"""
-
-    pass
-
-
-class ClusterInfoPayload(BaseModel):
-    """单个集群的信息（list_clusters 结果项）。"""
-
-    cluster_id: str
-    active_agents: int
-    status: str
-    bound: bool
-
-
-class ListClustersResultPayload(BaseModel):
-    """list_clusters 命令结果载荷。"""
-
-    clusters: list[ClusterInfoPayload]

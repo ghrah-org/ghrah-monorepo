@@ -1131,29 +1131,6 @@ async def test_builtin_approval_is_identical_across_real_entrypoints(
         await db.close()
 
 
-async def test_cross_cluster_same_uuid_is_rejected_before_authorization_changes(tmp_path):
-    from ghrah.ability.access import AccessIdentity
-
-    first, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
-    second, other = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
-    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
-    try:
-        assert (await _spawn(first, _manifest_payload("consumer", "w0.consumer")))["success"]
-        before = await db.grants(actor, _agent_id("consumer"))
-        payload = _manifest_payload("consumer", "w0.fs-consumer")
-        payload["config"]["name"] = "different-display"
-        assert not (await _spawn(second, payload))["success"]
-        assert await db.grants(actor, _agent_id("consumer")) == before
-        await first.supervisor.terminate_agent("consumer")
-        result = await second.handle_command("spawn_agent", payload, None)
-        assert result["success"], result
-    finally:
-        await first.stop()
-        await second.stop()
-        await other.close()
-        await db.close()
-
-
 async def test_failed_resume_preserves_prior_checkpoint_and_authorization(tmp_path, monkeypatch):
     from dataclasses import replace
 
@@ -1196,41 +1173,4 @@ async def test_failed_resume_preserves_prior_checkpoint_and_authorization(tmp_pa
         assert not unit.supervisor._registry.exists("consumer")
     finally:
         await unit.stop()
-        await db.close()
-
-
-async def test_real_same_display_names_in_two_clusters_keep_distinct_grants(tmp_path):
-    from ghrah.protocol.ability_tree import RevokeAbilityRequest
-
-    from ghrah.ability.access import AccessIdentity
-
-    first, db = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
-    second, other = await _authorized_builtin_unit(tmp_path, manifest_store=_consumer_store())
-    actor = AccessIdentity("default", "deployment", "control", True, "deployment")
-    try:
-        pa, pb = (
-            _manifest_payload("worker", "w0.fs-consumer"),
-            _manifest_payload("worker", "w0.consumer"),
-        )
-        pa["config"]["agent_id"], pb["config"]["agent_id"] = "a" * 32, "b" * 32
-        assert (await _spawn(first, pa))["success"]
-        assert (await _spawn(second, pb))["success"]
-        before = await db.grants(actor, "a" * 32)
-        revision = await other.agent_revision(actor, "b" * 32)
-        await other.write_revoke(
-            actor, "b" * 32, RevokeAbilityRequest(alias="fs", expected_revision=revision)
-        )
-        assert await db.grants(actor, "a" * 32) == before
-        handle = await first.supervisor.get_agent_handle("worker")
-        target = tmp_path / "workspace" / "kept.txt"
-        target.parent.mkdir(exist_ok=True)
-        target.write_text("a-only")
-        tool = handle._abilities["read_file"]
-        call, services = handle._build_ability_call(tool, {"file_path": str(target)}, {})
-        result = await handle._ability_executor.execute_ability(tool, call, services)
-        assert result.outcome is ActionOutcome.SUCCESS and result.data["content"] == "a-only"
-    finally:
-        await first.stop()
-        await second.stop()
-        await other.close()
         await db.close()

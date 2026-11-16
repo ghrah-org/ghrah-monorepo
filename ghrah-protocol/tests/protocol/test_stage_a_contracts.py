@@ -76,7 +76,6 @@ def test_project_agent_runtime_fields_are_part_of_wire_contract() -> None:
             {
                 "agent_id": "a1",
                 "name": "architect",
-                "cluster_id": "c1",
                 "runtime_status": "error",
                 "runtime_error": "transport down",
             }
@@ -123,4 +122,3 @@ def test_legacy_agent_event_is_accepted_without_guessing_scope() -> None:
     event = ActionChainUpdatedPayload(agent_name="legacy", node={})
     assert event.project_id == ""
     assert event.agent_id == ""
-    assert event.cluster_id == ""

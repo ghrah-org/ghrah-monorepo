@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 
 import {
   AbilityAdminViewSchema,
@@ -8,14 +9,34 @@ import {
   AbilityTreeChangeResultSchema,
   AbilityTreeViewSchema,
   ContentReadResultSchema,
+  AgentconfEndpointListViewSchema,
+  AgentAdminViewSchema,
+  AgentCreateRequestSchema,
+  AgentDeletedViewSchema,
+  AgentDesiredStateRequestSchema,
+  AgentListViewSchema,
+  AgentSnapshotSchema,
+  CommandType,
+  EventType,
+  ProjectCreatePayloadSchema,
+  ProjectDeletedViewSchema,
+  ProjectInfoPayloadSchema,
+  ProjectLifecycleRequestSchema,
+  ProjectListPayloadSchema,
+  ProjectListResultPayloadSchema,
+  ProjectTransitionRequestSchema,
+  ProjectUpdateRequestSchema,
   type AbilityPackageGroupsView,
   type AbilityTreeView,
   type MemberAxes,
+  type AbilityChangeView,
 } from "@ghrah/protocol";
+import type { CommandOutcome, MockState } from "./state.js";
 
 export interface MockHttpServerOptions {
   port: number;
   host?: string;
+  state?: MockState;
   projectId?: string;
   agentId?: string;
   /** 写端点固定返回 409 冲突，供前端冲突分支联调。 */
@@ -80,6 +101,18 @@ interface AgentRecord {
   tree: AbilityTreeView;
   axes: MemberAxes[];
   requiresRespawn: boolean;
+  changes: AbilityChangeView[];
+  runtimeIncarnation: string | null;
+  runtimeTools: string[] | null;
+}
+
+function syncRuntime(record: AgentRecord, incarnation: string | null): void {
+  record.tree.run_id = incarnation ?? "";
+  if (record.runtimeIncarnation === incarnation) return;
+  record.runtimeIncarnation = incarnation;
+  record.runtimeTools =
+    incarnation === null ? null : record.tree.bound_tools.map((tool) => tool.name);
+  if (incarnation !== null) record.requiresRespawn = false;
 }
 
 function agentKey(projectId: string, agentId: string): string {
@@ -96,16 +129,16 @@ function defaultAxes(tree: AbilityTreeView): MemberAxes[] {
   );
 }
 
-function adminView(record: AgentRecord) {
+function adminView(record: AgentRecord, running = false) {
   const tree = record.tree;
   return AbilityAdminViewSchema.parse({
     format: "ghrah.ability-control.admin.v1",
     project_id: tree.project_id,
     agent_id: tree.agent_id,
     revision: tree.revision,
-    run_id: tree.run_id,
+    run_id: tree.run_id || null,
     lifecycle: {
-      state: "stopped",
+      state: running ? "running" : "stopped",
       requires_respawn: record.requiresRespawn,
       pending_reasons: record.requiresRespawn ? ["next start"] : [],
     },
@@ -138,10 +171,21 @@ function adminView(record: AgentRecord) {
           record.axes.find((axis) => axis.member === `operations/${tool.member}`)?.available !==
           false,
       })),
-      current_runtime: tree.bound_tools.map((tool) => tool.name),
-      pending_respawn: { added: [], removed: [] },
+      current_runtime: record.runtimeTools,
+      pending_respawn: {
+        added:
+          record.runtimeTools === null
+            ? []
+            : tree.bound_tools
+                .filter((tool) => !record.runtimeTools!.includes(tool.name))
+                .map((tool) => tool.name),
+        removed:
+          record.runtimeTools?.filter(
+            (name) => !tree.bound_tools.some((tool) => tool.name === name),
+          ) ?? [],
+      },
     },
-    changes_cursor: 0,
+    changes_cursor: record.changes.length,
   });
 }
 
@@ -156,7 +200,7 @@ function statusView(projectId: string, packagesRead: boolean) {
     features: {
       tree: true,
       grants_write: true,
-      versions_read: true,
+      versions_read: false,
       versions_write: false,
       packages_read: packagesRead,
       packages_install: false,
@@ -278,8 +322,44 @@ function packageGroupsView(
 
 function writeCors(response: ServerResponse): void {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+}
+
+function projectErrorStatus(message: string): { code: string; status: number } {
+  if (message.startsWith("project not found")) return { code: "not_found", status: 404 };
+  if (
+    message === "project_version_conflict" ||
+    message.includes("version conflict") ||
+    message.includes("modified:")
+  ) {
+    return { code: "conflict", status: 409 };
+  }
+  if (message === "resource_archived") return { code: "resource_archived", status: 409 };
+  if (message === "project_has_rooms") return { code: "project_has_rooms", status: 409 };
+  if (message.startsWith("illegal transition")) {
+    return { code: "illegal_transition", status: 409 };
+  }
+  return { code: "invalid_request", status: 400 };
+}
+
+/** Project REST 错误体：与真实 Subject 的 wire 形状一致（detail 只在需要时出现）。 */
+function writeProjectError(response: ServerResponse, outcome: CommandOutcome): void {
+  const message = outcome.error ?? "invalid_request";
+  const { code, status } = projectErrorStatus(message);
+  const detail: Record<string, unknown> = {};
+  const current = /current (\d+)/.exec(outcome.errorDetail ?? message);
+  if (current) detail.current_version = Number(current[1]);
+  if (message === "project_has_rooms" && outcome.errorDetail && /^\d+$/.test(outcome.errorDetail)) {
+    detail.room_count = Number(outcome.errorDetail);
+  }
+  json(response, status, {
+    error: {
+      code,
+      message: outcome.errorDetail ?? message,
+      detail: Object.keys(detail).length > 0 ? detail : undefined,
+    },
+  });
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -337,7 +417,9 @@ function bump(record: AgentRecord): void {
 }
 
 function applyGrant(record: AgentRecord, alias: string, body: unknown): string | null {
-  const ability = record.tree.abilities.find((item) => item.alias === alias);
+  const ability = defaultTree(record.tree.project_id, record.tree.agent_id).abilities.find(
+    (item) => item.alias === alias,
+  );
   if (!ability || !isRecord(body)) return "invalid_change";
   const requested = Array.isArray(body.members)
     ? body.members.filter((item) => typeof item === "string")
@@ -359,14 +441,13 @@ function applyGrant(record: AgentRecord, alias: string, body: unknown): string |
   }
   record.tree = {
     ...record.tree,
-    abilities: record.tree.abilities.map((item) =>
-      item.alias === alias
-        ? {
-            ...item,
-            operations: item.operations.filter((operation) => requested.includes(operation.key)),
-          }
-        : item,
-    ),
+    abilities: [
+      ...record.tree.abilities.filter((item) => item.alias !== alias),
+      {
+        ...ability,
+        operations: ability.operations.filter((operation) => requested.includes(operation.key)),
+      },
+    ],
     bound_tools: record.tree.bound_tools.filter(
       (tool) => tool.alias !== alias || requested.includes(tool.member),
     ),
@@ -434,7 +515,10 @@ function applyUnbind(record: AgentRecord, toolName: string): void {
   bump(record);
 }
 
+const PROJECT_RESOURCE =
+  /^\/api\/v1\/projects(?:\/([^/]+))?(?:\/(archive|restore|pause|resume|stop))?$/;
 const PROJECT_AGENT = /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)(\/.*)?$/;
+const AGENT_RESOURCE = /^\/api\/v1\/projects\/([^/]+)\/agents(?:\/([^/]+))?(\/desired-state)?$/;
 const CONTENT =
   /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/ability-tree\/abilities\/([^/]+)\/content\/(.+)$/;
 
@@ -450,9 +534,54 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
     const existing = agents.get(key);
     if (existing) return existing;
     const tree = defaultTree(pid, aid);
-    const created = { tree, axes: defaultAxes(tree), requiresRespawn: false };
+    const created: AgentRecord = {
+      tree,
+      axes: defaultAxes(tree),
+      requiresRespawn: false,
+      changes: [],
+      runtimeIncarnation: null,
+      runtimeTools: null,
+    };
     agents.set(key, created);
     return created;
+  }
+
+  function agentView(pid: string, aid: string, effective: "next_start" | "stored" | null = null) {
+    const result = options.state!.handleCommand(CommandType.AGENT_ENTITY, {
+      project_id: pid,
+      agent_id: aid,
+      operation: { type: "snapshot" },
+    });
+    const snapshot = AgentSnapshotSchema.parse(result.data);
+    const spec = snapshot.specification;
+    const record = recordFor(pid, aid);
+    syncRuntime(record, snapshot.runtime.incarnation_id);
+    return AgentAdminViewSchema.parse({
+      project_id: pid,
+      specification: {
+        agent_id: aid,
+        name: spec.name,
+        endpoint_name: spec.endpoint_name ?? null,
+        system_prompt: spec.system_prompt,
+        prompt: {
+          digest: `sha256:${createHash("sha256").update(spec.system_prompt).digest("hex")}`,
+          size_bytes: Buffer.byteLength(spec.system_prompt),
+        },
+        desired_state: spec.desired_state,
+        manifest_ref: spec.manifest_ref,
+        runtime_status: spec.runtime_status,
+        runtime_error: spec.runtime_error,
+        project_version: snapshot.specification_revision,
+      },
+      runtime: snapshot.runtime,
+      ability: {
+        revision: record.tree.revision,
+        state: snapshot.runtime.availability === "online" ? "running" : "stopped",
+        requires_respawn: record.requiresRespawn,
+      },
+      effective,
+      spec_overrides_template: Boolean(spec.manifest_ref) && effective === "next_start",
+    });
   }
 
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -465,6 +594,346 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
       response.writeHead(204);
       response.end();
       return;
+    }
+
+    if (method === "GET" && path === "/health") {
+      json(response, 200, { status: "ok" });
+      return;
+    }
+    const projectResource = PROJECT_RESOURCE.exec(path);
+    if (projectResource) {
+      const state = options.state;
+      if (!state) {
+        json(response, 503, {
+          error: { code: "capability_unavailable", message: "shared MockState required" },
+        });
+        return;
+      }
+      const [, pid, action] = projectResource;
+      if (method === "GET" && !pid) {
+        const archived = url.searchParams.get("archived") === "true";
+        const status = url.searchParams.get("status") ?? undefined;
+        const parsed = ProjectListPayloadSchema.safeParse({ archived, status });
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid list query" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(
+          CommandType.PROJECT_LIST,
+          parsed.data as Record<string, unknown>,
+        );
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(response, 200, ProjectListResultPayloadSchema.parse(outcome.data));
+        return;
+      }
+      if (method === "POST" && !pid) {
+        const parsed = ProjectCreatePayloadSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project create payload" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(
+          CommandType.PROJECT_CREATE,
+          parsed.data as Record<string, unknown>,
+        );
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        const project = ProjectInfoPayloadSchema.parse(
+          (outcome.data as { project: unknown }).project,
+        );
+        response.setHeader("Location", `/api/v1/projects/${project.project_id}`);
+        json(response, 201, project);
+        return;
+      }
+      if (!pid) {
+        json(response, 405, { error: { code: "invalid_request", message: "method not allowed" } });
+        return;
+      }
+      if (method === "GET" && !action) {
+        const outcome = state.handleCommand(CommandType.PROJECT_GET, { project_id: pid });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      if (method === "PATCH" && !action) {
+        const parsed = ProjectUpdateRequestSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project update payload" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(CommandType.PROJECT_UPDATE, {
+          project_id: pid,
+          ...parsed.data,
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      if (method === "DELETE" && !action) {
+        const expected = url.searchParams.get("expected_version");
+        if (expected === null || !/^\d+$/.test(expected)) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "expected_version required" },
+          });
+          return;
+        }
+        const outcome = state.handleCommand(CommandType.PROJECT_DELETE, {
+          project_id: pid,
+          expected_version: Number(expected),
+          cascade_rooms: url.searchParams.get("cascade_rooms") === "true",
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(response, 200, ProjectDeletedViewSchema.parse(outcome.data));
+        return;
+      }
+      if (method === "POST" && pid && action) {
+        const parsed =
+          action === "archive" || action === "restore"
+            ? ProjectLifecycleRequestSchema.safeParse(await readBody(request))
+            : ProjectTransitionRequestSchema.safeParse(await readBody(request));
+        if (!parsed.success) {
+          json(response, 400, {
+            error: { code: "invalid_request", message: "invalid project lifecycle payload" },
+          });
+          return;
+        }
+        const command =
+          action === "archive"
+            ? CommandType.PROJECT_ARCHIVE
+            : action === "restore"
+              ? CommandType.PROJECT_RESTORE
+              : action === "pause"
+                ? CommandType.PROJECT_PAUSE
+                : action === "resume"
+                  ? CommandType.PROJECT_RESUME
+                  : CommandType.PROJECT_STOP;
+        const outcome = state.handleCommand(command, {
+          project_id: pid,
+          ...parsed.data,
+        });
+        if (!outcome.success) {
+          writeProjectError(response, outcome);
+          return;
+        }
+        json(
+          response,
+          200,
+          ProjectInfoPayloadSchema.parse((outcome.data as { project: unknown }).project),
+        );
+        return;
+      }
+      json(response, 405, { error: { code: "invalid_request", message: "method not allowed" } });
+      return;
+    }
+    if (method === "GET" && path === "/api/v1/agentconf/endpoints") {
+      json(
+        response,
+        200,
+        AgentconfEndpointListViewSchema.parse({
+          endpoints: [
+            {
+              id: "mock-endpoint",
+              name: "mock-model",
+              provider_id: "mock-provider",
+              provider_name: "mock",
+              model_name: "mock-model",
+              model_type: "llm",
+              api_format: "openai",
+              revision: 1,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            },
+          ].filter(
+            (item) =>
+              !url.searchParams.has("model_type") ||
+              item.model_type === url.searchParams.get("model_type"),
+          ),
+        }),
+      );
+      return;
+    }
+    const resource = AGENT_RESOURCE.exec(path);
+    if (resource) {
+      const state = options.state;
+      if (!state) {
+        json(response, 503, {
+          error: { code: "capability_unavailable", message: "shared MockState required" },
+        });
+        return;
+      }
+      const [, pid, aid, action] = resource;
+      const project = state.projects.get(pid);
+      const spec = project?.agents.find((item) => item.agent_id === aid);
+      if (!project || project.archived_at || (aid && !spec)) {
+        json(response, 404, { error: { code: "not_found", message: "unknown project or Agent" } });
+        return;
+      }
+      if (method === "GET" && !action) {
+        if (aid) json(response, 200, agentView(pid, aid));
+        else
+          json(
+            response,
+            200,
+            AgentListViewSchema.parse({
+              project_id: pid,
+              agents: project.agents.map((agent) => {
+                const view = agentView(pid, agent.agent_id!);
+                const { system_prompt: systemPrompt, ...summary } = view.specification;
+                void systemPrompt;
+                return {
+                  project_id: pid,
+                  specification: summary,
+                  runtime: view.runtime,
+                  ability: view.ability,
+                  ability_unavailable: view.ability_unavailable,
+                };
+              }),
+            }),
+          );
+        return;
+      }
+      const body = method === "DELETE" ? undefined : await readBody(request);
+      let outcome: CommandOutcome | undefined;
+      let targetId = aid;
+      if (method === "POST" && !aid) {
+        const parsed = AgentCreateRequestSchema.safeParse(body);
+        if (
+          parsed.success &&
+          (!parsed.data.endpoint_name || parsed.data.endpoint_name === "mock-model")
+        ) {
+          const change = parsed.data;
+          outcome = state.handleCommand(CommandType.PROJECT_ADD_AGENT, {
+            project_id: pid,
+            expected_version: change.expected_revision,
+            agent: {
+              name: change.name,
+              endpoint_name: change.endpoint_name,
+              system_prompt: change.system_prompt,
+              desired_state: change.desired_state,
+            },
+          });
+          if (outcome.success) targetId = (outcome.data as { agent_id: string }).agent_id;
+        } else if (parsed.success) {
+          outcome = { success: false, error: "model_configuration_invalid" };
+        }
+      } else if (method === "PATCH" && aid && !action) {
+        outcome = isRecord(body)
+          ? state.patchAgentSpecification(pid, aid, body)
+          : { success: false, error: "invalid_request" };
+      } else if (method === "PUT" && aid && action) {
+        const parsed = AgentDesiredStateRequestSchema.safeParse(body);
+        if (parsed.success)
+          outcome = state.handleCommand(CommandType.AGENT_ENTITY, {
+            project_id: pid,
+            agent_id: aid,
+            operation: {
+              type: parsed.data.state === "running" ? "start" : "stop",
+              expected_revision: parsed.data.expected_revision,
+            },
+          });
+      } else if (method === "DELETE" && aid && !action) {
+        const revision = expectedRevision(method, url, body);
+        if (revision !== undefined)
+          outcome = state.handleCommand(CommandType.PROJECT_REMOVE_AGENT, {
+            project_id: pid,
+            agent_id: aid,
+            agent_name: spec!.name,
+            expected_version: revision,
+          });
+      } else {
+        json(response, 405, { error: { code: "invalid_request", message: "method not allowed" } });
+        return;
+      }
+      if (!outcome?.success) {
+        const code =
+          outcome?.error === "agent_specification_conflict"
+            ? "conflict"
+            : outcome?.error?.startsWith("invalid payload:")
+              ? "invalid_request"
+              : (outcome?.error ?? "invalid_request");
+        json(
+          response,
+          code === "conflict" ||
+            code === "agent_name_exists" ||
+            code === "agent_manifest_required" ||
+            code === "project_not_active"
+            ? 409
+            : 400,
+          {
+            error: {
+              code,
+              message: outcome?.errorDetail ?? code,
+              detail: { revision: project.version },
+            },
+          },
+        );
+        return;
+      }
+      if (method === "DELETE") {
+        agents.delete(agentKey(pid, aid));
+        json(
+          response,
+          200,
+          AgentDeletedViewSchema.parse({
+            project_id: pid,
+            agent_id: aid,
+            project_version: project.version,
+          }),
+        );
+      } else {
+        if (method === "POST") response.setHeader("Location", `${path}/${targetId}`);
+        json(
+          response,
+          method === "POST" ? 201 : 200,
+          agentView(
+            pid,
+            targetId!,
+            method === "PATCH" ? "next_start" : method === "PUT" ? "stored" : null,
+          ),
+        );
+      }
+      return;
+    }
+    const scopedAgent = PROJECT_AGENT.exec(path);
+    if (options.state && scopedAgent) {
+      const [, pid, aid] = scopedAgent;
+      const project = options.state.projects.get(pid);
+      if (
+        !project ||
+        project.archived_at ||
+        !project.agents.some((agent) => agent.agent_id === aid)
+      ) {
+        json(response, 404, { error: { code: "agent_not_found", message: "unknown mock agent" } });
+        return;
+      }
     }
 
     if (method === "GET" && path === "/api/v1/abilities/status") {
@@ -540,13 +1009,20 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
     }
     const [, pid, aid, rest = ""] = match;
     const record = recordFor(pid, aid);
+    const runtime = options.state
+      ? [...options.state.agents.values()].find(
+          (agent) => agent.projectId === pid && agent.agentId === aid,
+        )
+      : undefined;
+    if (options.state)
+      syncRuntime(record, runtime?.runtimeState === "running" ? runtime.incarnationId : null);
 
     if (method === "GET" && rest === "/ability-tree") {
       json(response, 200, record.tree);
       return;
     }
     if (method === "GET" && rest === "/ability-admin") {
-      json(response, 200, adminView(record));
+      json(response, 200, adminView(record, runtime?.runtimeState === "running"));
       return;
     }
     if (method === "GET" && rest === "/ability-changes") {
@@ -555,8 +1031,10 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
         200,
         AbilityChangesPageSchema.parse({
           format: "ghrah.ability-control.changes.v1",
-          changes: [],
-          next_after_seq: 0,
+          changes: record.changes.filter(
+            (change) => change.seq > Number(url.searchParams.get("after_seq") ?? 0),
+          ),
+          next_after_seq: record.changes.length,
           has_more: false,
         }),
       );
@@ -598,6 +1076,29 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
         json(response, 400, { error: { code: error, message: "mock rejected the change" } });
         return;
       }
+      record.changes.push({
+        seq: record.changes.length + 1,
+        agent: aid,
+        revision: record.tree.revision,
+        before_revision: revision,
+        reason: grantMatch
+          ? method === "PUT"
+            ? "grant"
+            : "revoke"
+          : method === "PUT"
+            ? "bind_tool"
+            : "unbind_tool",
+        actor: { operator: "mock" },
+        source: "deployment",
+        version_digest: null,
+        policy: null,
+      });
+      options.state?.emit(EventType.ABILITY_TREE_CHANGED, {
+        project_id: pid,
+        agent_id: aid,
+        revision: record.tree.revision,
+        reason: record.changes.at(-1)!.reason,
+      });
       json(
         response,
         200,
@@ -624,13 +1125,14 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
           json(response, 500, { error: { code: "internal", message: "mock failure" } });
         });
       });
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
+        server?.once("error", reject);
         server?.listen(options.port, options.host, () => resolve());
       });
       options.logger?.(`http mock listening on ${this.port}`);
     },
     async close() {
-      if (!server) return;
+      if (!server?.listening) return;
       await new Promise<void>((resolve, reject) => {
         server?.close((error) => (error ? reject(error) : resolve()));
       });

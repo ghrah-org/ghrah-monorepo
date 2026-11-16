@@ -36,3 +36,4 @@ session-ses_*.md
 # pytest 临时目录（TEMP 不可写时的本地兜底）
 .pytest-tmp/
 pytest-of-*/
+.tmp-*.log

@@ -90,7 +90,6 @@ class WorkspaceCreatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     path: str
 
@@ -100,7 +99,6 @@ class WorkspaceDestroyedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
 
 
@@ -109,7 +107,6 @@ class WorkspaceSnapshotCreatedPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     snapshot_id: str
     message: str = ""
@@ -120,6 +117,5 @@ class WorkspaceRolledBackPayload(BaseModel):
 
     project_id: str = ""
     agent_id: str = ""
-    cluster_id: str = ""
     agent_name: str
     snapshot_id: str

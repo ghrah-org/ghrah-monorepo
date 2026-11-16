@@ -5,8 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { ChatEntry } from "@ghrah/observer-core";
+import type { ChatBlock, ChatEntry } from "@ghrah/observer-core";
 import {
+  attachmentUrl,
+  isVideoBlock,
   roomLogToChatEntries,
   useAgentsStore,
   useChatStore,
@@ -195,26 +197,38 @@ const roomMeta = computed(() => {
   });
 });
 
-async function handleSend(targets: string[], content: string) {
+async function handleSend(targets: string[], content: string, blocks: ChatBlock[] = []) {
   const projectId = props.projectId;
   const roomId = props.roomId;
   const currentRoom = room.value;
-  if (!roomId || !projectId || !currentRoom || !content) return;
+  if (!roomId || !projectId || !currentRoom) return;
+  if (!content && blocks.length === 0) return;
   const target = { projectId, roomId };
-  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets });
-  roomSend(roomId, content, targets)
+  const mediaBlockCount = blocks.filter((block) => block.type !== "text").length;
+  chat.clearBlockLoss(roomId);
+  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets, blocks });
+  roomSend(roomId, content, targets, blocks)
     .then((r) => {
-      if (r === null) chat.markPendingError(target, content, t("chat.sendFailedDisconnected"));
+      if (r === null)
+        chat.markPendingError(target, content, t("chat.sendFailedDisconnected"), mediaBlockCount);
       else if (!r.success)
-        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"));
+        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"), mediaBlockCount);
       else void refreshDeliveries();
     })
     .catch((e) =>
-      chat.markPendingError(target, content, t("chat.sendFailed", { msg: String(e ?? "") })),
+      chat.markPendingError(
+        target,
+        content,
+        t("chat.sendFailed", { msg: String(e ?? "") }),
+        mediaBlockCount,
+      ),
     );
   sticky.value = true;
   await nextTick(() => scrollToBottom());
 }
+
+/** 旧核会静默忽略 content_blocks：服务端回读没带回媒体块时给出可见提示。 */
+const blockLossNotice = computed(() => chat.blockLossRooms.has(props.roomId));
 
 function scrollToBottom() {
   if (messageContainer.value) {
@@ -371,8 +385,19 @@ function fileLabel(block: Extract<ContentBlock, { type: "file" }>): string {
   return block.filename ?? "file";
 }
 
-function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "text" }> {
+function isText(block: ChatBlock): block is Extract<ContentBlock, { type: "text" }> {
   return block.type === "text";
+}
+
+function videoPoster(block: Extract<ChatBlock, { type: "video" }>): string {
+  const frame = block.frames?.[0];
+  if (!frame?.base64) return "";
+  return `data:${frame.mime_type ?? "image/jpeg"};base64,${frame.base64}`;
+}
+
+function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
+  if (block.attachment_id) return attachmentUrl(props.projectId, block.attachment_id);
+  return block.url ?? "";
 }
 </script>
 
@@ -460,6 +485,27 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
               >
                 📎 {{ fileLabel(block) }}
               </a>
+              <template v-else-if="isVideoBlock(block)">
+                <video
+                  v-if="videoSrc(block)"
+                  :src="videoSrc(block)"
+                  :poster="videoPoster(block) || undefined"
+                  controls
+                  preload="metadata"
+                  class="max-w-full rounded"
+                />
+                <div v-else class="block-video-fallback">
+                  <img
+                    v-if="videoPoster(block)"
+                    :src="videoPoster(block)"
+                    :alt="block.filename ?? t('chat.video')"
+                    class="max-w-full rounded"
+                  />
+                  <span class="block-video-error">
+                    {{ t("chat.videoUnavailable", { name: block.filename ?? t("chat.video") }) }}
+                  </span>
+                </div>
+              </template>
               <details v-else-if="block.type === 'tool_call'" class="block-tool">
                 <summary class="text-xs">🔧 {{ block.name }}</summary>
                 <pre class="text-xs whitespace-pre-wrap">{{ block.arguments }}</pre>
@@ -512,7 +558,17 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
       </template>
     </div>
 
-    <MessageInput v-if="room" :disabled="!canChat" :members="room.members" @send="handleSend" />
+    <p v-if="blockLossNotice" class="chat-block-loss" role="status">
+      {{ t("chat.sendFailedNoBlocks") }}
+    </p>
+
+    <MessageInput
+      v-if="room"
+      :disabled="!canChat"
+      :members="room.members"
+      :project-id="projectId"
+      @send="handleSend"
+    />
 
     <RoomDetailDrawer
       :open="detailOpen"
@@ -770,5 +826,26 @@ function isText(block: ContentBlock): block is Extract<ContentBlock, { type: "te
 :root.dark .markdown-body :deep(th),
 :root.dark .markdown-body :deep(td) {
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.chat-block-loss {
+  margin: 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-danger);
+  font-size: var(--font-ui-note);
+}
+
+.block-video-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.block-video-error {
+  color: var(--color-danger);
+  font-size: var(--font-ui-note);
 }
 </style>

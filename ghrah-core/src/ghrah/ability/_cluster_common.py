@@ -15,20 +15,20 @@ _NO_SUPERVISOR_ERROR = (
 )
 
 _SUPERVISOR_NOT_CLUSTER_ERROR = (
-    "Supervisor is wired but not cluster-capable (assembly defect): "
-    "get_cluster_context is missing or returns an empty cluster_id. "
+    "Supervisor is wired but not collaboration-capable (assembly defect): "
+    "get_cluster_context is missing or returns no member list. "
     "Check the supervisor wiring at assembly time."
 )
 
 
 def cluster_supervisor_error(supervisor: Any) -> str | None:
-    """判定 supervisor 是否可支撑集群能力。
+    """判定 supervisor 是否可支撑协作类能力。
 
     两档可诊断错误（可区分"单体模式正常态"与"装配缺陷"）：
     1. ``supervisor is None`` → 未接线（standalone 正常态，
        提示在 spawn 时注入）；
     2. 已注入但 ``get_cluster_context`` 缺失 / 调用失败 /
-       cluster_id 为空 → 装配缺陷。
+       成员清单不可用 → 装配缺陷。
 
     Args:
         supervisor: 执行期 SUPERVISOR 服务（duck-typed）
@@ -42,9 +42,9 @@ def cluster_supervisor_error(supervisor: Any) -> str | None:
     if not callable(get_ctx):
         return _SUPERVISOR_NOT_CLUSTER_ERROR
     try:
-        cluster_id = (get_ctx() or {}).get("cluster_id") or ""
+        context = get_ctx() or {}
     except Exception:
         return _SUPERVISOR_NOT_CLUSTER_ERROR
-    if not cluster_id:
+    if not isinstance(context.get("members"), list):
         return _SUPERVISOR_NOT_CLUSTER_ERROR
     return None

@@ -69,7 +69,6 @@ class EnvironmentOutput(BaseModel):
 
     deployment: str = Field(description="standalone or subject-mounted")
     project_id: str = Field(description="Project id; empty when the agent is unattached")
-    cluster_id: str = Field(description="Cluster id")
     workspace_root: str | None = Field(description="Workspace root, or null when unset")
     default_working_dir: str | None = Field(description="Default working directory")
     allowed_roots: list[str] = Field(description="Filesystem roots the agent may use")

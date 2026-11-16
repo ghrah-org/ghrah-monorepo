@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghrah.protocol.enums import ProjectStatus, RecoveryAction
 from ghrah.protocol.payloads.model import EndpointReferenceModel
@@ -44,7 +44,6 @@ class AgentSpecSchema(EndpointReferenceModel):
 
     agent_id: str = ""
     name: str
-    cluster_id: str
     endpoint_name: str | None = None
     model_overrides: dict[str, Any] | None = None
     manifest_ref: str = ""
@@ -71,7 +70,7 @@ class ProjectInfoPayload(BaseModel):
     """Project 信息基类载荷。
 
     对齐 ghrah-subject project/models.ProjectRecord，用于 project_get/project_list
-    结果项及 PROJECT_* 事件回执。version/archived_at/deleted_at/cluster_ids/workspaces/
+    结果项及 PROJECT_* 事件回执。version/archived_at/deleted_at/workspaces/
     project_root_locator 为 Subject 独占内部状态 Root；workspaces 为 Agent 工作资源。
     Project 内部存储位置统一由 ``project_root_locator`` 派生。
     """
@@ -82,7 +81,6 @@ class ProjectInfoPayload(BaseModel):
     project_root_locator: str = ""
     shell_cwd: str = ""
     manifest_ref: str = ""
-    cluster_ids: list[str] = Field(default_factory=list)
     workspaces: list[WorkspaceMountSchema] = Field(default_factory=list)
     agents: list[AgentSpecSchema] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)
@@ -198,6 +196,80 @@ class ProjectListResultPayload(BaseModel):
 
     projects: list[ProjectInfoPayload] = Field(default_factory=list)
     count: int = 0
+
+
+# ─── Project REST 请求/响应模型（观察端管理面，非 WS wire） ───
+
+
+class ProjectUpdateRequest(BaseModel):
+    """PATCH /api/v1/projects/{project_id} 的请求体。
+
+    路径携带项目身份；body 只含可改字段与乐观锁版本。四个可改字段至少
+    提供一个，避免产生空更新事件。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+    manifest_ref: str | None = None
+    shell_cwd: str | None = None
+    expected_version: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _require_change(self) -> ProjectUpdateRequest:
+        if all(
+            value is None
+            for value in (self.name, self.description, self.manifest_ref, self.shell_cwd)
+        ):
+            raise ValueError("至少需要一个可改字段")
+        return self
+
+
+class ProjectLifecycleRequest(BaseModel):
+    """POST .../archive、.../restore 的请求体（无条件写）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
+class ProjectTransitionRequest(BaseModel):
+    """POST .../pause、.../resume、.../stop 的请求体。
+
+    本轮 REST 建议必填；字段保持可选以复用 WS 命令语义。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class ProjectDeletedView(BaseModel):
+    """DELETE /api/v1/projects/{project_id} 的 200 响应。
+
+    REST 面专用视图，不进入 WS wire；与 ProjectManager._handle_delete 的
+    ``data`` 字段一一对应。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    deleted: bool
+    storage_purged: bool
+    rooms_deleted: int = Field(ge=0)
+
+
+class ProjectTransitionPayload(ProjectIdPayload):
+    """project_pause / project_resume / project_stop 命令载荷。
+
+    在 ProjectIdPayload 上补可选 expected_version；未提供时沿用「以当前
+    版本为准」的历史行为（Manager 侧校验）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class ReconcileNowPayload(BaseModel):

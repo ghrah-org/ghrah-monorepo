@@ -24,6 +24,12 @@ from ghrah.protocol.types import (
     PluginNegotiatedPayload,
     PluginNegotiatePayload,
     PluginNegotiateResultPayload,
+    ProjectDeletedView,
+    ProjectLifecycleRequest,
+    ProjectTransitionPayload,
+    ProjectTransitionRequest,
+    ProjectUpdateRequest,
+    SendMessagePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
     TaskClaimListResultPayload,
@@ -55,6 +61,11 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "PluginLifecyclePayload": PluginLifecyclePayload,
     "PluginNegotiatedPayload": PluginNegotiatedPayload,
     "PluginCrashedPayload": PluginCrashedPayload,
+    "ProjectUpdateRequest": ProjectUpdateRequest,
+    "ProjectLifecycleRequest": ProjectLifecycleRequest,
+    "ProjectTransitionRequest": ProjectTransitionRequest,
+    "ProjectTransitionPayload": ProjectTransitionPayload,
+    "ProjectDeletedView": ProjectDeletedView,
     "TaskEvidencePayload": TaskEvidencePayload,
     "TaskClaimPayload": TaskClaimPayload,
     "TaskSubmitCompletionPayload": TaskSubmitCompletionPayload,
@@ -66,6 +77,8 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TaskInfoPayload_verification": TaskInfoPayload,
     "TaskDumpPayload": TaskDumpPayload,
     "TaskDumpResultPayload": TaskDumpResultPayload,
+    "SendMessagePayload_with_blocks": SendMessagePayload,
+    "SendMessagePayload_with_video": SendMessagePayload,
 }
 
 

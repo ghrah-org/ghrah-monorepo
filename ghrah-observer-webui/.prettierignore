@@ -15,3 +15,4 @@ packages/protocol/src/ability-tree.generated.ts
 packages/protocol/src/ability-control.generated.ts
 packages/protocol/src/agent-control.generated.ts
 packages/protocol/src/agentconf-control.generated.ts
+packages/protocol/src/runtime.generated.ts

@@ -13,7 +13,6 @@ import {
   AgentSpawnedPayloadSchema,
   AgentTerminatedPayloadSchema,
   BroadcastMessagePayloadSchema,
-  ClusterStatusPayloadSchema,
   CommandResultPayloadSchema,
   CreateWorkspacePayloadSchema,
   DelegatePayloadSchema,
@@ -27,10 +26,7 @@ import {
   HITLRequestPayloadSchema,
   HITLResolvedPayloadSchema,
   HITLResponsePayloadSchema,
-  InitClusterPayloadSchema,
   ListAgentsPayloadSchema,
-  ListClustersPayloadSchema,
-  ListClustersResultPayloadSchema,
   ManifestAbilityEventPayloadSchema,
   ManifestAgentEventPayloadSchema,
   ManifestDeletePayloadSchema,
@@ -45,15 +41,19 @@ import {
   PersistSavePayloadSchema,
   ProjectCreatePayloadSchema,
   ProjectDeletePayloadSchema,
+  ProjectDeletedViewSchema,
   ProjectInfoPayloadSchema,
   ProjectLifecyclePayloadSchema,
+  ProjectLifecycleRequestSchema,
   ProjectListPayloadSchema,
+  ProjectTransitionPayloadSchema,
+  ProjectTransitionRequestSchema,
   ProjectUpdatePayloadSchema,
+  ProjectUpdateRequestSchema,
   RegisterAbilityPayloadSchema,
   RoomDeletePayloadSchema,
   RoomLifecyclePayloadSchema,
   SendMessagePayloadSchema,
-  ShutdownClusterPayloadSchema,
   SpawnAgentPayloadSchema,
   SubscribePayloadSchema,
   TerminateAgentPayloadSchema,
@@ -124,7 +124,6 @@ describe("Project payload schemas", () => {
         {
           agent_id: "agent-001",
           name: "architect",
-          cluster_id: "cluster-1",
           runtime_status: "error",
           runtime_error: "transport down",
         },
@@ -135,6 +134,60 @@ describe("Project payload schemas", () => {
     expect(project.isolation.agent_path_grants["agent-001"]?.[0]?.subpath).toBe("src");
     expect(project.agents[0]?.runtime_status).toBe("error");
     expect(project.agents[0]?.runtime_error).toBe("transport down");
+  });
+});
+
+describe("Project REST request schemas", () => {
+  it("requires expected_version and at least one mutable field for update", () => {
+    expect(() => ProjectUpdateRequestSchema.parse({ name: "renamed" })).toThrow();
+    expect(() => ProjectUpdateRequestSchema.parse({ expected_version: 3 })).toThrow();
+    expect(ProjectUpdateRequestSchema.parse({ name: "renamed", expected_version: 3 })).toEqual({
+      name: "renamed",
+      description: undefined,
+      manifest_ref: undefined,
+      shell_cwd: undefined,
+      expected_version: 3,
+    });
+  });
+
+  it("rejects unknown fields on update", () => {
+    expect(() =>
+      ProjectUpdateRequestSchema.parse({
+        name: "renamed",
+        expected_version: 3,
+        project_id: "proj-001",
+      }),
+    ).toThrow();
+  });
+
+  it("requires expected_version for archive and restore", () => {
+    expect(() => ProjectLifecycleRequestSchema.parse({})).toThrow();
+    expect(ProjectLifecycleRequestSchema.parse({ expected_version: 3 })).toEqual({
+      expected_version: 3,
+    });
+  });
+
+  it("allows optional expected_version for pause/resume/stop request and payload", () => {
+    expect(ProjectTransitionRequestSchema.parse({})).toEqual({});
+    expect(ProjectTransitionRequestSchema.parse({ expected_version: 3 })).toEqual({
+      expected_version: 3,
+    });
+    expect(ProjectTransitionPayloadSchema.parse({ project_id: "proj-001" })).toEqual({
+      project_id: "proj-001",
+    });
+    expect(() => ProjectTransitionPayloadSchema.parse({ expected_version: 3 })).toThrow();
+  });
+
+  it("pins the deleted view shape", () => {
+    const view = {
+      project_id: "proj-001",
+      deleted: true,
+      storage_purged: true,
+      rooms_deleted: 2,
+    };
+    expect(ProjectDeletedViewSchema.parse(view)).toEqual(view);
+    expect(() => ProjectDeletedViewSchema.parse({ ...view, rooms_deleted: -1 })).toThrow();
+    expect(() => ProjectDeletedViewSchema.parse({ ...view, room_ids: [] })).toThrow();
   });
 });
 
@@ -320,7 +373,7 @@ describe("Project-scoped compatibility", () => {
 
   it("accepts legacy events but exposes empty ownership fields", () => {
     const event = AgentErrorPayloadSchema.parse({ agent_name: "agent-1", error: "boom" });
-    expect(event).toMatchObject({ project_id: "", agent_id: "", cluster_id: "" });
+    expect(event).toMatchObject({ project_id: "", agent_id: "" });
   });
 });
 
@@ -446,59 +499,6 @@ describe("HITLResolvedPayloadSchema", () => {
         status: "expired",
       }),
     ).toThrow();
-  });
-});
-
-describe("InitClusterPayloadSchema", () => {
-  it("parses with required cluster_id and default config", () => {
-    const result = InitClusterPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result.cluster_id).toBe("cluster-1");
-    expect(result.config).toEqual({});
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(InitClusterPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ShutdownClusterPayloadSchema", () => {
-  it("parses with required cluster_id and default config", () => {
-    const result = ShutdownClusterPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result.cluster_id).toBe("cluster-1");
-    expect(result.config).toEqual({});
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(ShutdownClusterPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ClusterStatusPayloadSchema", () => {
-  it("parses with required cluster_id", () => {
-    const result = ClusterStatusPayloadSchema.parse({ cluster_id: "cluster-1" });
-    expect(result).toEqual({ cluster_id: "cluster-1" });
-  });
-
-  it("rejects empty payload (cluster_id required)", () => {
-    expect(ClusterStatusPayloadSchema.safeParse({}).success).toBe(false);
-  });
-});
-
-describe("ListClustersPayloadSchema", () => {
-  it("parses empty object", () => {
-    const result = ListClustersPayloadSchema.parse({});
-    expect(result).toEqual({});
-  });
-});
-
-describe("ListClustersResultPayloadSchema", () => {
-  it("parses clusters list", () => {
-    const result = ListClustersResultPayloadSchema.parse({
-      clusters: [{ cluster_id: "cluster-1", active_agents: 2, status: "running", bound: true }],
-    });
-    expect(result.clusters).toHaveLength(1);
-    expect(result.clusters[0].cluster_id).toBe("cluster-1");
-    expect(result.clusters[0].bound).toBe(true);
   });
 });
 
@@ -910,6 +910,7 @@ describe("Manifest payload schemas", () => {
   });
 });
 
+
 describe("shell approval candidates", () => {
   it("preserves exact and optional class candidates", () => {
     const shell_remember = {
@@ -926,5 +927,70 @@ describe("shell approval candidates", () => {
       HITLRequestPayloadSchema.parse({ ...request, shell_remember: null }).shell_remember,
     ).toBeNull();
     expect(HITLRequestPayloadSchema.parse(request).shell_remember).toBeUndefined();
+  });
+});
+
+describe("SendMessagePayload content_blocks", () => {
+  it("accepts image blocks with empty content", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "",
+      content_blocks: [
+        { type: "text", text: "look" },
+        { type: "image", base64: "iVBORw0KGgo=", mime_type: "image/png" },
+      ],
+    });
+    expect(parsed.content_blocks).toHaveLength(2);
+  });
+
+  it("rejects unknown block types", () => {
+    expect(() =>
+      SendMessagePayloadSchema.parse({
+        project_id: "p1",
+        agent_id: "a1",
+        target: "agent-a",
+        content: "",
+        content_blocks: [{ type: "hologram", data: "x" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("SendMessagePayload video content_blocks", () => {
+  it("parses video block with attachment_id and frames", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "看这段视频",
+      content_blocks: [
+        {
+          type: "video",
+          attachment_id: "a".repeat(64),
+          mime_type: "video/mp4",
+          filename: "demo.mp4",
+          duration_s: 12.5,
+          width: 1280,
+          height: 720,
+          frames: [{ type: "image", base64: "aGVsbG8=", mime_type: "image/jpeg" }],
+        },
+      ],
+    });
+    expect(parsed.content_blocks).toHaveLength(1);
+    expect(parsed.content_blocks?.[0]?.type).toBe("video");
+  });
+
+  it("accepts image blocks referenced by attachment_id", () => {
+    const parsed = SendMessagePayloadSchema.parse({
+      project_id: "p1",
+      agent_id: "a1",
+      target: "agent-a",
+      content: "",
+      content_blocks: [{ type: "image", attachment_id: "b".repeat(64), mime_type: "image/png" }],
+    });
+    expect(parsed.content_blocks).toHaveLength(1);
+
   });
 });

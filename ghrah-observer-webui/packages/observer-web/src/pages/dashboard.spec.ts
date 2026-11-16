@@ -344,7 +344,6 @@ describe("Dashboard workspace tabs", () => {
       project_id: "p2",
       agent_id: "a2",
       agent_name: "Coder",
-      cluster_id: "c2",
       session_id: "s2",
     });
     await nextTick();

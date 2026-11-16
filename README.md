@@ -9,11 +9,11 @@
 - **Core**（`ghrah-core`）— agent 运行时：agent loop、LLM 调用、上下文管理（ActionChain 分支/Session）、能力（Ability）执行、per-agent 注入式装配。
 - **Subject**（`ghrah-subject`）— agent 服务：工作区与沙箱、权限/HITL 审批、Project/Room/Task 管理、manifest store、事件持久化与恢复（reconcile）。运行时基于 [Ouroboros](https://pypi.org/project/cordis-ouroboros/) Unit 内核，**内嵌 Core 单进程运行**。
 - **Protocol**（`ghrah-protocol`）— 跨进程协议：Envelope/CommandResult/Event 与各类 payload schema（Python 侧）；TS 侧 `@ghrah/protocol` 对齐演进。
-- **Observer WebUI**（`ghrah-observer-webui`）— 前端与CQRS读取区：WebSocket 订阅 Subject 事件流，提供聊天、ActionChain 链视图、HITL 审批、Project/Room 管理界面（Vue 3 + Vite）。
+- **Observer WebUI**（`ghrah-observer-webui`）— 前端与 CQRS 读取区，提供聊天、ActionChain 链视图、HITL 审批和 Project/Room 管理界面（Vue 3 + Vite）。通过 `/ws` 订阅 Subject 事件流，默认通过 `/api/v1/projects` 管理项目。
 
 ```
-Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUnit)
-                                       └── Subject 落盘：subject.db / ghrah.db / workspace
+Observer WebUI (vite :5173) ──/ws、/api/v1──> ghrah-subject (:4112, 内嵌 CoreUnit)
+                                              └── Subject 落盘：subject.db / ghrah.db / workspace
 ```
 
 ## 现状
@@ -23,6 +23,9 @@ Observer WebUI (vite :5173) ──WS──> ghrah-subject (:4112, 内嵌 CoreUni
 - 许可 Apache-2.0
 
 模型连接通过 agentconf 0.4 模型端点解析；Agent 配置必须显式声明 `endpoint_name`。旧配置转换及正式依赖使用边界见 [模型端点与配置迁移](ghrah-core/docs/model-endpoints.md)。
+
+Runtime `/v1` 管理契约与验证宿主**已退役**（M7，`872abfc`）；历史交付边界见
+[Runtime 管理契约与验证链路交付说明（历史）](ghrah-subject/docs/runtime-management-contract.md)。
 
 ## 快速开始
 

@@ -12,13 +12,11 @@
           "stop": null
         }
       },
-      "cluster_id": "example-cluster",
       "desired_state": "stopped",
       "endpoint_name": "chat"
     },
     {
       "name": "example-creative",
-      "cluster_id": "example-cluster",
       "desired_state": "stopped",
       "endpoint_name": "chat",
       "model_overrides": {
@@ -32,8 +30,5 @@
     }
   ],
   "project_id": "example-project",
-  "name": "migration-example",
-  "cluster_ids": [
-    "example-cluster"
-  ]
+  "name": "migration-example"
 }

@@ -236,7 +236,7 @@ create_app requires an assembled Context with the websocket_observer_endpoint un
 ### 5.4 没有的东西
 
 - **没有 sqlite 事件表**：事件存在内存 ring——`EventStore` 用 `deque`（`server/event_bus.py:25-41`，`replay_since` `:40-41`，容量 `event_replay_capacity = 1000`）。进程重启即丢，只能靠客户端 `last_seq_id` 续传已缓存部分。
-- **没有 sqlite chain 表**：链真相源是每 Project 的 `db/action-chains.sqlite3`（`project/paths.py:111-112`），由 Core `SqliteBackend` 与 `MessageManager` **共写同一文件**（`core_cluster/registry.py:382-391`），读侧 `ActionChainLedger` 开只读第二连接（`ledger/chain.py:49-55`、`:63`）。
+- **没有 sqlite chain 表**：链真相源是每 Project 的 `db/action-chains.sqlite3`（`project/paths.py:111-112`），由 Core `SqliteBackend` 与 `MessageManager` **共写同一文件**（`core_cluster/registry.py:382-391`）；读侧由 Core 的只读连接池（`core/read/chain.py`）承担，Subject 经 `CorePort.sessions.history` 取用，**不再自己打开该库**。
 - **没有锁文件一致性检查**：`uv.lock`/`pnpm-lock.yaml` 只在 `ghrah.toml` 的 `[workspace] native_locks` 里被声明，代码里没有 `lockfile`/`out of sync` 之类校验（全仓 grep 0 命中）。唯一的"锁"错误是 skill lock（§6.3）。
 
 ### 5.5 建表责任人

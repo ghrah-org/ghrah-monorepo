@@ -107,13 +107,11 @@ class McpDeploymentConfig:
     connector: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        keys = [(b.project_id, b.cluster_id, b.agent_id, b.server) for b in self.bindings]
+        keys = [(b.project_id, b.agent_id, b.server) for b in self.bindings]
         if len(set(keys)) != len(keys):
             raise McpConfigError("同一 MCP scope 内 server 别名冲突")
         members = [
-            (b.project_id, b.cluster_id, b.agent_id, m.reference)
-            for b in self.bindings
-            for m in b.members
+            (b.project_id, b.agent_id, m.reference) for b in self.bindings for m in b.members
         ]
         if len(set(members)) != len(members):
             raise McpConfigError("同一 MCP scope 内成员映射冲突")
@@ -122,13 +120,12 @@ class McpDeploymentConfig:
 class McpDeployment:
     """CoreUnit 所有的装配者；关系库借用，Agent/run 的运行对象独立持有。"""
 
-    def __init__(self, config: McpDeploymentConfig, store: Any, cluster_id: str) -> None:
+    def __init__(self, config: McpDeploymentConfig, store: Any) -> None:
         from ghrah.mcp.agentconf_source import AgentconfMcpSource
 
         self.config = config
         self._bindings = deepcopy(config.bindings)
         self.store = store
-        self.cluster_id = cluster_id
         self.source = config.source if config.source is not None else AgentconfMcpSource()
         self._owned_source = config.source is None
         self._agents: set[AgentMcpService] = set()
@@ -139,8 +136,7 @@ class McpDeployment:
         """观察当前宿主是否显式接线该快照成员；不产生授权或工具选择。"""
         return not self._closed and any(
             isinstance(b, McpPackageBinding)
-            and (b.project_id, b.cluster_id, b.agent_id)
-            == (self.store.project_id, self.cluster_id, agent)
+            and (b.project_id, b.agent_id) == (self.store.project_id, agent)
             and any(m.reference == reference for m in b.members)
             for b in self._bindings
         )
@@ -152,8 +148,7 @@ class McpDeployment:
         bindings = tuple(
             b
             for b in self._bindings
-            if (b.project_id, b.cluster_id, b.agent_id)
-            == (self.store.project_id, self.cluster_id, agent_id)
+            if (b.project_id, b.agent_id) == (self.store.project_id, agent_id)
         )
         service = AgentMcpService(self, agent_id, bindings)
         self._agents.add(service)
@@ -243,7 +238,6 @@ class AgentMcpService:
         return json.dumps(
             [
                 self._identity.project_id,
-                self._owner.cluster_id,
                 self._identity.subject_id,
                 self._identity.run_id,
             ],

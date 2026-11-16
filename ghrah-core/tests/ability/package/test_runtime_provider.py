@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _helpers import symlink_or_skip
 
 from ghrah.ability.access import (
     AbilityAccessStore,
@@ -197,7 +198,7 @@ async def test_effective_denied_path_is_checked_before_approval(store, tmp_path)
 
 async def test_symlink_escape_is_rejected(store, tmp_path):
     installer, _ = _install(tmp_path)
-    (tmp_path / "escape").symlink_to(tmp_path.parent, target_is_directory=True)
+    symlink_or_skip(tmp_path / "escape", tmp_path.parent, target_is_directory=True)
     _, _, _, tool = await _materialize(store, tmp_path, installer)
     response = await tool.execute(
         OperationCall(arguments={"file_path": "escape/file.txt"}), ExecutionServices()

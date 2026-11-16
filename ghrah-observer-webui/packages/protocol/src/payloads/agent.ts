@@ -4,6 +4,7 @@ import { ShellRememberOptionsSchema } from "../hitl.generated.js";
 // SPDX-License-Identifier: Apache-2.0
 
 import { z } from "zod";
+import { InputContentBlockSchema } from "./content.js";
 import { BranchInfoPayloadSchema } from "./session.js";
 
 export const AgentConfigPayloadSchema = z
@@ -30,7 +31,6 @@ export const SpawnAgentPayloadSchema = z
   .object({
     validate_model: z.boolean().optional(),
     project_id: z.string(),
-    cluster_id: z.string().optional().default(""),
     config: AgentConfigPayloadSchema,
     abilities: z.array(AbilityDefinitionPayloadSchema).nullable().optional(),
     manifest_ref: z.string().nullable().optional(),
@@ -53,6 +53,7 @@ export const SendMessagePayloadSchema = z.object({
   agent_id: z.string(),
   target: z.string(),
   content: z.string(),
+  content_blocks: z.array(InputContentBlockSchema).nullable().optional(),
   sender: z.string().optional().default("user"),
   timeout: z.number().nullable().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
@@ -104,7 +105,6 @@ export const AgentCompactContextPayloadSchema = z.object({
   project_id: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),
-  cluster_id: z.string().optional().default(""),
 });
 
 export const SubscribePayloadSchema = z.object({
@@ -143,7 +143,6 @@ export const HITLResponsePayloadSchema = z
 export const HITLResolvedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   promise_id: z.string(),
   agent_name: z.string(),
   ability_name: z.string(),
@@ -151,36 +150,8 @@ export const HITLResolvedPayloadSchema = z.object({
   status: z.enum(["approved", "rejected", "timeout"]),
 });
 
-export const InitClusterPayloadSchema = z.object({
-  cluster_id: z.string(),
-  config: z.record(z.unknown()).optional().default({}),
-});
-
-export const ShutdownClusterPayloadSchema = z.object({
-  cluster_id: z.string(),
-  config: z.record(z.unknown()).optional().default({}),
-});
-
-export const ClusterStatusPayloadSchema = z.object({
-  cluster_id: z.string(),
-});
-
-export const ListClustersPayloadSchema = z.object({});
-
-export const ClusterInfoPayloadSchema = z.object({
-  cluster_id: z.string(),
-  active_agents: z.number(),
-  status: z.string(),
-  bound: z.boolean(),
-});
-
-export const ListClustersResultPayloadSchema = z.object({
-  clusters: z.array(ClusterInfoPayloadSchema),
-});
-
 export const AgentSpawnedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   name: z.string(),
   agent_id: z.string().optional().default(""),
   incarnation_id: z.string().optional().default(""),
@@ -190,7 +161,6 @@ export const AgentSpawnedPayloadSchema = z.object({
 
 export const AgentTerminatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   name: z.string(),
   agent_id: z.string().optional().default(""),
   incarnation_id: z.string().optional().default(""),
@@ -210,19 +180,45 @@ export const ContentBlockSchema = z.discriminatedUnion("type", [
     type: z.literal("image"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
   }),
   z.object({
     type: z.literal("audio"),
     data: z.string(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string(),
   }),
   z.object({
     type: z.literal("file"),
     url: z.string().nullable().optional(),
     base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
     mime_type: z.string().nullable().optional(),
     filename: z.string().nullable().optional(),
+  }),
+  z.object({
+    type: z.literal("video"),
+    url: z.string().nullable().optional(),
+    base64: z.string().nullable().optional(),
+    attachment_id: z.string().nullable().optional(),
+    mime_type: z.string().nullable().optional(),
+    filename: z.string().nullable().optional(),
+    duration_s: z.number().nullable().optional(),
+    width: z.number().int().nullable().optional(),
+    height: z.number().int().nullable().optional(),
+    frames: z
+      .array(
+        z.object({
+          type: z.literal("image"),
+          url: z.string().nullable().optional(),
+          base64: z.string().nullable().optional(),
+          attachment_id: z.string().nullable().optional(),
+          mime_type: z.string().nullable().optional(),
+        }),
+      )
+      .nullable()
+      .optional(),
   }),
   z.object({
     type: z.literal("tool_call"),
@@ -290,7 +286,6 @@ export type ActionNode = z.infer<typeof ActionNodeSchema>;
 export const AgentResponsePayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   sender: z.string(),
   recipient: z.string(),
   content: z.string(),
@@ -302,7 +297,6 @@ export const AgentResponsePayloadSchema = z.object({
 export const ActionChainUpdatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   node: ActionNodeSchema.optional().default({}),
   branch: BranchInfoPayloadSchema.nullable().optional(),
@@ -311,7 +305,6 @@ export const ActionChainUpdatedPayloadSchema = z.object({
 export const ContextUsageUpdatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   phase: z.string(),
   occupied_tokens: z.number().int().nullable().optional(),
@@ -331,7 +324,6 @@ export const ContextUsageUpdatedPayloadSchema = z.object({
 export const AgentErrorPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   error: z.string(),
 });
@@ -343,7 +335,6 @@ export const HealthStatusPayloadSchema = z.object({
 export const AbilityResultPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   request_id: z.string(),
   agent_name: z.string(),
   ability_name: z.string(),
@@ -355,7 +346,6 @@ export const AbilityResultPayloadSchema = z.object({
 export const HITLRequestPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   promise_id: z.string(),
   agent_name: z.string(),
   ability_name: z.string(),
@@ -384,12 +374,6 @@ export type SubscribePayload = z.infer<typeof SubscribePayloadSchema>;
 export type UnsubscribePayload = z.infer<typeof UnsubscribePayloadSchema>;
 export type ExecuteAbilityPayload = z.infer<typeof ExecuteAbilityPayloadSchema>;
 export type HITLResponsePayload = z.infer<typeof HITLResponsePayloadSchema>;
-export type InitClusterPayload = z.infer<typeof InitClusterPayloadSchema>;
-export type ShutdownClusterPayload = z.infer<typeof ShutdownClusterPayloadSchema>;
-export type ClusterStatusPayload = z.infer<typeof ClusterStatusPayloadSchema>;
-export type ListClustersPayload = z.infer<typeof ListClustersPayloadSchema>;
-export type ClusterInfoPayload = z.infer<typeof ClusterInfoPayloadSchema>;
-export type ListClustersResultPayload = z.infer<typeof ListClustersResultPayloadSchema>;
 
 export type AgentSpawnedPayload = z.infer<typeof AgentSpawnedPayloadSchema>;
 export type AgentTerminatedPayload = z.infer<typeof AgentTerminatedPayloadSchema>;

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from fastapi.testclient import TestClient
 from ghrah.protocol.types import EventType
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
@@ -16,6 +17,7 @@ from ghrah.subject.runtime.ouroboros_bridge import mount_unit
 from ghrah.subject.runtime.service_keys import (
     OBSERVER_ENDPOINT,
     OBSERVER_EVENT_BUS,
+    PROJECT_STORE,
 )
 from ghrah.subject.server.config import ObserverServerConfig
 from ghrah.subject.server.connection_manager import ConnectionManager
@@ -149,6 +151,35 @@ async def test_unattributed_agent_scoped_events_are_dropped_and_counted() -> Non
         assert unit.observer_event_bus.dropped_unattributed_events == 2
 
 
+async def test_agent_scoped_event_is_attributed_via_project_store() -> None:
+    """端点解析器接线：Core 事件缺 project_id 时用 PROJECT_STORE 反查补齐。"""
+
+    class FakeProjectStore:
+        async def project_id_for_agent(self, agent_id: str) -> str | None:
+            return "p1" if agent_id == "a" * 32 else None
+
+    config = SubjectConfig()
+    unit = WebSocketObserverEndpointUnit(config)
+
+    async with Context() as ctx:
+        ctx.provide(PROJECT_STORE.name, FakeProjectStore())
+        fiber = ctx.plugin(mount_unit(unit))
+        await wait_active(fiber)
+
+        ctx.emit("core:agent_response", {"agent_id": "a" * 32, "agent_name": "planner"})
+
+        events: list[dict[str, Any]] = []
+        for _ in range(200):
+            events = unit.observer_event_bus.event_store.replay_since(0)
+            if events:
+                break
+            await asyncio.sleep(0.01)
+
+        assert [e["type"] for e in events] == ["agent_response"]
+        assert events[0]["payload"]["project_id"] == "p1"
+        assert unit.observer_event_bus.dropped_unattributed_events == 0
+
+
 async def test_observer_preserves_project_agent_scope_for_subject_router() -> None:
     class ContextStub:
         def __init__(self) -> None:
@@ -182,3 +213,43 @@ async def test_observer_preserves_project_agent_scope_for_subject_router() -> No
             },
         )
     ]
+
+
+def _http_paths(app: Any) -> set[str]:
+    return {
+        route.path
+        for route in app.routes
+        if getattr(route, "path", None) and route.__class__.__name__ == "APIRoute"
+    }
+
+
+async def test_observer_app_http_routes_live_under_api_v1() -> None:
+    """Subject 边缘只提供 /api/v1 下的 HTTP 入口；无前缀 GET 留给 Observer。
+
+    /health 为过渡别名：ghrah-toolchain 仍探测它；切到 /api/v1/health 后删除。
+    """
+    config = SubjectConfig()
+    unit = WebSocketObserverEndpointUnit(config)
+
+    async with Context() as ctx:
+        fiber = ctx.plugin(mount_unit(unit))
+        await wait_active(fiber)
+        app = unit.app
+        paths = _http_paths(app)
+
+        assert "/api/v1/health" in paths
+        assert "/api/v1/meta" in paths
+        assert "/" not in paths
+        assert app.openapi_url == "/api/v1/openapi.json"
+        assert app.docs_url is None
+        assert app.redoc_url is None
+
+        client = TestClient(app)
+        assert client.get("/api/v1/health").json()["status"] == "ok"
+        meta = client.get("/api/v1/meta").json()
+        assert meta["name"] == "ghrah-subject-observer"
+        assert client.get("/api/v1/openapi.json").status_code == 200
+        assert client.get("/").status_code == 404
+        assert client.get("/docs").status_code == 404
+        # 过渡别名仍可用（带 deprecation 标记），供工具链就绪探测
+        assert client.get("/health").json()["status"] == "ok"

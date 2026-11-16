@@ -79,6 +79,8 @@ describe("REST transport adapter", () => {
       packageGroups: vi.fn(),
       projectPackageGroups: vi.fn(),
       agentPackageGroups: vi.fn(),
+      packageVersion: vi.fn(),
+      probePackageMcp: vi.fn(),
     };
   }
 

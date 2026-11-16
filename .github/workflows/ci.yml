@@ -19,9 +19,19 @@ jobs:
       # protocol 与 scheme 保持 strict 零错误；既有包不在本次扩展类型门禁。
       - run: cd ghrah-protocol && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.protocol
       - run: cd ghrah-scheme && MYPYPATH=src uv run mypy --explicit-package-bases -p ghrah.scheme
-      - run: uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel
+      # 诊断用：跑完打印标记，区分「pytest 自己没退」与「pytest 已退但进程/管道被占」；
+      # timeout-minutes 防止挂住时耗到作业级上限，快速失败并保留日志。
+      - name: Python 全量测试
+        timeout-minutes: 25
+        run: |
+          uv run pytest ghrah-plugin ghrah-protocol ghrah-core ghrah-subject ghrah-taskstore ghrah-scheme ghrah-kernel \
+            -o faulthandler_timeout=120
+          echo "::notice::pytest 已返回，退出码 $?"
       - name: 契约漂移检查
         run: uv run python scripts/export_ability_contracts.py --check
+      # 第二阶段（Core 适配）的防回归基线：Core 运行时面只降不升，且不得 import Subject。
+      - name: Core 语义基线
+        run: uv run python scripts/check_core_semantics.py --check
       - name: Kernel 独立安装与真实命名服务
         run: |
           uv build --package ghrah-kernel --out-dir dist/kernel-check
@@ -48,6 +58,21 @@ jobs:
             agent_wheel_args+=(--with "$wheel")
           done
           uv run --isolated --no-project --with 'ghrah-kernel[agent]' "${agent_wheel_args[@]}" python -I scripts/verify_agent_install.py
+
+  kernel-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      # 聚焦验证原生 pipe2 与无 pipe2/容量 fcntl 的 Unix 分支。
+      - run: uv run pytest ghrah-kernel -q -W error -o faulthandler_timeout=30
 
   windows-portability:
     runs-on: windows-latest
@@ -80,13 +105,15 @@ jobs:
       # 测试消费 workspace 包的 dist；按依赖顺序构建全部直接依赖（= webui build:deps）。
       - run: pnpm build:deps
       - run: pnpm -r test
+      - name: Observer mock 协议与投影联调
+        run: node ghrah-observer-webui/packages/observer-core/scripts/e2e-mock-smoke.mjs
       - run: pnpm type-check
       - run: pnpm lint
       # 只跑断言型护栏（盒模型/层顺序/溢出/侧边栏），不跑像素基线：
       # 视觉基线绑定生成机器的字体渲染，跨镜像比较会整片误报。
-      - name: Playwright 布局护栏
+      - name: Playwright 布局护栏与 mock 流程
         run: |
           pnpm --filter @ghrah/observer-web exec playwright install --with-deps chromium
-          pnpm --filter @ghrah/observer-web test:guards
+          pnpm --filter @ghrah/observer-web exec playwright test e2e/guards.spec.ts e2e/mock-flow.spec.ts
       - name: 构建观察端
         run: pnpm --filter @ghrah/observer-web build

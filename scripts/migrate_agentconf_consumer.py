@@ -161,6 +161,10 @@ def convert_config(
             node["version"] = "2"
             AgentManifest.model_validate(node)
             return
+        if isinstance(node.get("agents"), list):
+            node.pop("cluster_ids", None)
+        if context in {"root", "config", "agent", "agents"}:
+            node.pop("cluster_id", None)
         if (
             "agent_config_name" in node
             or context in {"root", "config", "agent", "agents"}

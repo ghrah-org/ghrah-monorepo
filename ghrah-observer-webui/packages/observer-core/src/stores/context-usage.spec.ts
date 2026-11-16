@@ -12,7 +12,6 @@ const payload = (
 ): ContextUsageUpdatedPayload => ({
   project_id: "p1",
   agent_id: "a1",
-  cluster_id: "c1",
   agent_name: "coder",
   phase: "post_call",
   occupied_tokens: 4000,

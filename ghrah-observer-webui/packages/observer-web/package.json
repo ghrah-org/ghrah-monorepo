@@ -17,7 +17,8 @@
     "lint:ui-tokens": "node scripts/check-ui-tokens.mjs",
     "test:visual": "playwright test e2e/visual.spec.ts",
     "test:visual:update": "playwright test e2e/visual.spec.ts --update-snapshots",
-    "test:guards": "playwright test e2e/guards.spec.ts"
+    "test:guards": "playwright test e2e/guards.spec.ts",
+    "test:mock": "playwright test e2e/mock-flow.spec.ts"
   },
   "dependencies": {
     "@ghrah/observer-core": "workspace:*",

@@ -39,6 +39,9 @@ if TYPE_CHECKING:
     from ghrah.context.manager import ContextManager
 
 logger = logging.getLogger(__name__)
+
+#: Room 投影的最大重试次数；到达后标记终结，避免永久失败的行每轮扫描空转。
+ROOM_PROJECTION_MAX_ATTEMPTS = 5
 Receiver = Callable[[AgentMessage], Awaitable[AgentMessage]]
 
 
@@ -187,6 +190,7 @@ CREATE INDEX IF NOT EXISTS mm_replies ON mm_messages(reply_to, seq);
 CREATE TABLE IF NOT EXISTS mm_room_projections (
     message_id TEXT PRIMARY KEY REFERENCES mm_messages(message_id),
     completed INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT
 );
 CREATE TABLE IF NOT EXISTS mm_inline_waits (
@@ -247,6 +251,8 @@ class MessageManager:
         self._scan_lock = asyncio.Lock()
         self._receivers: dict[str, Receiver] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
+        self._reply_waiters: set[asyncio.Future[None]] = set()
+        self._paused_agents: set[str] = set()
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._closing = False
@@ -280,7 +286,7 @@ class MessageManager:
         """关闭服务，保留尚未完成的消息。"""
         await self.close()
 
-    async def open(self) -> None:
+    async def open(self, *, start_dispatcher: bool = True, prepare_context: bool = False) -> None:
         """打开服务；上次进程未完成的投递转为中断，禁止隐式重跑。"""
         if self._db is not None:
             raise RuntimeError("MessageManager is already open")
@@ -294,6 +300,9 @@ class MessageManager:
         self._owner = owner
         self._closing = False
         try:
+            if prepare_context:
+                async with SqliteBackend(self._path) as backend:
+                    await backend.initialize()
             self._db = await aiosqlite.connect(self._path)
             self._db.row_factory = aiosqlite.Row
             await self._db.execute("PRAGMA journal_mode=WAL")
@@ -349,20 +358,55 @@ class MessageManager:
                     await db.execute(
                         "ALTER TABLE mm_delivery_results ADD COLUMN content_blocks TEXT"
                     )
+                projection_columns = await (
+                    await db.execute("PRAGMA table_info(mm_room_projections)")
+                ).fetchall()
+                if "attempts" not in {item[1] for item in projection_columns}:
+                    await db.execute(
+                        "ALTER TABLE mm_room_projections ADD COLUMN attempts "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
                 await db.execute("UPDATE mm_meta SET version=6 WHERE singleton=1")
                 await db.execute(
                     "UPDATE mm_deliveries SET state='interrupted', error=? "
                     "WHERE state='processing'",
                     ("Previous process stopped before durable completion",),
                 )
+                # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用，
+                # 而 retry/resume 都不会接受它——它会永久卡住该收件人的队列。
+                # 这里按「已消费即完成」收尾，保留说明性 error 供排查。
+                await db.execute(
+                    "UPDATE mm_deliveries SET state='completed', error=? "
+                    "WHERE state='interrupted' AND consumed_node_id IS NOT NULL "
+                    "AND NOT EXISTS (SELECT 1 FROM mm_delivery_results r "
+                    "WHERE r.delivery_id=mm_deliveries.delivery_id)",
+                    ("recovered: consumed before durable completion",),
+                )
             await self.refresh_agent_ids()
             await self.recover_completions()
-            self._dispatcher = asyncio.create_task(
-                self._dispatch_loop(), context=self._task_context()
-            )
+            if start_dispatcher:
+                self.start_dispatcher()
         except BaseException:
             await self.close()
             raise
+
+    async def prepare_dispatch(self) -> None:
+        """显式验收恢复路径；错误直接传播，不通过后台循环吞掉初始化故障。"""
+        self._require_db()
+        if self._closing or self._dispatcher is not None or self._receivers:
+            raise RuntimeError("Dispatch preparation requires an open, inactive manager")
+        await self.recover_completions()
+        await self.recover_room_projections()
+
+    def start_dispatcher(self) -> None:
+        """在运行时就绪时幂等启动调度，不创建或绑定 Agent。"""
+        self._require_db()
+        if self._closing:
+            raise RuntimeError("MessageManager is closing")
+        if self._dispatcher is None:
+            self._dispatcher = asyncio.create_task(
+                self._dispatch_loop(), context=self._task_context()
+            )
 
     async def close(self) -> None:
         """停止调度并等待取消收敛；处理中断记录保留到下次显式重试。"""
@@ -374,6 +418,7 @@ class MessageManager:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._workers.clear()
+        self._paused_agents.clear()
         self._receivers.clear()
         self._session_receivers.clear()
         self._dispatcher = None
@@ -402,12 +447,24 @@ class MessageManager:
         """停止该 agent 的消费；未开始消息继续离线待收。"""
         self._require_db()
         self._receivers.pop(agent_id, None)
+        self._paused_agents.discard(agent_id)
         self._session_receivers.discard(agent_id)
         task = self._workers.get(agent_id)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self._workers.pop(agent_id, None)
+
+    async def drain(self, agent_ids: Collection[str], *, timeout: float) -> None:
+        """暂停指定 Agent 的新投递，有界等待在途工作及回复读取。"""
+        async with self._scan_lock:
+            self._paused_agents.update(agent_ids)
+            active = [
+                *(self._workers[key] for key in agent_ids if key in self._workers),
+                *self._reply_waiters,
+            ]
+        if active:
+            await asyncio.wait(active, timeout=timeout)
 
     async def bind_atomic(self, agent: ActorAgent) -> None:
         """显式绑定同文件 SQLite 上下文，原子提交消费确认与本轮出站。"""
@@ -735,9 +792,16 @@ class MessageManager:
                             )
                 await asyncio.sleep(min(self._poll_interval, 0.05))
 
-        if timeout < 0:
-            return await wait()
-        return await asyncio.wait_for(wait(), timeout)
+        marker = asyncio.get_running_loop().create_future()
+        self._reply_waiters.add(marker)
+        try:
+            if timeout < 0:
+                return await wait()
+            return await asyncio.wait_for(wait(), timeout)
+        finally:
+            self._reply_waiters.discard(marker)
+            if not marker.done():
+                marker.set_result(None)
 
     async def wait_inline(
         self, message_id: str, *, timeout: float = -1, tolerate_errors: bool = False
@@ -1040,35 +1104,53 @@ class MessageManager:
         self._wake.set()
 
     async def recover_room_projections(self) -> int:
-        """重放未确认的 Room 投影；接收端按消息引用幂等，不重新执行 agent。"""
+        """重放未确认的 Room 投影；接收端按消息引用幂等，不重新执行 agent。
+
+        永久性失败（如目标 Room 已删除）不能无限重试：每轮扫描都会重试一次，
+        会让日志持续刷屏并空转写库。这里按 ``attempts`` 计数，到达
+        :data:`ROOM_PROJECTION_MAX_ATTEMPTS` 后标记为终结并只告警一次；
+        ``error`` 保留最后一次失败原因供排查。
+        """
         if self._room_projector is None:
             return 0
         async with self._projection_lock:
             async with self._lock:
                 rows = await (
                     await self._require_db().execute(
-                        "SELECT message_id FROM mm_room_projections "
+                        "SELECT message_id, attempts FROM mm_room_projections "
                         "WHERE completed=0 ORDER BY rowid"
                     )
                 ).fetchall()
             completed = 0
             for row in rows:
+                message_id, attempts = row[0], int(row[1] or 0)
                 try:
-                    await self._room_projector(await self.get_message(row[0]))
+                    await self._room_projector(await self.get_message(message_id))
                     async with self._transaction() as db:
                         await db.execute(
                             "UPDATE mm_room_projections SET completed=1, error=NULL "
                             "WHERE message_id=?",
-                            (row[0],),
+                            (message_id,),
                         )
                     completed += 1
                 except Exception as exc:
+                    failed = attempts + 1
+                    exhausted = failed >= ROOM_PROJECTION_MAX_ATTEMPTS
                     async with self._transaction() as db:
                         await db.execute(
-                            "UPDATE mm_room_projections SET error=? WHERE message_id=?",
-                            (str(exc), row[0]),
+                            "UPDATE mm_room_projections SET attempts=?, error=?, completed=? "
+                            "WHERE message_id=?",
+                            (failed, str(exc), 1 if exhausted else 0, message_id),
                         )
-                    logger.warning("Room projection remains pending: %s: %s", row[0], exc)
+                    if exhausted:
+                        logger.warning(
+                            "Room projection abandoned after %d attempts: %s: %s",
+                            failed,
+                            message_id,
+                            exc,
+                        )
+                    elif failed == 1:
+                        logger.warning("Room projection remains pending: %s: %s", message_id, exc)
             return completed
 
     async def refresh_agent_ids(self) -> None:
@@ -1432,6 +1514,8 @@ class MessageManager:
             await self.recover_completions()
             await self.recover_room_projections()
             for agent_id, receiver in tuple(self._receivers.items()):
+                if agent_id in self._paused_agents:
+                    continue
                 if agent_id in self._workers:
                     continue
                 async with self._lock:

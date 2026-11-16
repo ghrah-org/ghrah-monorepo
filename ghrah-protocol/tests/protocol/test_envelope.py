@@ -21,7 +21,6 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from ghrah.protocol.types import (
-    AGENT_SCOPED_EVENT_TYPES,
     COMMAND_PAYLOAD_MAP,
     CORE_COMMANDS,
     EVENT_PAYLOAD_MAP,
@@ -355,10 +354,6 @@ class TestPayloadMap:
             CommandType.SUBSCRIBE,
             CommandType.UNSUBSCRIBE,
             CommandType.GET_AGENT_INFO,
-            CommandType.INIT_CLUSTER,
-            CommandType.SHUTDOWN_CLUSTER,
-            CommandType.CLUSTER_STATUS,
-            CommandType.LIST_CLUSTERS,
             CommandType.HITL_RESPONSE,
         }
         for ct in expected:
@@ -438,9 +433,8 @@ class TestCompactContextContracts:
         assert CommandType.AGENT_COMPACT_CONTEXT.value in CORE_COMMANDS
 
     def test_context_usage_updated_registered(self):
-        """事件 + payload 双登记，且归入 AGENT_SCOPED（发布须带非空归属）。"""
+        """事件 + payload 双登记（归属契约已迁到 Subject 侧）。"""
         assert EVENT_PAYLOAD_MAP[EventType.CONTEXT_USAGE_UPDATED] is ContextUsageUpdatedPayload
-        assert EventType.CONTEXT_USAGE_UPDATED.value in AGENT_SCOPED_EVENT_TYPES
 
     def test_agent_compact_context_envelope_round_trip(self):
         """命令载荷经 envelope_from_dict 收窄往返不丢字段。"""
@@ -451,14 +445,12 @@ class TestCompactContextContracts:
                     "project_id": "p1",
                     "agent_id": "a1",
                     "agent_name": "writer",
-                    "cluster_id": "c1",
                 },
             }
         )
         assert isinstance(env.payload, AgentCompactContextPayload)
         narrowed = expect_payload(env, AgentCompactContextPayload)
         assert narrowed.agent_name == "writer"
-        assert narrowed.cluster_id == "c1"
 
     def test_context_usage_updated_envelope_round_trip(self):
         """事件载荷（pre_call 锚点口径 + None 真实值）收窄往返不丢字段。"""
@@ -642,9 +634,6 @@ class TestHITLResolvedPayload:
 
     def test_event_registered_in_payload_map(self):
         assert EVENT_PAYLOAD_MAP[EventType.HITL_RESOLVED] is HITLResolvedPayload
-
-    def test_agent_scoped(self):
-        assert EventType.HITL_RESOLVED.value in AGENT_SCOPED_EVENT_TYPES
 
 
 # ─── 验收：payload_agent_name helper ───

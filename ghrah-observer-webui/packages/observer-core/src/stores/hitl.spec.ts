@@ -10,7 +10,6 @@ import { useHitlStore } from "./hitl.js";
 const payload = (overrides: Partial<HITLRequestPayload> = {}): HITLRequestPayload => ({
   project_id: "p1",
   agent_id: "a1",
-  cluster_id: "c1",
   promise_id: "h1",
   agent_name: "coder",
   ability_name: "write_file",

@@ -24,6 +24,7 @@ from ghrah.chat.content import (
     ReasoningBlock,
     TextBlock,
     ToolCallChunkBlock,
+    VideoBlock,
 )
 from ghrah.chat.format.openai import OpenAIFormat
 from ghrah.chat.format.openai_responses import OpenAIResponsesFormat
@@ -337,3 +338,17 @@ async def test_nonstream_provider_error_is_mapped_without_provider_details():
     with pytest.raises(LLMError, match="Responses request failed") as error:
         await fmt.generate([])
     assert "private details" not in str(error.value)
+
+
+class TestVideoBlockProjection:
+    def test_video_frames_become_input_images(self) -> None:
+        fmt = OpenAIResponsesFormat(model="deployment")
+        video = VideoBlock(
+            attachment_id="a" * 64,
+            mime_type="video/mp4",
+            filename="demo.mp4",
+            frames=[ImageBlock(base64="frame1", mime_type="image/jpeg")],
+        )
+        items = fmt._format_input([ChatMessage.user(text_or_blocks=[video])])
+        content = items[0]["content"]
+        assert any(p.get("type") == "input_image" for p in content)

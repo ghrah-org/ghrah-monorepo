@@ -21,6 +21,12 @@ from ghrah.protocol.types import (
     PluginNegotiatedPayload,
     PluginNegotiatePayload,
     PluginNegotiateResultPayload,
+    ProjectDeletedView,
+    ProjectLifecycleRequest,
+    ProjectTransitionPayload,
+    ProjectTransitionRequest,
+    ProjectUpdateRequest,
+    SendMessagePayload,
     TaskCheckOutcomePayload,
     TaskClaimEventPayload,
     TaskClaimListPayload,
@@ -265,6 +271,55 @@ SAMPLES: dict[str, object] = {
                 created_by="agent:backend-dev",
                 created_at="2026-09-20T10:00:00Z",
             )
+        ],
+    ),
+    "ProjectUpdateRequest": ProjectUpdateRequest(name="Renamed", expected_version=3),
+    "ProjectLifecycleRequest": ProjectLifecycleRequest(expected_version=3),
+    "ProjectTransitionRequest": ProjectTransitionRequest(expected_version=3),
+    "ProjectTransitionPayload": ProjectTransitionPayload(project_id="proj-001", expected_version=3),
+    "ProjectDeletedView": ProjectDeletedView(
+        project_id="proj-001",
+        deleted=True,
+        storage_purged=True,
+        rooms_deleted=2,
+    ),
+    "SendMessagePayload_with_blocks": SendMessagePayload(
+        project_id="proj-001",
+        agent_id="agent-001",
+        target="requirement-agent",
+        content="",
+        content_blocks=[
+            {"type": "text", "text": "请看这张图纸"},
+            {
+                "type": "image",
+                "base64": "iVBORw0KGgo=",
+                "mime_type": "image/png",
+            },
+        ],
+        metadata={"room_id": "room-001"},
+    ),
+    "SendMessagePayload_with_video": SendMessagePayload(
+        project_id="proj-001",
+        agent_id="agent-001",
+        target="requirement-agent",
+        content="请看这段视频",
+        content_blocks=[
+            {
+                "type": "video",
+                "attachment_id": "a" * 64,
+                "mime_type": "video/mp4",
+                "filename": "demo.mp4",
+                "duration_s": 12.5,
+                "width": 1280,
+                "height": 720,
+                "frames": [
+                    {
+                        "type": "image",
+                        "base64": "iVBORw0KGgo=",
+                        "mime_type": "image/jpeg",
+                    }
+                ],
+            }
         ],
     ),
 }

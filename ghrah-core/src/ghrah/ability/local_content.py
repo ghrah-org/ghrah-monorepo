@@ -14,7 +14,12 @@ from ghrah.protocol.ability_tree import AbilityTreeView, TreeKey
 from pydantic import TypeAdapter
 
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, MemberFence
-from ghrah.ability.content import ContentReadRequest, ContentReadResult, relative_path
+from ghrah.ability.content import (
+    ContentReadRequest,
+    ContentReadResult,
+    is_loadable_text,
+    relative_path,
+)
 
 if TYPE_CHECKING:
     from ghrah.ability.execution.invocation import OperationCall
@@ -161,7 +166,7 @@ class LocalGrantedContentProvider:
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("文本读取上限必须为正整数")
         description = await self.store.describe_content(self._identity, fence)
-        if not description.media_type.startswith("text/") or description.total_bytes > max_bytes:
+        if not is_loadable_text(description.media_type) or description.total_bytes > max_bytes:
             raise ValueError("内容不是允许加载的有界文本")
         data = bytearray()
         offset = 0

@@ -78,7 +78,6 @@ export const ChainHistoryResultPayloadSchema = z.object({
 export const SessionInfoPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   session_id: z.string(),
   agent_name: z.string(),
   name: z.string().optional().default("Session 1"),
@@ -98,7 +97,6 @@ export const SessionInfoPayloadSchema = z.object({
 export const SessionCreatedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   session: SessionInfoPayloadSchema,
 });
@@ -108,7 +106,6 @@ export const SessionActivatedPayloadSchema = SessionCreatedPayloadSchema;
 export const SessionArchivedPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   session_id: z.string(),
 });
@@ -118,7 +115,6 @@ export const SessionDeletedPayloadSchema = SessionArchivedPayloadSchema;
 export const SessionListResultPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   active_session_id: z.string().optional().default(""),
   sessions: z.array(SessionInfoPayloadSchema),
@@ -139,7 +135,6 @@ export const BranchInfoPayloadSchema = z.object({
 export const BranchEventPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   branch: BranchInfoPayloadSchema,
 });
@@ -147,7 +142,6 @@ export const BranchEventPayloadSchema = z.object({
 export const BranchLifecyclePayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   session_id: z.string(),
   branch_id: z.string(),
@@ -156,7 +150,6 @@ export const BranchLifecyclePayloadSchema = z.object({
 export const BranchListResultPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
-  cluster_id: z.string().optional().default(""),
   agent_name: z.string(),
   session_id: z.string(),
   active_branch_id: z.string().optional().default(""),

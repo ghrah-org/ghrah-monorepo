@@ -155,18 +155,6 @@ def test_shell_member_checks_command_and_working_dir(tmp_path: Path) -> None:
     assert escaped.value.code == "access_denied"
 
 
-def test_cluster_member_checks_identity_fields(tmp_path: Path) -> None:
-    """集群成员没有路径资源，只核对必填身份参数。"""
-    root = str(tmp_path)
-    _admit("cluster", "send_message", {"target": "bob", "content": "hi"}, (root,), root)
-    with pytest.raises(AccessError) as missing:
-        _admit("cluster", "send_message", {"target": "bob"}, (root,), root)
-    assert missing.value.code == "invalid_change"
-    with pytest.raises(AccessError) as malformed:
-        _admit("cluster", "terminate_agent", {"agent_name": 7}, (root,), root)
-    assert malformed.value.code == "invalid_change"
-
-
 def test_mcp_member_checks_server_and_tool(tmp_path: Path) -> None:
     """MCP 成员要求 server / tool 字符串与对象形状的 arguments。"""
     root = str(tmp_path)

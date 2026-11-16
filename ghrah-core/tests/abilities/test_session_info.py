@@ -81,18 +81,6 @@ class TestSessionInfo:
         assert result.data["agent"]["name"] == "w"
         assert "not wired" in result.data["agent"]["session"]
 
-    async def test_cluster_section_with_supervisor(self) -> None:
-        ability = SessionInfoAbility()
-        call, services = make_call(), make_services(supervisor=_FakeSupervisor())
-        result = await ability.execute(call, services)
-        assert result.data["cluster"]["count"] == 2
-        assert result.data["cluster"]["members"][0] == {"name": "planner"}
-
-    async def test_cluster_none_without_supervisor(self) -> None:
-        ability = SessionInfoAbility()
-        result = await ability.execute(make_call(), make_services())
-        assert result.data["cluster"] is None
-
     def test_bind_tool_shape(self) -> None:
         tool = SessionInfoAbility().bind_tool()
         fn = tool["function"]

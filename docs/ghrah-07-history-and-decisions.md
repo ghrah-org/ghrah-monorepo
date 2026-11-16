@@ -70,7 +70,7 @@
 
 **D-4 lock 用双 schema 并存，不做静默迁移。** `schema=1`（旧，`skills/lock.py`）与 `schema=2`（新，`scheme/loading/skill_lock.py`）并存；读到 `schema=1` 直接报 `lock schema='1' 与当前 2 不符（需显式重建，不自动改写）`（`skill_lock.py:189-193`），拒绝半可信摘要。理由：宁可让漂移"无法裁决"（`content_drifted=None`），也不要算出假结论。
 
-**D-5 单一写路径 + 派生副本可重建。** Core 的 sqlite 是唯一权威写侧，Subject 的 `ActionChainLedger` 是只读投影（同文件 WAL 双连接），Observer store 由 `core:*` 事件驱动、重连时经 `get_chain_history` 重建（`AGENTS.md`）。任何"第二写路径"都是 bug，不是优化。
+**D-5 单一写路径 + 派生副本可重建。** Core 的 sqlite 是唯一权威写侧，Subject 的 `LedgerUnit` 是只读投影（经 `CorePort.sessions.history`，自身不持有数据库连接），Observer store 由 `core:*` 事件驱动、重连时经 `get_chain_history` 重建（`AGENTS.md`）。任何"第二写路径"都是 bug，不是优化。
 
 **D-6 契约以 `ghrah-protocol` 为唯一权威。** TS 侧 `packages/protocol` 对齐；能力定义只在 Python 侧，不上 wire。所以"能力列表"命令落在 manifest 域（见 §2.4），而不是造一个新的 ability 域。
 

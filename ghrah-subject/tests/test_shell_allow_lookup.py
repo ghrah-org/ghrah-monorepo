@@ -27,7 +27,7 @@ async def wired(tmp_path):
     unit = CoreClusterRegistryUnit(SubjectConfig(observer_http_api_enabled=False))
     await unit.init(ctx)
     try:
-        yield store, unit.service._unit_factory
+        yield store, unit._unit_factory.build_config
     finally:
         await unit.stop()
         await store.stop()
@@ -39,10 +39,10 @@ async def test_project_bound_lookup_reads_changes_without_restart(wired, tmp_pat
     second = make_project_record(name="B")
     await store.upsert(first)
     await store.upsert(second)
-    a = factory("a", first.project_id, (tmp_path / "a").as_uri())
-    b = factory("b", second.project_id, (tmp_path / "b").as_uri())
-    lookup_a = a._config.shell_allow_lookup
-    lookup_b = b._config.shell_allow_lookup
+    a = factory(first.project_id, (tmp_path / "a").as_uri())
+    b = factory(second.project_id, (tmp_path / "b").as_uri())
+    lookup_a = a.shell_allow_lookup
+    lookup_b = b.shell_allow_lookup
     assert await lookup_a() == []
     entry = ShellAllowEntry(kind="class", key="pnpm:script:lint", label="lint")
     updated = await store.update(
@@ -58,12 +58,12 @@ async def test_project_bound_lookup_reads_changes_without_restart(wired, tmp_pat
 
 async def test_database_failure_is_logged_as_empty_memory(wired, tmp_path, monkeypatch, caplog):
     store, factory = wired
-    core = factory("a", "missing", (tmp_path / "a").as_uri())
-    assert await core._config.shell_allow_lookup() == []
+    core = factory("missing", (tmp_path / "a").as_uri())
+    assert await core.shell_allow_lookup() == []
 
     async def failed_get(project_id):
         raise sqlite3.OperationalError("test read failure")
 
     monkeypatch.setattr(store, "get", failed_get)
-    assert await core._config.shell_allow_lookup() == []
+    assert await core.shell_allow_lookup() == []
     assert "shell allow lookup failed" in caplog.text

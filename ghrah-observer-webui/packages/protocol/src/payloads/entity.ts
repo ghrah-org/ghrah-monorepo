@@ -86,7 +86,6 @@ export const AgentEntityCreatePayloadSchema = z
   .object({
     project_id: identifier,
     name: identifier,
-    cluster_id: identifier,
     start: z.boolean(),
     endpoint_name: identifier.nullable().optional().default(null),
     model_overrides: z.record(z.unknown()).nullable().optional().default(null),

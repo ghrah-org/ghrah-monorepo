@@ -21,19 +21,38 @@ from fastapi import FastAPI
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, GrantRecord
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.versions import AbilityVersion
-from ghrah.protocol.ability_tree import AbilityTreeView, BindToolRequest, GrantAbilityRequest
+from ghrah.core.read.ability_catalog import (
+    CatalogError,
+    build_package_catalog,
+    build_package_groups,
+)
+from ghrah.core.wiring import build_core_catalog, build_core_port
+from ghrah.protocol.ability_control import (
+    AbilityMcpProbeView,
+    AbilityMcpServerInfoView,
+    AbilityMcpToolView,
+    AbilityTreeChangeResult,
+)
+from ghrah.protocol.ability_tree import (
+    AbilityTreeView,
+    BindToolRequest,
+    GrantAbilityRequest,
+)
+from ghrah.protocol.errors import ApiError
+from ghrah.protocol.problem import Problem, ProblemCode
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
 from starlette.requests import Request
 
 from ghrah.subject.config import SubjectConfig
+from ghrah.subject.runtime.core_ports import CorePorts
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
 from ghrah.subject.runtime.service_keys import (
-    ABILITY_ACCESS,
+    CORE_CATALOG_SERVICE,
+    CORE_PORT_SERVICE,
     OBSERVER_EVENT_BUS,
     PROJECT_STORE,
 )
-from ghrah.subject.units.ability_catalog import build_package_catalog, build_package_groups
 from ghrah.subject.units.ability_control import (
     AbilityControlUnit,
     _authorized,
@@ -70,23 +89,7 @@ class _Handle:
     project_id: str
     store: Any
     operator: Any
-
-
-class _Access:
-    def __init__(self, handle: _Handle, runtime: tuple[str, ...] | None = None) -> None:
-        self._handle = handle
-        self._runtime = runtime
-
-    async def acquire(self, project_id: str, project_root_locator: str) -> _Handle:
-        del project_id, project_root_locator
-        return self._handle
-
-    async def agent_tool_snapshot(self, project_id: str, agent_id: str) -> tuple[str, ...] | None:
-        del project_id, agent_id
-        return self._runtime
-
-    async def close(self) -> None:
-        return None
+    store_path: str | None = None
 
 
 class _Bus:
@@ -104,15 +107,18 @@ class _FakeStore:
     def __init__(self, error: str | None = None) -> None:
         self.error = error
 
-    async def write_bind_tool(self, actor: Any, agent: str, change: Any) -> int:
-        del actor, agent, change
+    async def enable_tool(self, *, agent_id: str, change: Any) -> AbilityTreeChangeResult:
+        view = await self.view(None, agent_id)
         if self.error is not None:
-            raise AccessError(self.error)  # type: ignore[arg-type]
-        return 5
-
-    async def agent_revision(self, actor: Any, agent: str) -> int:
-        del actor, agent
-        return 6
+            raise ApiError(
+                Problem.make(
+                    ProblemCode.FAILED_PRECONDITION,
+                    capability="abilities.enable_tool",
+                    detail="conflict",
+                    details={"revision": 6, "view": view.model_dump(mode="json")},
+                )
+            )
+        return AbilityTreeChangeResult(revision=5, view=view)
 
     async def view(self, actor: Any, agent: str) -> Any:
         del actor
@@ -182,19 +188,93 @@ async def _request(
     return await asyncio.to_thread(run)
 
 
-def _app(config: SubjectConfig, handle: _Handle, bus: _Bus, runtime: Any = None) -> FastAPI:
-    access = _Access(handle, runtime)
-    app = FastAPI()
-    app.include_router(
-        build_ability_control_router(
-            config=config,
-            project_store=_ProjectStore("proj", "/tmp/proj"),
-            access=access,  # type: ignore[arg-type]
-            event_bus=bus,
+@pytest.fixture
+async def make_app():
+    ports: list[CorePorts] = []
+    catalogs: list[Any] = []
+
+    def build(config: SubjectConfig, handle: _Handle, bus: _Bus, probe: Any = None) -> FastAPI:
+        # 关系库由测试布置事实，HTTP 通过作用域端口 / 目录端口读取。
+        def make_port(project_id: str):
+            return build_core_port(
+                scope_id=project_id,
+                db_path=handle.store_path or "",
+                install_root=config.ability.install_root,
+            )
+
+        base_ports = CorePorts(make_port)
+        ports.append(base_ports)
+
+        base_catalog = build_core_catalog(
+            install_root=config.ability.install_root,
+            agentconf_db_path=config.agentconf_db_path,
         )
-    )
-    register_ability_control_error_handlers(app)
-    return app
+        catalogs.append(base_catalog)
+
+        if probe is None:
+            catalog: Any = base_catalog
+        else:
+
+            async def run_probe(*, namespace, name, version, request):
+                try:
+                    return await probe(
+                        config.ability.install_root,
+                        namespace,
+                        name,
+                        version,
+                        request,
+                        db_path=config.agentconf_db_path,
+                    )
+                except CatalogError as exc:
+                    code = (
+                        ProblemCode.FAILED_PRECONDITION
+                        if exc.code == "invalid_change"
+                        else ProblemCode.NOT_FOUND
+                    )
+                    raise ApiError(
+                        Problem.make(
+                            code,
+                            capability="abilities.package_mcp_probe",
+                            detail=exc.message,
+                            details={"reason": "definition_not_mcp"}
+                            if exc.code == "invalid_change"
+                            else {},
+                        )
+                    ) from exc
+
+            catalog = SimpleNamespace(
+                packages=base_catalog.packages,
+                package_detail=base_catalog.package_detail,
+                package_version_profile=base_catalog.package_version_profile,
+                package_groups=base_catalog.package_groups,
+                package_mcp_probe=run_probe,
+                aclose=base_catalog.aclose,
+            )
+
+        class RoutedPorts:
+            def for_project(self, project_id: str):
+                if isinstance(handle.store, _FakeStore):
+                    return SimpleNamespace(abilities=handle.store)
+                return base_ports.for_project(project_id)
+
+        app = FastAPI()
+        app.include_router(
+            build_ability_control_router(
+                config=config,
+                project_store=_ProjectStore(handle.project_id, "/tmp/project"),
+                core_ports=RoutedPorts(),
+                catalog=catalog,
+                event_bus=bus,
+            )
+        )
+        register_ability_control_error_handlers(app)
+        return app
+
+    yield build
+    for port in ports:
+        await port.aclose()
+    for catalog in catalogs:
+        await catalog.aclose()
 
 
 def _request_with_host(host: str, headers: dict[str, str] | None = None) -> Request:
@@ -223,7 +303,8 @@ async def test_unit_mounts_router_and_status_route_on_observer_app() -> None:
             PROJECT_STORE.name,
             _ProjectStore("proj", "/tmp/proj"),
         )
-        ctx.provide(ABILITY_ACCESS.name, _Access(_Handle("proj", None, None)))
+        ctx.provide(CORE_PORT_SERVICE.name, object())
+        ctx.provide(CORE_CATALOG_SERVICE.name, build_core_catalog())
         unit = AbilityControlUnit(config)
         fiber = ctx.plugin(mount_unit(unit))
         await wait_active(fiber)
@@ -241,7 +322,6 @@ async def test_status_reports_enabled_and_disabled() -> None:
     router = build_ability_control_router(
         config=enabled,
         project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
         event_bus=_Bus(),
     )
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
@@ -257,7 +337,6 @@ async def test_status_reports_enabled_and_disabled() -> None:
     router = build_ability_control_router(
         config=disabled,
         project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
         event_bus=_Bus(),
     )
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
@@ -272,7 +351,6 @@ async def test_status_reports_enabled_and_disabled() -> None:
     router = build_ability_control_router(
         config=closed,
         project_store=_ProjectStore("proj", "/tmp/proj"),
-        access=_Access(_Handle("proj", None, None)),  # type: ignore[arg-type]
         event_bus=_Bus(),
     )
     status = next(route.endpoint for route in router.routes if route.path.endswith("/status"))
@@ -303,12 +381,12 @@ def test_authorization_trusts_loopback_and_requires_token_elsewhere() -> None:
     )
 
 
-async def test_admin_and_tree_rest_behaviour(tmp_path: Any) -> None:
+async def test_admin_and_tree_rest_behaviour(tmp_path: Any, make_app) -> None:
     store, operator = await _open_store(tmp_path)
     try:
         config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
         bus = _Bus()
-        app = _app(config, _Handle("proj", store, operator), bus)
+        app = make_app(config, _Handle("proj", store, operator, str(tmp_path / "ability.db")), bus)
         server, task, port = await _serve(app)
         base = f"http://127.0.0.1:{port}"
         try:
@@ -346,7 +424,9 @@ async def test_admin_and_tree_rest_behaviour(tmp_path: Any) -> None:
             assert missing_status == 200
             assert missing["revision"] == 0
             disabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=False)
-            app = _app(disabled, _Handle("proj", store, operator), _Bus())
+            app = make_app(
+                disabled, _Handle("proj", store, operator, str(tmp_path / "ability.db")), _Bus()
+            )
             server2, task2, port2 = await _serve(app)
             try:
                 off_status, off = await _request(
@@ -364,12 +444,12 @@ async def test_admin_and_tree_rest_behaviour(tmp_path: Any) -> None:
         await store.close()
 
 
-async def test_write_publishes_tree_event_and_maps_conflict(tmp_path: Any) -> None:
+async def test_write_publishes_tree_event_and_maps_conflict(tmp_path: Any, make_app) -> None:
     del tmp_path
     config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
     bus = _Bus()
     store = _FakeStore()
-    app = _app(config, _Handle("proj", store, object()), bus)  # type: ignore[arg-type]
+    app = make_app(config, _Handle("proj", store, object()), bus)  # type: ignore[arg-type]
     server, task, port = await _serve(app)
     base = f"http://127.0.0.1:{port}"
     try:
@@ -390,7 +470,7 @@ async def test_write_publishes_tree_event_and_maps_conflict(tmp_path: Any) -> No
         assert bus.calls and bus.calls[-1][0] == "ability_tree_changed"
         assert bus.calls[-1][1]["agent_id"] == "agent-1"
 
-        conflict_app = _app(
+        conflict_app = make_app(
             config,
             _Handle("proj", _FakeStore(error="conflict"), object()),  # type: ignore[arg-type]
             _Bus(),
@@ -458,11 +538,13 @@ def _reject_root(value: Any) -> None:
             _reject_root(item)
 
 
-async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any) -> None:
+async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any, make_app) -> None:
     store, operator = await _open_store(tmp_path)
     try:
         config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
-        app = _app(config, _Handle("proj", store, operator), _Bus())
+        app = make_app(
+            config, _Handle("proj", store, operator, str(tmp_path / "ability.db")), _Bus()
+        )
         server, task, port = await _serve(app)
         base = f"http://127.0.0.1:{port}"
         try:
@@ -549,7 +631,11 @@ async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any)
             assert rejected["error"]["code"] == "invalid_request"
             closed_config = SubjectConfig(observer_http_api_enabled=True)
             closed_config.ability_source = "legacy"
-            closed_app = _app(closed_config, _Handle("proj", store, operator), _Bus())
+            closed_app = make_app(
+                closed_config,
+                _Handle("proj", store, operator, str(tmp_path / "ability.db")),
+                _Bus(),
+            )
             closed_server, closed_task, closed_port = await _serve(closed_app)
             try:
                 denied, denied_body = await _request(
@@ -570,7 +656,9 @@ async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any)
                 closed_server.should_exit = True
                 await closed_task
             disabled = SubjectConfig(ability_source="builtin", observer_http_api_enabled=False)
-            disabled_app = _app(disabled, _Handle("proj", store, operator), _Bus())
+            disabled_app = make_app(
+                disabled, _Handle("proj", store, operator, str(tmp_path / "ability.db")), _Bus()
+            )
             disabled_server, disabled_task, disabled_port = await _serve(disabled_app)
             try:
                 for path in (
@@ -785,3 +873,147 @@ def test_installed_available_is_false_when_the_install_root_cannot_be_read(
     catalog = build_package_catalog(str(locked))
     assert catalog.installed_available is False
     assert all(row.origin == "builtin" for row in catalog.packages)
+
+
+async def test_package_version_profile_route_returns_member_details(make_app) -> None:
+    """画像端点：内置版本可读、成员明细齐全、错误按 400/404 分类、无绝对路径。"""
+    config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
+    app = make_app(config, _Handle("proj", None, None), _Bus())
+    server, task, port = await _serve(app)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, profile = await _request(f"{base}/api/v1/ability-packages/ghrah/fs/versions/0.1.0")
+        assert status == 200
+        assert profile["format"] == "ghrah.ability-control.package-version.v1"
+        assert profile["origin"] == "builtin"
+        assert profile["definition_origin"] == "source"
+        assert len(profile["operations"]) == 7
+        assert profile["verify"] is None and profile["mcp"] is None
+        entries = [item["entry"] for item in profile["operations"] if item["entry"] is not None]
+        assert entries and all(item["path"].startswith("operations/") for item in entries)
+        _reject_root(profile)
+        assert "/home/" not in json.dumps(profile)
+
+        missing_status, missing = await _request(
+            f"{base}/api/v1/ability-packages/ghrah/fs/versions/9.9.9"
+        )
+        assert missing_status == 404
+        assert missing["error"]["code"] == "not_found"
+        bad_status, bad = await _request(f"{base}/api/v1/ability-packages/Ghrah/fs/versions/0.1.0")
+        assert bad_status == 400
+        assert bad["error"]["code"] == "invalid_request"
+        bad_version_status, _bad_version = await _request(
+            f"{base}/api/v1/ability-packages/ghrah/fs/versions/latest"
+        )
+        assert bad_version_status == 400
+    finally:
+        server.should_exit = True
+        await task
+
+
+async def test_package_mcp_probe_route_maps_gate_result_and_catalog_errors(
+    monkeypatch: pytest.MonkeyPatch, make_app
+) -> None:
+    """探测端点：注入缝可用、非 MCP 409 带 reason、未找到 404、请求越界 400、门控 503。"""
+    config = SubjectConfig(ability_source="builtin", observer_http_api_enabled=True)
+    calls: list[tuple[Any, ...]] = []
+
+    async def stub_probe(
+        install_root: Any,
+        namespace: str,
+        name: str,
+        version: str,
+        request: Any,
+        *,
+        db_path: Any = None,
+        connector: Any = None,
+    ) -> AbilityMcpProbeView:
+        calls.append((install_root, namespace, name, version, request, db_path))
+        if name == "fs":
+            raise CatalogError("invalid_change", "definition_not_mcp")
+        if version == "9.9.9":
+            raise CatalogError("not_found", "missing")
+        return AbilityMcpProbeView(
+            namespace=namespace,
+            name=name,
+            version=version,
+            server="fetch",
+            ok=True,
+            phase="list_tools",
+            elapsed_ms=3,
+            protocol_version="2025-06-18",
+            server_info=AbilityMcpServerInfoView(name="remote", version="1.0.0"),
+            tools=[AbilityMcpToolView(name="echo", input_schema={"type": "object"})],
+            tool_count=1,
+            resource_count=0,
+        )
+
+    monkeypatch.setattr("ghrah.subject.units.ability_control._mcp_probe_ready", lambda: True)
+    app = make_app(config, _Handle("proj", None, None), _Bus(), probe=stub_probe)
+    server, task, port = await _serve(app)
+    base = f"http://127.0.0.1:{port}"
+    probe_path = "/api/v1/ability-packages/{ns}/{name}/versions/{version}/mcp/probe"
+    try:
+        status, payload = await _request(
+            f"{base}/api/v1/abilities/status",
+        )
+        assert status == 200
+        assert payload["features"]["mcp_probe"] is True
+
+        rejected_status, rejected = await _request(
+            f"{base}" + probe_path.format(ns="ghrah", name="fs", version="0.1.0"),
+            method="POST",
+            body={"timeout_ms": 5000},
+        )
+        assert rejected_status == 409
+        assert rejected["error"]["code"] == "invalid_change"
+        assert rejected["error"]["detail"]["reason"] == "definition_not_mcp"
+
+        missing_status, missing = await _request(
+            f"{base}" + probe_path.format(ns="mcp", name="fetch", version="9.9.9"),
+            method="POST",
+            body={"timeout_ms": 5000},
+        )
+        assert missing_status == 404
+        assert missing["error"]["code"] == "not_found"
+
+        ok_status, ok_payload = await _request(
+            f"{base}" + probe_path.format(ns="mcp", name="fetch", version="1.0.0"),
+            method="POST",
+            body={"timeout_ms": 5000, "include_resources": True},
+        )
+        assert ok_status == 200
+        assert ok_payload["ok"] is True
+        assert ok_payload["tool_count"] == 1
+        assert ok_payload["server"] == "fetch"
+        assert calls[-1][4].include_resources is True
+        assert calls[-1][5] is None  # db_path 由 config.agentconf_db_path 提供（此处未配置）
+
+        invalid_status, invalid = await _request(
+            f"{base}" + probe_path.format(ns="mcp", name="fetch", version="1.0.0"),
+            method="POST",
+            body={"timeout_ms": 999},
+        )
+        assert invalid_status == 400
+        assert invalid["error"]["code"] == "invalid_request"
+    finally:
+        server.should_exit = True
+        await task
+
+    monkeypatch.setattr(
+        "ghrah.subject.units.ability_control._mcp_probe_ready",
+        lambda: False,
+    )
+    gated = make_app(config, _Handle("proj", None, None), _Bus())
+    server, task, port = await _serve(gated)
+    try:
+        gated_status, gated_payload = await _request(
+            f"http://127.0.0.1:{port}" + probe_path.format(ns="mcp", name="fetch", version="1.0.0"),
+            method="POST",
+            body={"timeout_ms": 5000},
+        )
+        assert gated_status == 503
+        assert gated_payload["error"]["code"] == "capability_unavailable"
+    finally:
+        server.should_exit = True
+        await task

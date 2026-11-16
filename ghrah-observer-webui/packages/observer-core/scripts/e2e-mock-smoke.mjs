@@ -15,10 +15,19 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { createPinia, setActivePinia } from "pinia";
 
-import { demoScenario, MockServer, MockState, runScenario } from "../../mock-server/dist/index.js";
+import {
+  createMockHttpServer,
+  demoScenario,
+  MockServer,
+  MockState,
+  runScenario,
+} from "../../mock-server/dist/index.js";
+import { AgentSnapshotSchema, CommandType, EventType } from "../../protocol/dist/index.js";
 import {
   connectStores,
   ObserverClient,
+  createAbilityControlClient,
+  HttpClient,
   useActionChainsStore,
   useAgentsStore,
   useBranchesStore,
@@ -75,6 +84,8 @@ async function main() {
   const unbind = connectStores(client);
   await client.connect();
   check("client connected", client.connected);
+  const http = createMockHttpServer({ port: 0, state });
+  await http.start();
 
   // ── 3. 初始同步：projects/rooms/agents ──
   const synced =
@@ -462,10 +473,136 @@ async function main() {
   check("seq still strictly increasing after resume", allIncreasing);
   await waitFor("post-reconnect sync", () => rooms.roomList.length >= 4, 10_000);
 
+  const createdEntity = await client.createAgentEntity({
+    project_id: demoProjectId,
+    name: "smoke-entity",
+    manifest_ref: "mock.agent",
+    start: false,
+  });
+  check("create a stopped persistent Agent", createdEntity.success);
+  const stopped = AgentSnapshotSchema.parse(createdEntity.data);
+  const entity = client.agent(demoProjectId, stopped.identity.agent_id);
+  const started = await entity.start(stopped.specification_revision);
+  const firstIncarnation = started.runtime.incarnation_id;
+  check(
+    "start preserves persistent identity",
+    started.identity.agent_id === stopped.identity.agent_id &&
+      started.runtime.availability === "online",
+  );
+  const { session } = await entity.context.createSession("smoke entity context", "Entity prompt");
+  await entity.context.activateSession(session.session_id);
+  const target = {
+    projectId: demoProjectId,
+    agentId: stopped.identity.agent_id,
+    agentName: "smoke-entity",
+  };
+  const sentDirect = await client.sendMessage(target, "direct hello");
+  check(
+    "direct message gets deterministic reply",
+    sentDirect.success && sentDirect.data.content.includes("direct hello"),
+  );
+  const inbox = await entity.mailbox.listInbox();
+  const message = inbox.items.find((item) => item.message.content === "direct hello");
+  check(
+    "mailbox receipt links to ActionChain node",
+    message?.deliveries[0].consumed_node_id != null,
+  );
+  const history = await entity.context.getHistory(session.session_id, session.active_branch_id);
+  check(
+    "context history contains the consumed message",
+    history.nodes.some((node) =>
+      node.messages_delta?.some((msg) =>
+        msg.content_blocks?.some((block) => block.text === "direct hello"),
+      ),
+    ),
+  );
+  const stoppedEntity = await entity.stop(undefined, firstIncarnation);
+  check(
+    "stopped Agent retains context and mailbox",
+    stoppedEntity.runtime.availability === "offline" &&
+      (await entity.mailbox.listInbox()).items.length === 1 &&
+      (await entity.context.getHistory(session.session_id, session.active_branch_id)).nodes
+        .length === history.nodes.length,
+  );
+  const restarted = await entity.start(stoppedEntity.specification_revision);
+  check(
+    "restart rotates incarnation, retains active Session",
+    restarted.runtime.incarnation_id !== firstIncarnation &&
+      restarted.context.active_session_id === session.session_id,
+  );
+
+  const control = createAbilityControlClient(
+    new HttpClient({ baseUrl: `http://127.0.0.1:${http.port}` }),
+    { projectId: demoProjectId },
+  );
+  const notifications = [];
+  client.on(EventType.ABILITY_TREE_CHANGED, (event) => notifications.push(event));
+  const admin = await control.admin(stopped.identity.agent_id);
+  check(
+    "HTTP management reads shared WS runtime",
+    admin.lifecycle.state === "running" && admin.run_id === restarted.runtime.incarnation_id,
+  );
+  await control.revokeGrant(stopped.identity.agent_id, {
+    alias: "ghrah-fs",
+    expected_revision: admin.revision,
+  });
+  const revoked = await control.admin(stopped.identity.agent_id);
+  await control.putGrant(stopped.identity.agent_id, {
+    alias: "ghrah-fs",
+    instance_id: "ghrah-fs",
+    members: ["read_file"],
+    expected_revision: revoked.revision,
+  });
+  check(
+    "re-grant restores revoked ability from definition",
+    (await control.admin(stopped.identity.agent_id)).grants.length === 1,
+  );
+  check(
+    "HTTP writes broadcast WS invalidation",
+    await waitFor("ability invalidation", () => notifications.length === 2),
+  );
+  const changes = await control.changes(stopped.identity.agent_id);
+  check("ability audit is reconstructible via HTTP", changes.changes.length === 2);
+  const stale = await client.request({
+    type: CommandType.AGENT_ENTITY,
+    payload: {
+      ...stopped.identity,
+      operation: { type: "stop", expected_incarnation_id: firstIncarnation },
+    },
+  });
+  check(
+    "stale incarnation cannot stop restarted Agent",
+    !stale.success && stale.error === "agent_incarnation_conflict",
+  );
+  const peerCreated = await client.createAgentEntity({
+    project_id: demoProjectId,
+    name: "smoke-peer",
+    manifest_ref: "mock.agent",
+    start: true,
+  });
+  const peer = AgentSnapshotSchema.parse(peerCreated.data);
+  const peerTarget = {
+    projectId: demoProjectId,
+    agentId: peer.identity.agent_id,
+    agentName: "smoke-peer",
+  };
+  const interAgent = await client.sendAgentMessage(target, peerTarget, "A to B", false);
+  check(
+    "inter-Agent ability receipt",
+    interAgent.success && interAgent.data.response.includes("A to B"),
+  );
+  const outbox = await entity.mailbox.listOutbox();
+  const peerInbox = await client.agent(demoProjectId, peer.identity.agent_id).mailbox.listInbox();
+  check(
+    "sender outbox and recipient inbox read the same message",
+    outbox.items.at(-1)?.message.message_id === peerInbox.items[0]?.message.message_id,
+  );
+
   // ── teardown ──
   unbind();
   await client.disconnect();
   cancelScenario();
+  await http.close();
   await server.close();
 
   console.log(failures === 0 ? "\nSMOKE PASS" : `\nSMOKE FAIL (${failures} failures)`);

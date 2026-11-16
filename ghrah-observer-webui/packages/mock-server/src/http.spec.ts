@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createMockHttpServer, type MockHttpServer } from "./http.js";
+import { MockState } from "./state.js";
+import { AgentSnapshotSchema, CommandType, EventType } from "@ghrah/protocol";
 
 const servers: MockHttpServer[] = [];
 
@@ -21,6 +23,160 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 describe("MockHttpServer", () => {
+  it("uses WS identities and runtime, emits changes, and restores revoked grants", async () => {
+    const state = new MockState();
+    const projectResult = state.handleCommand(CommandType.PROJECT_CREATE, { name: "http-shared" });
+    const projectId = (projectResult.data as { project: { project_id: string } }).project
+      .project_id;
+    const created = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+      project_id: projectId,
+      name: "worker",
+      manifest_ref: "mock.agent",
+      start: true,
+    });
+    const snapshot = AgentSnapshotSchema.parse(created.data);
+    const events: string[] = [];
+    state.emit = (type) => events.push(type);
+    const server = createMockHttpServer({ port: 0, state });
+    servers.push(server);
+    await server.start();
+    const base = `http://127.0.0.1:${server.port}`;
+    const agentBase = `${base}/api/v1/projects/${projectId}/agents/${snapshot.identity.agent_id}`;
+    expect((await fetch(`${base}/health`)).status).toBe(200);
+    expect(
+      (await fetch(`${base}/api/v1/projects/${projectId}/agents/unknown/ability-admin`)).status,
+    ).toBe(404);
+    const admin = await getJson<{ lifecycle: { state: string }; run_id: string }>(
+      `${agentBase}/ability-admin`,
+    );
+    expect(admin.lifecycle.state).toBe("running");
+    expect(admin.run_id).toBe(snapshot.runtime.incarnation_id);
+    expect(
+      (
+        await fetch(`${agentBase}/ability-tree/grants/ghrah-fs?expected_revision=1`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await fetch(`${agentBase}/ability-tree/grants/ghrah-fs`, {
+          method: "PUT",
+          body: JSON.stringify({ alias: "ghrah-fs", members: ["read_file"], expected_revision: 2 }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(events.filter((type) => type === EventType.ABILITY_TREE_CHANGED)).toHaveLength(2);
+    const restored = await getJson<{ abilities: unknown[] }>(`${agentBase}/ability-tree`);
+    expect(restored.abilities).toHaveLength(1);
+    const changes = await getJson<{ changes: Array<{ reason: string }> }>(
+      `${agentBase}/ability-changes`,
+    );
+    expect(changes.changes.map((change) => change.reason)).toEqual(["revoke", "grant"]);
+    const patchedResponse = await fetch(agentBase, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: snapshot.specification_revision,
+        system_prompt: "新提示词",
+      }),
+    });
+    expect(patchedResponse.status).toBe(200);
+    const patched = (await patchedResponse.json()) as {
+      effective: string;
+      specification: { project_version: number; prompt: { size_bytes: number } };
+    };
+    expect(patched.effective).toBe("next_start");
+    expect(patched.specification.prompt.size_bytes).toBe(12);
+    expect([...state.agents.values()][0].config.system_prompt).toBe("");
+    expect(
+      (
+        await fetch(agentBase, {
+          method: "PATCH",
+          body: JSON.stringify({
+            expected_revision: snapshot.specification_revision,
+            system_prompt: "stale",
+          }),
+        })
+      ).status,
+    ).toBe(409);
+    const stoppedResponse = await fetch(`${agentBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: patched.specification.project_version,
+        state: "stopped",
+      }),
+    });
+    expect(stoppedResponse.status).toBe(200);
+    const stopped = (await stoppedResponse.json()) as {
+      specification: { project_version: number };
+      runtime: { availability: string };
+    };
+    expect(stopped.runtime.availability).toBe("offline");
+    const restartedResponse = await fetch(`${agentBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: stopped.specification.project_version,
+        state: "running",
+      }),
+    });
+    expect(restartedResponse.status).toBe(200);
+    const restarted = (await restartedResponse.json()) as {
+      specification: { project_version: number };
+      ability: { requires_respawn: boolean };
+      runtime: { incarnation_id: string };
+    };
+    expect(restarted.runtime.incarnation_id).not.toBe(snapshot.runtime.incarnation_id);
+    expect(restarted.ability.requires_respawn).toBe(false);
+    expect([...state.agents.values()][0].config.system_prompt).toBe("新提示词");
+    const draftResponse = await fetch(`${base}/api/v1/projects/${projectId}/agents`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_revision: restarted.specification.project_version,
+        name: "draft",
+        endpoint_name: "mock-model",
+      }),
+    });
+    expect(draftResponse.status).toBe(201);
+    const draft = (await draftResponse.json()) as {
+      specification: { agent_id: string; project_version: number };
+    };
+    const draftBase = `${base}/api/v1/projects/${projectId}/agents/${draft.specification.agent_id}`;
+    expect(draftResponse.headers.get("location")).toBe(new URL(draftBase).pathname);
+    const list = await getJson<{ agents: Array<{ specification: Record<string, unknown> }> }>(
+      `${base}/api/v1/projects/${projectId}/agents`,
+    );
+    expect(list.agents).toHaveLength(2);
+    expect(list.agents[0].specification).not.toHaveProperty("system_prompt");
+    const draftStart = await fetch(`${draftBase}/desired-state`, {
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: draft.specification.project_version,
+        state: "running",
+      }),
+    });
+    expect(draftStart.status).toBe(409);
+    expect(((await draftStart.json()) as { error: { code: string } }).error.code).toBe(
+      "agent_manifest_required",
+    );
+    expect(
+      (
+        await fetch(`${draftBase}?expected_revision=${draft.specification.project_version}`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await fetch(draftBase)).status).toBe(404);
+    state.dispose();
+  });
+
+  it("rejects startup when the HTTP port is occupied", async () => {
+    const first = createMockHttpServer({ port: 0, host: "127.0.0.1" });
+    servers.push(first);
+    await first.start();
+    const second = createMockHttpServer({ port: first.port, host: "127.0.0.1" });
+    servers.push(second);
+    await expect(second.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
+  });
   it("serves status, tree and admin projections", async () => {
     const base = await start();
     const status = await getJson<{ ability_source?: string; features?: { tree?: boolean } }>(
@@ -243,5 +399,156 @@ describe("MockHttpServer", () => {
       const body = (await response.json()) as { error?: { code?: string } };
       expect(body.error?.code).toBe("capability_unavailable");
     }
+  });
+});
+
+describe("MockHttpServer project REST", () => {
+  async function startWithState(): Promise<{ base: string; state: MockState }> {
+    const state = new MockState();
+    const server = createMockHttpServer({ port: 0, state });
+    servers.push(server);
+    await server.start();
+    return { base: `http://127.0.0.1:${server.port}`, state };
+  }
+
+  async function createProject(base: string): Promise<Record<string, unknown>> {
+    const response = await fetch(`${base}/api/v1/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "rest-project" }),
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toMatch(/^\/api\/v1\/projects\//);
+    return (await response.json()) as Record<string, unknown>;
+  }
+
+  it("creates, lists, reads and patches projects", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+    expect(project.version).toBe(1);
+
+    const list = await getJson<{ projects: unknown[]; count: number }>(`${base}/api/v1/projects`);
+    expect(list.count).toBe(1);
+
+    const patched = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "renamed", expected_version: 1 }),
+    });
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { version: number }).version).toBe(2);
+
+    const stale = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "stale", expected_version: 1 }),
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = (await stale.json()) as {
+      error: { code: string; detail: { current_version: number } };
+    };
+    expect(staleBody.error.code).toBe("conflict");
+    expect(staleBody.error.detail.current_version).toBe(2);
+
+    const detail = await getJson<{ name: string }>(`${base}/api/v1/projects/${projectId}`);
+    expect(detail.name).toBe("renamed");
+  });
+
+  it("archives and restores with the archived list axis", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+
+    const archived = await fetch(`${base}/api/v1/projects/${projectId}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: 1 }),
+    });
+    expect(archived.status).toBe(200);
+    const archivedBody = (await archived.json()) as { archived_at: string | null; version: number };
+    expect(archivedBody.archived_at).not.toBeNull();
+
+    const active = await getJson<{ count: number }>(`${base}/api/v1/projects`);
+    expect(active.count).toBe(0);
+    const archivedList = await getJson<{ count: number }>(`${base}/api/v1/projects?archived=true`);
+    expect(archivedList.count).toBe(1);
+
+    const restored = await fetch(`${base}/api/v1/projects/${projectId}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: archivedBody.version }),
+    });
+    expect(restored.status).toBe(200);
+    expect(((await restored.json()) as { archived_at: string | null }).archived_at).toBeNull();
+  });
+
+  it("guards deletion with room count and supports cascade", async () => {
+    const { base, state } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+    const room = state.handleCommand(CommandType.ROOM_CREATE, {
+      project_id: projectId,
+      name: "room-1",
+    });
+    expect(room.success).toBe(true);
+
+    const blocked = await fetch(`${base}/api/v1/projects/${projectId}?expected_version=1`, {
+      method: "DELETE",
+    });
+    expect(blocked.status).toBe(409);
+    const blockedBody = (await blocked.json()) as {
+      error: { code: string; detail: { room_count: number } };
+    };
+    expect(blockedBody.error.code).toBe("project_has_rooms");
+    expect(blockedBody.error.detail.room_count).toBe(1);
+
+    const deleted = await fetch(
+      `${base}/api/v1/projects/${projectId}?expected_version=1&cascade_rooms=true`,
+      { method: "DELETE" },
+    );
+    expect(deleted.status).toBe(200);
+    const deletedBody = (await deleted.json()) as { rooms_deleted: number; deleted: boolean };
+    expect(deletedBody.deleted).toBe(true);
+    expect(deletedBody.rooms_deleted).toBe(1);
+
+    const gone = await fetch(`${base}/api/v1/projects/${projectId}`);
+    expect(gone.status).toBe(404);
+  });
+
+  it("validates pause version and requires expected_version on delete", async () => {
+    const { base } = await startWithState();
+    const project = await createProject(base);
+    const projectId = project.project_id as string;
+
+    const stale = await fetch(`${base}/api/v1/projects/${projectId}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: 99 }),
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = (await stale.json()) as {
+      error: { code: string; detail: { current_version: number } };
+    };
+    expect(staleBody.error.detail.current_version).toBe(1);
+
+    const paused = await fetch(`${base}/api/v1/projects/${projectId}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(paused.status).toBe(200);
+    expect(((await paused.json()) as { status: string }).status).toBe("paused");
+
+    const missingVersion = await fetch(`${base}/api/v1/projects/${projectId}`, {
+      method: "DELETE",
+    });
+    expect(missingVersion.status).toBe(400);
+  });
+
+  it("returns 503 for project routes without shared state", async () => {
+    const base = await start();
+    const response = await fetch(`${base}/api/v1/projects`);
+    expect(response.status).toBe(503);
   });
 });

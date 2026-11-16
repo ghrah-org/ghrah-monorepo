@@ -15,7 +15,11 @@ from ghrah.protocol.types import EventType, Message
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
-from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT, OBSERVER_EVENT_BUS
+from ghrah.subject.runtime.service_keys import (
+    OBSERVER_ENDPOINT,
+    OBSERVER_EVENT_BUS,
+    PROJECT_STORE,
+)
 from ghrah.subject.server.config import ObserverServerConfig
 from ghrah.subject.server.connection_manager import ConnectionManager
 from ghrah.subject.server.event_bus import EventBus
@@ -80,6 +84,9 @@ class WebSocketObserverEndpointUnit(SubjectUnit):
         self._observer_config = observer_config
         self._connection_manager: ConnectionManager | None = None
         self._observer_event_bus: EventBus | None = None
+        # agent_id → project_id 归属缓存：权威在 ProjectStore，这里只做读侧加速，
+        # 任一 project_* 事件到达时整体失效（见 _make_forwarder）。
+        self._agent_project_cache: dict[str, str] = {}
         self._observer_event_bus_adapter: _ObserverEventBusAdapter | None = None
         self._router: ObserverRouter | None = None
         self._server: ObserverServer | None = None
@@ -120,9 +127,32 @@ class WebSocketObserverEndpointUnit(SubjectUnit):
     async def init(self, ctx: Any) -> None:
         config = self._observer_config or ObserverServerConfig(log_level=self._config.log_level)
         connection_manager = ConnectionManager()
+        cache = self._agent_project_cache
+
+        async def resolve_agent_project(agent_id: str) -> str | None:
+            """用 ProjectStore 的权威映射把 agent_id 解析成 project_id。"""
+            cached = cache.get(agent_id)
+            if cached:
+                return cached
+            try:
+                store = ctx.get(PROJECT_STORE.name)
+            except Exception:
+                return None
+            if store is None:
+                return None
+            try:
+                project_id = await store.project_id_for_agent(agent_id)
+            except Exception:
+                logger.warning("agent→project 归属查询失败: %s", agent_id, exc_info=True)
+                return None
+            if project_id:
+                cache[agent_id] = project_id
+            return project_id
+
         observer_event_bus = EventBus(
             connection_manager,
             event_store_capacity=config.event_replay_capacity,
+            agent_project_resolver=resolve_agent_project,
         )
         router = ObserverRouter(
             connection_manager,
@@ -151,6 +181,9 @@ class WebSocketObserverEndpointUnit(SubjectUnit):
         """构造单事件转发闭包（wire_type = 协议层事件名字符串）。"""
 
         async def forward(payload: Any) -> None:
+            if wire_type.startswith("project_"):
+                # Project 归属的权威变了（增删 agent / 改 project），整体失效缓存。
+                self._agent_project_cache.clear()
             await self.observer_event_bus.emit_core_event(
                 Message(type=wire_type, payload=_payload_as_dict(payload))
             )
@@ -186,6 +219,10 @@ def _create_observer_app(
         title="ghrah-subject-observer",
         description="ghrah-subject Observer WebSocket server",
         version="0.1.0",
+        # 业务/元信息入口一律在 /api/v1 命名空间下；无前缀 GET 留给 Observer SPA。
+        docs_url=None,
+        redoc_url=None,
+        openapi_url="/api/v1/openapi.json",
     )
 
     async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -197,7 +234,7 @@ def _create_observer_app(
             "active_sessions": connection_manager.connection_count,
         }
 
-    async def root() -> dict[str, str]:
+    async def meta() -> dict[str, str]:
         return {
             "name": "ghrah-subject-observer",
             "version": "0.1.0",
@@ -205,8 +242,11 @@ def _create_observer_app(
         }
 
     app.websocket(config.ws_path)(websocket_endpoint)
-    app.get("/health")(health)
-    app.get("/")(root)
+    app.get("/api/v1/health")(health)
+    app.get("/api/v1/meta")(meta)
+    # 过渡别名：ghrah-toolchain 的 dev/生命周期仍探测无前缀 /health。
+    # 待工具链切到 /api/v1/health 后删除（基线切换阶段，见 T0 任务书）。
+    app.get("/health", deprecated=True, include_in_schema=False)(health)
     return app
 
 

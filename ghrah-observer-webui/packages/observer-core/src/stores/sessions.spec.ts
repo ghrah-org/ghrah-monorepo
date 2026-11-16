@@ -12,7 +12,6 @@ const agent: AgentTarget = { projectId: "p1", agentId: "a1", agentName: "coder" 
 const session = (id: string, overrides: Partial<SessionInfoPayload> = {}): SessionInfoPayload => ({
   project_id: "",
   agent_id: "",
-  cluster_id: "",
   session_id: id,
   agent_name: "coder",
   name: `Session ${id}`,
@@ -55,7 +54,6 @@ describe("useSessionsStore", () => {
     store.onSessionActivated({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       agent_name: "coder",
       session: session("s1"),
     });
@@ -70,7 +68,6 @@ describe("useSessionsStore", () => {
     store.removeSession({
       project_id: "p1",
       agent_id: "a1",
-      cluster_id: "c1",
       agent_name: "coder",
       session_id: "s1",
     });

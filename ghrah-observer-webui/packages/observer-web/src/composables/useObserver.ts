@@ -14,6 +14,9 @@ import {
   type ListProjectsOptions,
   ObserverClient,
   HttpClient,
+  projectControlClient,
+  resolveProjectApiMode,
+  RestProjectObserverClient,
   type SessionTarget,
   useActionChainsStore,
   useAgentsStore,
@@ -25,7 +28,7 @@ import {
   useProjectsStore,
   useRoomsStore,
 } from "@ghrah/observer-core";
-import type { AbilityDefinitionPayload, AgentConfigPayload } from "@ghrah/protocol";
+import type { AbilityDefinitionPayload, AgentConfigPayload, ContentBlock } from "@ghrah/protocol";
 import { ref, shallowRef, watch } from "vue";
 import { i18n } from "@/i18n";
 import { usePlugins } from "@/composables/usePlugins";
@@ -109,7 +112,11 @@ export function useObserver() {
     await loadManifest();
 
     try {
-      const obsClient = new ObserverClient(url);
+      const mode = resolveProjectApiMode();
+      const obsClient =
+        mode === "rest"
+          ? new RestProjectObserverClient(url, projectControlClient())
+          : new ObserverClient(url);
       unbind = connectStores(obsClient, { tsHalfProvider });
 
       await obsClient.connect();
@@ -222,11 +229,17 @@ export function useObserver() {
   // ── Room / Project / 导航 ──
 
   /** 人类向 room 发消息（author 默认对齐 DEFAULT_HUMAN_AUTHOR）。 */
-  async function roomSend(roomId: string, content: string, targets?: string[]) {
+  async function roomSend(
+    roomId: string,
+    content: string,
+    targets?: string[],
+    blocks?: ContentBlock[],
+  ) {
     return withClient((c) =>
       c.roomSend(roomId, {
         message: content,
         ...(targets && targets.length > 0 ? { targets } : {}),
+        ...(blocks && blocks.length > 0 ? { content_blocks: blocks } : {}),
       }),
     );
   }

@@ -9,7 +9,7 @@ import base64
 import html
 from typing import TYPE_CHECKING, Any
 
-from ghrah.ability.content import ContentReadResult, relative_path
+from ghrah.ability.content import ContentReadResult, is_loadable_text, relative_path
 
 if TYPE_CHECKING:
     from ghrah.ability.scheme.host import AbilityTreeSession
@@ -77,7 +77,7 @@ class GrantedContentProvider:
         offset = 0
         while True:
             result = await self.read(alias, member, offset=offset)
-            if not result.media_type.startswith("text/") or result.total_bytes > max_bytes:
+            if not is_loadable_text(result.media_type) or result.total_bytes > max_bytes:
                 raise ValueError("内容不是允许注入的有界文本")
             identity = (result.version_digest, result.digest)
             if first is not None and identity != first:

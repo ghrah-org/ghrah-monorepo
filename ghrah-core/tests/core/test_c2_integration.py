@@ -106,7 +106,6 @@ async def test_manifest_spawn_hitl_gate_full_chain(
     unit = create_core_unit(
         ability_core_config(
             project_id="default",
-            cluster_id="smoke-cluster",
             manifest_store=_CompositeStore(),
         )
     )

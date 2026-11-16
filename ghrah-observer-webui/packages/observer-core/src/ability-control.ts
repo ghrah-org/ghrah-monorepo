@@ -2,7 +2,10 @@ import {
   AbilityAdminViewSchema,
   AbilityApiStatusSchema,
   AbilityChangesPageSchema,
+  AbilityMcpProbeRequestSchema,
+  AbilityMcpProbeViewSchema,
   AbilityPackageGroupsViewSchema,
+  AbilityPackageVersionProfileViewSchema,
   AbilityTreeChangeResultSchema,
   AbilityTreeIdSchema,
   AbilityTreeViewSchema,
@@ -12,7 +15,9 @@ import {
   type AbilityAdminView,
   type AbilityApiStatus,
   type AbilityChangesPage,
+  type AbilityMcpProbeView,
   type AbilityPackageGroupsView,
+  type AbilityPackageVersionProfileView,
   type AbilityTreeChangeResult,
   type AbilityTreeView,
   type BindToolRequest,
@@ -24,7 +29,7 @@ import {
   UnbindToolRequestSchema,
 } from "@ghrah/protocol";
 
-import { HttpClient, HttpError } from "./http.js";
+import { HttpClient, HttpError, type HttpAbortSignal } from "./http.js";
 
 export interface AbilityControlClientOptions {
   /** 项目作用域；所有端点都从受信路径取项目，不在载荷里自报。 */
@@ -39,6 +44,16 @@ export interface AbilityAdminQuery {
 export interface AbilityChangesQuery {
   afterSeq?: number;
   limit?: number;
+}
+
+/** 一次只读 MCP 探测的调用参数。超时与资源开关由契约夹逼，不在这里改写。 */
+export interface AbilityMcpProbeOptions {
+  /** 服务端探测预算，毫秒。缺省 5000，合法范围 1000–10000。 */
+  timeoutMs?: number;
+  /** 为 true 时额外查询资源清单。缺省 false。 */
+  includeResources?: boolean;
+  /** 调用方取消。中止后 store 不把这次传输失败写成探测报告。 */
+  signal?: HttpAbortSignal;
 }
 
 /** 管理面 CAS 冲突；携带服务端返回的最新 revision 与视图，供 UI 重读而非重试。 */
@@ -70,6 +85,17 @@ export interface AbilityControlClient {
   packageGroups(): Promise<AbilityPackageGroupsView>;
   projectPackageGroups(): Promise<AbilityPackageGroupsView>;
   agentPackageGroups(agentId: string): Promise<AbilityPackageGroupsView>;
+  packageVersion(
+    namespace: string,
+    name: string,
+    version: string,
+  ): Promise<AbilityPackageVersionProfileView>;
+  probePackageMcp(
+    namespace: string,
+    name: string,
+    version: string,
+    options?: AbilityMcpProbeOptions,
+  ): Promise<AbilityMcpProbeView>;
   tree(agentId: string): Promise<AbilityTreeView>;
   admin(agentId: string, query?: AbilityAdminQuery): Promise<AbilityAdminView>;
   changes(agentId: string, query?: AbilityChangesQuery): Promise<AbilityChangesPage>;
@@ -88,6 +114,51 @@ export interface AbilityControlClient {
 function rejectTarget(actual: AbilityTreeView, projectId: string, agentId: string): void {
   if (actual.project_id !== projectId || actual.agent_id !== agentId) {
     throw new Error("Ability control target mismatch");
+  }
+}
+
+/** 与 Subject 路径身份一致：小写开头，不含点号与大写。 */
+const PACKAGE_IDENTITY = /^[a-z][a-z0-9_-]*$/;
+/** SemVer core 三段，与 Core `V1_SEMVER_PATTERN` 一致。 */
+const PACKAGE_VERSION = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/;
+
+function packageVersionPath(namespace: string, name: string, version: string): string {
+  if (!PACKAGE_IDENTITY.test(namespace) || !PACKAGE_IDENTITY.test(name)) {
+    throw new Error("Invalid package identity");
+  }
+  if (!PACKAGE_VERSION.test(version)) {
+    throw new Error("Invalid package version");
+  }
+  const ns = encodeURIComponent(namespace);
+  const pkg = encodeURIComponent(name);
+  const ver = encodeURIComponent(version);
+  return `/api/v1/ability-packages/${ns}/${pkg}/versions/${ver}`;
+}
+
+function rejectPackageVersion(
+  view: AbilityPackageVersionProfileView,
+  namespace: string,
+  name: string,
+  version: string,
+): void {
+  if (
+    view.namespace !== namespace ||
+    view.name !== name ||
+    view.version !== version ||
+    view.full_name !== `${namespace}.${name}`
+  ) {
+    throw new Error("Ability package version target mismatch");
+  }
+}
+
+function rejectProbeTarget(
+  view: AbilityMcpProbeView,
+  namespace: string,
+  name: string,
+  version: string,
+): void {
+  if (view.namespace !== namespace || view.name !== name || view.version !== version) {
+    throw new Error("Ability MCP probe target mismatch");
   }
 }
 
@@ -159,6 +230,33 @@ export function createAbilityControlClient(
     },
     async agentPackageGroups(agentId) {
       return readGroups(agentPath(agentId, "/ability-package-groups"), "agent", agentId);
+    },
+    async packageVersion(namespace, name, version) {
+      const view = AbilityPackageVersionProfileViewSchema.parse(
+        await http.get<unknown>(packageVersionPath(namespace, name, version)),
+      );
+      rejectPackageVersion(view, namespace, name, version);
+      return view;
+    },
+    async probePackageMcp(namespace, name, version, options = {}) {
+      const body = AbilityMcpProbeRequestSchema.parse({
+        ...(options.timeoutMs === undefined ? {} : { timeout_ms: options.timeoutMs }),
+        ...(options.includeResources === undefined
+          ? {}
+          : { include_resources: options.includeResources }),
+      });
+      const view = AbilityMcpProbeViewSchema.parse(
+        await http.post<unknown>(
+          `${packageVersionPath(namespace, name, version)}/mcp/probe`,
+          body,
+          {
+            timeoutMs: body.timeout_ms + 3000,
+            signal: options.signal,
+          },
+        ),
+      );
+      rejectProbeTarget(view, namespace, name, version);
+      return view;
     },
     tree,
     async admin(agentId, query = {}) {

@@ -1,44 +1,19 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""命令路由分组与事件归属契约。
+"""命令路由分组。
 
-供 Subject 路由层判断命令归属（Core / Subject 本地 / 各域处理器）与
-Agent 作用域事件必须携带的归属字段。
+供 Subject 路由层判断命令归属（Core / Subject 本地 / 各域处理器）。
+
+事件归属契约（Agent 作用域事件必须携带非空 ``project_id`` + ``agent_id``）已随
+M1（2026-11-14）迁到 Subject 侧 ``ghrah.subject.server.event_attribution``：
+Project 是 Subject 的组织方式，只有 Subject 需要"哪些事件必须带 Project 归属"
+这条规则，protocol 只保留与语言无关的 wire 形状。
 """
 
 from __future__ import annotations
 
-from ghrah.protocol.enums import CommandType, EventType
-
-# 必须携带非空 project_id + agent_id 的事件类型（Agent 作用域事件归属契约）。
-# 生产侧缺失归属时跳过发布，转发侧（Subject EventBus）缺失归属时丢弃并计数。
-
-
-AGENT_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
-    {
-        EventType.AGENT_SPAWNED.value,
-        EventType.AGENT_TERMINATED.value,
-        EventType.AGENT_RESPONSE.value,
-        EventType.AGENT_ERROR.value,
-        EventType.ACTION_CHAIN_UPDATED.value,
-        EventType.ABILITY_RESULT.value,
-        EventType.ABILITY_TREE_CHANGED.value,
-        EventType.HITL_REQUEST.value,
-        EventType.HITL_RESOLVED.value,
-        EventType.CONTEXT_USAGE_UPDATED.value,
-        EventType.SESSION_CREATED.value,
-        EventType.SESSION_ACTIVATED.value,
-        EventType.SESSION_ARCHIVED.value,
-        EventType.SESSION_DELETED.value,
-        EventType.SESSION_LIST_RESULT.value,
-        EventType.BRANCH_CREATED.value,
-        EventType.BRANCH_ACTIVATED.value,
-        EventType.BRANCH_ARCHIVED.value,
-        EventType.BRANCH_DELETED.value,
-        EventType.BRANCH_LIST_RESULT.value,
-    }
-)
+from ghrah.protocol.enums import CommandType
 
 PERSIST_COMMANDS: frozenset[str] = frozenset(
     {
@@ -67,10 +42,6 @@ CORE_COMMANDS: frozenset[str] = frozenset(
         CommandType.GET_AGENT_INFO.value,
         CommandType.AGENT_COMPACT_CONTEXT.value,
         CommandType.AGENT_RESET.value,
-        CommandType.INIT_CLUSTER.value,
-        CommandType.SHUTDOWN_CLUSTER.value,
-        CommandType.CLUSTER_STATUS.value,
-        CommandType.LIST_CLUSTERS.value,
         CommandType.SESSION_CREATE.value,
         CommandType.SESSION_ACTIVATE.value,
         CommandType.SESSION_LIST.value,

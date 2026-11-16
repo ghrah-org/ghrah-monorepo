@@ -14,7 +14,6 @@ function makeProject(overrides: Partial<ProjectInfoPayload> = {}): ProjectInfoPa
     description: "",
     project_root_locator: "",
     manifest_ref: "",
-    cluster_ids: [],
     workspaces: [],
     agents: [],
     task_ids: [],
@@ -65,7 +64,6 @@ describe("useProjectsStore", () => {
         agents: [
           {
             name: "agent-1",
-            cluster_id: "c1",
             manifest_ref: "",
             instance_manifest_path: "",
             system_prompt: "",

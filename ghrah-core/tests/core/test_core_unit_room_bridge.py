@@ -14,7 +14,7 @@ from ghrah.core.unit import CoreUnit, CoreUnitConfig
 
 
 def _config() -> CoreUnitConfig:
-    return CoreUnitConfig(cluster_id="test-cluster", project_id="default")
+    return CoreUnitConfig(project_id="default")
 
 
 class _FakeCtx:
