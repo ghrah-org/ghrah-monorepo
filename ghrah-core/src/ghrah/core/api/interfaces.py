@@ -33,6 +33,11 @@ from ghrah.protocol.ability_tree import (
 )
 from ghrah.protocol.interface import Interface, InterfaceRegistry
 from ghrah.protocol.payloads.content import InputContentBlock
+from ghrah.protocol.shell_allow import (
+    ShellAllowValidationRequest,
+    ShellBuiltinRulesRequest,
+    ShellBuiltinRulesView,
+)
 from ghrah.protocol.views.common import (
     AckView,
     AgentIdView,
@@ -614,6 +619,8 @@ CORE_INTERFACES = InterfaceRegistry(
 
 CORE_CATALOG_INTERFACES = InterfaceRegistry(
     (
+        Interface("shell.validate_allow", ShellAllowValidationRequest, AckView),
+        Interface("shell.builtin_rules", ShellBuiltinRulesRequest, ShellBuiltinRulesView),
         Interface("abilities.packages", AbilitiesPackagesRequest, AbilityPackageCatalogView),
         Interface(
             "abilities.package_detail",

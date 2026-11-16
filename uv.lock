@@ -564,20 +564,14 @@ name = "ghrah-protocol"
 version = "0.2.0a0"
 source = { editable = "ghrah-protocol" }
 dependencies = [
-    { name = "bash-classify" },
     { name = "ghrah-plugin" },
     { name = "pydantic" },
-    { name = "tree-sitter" },
-    { name = "tree-sitter-bash" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "bash-classify", specifier = ">=0.14.1" },
     { name = "ghrah-plugin", editable = "ghrah-plugin" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "tree-sitter", specifier = ">=0.26.0" },
-    { name = "tree-sitter-bash", specifier = ">=0.25.1" },
 ]
 
 [[package]]

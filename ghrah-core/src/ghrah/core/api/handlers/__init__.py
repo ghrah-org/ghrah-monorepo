@@ -21,6 +21,7 @@ from ghrah.core.api.handlers.messages import make_message_handlers
 from ghrah.core.api.handlers.nodes import make_node_handlers
 from ghrah.core.api.handlers.session_write import make_session_write_handlers
 from ghrah.core.api.handlers.sessions import make_session_handlers
+from ghrah.core.api.handlers.shell import make_shell_handlers
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.chain import ChainReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
@@ -69,4 +70,4 @@ def build_catalog_handlers(abilities: AbilityReadStore) -> dict[str, Handler]:
     Returns:
         能力名到处理器的映射
     """
-    return make_catalog_handlers(abilities)
+    return {**make_catalog_handlers(abilities), **make_shell_handlers()}
