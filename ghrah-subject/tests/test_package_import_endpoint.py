@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from ghrah.ability.package.lock import lock_filename, read_lock
 from ghrah.core.wiring import build_core_catalog
 from ghrah.protocol.enums import EventType
+
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.units.ability_control import (
     build_ability_control_router,
@@ -56,6 +56,38 @@ members:
 """
 
 
+PING_SOURCE = '''\
+"""最小可授予 operation：ABI 与 MANIFEST 的 input/output schema 一致。
+
+字段故意不写 ``Field(description=...)``：安装期预检只剥顶层 description，
+属性级 description 会参与比较，手写 MANIFEST 里没有它。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
+
+
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host: str
+
+
+class Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+
+
+async def execute(call: Any, services: Any) -> None:
+    """入口：只满足安装期 ABI 预检，不执行真实动作。"""
+    del call, services
+'''
+
+
 class _Projects:
     """导入端点不需要项目，只需要 project_store 存在。"""
 
@@ -83,14 +115,19 @@ def package_zip(*, top: str | None = "demo", payload: bytes = b"") -> bytes:
             handle.writestr(f"{prefix}{name}", data)
 
         add("ability.yaml", MANIFEST.encode("utf-8"))
-        add("operations/ping.py", b'MARKER = "alpha"\n')
+        add("operations/ping.py", PING_SOURCE.encode("utf-8"))
         if payload:
             add("assets/blob.bin", payload)
     return buffer.getvalue()
 
 
 def make_client(
-    install_root: Path, *, max_bytes: int = 256 << 20, bus: _Bus | None = None
+    install_root: Path,
+    *,
+    max_bytes: int = 256 << 20,
+    bus: _Bus | None = None,
+    token: str = "",
+    client: tuple[str, int] | None = None,
 ) -> tuple[TestClient, Any]:
     catalog = build_core_catalog(install_root=str(install_root))
     config = SubjectConfig(
@@ -98,6 +135,7 @@ def make_client(
         observer_http_api_enabled=True,
         ability_packages_install=True,
         ability_upload_max_bytes=max_bytes,
+        observer_http_api_token=token,
     )
     app = FastAPI()
     app.include_router(
@@ -109,7 +147,7 @@ def make_client(
         )
     )
     register_ability_control_error_handlers(app)
-    return TestClient(app), catalog
+    return TestClient(app, **({} if client is None else {"client": client})), catalog
 
 
 def test_import_zip_installs_package(tmp_path: Path) -> None:
@@ -211,3 +249,69 @@ def test_import_can_be_disabled_by_config(tmp_path: Path, flag: bool) -> None:
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "capability_unavailable"
+
+
+NON_LOOPBACK = ("198.51.100.7", 50000)
+
+
+def test_import_non_loopback_without_token_is_denied(tmp_path: Path) -> None:
+    """非回环请求没有 Bearer token：403 access_denied，且不落盘安装。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    client, _ = make_client(install_root, client=NON_LOOPBACK)
+
+    response = client.post(
+        "/api/v1/ability-packages/import",
+        files={"file": ("demo.zip", package_zip(), "application/zip")},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert not (install_root / "acme").exists()
+
+
+def test_import_non_loopback_with_wrong_token_is_denied(tmp_path: Path) -> None:
+    """非回环请求 token 不匹配：同样 403，且不落盘安装。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    client, _ = make_client(install_root, token="secret", client=NON_LOOPBACK)
+
+    response = client.post(
+        "/api/v1/ability-packages/import",
+        files={"file": ("demo.zip", package_zip(), "application/zip")},
+        headers={"Authorization": "Bearer wrong"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert not (install_root / "acme").exists()
+
+
+def test_import_non_loopback_with_valid_token_is_allowed(tmp_path: Path) -> None:
+    """非回环请求带正确 Bearer token：放行并完成安装。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    client, _ = make_client(install_root, token="secret", client=NON_LOOPBACK)
+
+    response = client.post(
+        "/api/v1/ability-packages/import",
+        files={"file": ("demo.zip", package_zip(), "application/zip")},
+        headers={"Authorization": "Bearer secret"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert (install_root / "acme" / "demo" / "1.0.0").is_dir()
+
+
+def test_import_loopback_is_allowed_without_token(tmp_path: Path) -> None:
+    """回环请求默认放行（既有行为不能回退）。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    client, _ = make_client(install_root, token="secret")
+
+    response = client.post(
+        "/api/v1/ability-packages/import",
+        files={"file": ("demo.zip", package_zip(), "application/zip")},
+    )
+
+    assert response.status_code == 200, response.text

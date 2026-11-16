@@ -570,14 +570,22 @@ def build_ability_control_router(
         raise AbilityApiError("capability_unavailable", "该写入尚未开放")
 
     async def _import_package(
+        request: Request,
         file: UploadFile = File(...),
         _: None = Depends(_ensure_catalog),
     ) -> dict[str, Any]:
         """导入上传的能力包归档。
 
         上传字节流式落盘（内存不随文件变大），解包、格式校验、安装与安装记录
-        全部在 Core；本单元只做体积上限、扩展名快筛与错误映射。
+        全部在 Core；本单元只做鉴权、体积上限、扩展名快筛与错误映射。
+
+        **鉴权必须先于安装**：Core 的安装期 ABI 预检会在 Subject 进程内
+        ``exec`` 上传包里的 operation 源码，因此本端点和同文件其它写面一样
+        先过 :func:`_authorized`——非回环请求必须带有效 Bearer token，回环
+        请求放行。上传安装只应开放给受信操作者。
         """
+        if not _authorized(request, config):
+            raise AbilityApiError("access_denied", "非回环请求需要有效 Bearer token")
         if not config.ability_packages_install:
             raise AbilityApiError("capability_unavailable", "能力包导入未启用")
         source_name = file.filename or "package.zip"
