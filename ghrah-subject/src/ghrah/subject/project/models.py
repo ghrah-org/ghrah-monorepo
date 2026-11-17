@@ -18,7 +18,6 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ghrah.plugin.assembly import PluginAssembly
-from ghrah.protocol.payloads.model import EndpointReferenceModel
 from ghrah.protocol.types import ProjectStatus, RecoveryAction
 from pydantic import (
     BaseModel,
@@ -35,7 +34,6 @@ __all__ = [
     "AgentOrigin",
     "AgentPresentation",
     "AgentRecord",
-    "AgentSpec",
     "IsolationSpec",
     "PathGrant",
     "ProjectRecord",
@@ -123,42 +121,6 @@ class WritableWorkspaceSpec(BaseModel):
     name: str = ""
     role: str | None = None
     default_for_agents: bool = False
-
-
-class AgentSpec(EndpointReferenceModel):
-    """Project 内 agent desired-state 摘要。
-
-    不含 ``default_workspace_id``（决策 B）：agent 所属 workspace = project 内
-    ``default_for_agents=True`` 的 WorkspaceMount（MVP 唯一）。
-
-    Attributes:
-        agent_id: 跨 Room/cluster 稳定不变的业务身份（UUID hex）。
-        name: agent 名（cluster 内唯一）。
-        manifest_ref: Subject 级模板库引用（~/.ghrah/manifests）。
-        instance_manifest_path: 实例 manifest 落点（default workspace 内
-            ``.ghrah/agents/<name>.yaml``）。
-        system_prompt: 系统提示词覆盖（空则沿用模板）。
-        abilities: ability 全名列表；None 表示沿用模板默认。
-        path_grants: 对各 workspace 子路径的写授权列表。
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    agent_id: str = ""
-    endpoint_name: str | None = None
-    model_overrides: dict[str, Any] | None = None
-    manifest_ref: str = ""
-    instance_manifest_path: str = ""
-    system_prompt: str = ""
-    abilities: list[str] | None = None
-    desired_state: Literal["running", "stopped"] = "running"
-    path_grants: list[PathGrant] = Field(default_factory=list)
-    # 运行诊断（desired-state 的一部分，随定义持久化，重启后可读）：
-    # pending = 定义已写入、runtime 尚未确认；running = 已在 cluster 上启动；
-    # error = 启动失败，runtime_error 记录可诊断原因（reconcile 可重试收敛）。
-    runtime_status: str = "pending"
-    runtime_error: str = ""
 
 
 class AgentPresentation(BaseModel):
@@ -342,7 +304,7 @@ class ProjectRecord(BaseModel):
     shell_allow: list[ShellAllowEntry] = Field(default_factory=list)
     manifest_ref: str = ""
     workspaces: list[WorkspaceMount] = Field(default_factory=list)
-    agents: list[AgentSpec] = Field(default_factory=list)
+    agents: list[AgentRecord] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)
     isolation: IsolationSpec = Field(default_factory=IsolationSpec)
     status: ProjectStatus = ProjectStatus.ACTIVE

@@ -485,8 +485,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
             "success": True,
             "data": {
                 "name": agent["name"],
-                "system_prompt": agent.get("system_prompt") or "",
-                "abilities": list(agent.get("abilities") or []),
+                # 配置不再存在记录里：端点与提示词的权威在 Core 实例快照，
+                # 这里只回身份与编排态，避免 Subject 复制一份配置。
                 "runtime_state": "stopped",
                 "context_usage": None,
                 **identity,
@@ -545,64 +545,17 @@ class CoreClusterRegistryUnit(SubjectUnit):
     async def _spawn(
         self, manager: Any, project: dict[str, Any], payload: dict[str, Any]
     ) -> dict[str, Any]:
-        # ACTIVE 校验已在 _project() 的 _RUNTIME_REVIVING_COMMANDS 守卫统一完成。
-        if payload.get("abilities"):
-            raise StableError(
-                "abilities_managed_by_access_store",
-                "Specify an Agent template and use ability grants and tool selection",
-            )
-        from ghrah.protocol.payloads.agent import AgentConfigPayload
+        """旧 manifest 装配入口已退役。
 
-        config = AgentConfigPayload.model_validate(payload.get("config") or {}).model_dump()
-        name = str(config.get("name") or "")
-        if not name:
-            raise ValueError("config.name required")
-        # 乐观锁冲突（并发写同 Project）时重取最新快照重试，最多 3 次：
-        # 合法的不同 name 并发 spawn 不应因陈旧 version 快照被误拒；
-        # 重试中同名重复由 add_agent 的 name 唯一性校验正常拦截。
-        for attempt in range(3):
-            # 单元按项目唯一：运行键就是 project_id，不需要再校验集群归属。
-            result = await manager.handle_command(
-                "project_add_agent",
-                {
-                    "project_id": project["project_id"],
-                    "expected_version": project["version"],
-                    "agent": {
-                        "agent_id": str(config.get("agent_id") or ""),
-                        "endpoint_name": config.get("endpoint_name"),
-                        "model_overrides": config.get("model_overrides"),
-                        "name": name,
-                        "manifest_ref": str(payload.get("manifest_ref") or ""),
-                        "system_prompt": str(config.get("system_prompt") or ""),
-                    },
-                },
-            )
-            if result.get("success"):
-                break
-            error_text = str(result.get("error") or "")
-            if attempt < 2 and _is_version_conflict(project["project_id"], error_text):
-                # 重取快照（同时重验 ACTIVE/归档状态，防并发暂停后继续 spawn）
-                project, manager = await self._project(payload, "spawn_agent")
-                continue
-            if _is_version_conflict(project["project_id"], error_text):
-                return {
-                    "success": False,
-                    "data": None,
-                    "error": "project_version_conflict",
-                }
-            return dict(result)
-        data = result.get("data") or {}
-        return {
-            "success": True,
-            "data": {
-                "name": data.get("agent_name", name),
-                "agent_id": data.get("agent_id", ""),
-                "project_id": project["project_id"],
-                "runtime_pending": bool(data.get("runtime_pending")),
-                "runtime_error": data.get("runtime_error"),
-            },
-            "error": None,
-        }
+        v3 的创建/恢复统一走 ``agents.create_assembly``：模板在创建时填充一次，
+        之后配置的权威在 Core 的实例快照。``spawn_agent`` 只保留这条明确的拒绝，
+        避免调用方以为「按 manifest 起一个」还能用。
+        """
+        del manager, project, payload
+        raise StableError(
+            "agent_manifest_retired",
+            "按 manifest 装配已退役；请用 Agent 模板创建（agents.create_assembly）",
+        )
 
     async def _list(self, project: dict[str, Any]) -> dict[str, Any]:
         running: dict[str, dict[str, Any]] = {}

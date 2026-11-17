@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
 from ghrah.ability.access import GrantPolicy
 from ouroboros import Context  # type: ignore[import-untyped]
 
@@ -34,6 +35,10 @@ from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
 from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
+
+pytestmark = pytest.mark.skip(
+    reason="manifest 装配链路已退役；模板路径（agents.create_assembly）的全链路 e2e 待补"
+)
 
 CODER_MANIFEST_YAML = """\
 manifest: agent

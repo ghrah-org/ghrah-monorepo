@@ -35,6 +35,7 @@ from ghrah.subject.runtime.service_keys import (
     PROJECT_STORE,
     TASK_MANAGER,
     TASK_STORE,
+    TEMPLATE_STORE,
     WORKSPACE_MANAGER,
 )
 from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, UnitMeta
@@ -192,6 +193,7 @@ class ProjectUnit(SubjectUnit):
             task_mgr,
             cluster_transport,
             manifest_store,
+            template_store=lambda: ctx.get(TEMPLATE_STORE.name),
             on_event=self._emit_event,
             bootstrap_workspace_locator=self._config.project.bootstrap_workspace_locator,
             default_root_locator_template=self._config.project.default_root_locator_template,

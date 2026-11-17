@@ -24,7 +24,7 @@ from typing import Any
 import aiosqlite
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
-from ghrah.subject.project.models import AgentSpec, ProjectRecord
+from ghrah.subject.project.models import AgentRecord, ProjectRecord
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class DesiredStateRecord(BaseModel):
     subject_id: str
     units: list[UnitSpec] = Field(default_factory=list)
     projects: list[ProjectRecord] = Field(default_factory=list)
-    agents: list[AgentSpec] = Field(default_factory=list)
+    agents: list[AgentRecord] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_serializer("updated_at")
@@ -68,10 +68,10 @@ class DesiredStateRecord(BaseModel):
             return datetime.fromisoformat(value)
         return value
 
-    def derive_agents(self) -> list[AgentSpec]:
-        """跨 project 扁平化 agent；优先按 UUID，旧记录按 project/cluster/name。"""
+    def derive_agents(self) -> list[AgentRecord]:
+        """跨 project 扁平化 agent；优先按 UUID，旧记录按 project/name。"""
         seen: set[str] = set()
-        result: list[AgentSpec] = []
+        result: list[AgentRecord] = []
         for project in self.projects:
             for agent in project.agents:
                 identity = agent.agent_id or (f"legacy:{project.project_id}:{agent.name}")

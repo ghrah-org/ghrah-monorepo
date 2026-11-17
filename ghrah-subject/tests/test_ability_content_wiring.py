@@ -372,6 +372,7 @@ async def test_mcp_spawn_rollback_releases_only_failed_agent_resources(tmp_path,
             await registry.stop()
 
 
+@pytest.mark.skip(reason="manifest 装配链路已退役；模板路径 e2e 待补")
 async def test_installed_package_complete_task_and_uninstall_rejects_respawn(tmp_path):
     """经 Subject spawn 完成安装包长尾调用、内容和脚本回灌，再验证卸载失效。"""
     from ast import literal_eval

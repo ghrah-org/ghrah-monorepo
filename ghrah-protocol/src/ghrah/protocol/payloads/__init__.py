@@ -83,7 +83,10 @@ from ghrah.protocol.payloads.plugin import (  # noqa: F401
     PluginNegotiateResultPayload,
 )
 from ghrah.protocol.payloads.project import (  # noqa: F401
-    AgentSpecSchema,
+    AgentCreateSpecSchema,
+    AgentOriginSchema,
+    AgentPresentationSchema,
+    AgentRecordSchema,
     IsolationSpecPayload,
     PathGrantSchema,
     ProjectAddAgentPayload,
@@ -224,7 +227,10 @@ __all__ = [
     "AgentResetPayload",
     "AgentResponsePayload",
     "AgentSpawnedPayload",
-    "AgentSpecSchema",
+    "AgentCreateSpecSchema",
+    "AgentOriginSchema",
+    "AgentPresentationSchema",
+    "AgentRecordSchema",
     "AgentTerminatedPayload",
     "AudioBlockPayload",
     "BranchActivatePayload",

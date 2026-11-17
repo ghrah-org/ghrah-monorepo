@@ -76,15 +76,15 @@ def test_project_agent_runtime_fields_are_part_of_wire_contract() -> None:
             {
                 "agent_id": "a1",
                 "name": "architect",
-                "runtime_status": "error",
-                "runtime_error": "transport down",
+                "runtime_status": "failed",
+                "last_error": "transport down",
             }
         ],
     )
 
     wire = project.model_dump(mode="json")
-    assert wire["agents"][0]["runtime_status"] == "error"
-    assert wire["agents"][0]["runtime_error"] == "transport down"
+    assert wire["agents"][0]["runtime_status"] == "failed"
+    assert wire["agents"][0]["last_error"] == "transport down"
     assert wire["isolation"]["agent_path_grants"] == {}
 
 

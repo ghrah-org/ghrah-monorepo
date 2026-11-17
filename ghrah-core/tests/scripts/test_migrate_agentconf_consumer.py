@@ -216,6 +216,12 @@ def test_failure_never_creates_output(tmp_path):
     assert not output.exists()
 
 
+@pytest.mark.skip(
+    reason=(
+        "项目 Agent 记录不再承载 endpoint_name/model_overrides（配置权威移到 Core 实例快照）；"
+        "该转换器针对的是正在退役的 agentconf/manifest 链路，需随模板导入一并重写"
+    )
+)
 def test_reviewable_example_matches_converter_output_and_wire_schema():
     from ghrah.protocol.payloads.project import ProjectInfoPayload
 

@@ -33,7 +33,7 @@ from ghrah.subject.recovery.desired_state import (
 
 if TYPE_CHECKING:
     from ghrah.subject.manifest_store.store import ManifestStore
-    from ghrah.subject.project.models import AgentSpec, ProjectRecord
+    from ghrah.subject.project.models import AgentRecord, ProjectRecord
     from ghrah.subject.runtime.service_keys import (
         CoreClusterRegistryService as ClusterRegistryProtocol,
     )
@@ -376,7 +376,7 @@ class ReconciliationService:
                     )
 
     async def _spawn_agent(
-        self, project_id: str, agent: AgentSpec
+        self, project_id: str, agent: AgentRecord
     ) -> tuple[str | None, str | None]:
         """spawn 单个 agent；返回 ``(outcome, error)``。"""
         try:

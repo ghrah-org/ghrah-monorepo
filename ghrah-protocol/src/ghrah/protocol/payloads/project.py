@@ -39,21 +39,56 @@ class WritableWorkspaceSpec(BaseModel):
     default_for_agents: bool = False
 
 
-class AgentSpecSchema(EndpointReferenceModel):
-    """Project 内 agent desired-state 摘要。"""
+class AgentPresentationSchema(BaseModel):
+    """展示字段快照；只影响观察端，不参与装配。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    icon: str = ""
+    deprecated: bool = False
+
+
+class AgentOriginSchema(BaseModel):
+    """来源审计：来自哪个模板的哪一版；运行期不回读模板。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str
+    revision: int = Field(ge=1)
+
+
+class AgentRecordSchema(EndpointReferenceModel):
+    """Project 内一个 Agent 的记录：身份 + 展示 + 编排状态 + 来源。
+
+    **不承载配置**：模型/提示词/上下文/能力的权威在 Core 的实例快照，模板只在
+    创建时填一次。旧元素（含 ``manifest_ref`` 等字段）不兼容，必须由
+    ``scripts/purge_legacy_agents.py`` 清空后才会被读取。
+    """
 
     agent_id: str = ""
+    project_id: str = ""
     name: str
-    endpoint_name: str | None = None
-    model_overrides: dict[str, Any] | None = None
-    manifest_ref: str = ""
-    instance_manifest_path: str = ""
-    system_prompt: str = ""
-    abilities: list[str] | None = None
+    presentation: AgentPresentationSchema = Field(default_factory=AgentPresentationSchema)
+    origin: AgentOriginSchema | None = None
     desired_state: Literal["running", "stopped"] = "running"
-    path_grants: list[PathGrantSchema] = Field(default_factory=list)
-    runtime_status: str = "pending"
-    runtime_error: str = ""
+    runtime_status: Literal["pending", "running", "stopped", "failed", "lost"] = "pending"
+    last_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class AgentCreateSpecSchema(BaseModel):
+    """按模板创建一个 Agent 的请求体（不含任何配置字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    template_id: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    desired_state: Literal["running", "stopped"] = "running"
 
 
 class IsolationSpecPayload(BaseModel):
@@ -82,7 +117,7 @@ class ProjectInfoPayload(BaseModel):
     shell_cwd: str = ""
     manifest_ref: str = ""
     workspaces: list[WorkspaceMountSchema] = Field(default_factory=list)
-    agents: list[AgentSpecSchema] = Field(default_factory=list)
+    agents: list[AgentRecordSchema] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)
     isolation: IsolationSpecPayload = Field(default_factory=IsolationSpecPayload)
     status: ProjectStatus = ProjectStatus.ACTIVE
@@ -152,10 +187,10 @@ class ProjectListPayload(BaseModel):
 
 
 class ProjectAddAgentPayload(BaseModel):
-    """project_add_agent 命令载荷。"""
+    """project_add_agent 命令载荷：按模板创建（不再携带任何配置）。"""
 
     project_id: str
-    agent: AgentSpecSchema
+    agent: AgentCreateSpecSchema
     expected_version: int | None = None
 
 

@@ -40,7 +40,7 @@ from ghrah.protocol.agent_control import (
 from pydantic import BaseModel, ValidationError
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT
+from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT, TEMPLATE_STORE
 from ghrah.subject.template_store import (
     AgentTemplateRecord,
     AgentTemplateService,
@@ -299,6 +299,7 @@ class AgentTemplateControlUnit(SubjectUnit):
         self._meta = UnitMeta(
             name="agent_template_control",
             requires=frozenset({OBSERVER_ENDPOINT}),
+            provides=frozenset({TEMPLATE_STORE}),
             routes=RouteSpec(),
         )
 
@@ -329,6 +330,8 @@ class AgentTemplateControlUnit(SubjectUnit):
         store = TemplateStore(self._config.persistence.db_path)
         await store.start()
         self._store = store
+        # 模板库是实例级唯一权威：以服务形式提供，创建服务与 ProjectUnit 共用同一实例。
+        ctx.provide(TEMPLATE_STORE.name, store)
         service = AgentTemplateService(store)
         self._service = service
         router = build_agent_template_control_router(config=self._config, service=service)

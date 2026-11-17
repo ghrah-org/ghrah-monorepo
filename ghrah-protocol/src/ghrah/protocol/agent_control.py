@@ -27,9 +27,10 @@ __all__ = [
     "AgentDesiredStateRequest",
     "AgentListView",
     "AgentPromptSummary",
+    "AgentPresentationView",
+    "AgentOriginView",
     "AgentRuntimeView",
     "AgentSpecPatch",
-    "AgentSpecificationDetail",
     "AgentSpecificationSummary",
     "AgentSummaryView",
     "AgentTemplateAbilityRequestView",
@@ -88,24 +89,38 @@ class AgentAbilitySummary(TreeModel):
     pending_reasons: list[str] = Field(default_factory=list)
 
 
+class AgentPresentationView(TreeModel):
+    """记录里的展示字段快照（不影响装配）。"""
+
+    title: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    icon: str = ""
+    deprecated: bool = False
+
+
+class AgentOriginView(TreeModel):
+    """记录的来源：模板身份 + 创建时使用的修订。"""
+
+    template_id: str
+    revision: int = Field(ge=1)
+
+
 class AgentSpecificationSummary(TreeModel):
-    """列表用的规格。不含提示词正文。"""
+    """列表用的记录摘要。
+
+    不含任何配置字段：模型/提示词/上下文/能力的权威在 Core 的实例快照，
+    由 ``/agents/{agent_id}/config`` 单独读。
+    """
 
     agent_id: str
     name: str
-    endpoint_name: str | None = None
-    prompt: AgentPromptSummary
+    presentation: AgentPresentationView
+    origin: AgentOriginView | None = None
     desired_state: Literal["running", "stopped"]
-    manifest_ref: str = ""
     runtime_status: str
-    runtime_error: str = ""
+    last_error: str = ""
     project_version: int = Field(ge=0)
-
-
-class AgentSpecificationDetail(AgentSpecificationSummary):
-    """单体规格。包含提示词正文。"""
-
-    system_prompt: str = ""
 
 
 class AgentSummaryView(TreeModel):
@@ -132,7 +147,7 @@ class AgentAdminView(TreeModel):
 
     format: Literal["ghrah.agent-control.v1"] = "ghrah.agent-control.v1"
     project_id: str
-    specification: AgentSpecificationDetail
+    specification: AgentSpecificationSummary
     runtime: AgentRuntimeView
     ability: AgentAbilitySummary | None = None
     ability_unavailable: str | None = None
@@ -141,30 +156,26 @@ class AgentAdminView(TreeModel):
 
 
 class AgentCreateRequest(TreeModel):
-    """创建 Agent。默认停止，避免未声明就尝试启动。"""
+    """按模板创建 Agent；配置不进请求体，默认停止。"""
 
     expected_revision: int = Field(ge=0)
     name: str = Field(min_length=1)
-    endpoint_name: str | None = None
-    system_prompt: str = ""
+    template_id: str = Field(min_length=1)
+    revision: int = Field(ge=1)
     desired_state: Literal["running", "stopped"] = "stopped"
-    manifest_ref: str = ""
-    """Agent v2 模板的完整名（``namespace.name``）；空表示暂不绑定模板。"""
 
 
 class AgentSpecPatch(TreeModel):
-    """修改已保存的端点或提示词。至少带一个可写字段。"""
+    """修改记录的展示字段；配置由 Core 快照承载，不可经此改写。"""
 
     expected_revision: int = Field(ge=0)
-    endpoint_name: str | None = None
-    system_prompt: str | None = None
+    presentation: AgentPresentationView | None = None
 
     @model_validator(mode="after")
     def require_one_field(self) -> AgentSpecPatch:
-        """省略两个可写字段时没有可保存的变更。"""
-        provided = self.model_fields_set - {"expected_revision"}
-        if not provided:
-            raise ValueError("至少提供 endpoint_name 或 system_prompt")
+        """没有可写字段时拒绝。"""
+        if self.presentation is None:
+            raise ValueError("至少提供 presentation")
         return self
 
 

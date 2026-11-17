@@ -23,7 +23,7 @@ from ghrah.subject.task.store import TaskStore
 from ghrah.subject.workspace.models import WorkspaceRecord
 
 if TYPE_CHECKING:
-    from ghrah.subject.project.models import AgentSpec, ProjectRecord
+    from ghrah.subject.project.models import AgentRecord, ProjectRecord
 
 __all__ = [
     "ABILITY_ACCESS",
@@ -46,6 +46,7 @@ __all__ = [
     "SESSION_REGISTRY",
     "TASK_MANAGER",
     "TASK_STORE",
+    "TEMPLATE_STORE",
     "WORKSPACE_MANAGER",
     "WORKSPACE_SERVICE",
     "ClusterHandle",
@@ -146,14 +147,19 @@ class ProjectManagerService(Protocol):
     async def bootstrap_default_project(self) -> ProjectRecord:
         """建 default project 并 ProjectStore.upsert，返回记录。"""
 
-    async def adopt_existing_agents(self, project_id: str, cluster_id: str) -> list[AgentSpec]:
-        """经 registry.list_agents 取现有 agent，构造 AgentSpec 并加入
-        project.agents desired-state，返回列表。"""
+    async def adopt_existing_agents(self, project_id: str, cluster_id: str) -> list[AgentRecord]:
+        """经 registry.list_agents 取现有 agent，补登记为 AgentRecord 并加入
+        project.agents，返回列表。"""
 
     async def mark_agent_runtime(
-        self, project_id: str, agent_id: str, runtime_error: str | None
+        self,
+        project_id: str,
+        agent_id: str,
+        runtime_error: str | None,
+        *,
+        status: str | None = None,
     ) -> None:
-        """持久化 agent 运行诊断（running / error；best-effort，允许陈旧）。"""
+        """持久化实例运行诊断（running / stopped / failed；best-effort，允许陈旧）。"""
 
     async def restore_agent_if_desired(
         self, project_id: str, agent_id: str, agent_name: str
@@ -266,6 +272,8 @@ COMMAND_RUNNER = SubjectServiceKey[CommandRunner]("command_runner")
 LEDGER = SubjectServiceKey[Any]("ledger")
 SANDBOX_EXECUTOR = SubjectServiceKey[SandboxExecutor]("sandbox_executor", SandboxExecutor)
 MANIFEST_STORE = SubjectServiceKey[ManifestStore]("manifest_store", ManifestStore)
+# 实例级 Agent 模板库：创建服务的唯一模板来源（T1-a 的 TemplateStore）。
+TEMPLATE_STORE = SubjectServiceKey[Any]("agent_template_store")
 OBSERVER_ENDPOINT = SubjectServiceKey[Any]("observer_endpoint")
 OBSERVER_EVENT_BUS = SubjectServiceKey[ObserverEventBus]("observer_event_bus")
 TASK_MANAGER = SubjectServiceKey[TaskManagerService]("task_manager")

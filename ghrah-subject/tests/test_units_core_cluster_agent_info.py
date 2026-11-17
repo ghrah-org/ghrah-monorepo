@@ -67,15 +67,12 @@ def _project() -> dict[str, Any]:
             {
                 "name": AGENT_NAME,
                 "agent_id": AGENT_ID,
-                "endpoint_name": "requirement-agent-multimodal",
-                "manifest_ref": "",
-                "instance_manifest_path": "",
-                "system_prompt": SYSTEM_PROMPT,
-                "abilities": ["conversation"],
+                "project_id": PROJECT_ID,
+                "presentation": {"title": "", "description": "", "tags": []},
+                "origin": None,
                 "desired_state": "running",
-                "path_grants": [],
-                "runtime_status": "error",
-                "runtime_error": "model_configuration_invalid",
+                "runtime_status": "failed",
+                "last_error": "model_configuration_invalid",
             }
         ],
     }
@@ -207,8 +204,8 @@ async def test_offline_agent_returns_definition_state(tmp_path: Path) -> None:
     data = result["data"]
     assert data["runtime_state"] == "stopped"
     assert data["name"] == AGENT_NAME
-    assert data["system_prompt"] == SYSTEM_PROMPT
-    assert data["abilities"] == ["conversation"]
+    assert "system_prompt" not in data
+    assert "abilities" not in data
     assert data["context_usage"] is None
     assert data["project_id"] == PROJECT_ID
     assert data["agent_id"] == AGENT_ID
@@ -221,7 +218,6 @@ async def test_online_agent_keeps_legacy_receipt_fields(tmp_path: Path) -> None:
     """在线分支保留 C3 前的回执字段（前端 bind/dialog 的消费面）。"""
     view = AgentView(
         agent_id=AGENT_ID,
-        project_id=PROJECT_ID,
         name=AGENT_NAME,
         state={"name": AGENT_NAME, "initialized": True},
         abilities=["conversation"],
@@ -254,7 +250,6 @@ async def test_online_agent_passes_through_core_receipt_fields(tmp_path: Path) -
     """端口视图若已承载 ``context_usage`` / ``available_ability_types``，原样透传。"""
     view = AgentView(
         agent_id=AGENT_ID,
-        project_id=PROJECT_ID,
         name=AGENT_NAME,
         state={"name": AGENT_NAME, "initialized": True},
         abilities=["conversation"],

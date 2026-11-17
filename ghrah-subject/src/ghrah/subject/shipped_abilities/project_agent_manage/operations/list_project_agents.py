@@ -40,8 +40,9 @@ class AgentSummary(BaseModel):
     name: str = Field(description="显示名")
     desired_state: str = Field(description="期望运行态")
     runtime_status: str = Field(description="运行诊断状态")
-    runtime_error: str = Field(default="", description="运行错误（若有）")
-    manifest_ref: str = Field(default="", description="manifest 引用")
+    last_error: str = Field(default="", description="运行错误（若有）")
+    template_id: str = Field(default="", description="来源模板 id")
+    template_revision: int = Field(default=0, description="来源模板修订")
 
 
 class Output(BaseModel):
@@ -77,8 +78,9 @@ async def execute(call: Any, services: Any) -> ActionResult:
                     "name": str(item.get("name") or ""),
                     "desired_state": str(item.get("desired_state") or ""),
                     "runtime_status": str(item.get("runtime_status") or ""),
-                    "runtime_error": str(item.get("runtime_error") or ""),
-                    "manifest_ref": str(item.get("manifest_ref") or ""),
+                    "last_error": str(item.get("last_error") or ""),
+                    "template_id": str((item.get("origin") or {}).get("template_id") or ""),
+                    "template_revision": int((item.get("origin") or {}).get("revision") or 0),
                 }
             )
     return receipt_to_result(receipt, ok_data={"agents": agents, "count": len(agents)})

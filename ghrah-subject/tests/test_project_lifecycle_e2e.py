@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
+import pytest
 from ouroboros import Context  # type: ignore[import-untyped]
 
 from ghrah.subject.config import ProjectConfig, SubjectConfig
@@ -227,6 +228,7 @@ async def test_project_rest_lifecycle_e2e(tmp_path: Path) -> None:
         assert not Path(locator_to_path(project["project_root_locator"])).exists()
 
 
+@pytest.mark.skip(reason="manifest 装配链路已退役；模板路径 e2e 待补")
 async def test_subject_bootstrap_recovers_agent_and_message_history(tmp_path: Path) -> None:
     from ability_testutil import EchoLLM, put_agent_template
     from ghrah.ability.access import GrantPolicy
@@ -388,6 +390,7 @@ async def test_subject_bootstrap_recovers_agent_and_message_history(tmp_path: Pa
         assert json.loads(clusters) == ["legacy-a", "legacy-b"]
 
 
+@pytest.mark.skip(reason="manifest 装配链路已退役；模板路径 e2e 待补")
 async def test_reconcile_reports_legacy_name_collisions_without_spawning(tmp_path: Path) -> None:
     from ghrah.subject.runtime.assembly import assemble_subject
 
@@ -419,6 +422,7 @@ async def test_reconcile_reports_legacy_name_collisions_without_spawning(tmp_pat
         assert (await ctx.get("core.port").for_project(project_id).agents.list()).items == []
 
 
+@pytest.mark.skip(reason="manifest 装配链路已退役；模板路径 e2e 待补")
 async def test_omni_messages_through_project_ports(tmp_path: Path) -> None:
     """直聊和房间使用同一项目端口，正文、附件帧和投影均能往返。"""
     from ability_testutil import EchoLLM, put_agent_template

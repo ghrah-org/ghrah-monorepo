@@ -21,7 +21,7 @@ from ghrah.protocol.errors import ApiError
 from ghrah.protocol.problem import Problem, ProblemCode
 
 from ghrah.subject.project.manager import ProjectManager, _is_terminate_absent
-from ghrah.subject.project.models import AgentSpec, ProjectRecord, make_project_record
+from ghrah.subject.project.models import AgentRecord, ProjectRecord, make_project_record
 
 AGENT_ID = "a" * 32
 
@@ -86,13 +86,12 @@ class _FakeStore:
 
 
 def _record() -> ProjectRecord:
-    agent = AgentSpec(
+    agent = AgentRecord(
         name="requirement",
         agent_id=AGENT_ID,
-        manifest_ref="demo.requirement",
         desired_state="running",
-        runtime_status="error",
-        runtime_error="model_configuration_invalid",
+        runtime_status="failed",
+        last_error="model_configuration_invalid",
     )
     return make_project_record(
         name="demo",
