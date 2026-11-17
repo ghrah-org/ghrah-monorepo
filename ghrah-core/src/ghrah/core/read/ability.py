@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageImportView,
     AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
@@ -42,15 +44,45 @@ from ghrah.protocol.ability_tree import (
 )
 
 from ghrah.ability.access import AbilityAccessStore, AccessIdentity
+from ghrah.ability.package.archive import ArchiveError, detect_format, extract_package
+from ghrah.ability.package.installed_store import parse_full_name
+from ghrah.ability.package.installer import (
+    AbilityInstaller,
+    InstallerError,
+    relock_source,
+)
+from ghrah.ability.package.provider import validate_source_tree
 from ghrah.core.read.ability_catalog import (
+    CatalogError,
     build_instances_view,
     build_package_catalog,
     build_package_detail,
     build_package_groups,
     build_version_profile,
 )
+from ghrah.manifest.errors import ManifestValidationError
 
 __all__ = ["AbilityConflictError", "AbilityReadStore", "AbilityUnavailableError"]
+
+#: 归档域错误码 → Core 目录错误码。
+_ARCHIVE_CODES = {
+    "invalid_request": "invalid_request",
+    "unsupported_format": "unsupported_format",
+    "invalid_package": "invalid_package",
+}
+
+#: 安装器错误码 → Core 目录错误码；没列出的都按「包不合法」处理。
+_INSTALL_CODES = {
+    "version_exists": "conflict",
+    "install_failed": "unavailable",
+    "unsupported_source": "invalid_package",
+    "symlink_rejected": "invalid_package",
+    "lock_in_source": "invalid_package",
+    "reserved_namespace": "invalid_package",
+    "reserved_member_name": "invalid_package",
+    "invalid_definition": "invalid_package",
+    "digest_mismatch": "invalid_package",
+}
 
 _DEPLOYMENT_OPERATOR = "deployment"
 
@@ -252,6 +284,98 @@ class AbilityReadStore:
             operator=operator,
             project_id=self._scope_id,
             agent_id=agent_id,
+        )
+
+    async def package_import(
+        self, *, archive_path: str, source_name: str
+    ) -> AbilityPackageImportView:
+        """导入一个能力包归档：解包、校验、安装、改写安装记录。
+
+        归档由调用方（Subject）落地成临时文件；本方法只负责把它变成安装根下的一代。
+        安装记录由安装器写出，导入完成后把来源改写成 ``archive`` + 上传文件名。
+
+        **信任边界**：安装期 ABI 预检会加载并 ``exec`` 上传包里的 operation 源码，
+        也就是「上传安装 = 在当前进程内执行一次包代码」，且不在沙箱内。本方法
+        假定调用方已经完成鉴权（Subject 上传端点在调用前先过 ``_authorized``），
+        并且只把它暴露给受信操作者；不要新增绕过鉴权的调用路径。
+
+        Args:
+            archive_path: 归档的绝对路径
+            source_name: 用户看到的原始文件名
+
+        Returns:
+            导入结果；同摘要重复导入时 ``already_installed=True``
+
+        Raises:
+            CatalogError: 安装根未配置、格式不支持、包内容不合法或版本冲突
+        """
+        root = self._install_root
+        if not root:
+            raise CatalogError("unavailable", "能力包安装根未配置，无法导入")
+        archive = Path(archive_path)
+        if not archive.is_file():
+            raise CatalogError("invalid_request", "上传的归档不存在")
+        try:
+            archive_format = detect_format(archive, name=source_name)
+        except ArchiveError as exc:
+            raise CatalogError(
+                _ARCHIVE_CODES.get(exc.code, "invalid_package"), exc.message
+            ) from exc
+        with tempfile.TemporaryDirectory(prefix="ghrah-ability-import-") as workspace:
+            try:
+                source_root = extract_package(
+                    archive, Path(workspace) / "src", format=archive_format
+                )
+            except ArchiveError as exc:
+                raise CatalogError(
+                    _ARCHIVE_CODES.get(exc.code, "invalid_package"), exc.message
+                ) from exc
+            try:
+                validate_source_tree(source_root)
+            except ManifestValidationError as exc:
+                raise CatalogError("invalid_package", str(exc)) from exc
+            try:
+                result = AbilityInstaller(root).install(source_root)
+            except InstallerError as exc:
+                raise CatalogError(
+                    _INSTALL_CODES.get(exc.code, "invalid_package"), exc.message
+                ) from exc
+        namespace, name = parse_full_name(result.full_name) or (
+            result.full_name,
+            result.full_name,
+        )
+        if not result.already_installed:
+            try:
+                relock_source(
+                    root,
+                    namespace=namespace,
+                    name=name,
+                    version=result.version,
+                    kind="archive",
+                    ref=source_name or None,
+                )
+            except InstallerError as exc:
+                raise CatalogError("unavailable", exc.message) from exc
+        profile = None
+        try:
+            profile = await self.package_version_profile(
+                namespace=namespace, name=name, version=result.version
+            )
+        except CatalogError:
+            profile = None
+        return AbilityPackageImportView(
+            namespace=namespace,
+            name=name,
+            full_name=result.full_name,
+            version=result.version,
+            package_digest=result.package_digest,
+            operation_count=len(profile.operations) if profile else 0,
+            skill_count=len(profile.skills) if profile else 0,
+            archive_format=archive_format,
+            source_name=source_name or None,
+            already_installed=result.already_installed,
+            lock_written=not result.already_installed,
+            verify=profile.verify if profile else None,
         )
 
     async def instances(self) -> AbilityInstancesView:

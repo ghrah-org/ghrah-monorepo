@@ -273,6 +273,31 @@ class AbilityPackageCatalogView(TreeModel):
     packages: list[AbilityPackageVersionRow] = Field(default_factory=list)
 
 
+class AbilityPackageImportView(TreeModel):
+    """一次能力包导入的结果。
+
+    失败一律走错误信封，不用 ``ok=False``；这里只描述「装成了什么」。
+    不含安装根路径：对外只暴露包身份与摘要。
+    """
+
+    format: Literal["ghrah.ability-control.package-import.v1"] = (
+        "ghrah.ability-control.package-import.v1"
+    )
+    namespace: str
+    name: str
+    full_name: str
+    version: str
+    origin: Literal["installed"] = "installed"
+    package_digest: str
+    operation_count: int = Field(ge=0)
+    skill_count: int = Field(ge=0)
+    archive_format: Literal["zip"]
+    source_name: str | None = None
+    already_installed: bool = False
+    lock_written: bool = True
+    verify: AbilityVerifyView | None = None
+
+
 class AbilityVerifyView(TreeModel):
     """一次安装校验的结果。差异路径是包内相对路径。"""
 

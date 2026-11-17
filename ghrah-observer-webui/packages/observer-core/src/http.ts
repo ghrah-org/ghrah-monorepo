@@ -57,6 +57,12 @@ export interface HttpRequestOptions {
   timeoutMs?: number;
 }
 
+/** 上传选项：只要进度；超时默认按上传口径放宽。 */
+export interface HttpUploadOptions {
+  onProgress?: (ratio: number) => void;
+  timeoutMs?: number;
+}
+
 export interface HttpClientOptions {
   /** 形如 http(s)://host[:port]；末尾斜杠会归一化。 */
   baseUrl: string;
@@ -181,6 +187,50 @@ function defaultFetch(): HttpFetch {
   return fetchImpl.bind(globalThis) as HttpFetch;
 }
 
+/** 上传比普通写请求慢得多：给十分钟，避免大包在慢网下被提前掐断。 */
+const UPLOAD_TIMEOUT_MS = 600_000;
+
+interface UploadProgressEvent {
+  readonly lengthComputable: boolean;
+  readonly loaded: number;
+  readonly total: number;
+}
+
+interface UploadRequestLike {
+  responseType: string;
+  timeout: number;
+  readonly status: number;
+  readonly responseText: string;
+  readonly upload: {
+    addEventListener(type: "progress", handler: (event: UploadProgressEvent) => void): void;
+  };
+  open(method: string, url: string, async: boolean): void;
+  setRequestHeader(name: string, value: string): void;
+  addEventListener(type: string, handler: () => void): void;
+  send(body: unknown): void;
+}
+
+type UploadRequestCtor = new () => UploadRequestLike;
+
+/** 把 multipart 失败响应归一成与 fetch 路径一致的 ``HttpError``。 */
+function uploadError(status: number, text: string): HttpError {
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = undefined;
+  }
+  const part = (
+    body as { error?: { code?: unknown; message?: unknown; detail?: unknown } } | undefined
+  )?.error;
+  const code = typeof part?.code === "string" && part.code ? part.code : "internal";
+  const message =
+    typeof part?.message === "string" && part.message > ""
+      ? part.message
+      : `管理面请求失败（HTTP ${status}）`;
+  return new HttpError({ code, status, message, detail: part?.detail });
+}
+
 export class HttpClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
@@ -214,6 +264,48 @@ export class HttpClient {
     return this.request<T>("DELETE", path, options, false);
   }
 
+  /**
+   * 上传一个不透明请求体（浏览器里是 FormData）。走 XHR 只为拿到上传进度。
+   *
+   * 本包不依赖 DOM 类型：body 由调用方构造，进度事件只读 `loaded/total`。
+   */
+  upload<T>(path: string, body: unknown, options: HttpUploadOptions = {}): Promise<T> {
+    const Xhr = (globalThis as { XMLHttpRequest?: UploadRequestCtor }).XMLHttpRequest;
+    if (!Xhr) {
+      throw new HttpError({ code: "internal", status: 0, message: "XMLHttpRequest 不可用" });
+    }
+    const url = buildUrl(this.baseUrl, path);
+    const token = this.token;
+    return new Promise<T>((resolve, reject) => {
+      const request = new Xhr();
+      request.open("POST", url, true);
+      request.responseType = "text";
+      request.timeout = options.timeoutMs ?? UPLOAD_TIMEOUT_MS;
+      request.setRequestHeader("Accept", "application/json");
+      if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
+      request.upload.addEventListener("progress", (event) => {
+        if (!options.onProgress || !event.lengthComputable || event.total <= 0) return;
+        options.onProgress(event.loaded / event.total);
+      });
+      request.addEventListener("load", () => {
+        const status = request.status;
+        const text = typeof request.responseText === "string" ? request.responseText : "";
+        if (status >= 200 && status < 300) {
+          try {
+            resolve((text ? JSON.parse(text) : undefined) as T);
+          } catch {
+            reject(new HttpError({ code: "internal", status, message: "响应不是合法 JSON" }));
+          }
+          return;
+        }
+        reject(uploadError(status, text));
+      });
+      request.addEventListener("error", () => reject(networkError(undefined, false)));
+      request.addEventListener("abort", () => reject(networkError(undefined, false)));
+      request.addEventListener("timeout", () => reject(networkError(undefined, true)));
+      request.send(body);
+    });
+  }
   private async request<T>(
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,

@@ -21,6 +21,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
     AbilityPackageGroupsView,
+    AbilityPackageImportView,
     AbilityPackageVersionProfileView,
     AbilityTreeChangeResult,
 )
@@ -476,6 +477,18 @@ class AbilitiesPackageGroupsRequest(BaseModel):
     agent_id: str | None = None
 
 
+class AbilitiesPackageImportRequest(BaseModel):
+    """``abilities.package_import`` 的请求信封。
+
+    归档已由 Subject 落成本机临时文件；Core 只认路径，不认字节。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    archive_path: str
+    source_name: str
+
+
 class AbilitiesPackageGroupsGlobalRequest(BaseModel):
     """``abilities.package_groups`` 的目录侧请求信封（全局视图，无作用域）。"""
 
@@ -641,6 +654,11 @@ CORE_CATALOG_INTERFACES = InterfaceRegistry(
             "abilities.package_groups",
             AbilitiesPackageGroupsGlobalRequest,
             AbilityPackageGroupsView,
+        ),
+        Interface(
+            "abilities.package_import",
+            AbilitiesPackageImportRequest,
+            AbilityPackageImportView,
         ),
     )
 )

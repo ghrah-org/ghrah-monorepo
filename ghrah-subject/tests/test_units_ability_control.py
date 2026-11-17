@@ -612,11 +612,7 @@ async def test_package_catalog_is_readable_and_writes_stay_closed(tmp_path: Any,
                 for version in group["versions"]
             )
             _reject_root(agent_groups)
-            closed, body = await _request(
-                f"{base}/api/v1/ability-packages/import", method="POST", body={}
-            )
-            assert closed == 503
-            assert body["error"]["code"] == "capability_unavailable"
+            # 能力包导入已开放（见 test_package_import_endpoint.py）；其余写路径仍关闭。
             package = f"{base}/api/v1/ability-packages/{sample['namespace']}/{sample['name']}"
             for method, path in (
                 ("POST", f"{package}/versions/0/verify"),

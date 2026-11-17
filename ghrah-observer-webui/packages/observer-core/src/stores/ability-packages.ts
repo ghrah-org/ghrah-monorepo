@@ -6,6 +6,7 @@ import type {
   AbilityApiStatus,
   AbilityMcpProbeView,
   AbilityPackageGroupsView,
+  AbilityPackageImportView,
   AbilityPackageVersionProfileView,
 } from "@ghrah/protocol";
 import { defineStore } from "pinia";
@@ -328,6 +329,17 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
     }
   }
 
+  /** 上传并安装一个能力包归档；成功后重读列表，返回安装结果。 */
+  async function install(
+    body: unknown,
+    options: { onProgress?: (ratio: number) => void } = {},
+  ): Promise<AbilityPackageImportView> {
+    const client = abilityControlClient(STATUS_PROJECT);
+    const view = await client.importPackage(body, { onProgress: options.onProgress });
+    await load();
+    return view;
+  }
+
   return {
     status,
     groups,
@@ -342,6 +354,7 @@ export const useAbilityPackagesStore = defineStore("ghrah-ability-packages", () 
     versionProfiles,
     probes,
     load,
+    install,
     setSettingsVisible,
     setAssemblyVisible,
     markStale,
