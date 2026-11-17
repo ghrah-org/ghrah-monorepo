@@ -9,7 +9,6 @@ import importlib.util
 import json
 import math
 import secrets
-from multiprocessing import Pipe
 
 from ghrah_kernel.client import RpcClient
 from ghrah_kernel.endpoint import AsyncEndpoint
@@ -24,7 +23,7 @@ from ghrah_kernel.integration.identity import (
 from ghrah_kernel.kernel.runtime import Kernel
 from ghrah_kernel.kernel_client import KernelClient
 from ghrah_kernel.launch import LaunchCatalog, LaunchRecord
-from ghrah_kernel.wire import MessageConnection
+from ghrah_kernel.wire import MessageConnection, message_pipe
 
 
 async def verify() -> dict:
@@ -52,7 +51,7 @@ async def verify() -> dict:
     clients = []
 
     def connect(role):
-        own, peer = Pipe(duplex=True)
+        own, peer = message_pipe()
         token = secrets.token_hex(16)
         kernel.attach_caller(peer, token, role, principal=user.ref, resolution_scope="local")
         client = KernelClient(RpcClient(AsyncEndpoint(MessageConnection(own))))

@@ -4,14 +4,13 @@
 
 import asyncio
 import threading
-from multiprocessing import Pipe
 
 import pytest
 from _mechanism.scenarios import open_message_provider, run_message_roundtrip
 
 from ghrah_kernel.client import RemoteError
 from ghrah_kernel.endpoint import AsyncEndpoint
-from ghrah_kernel.wire import MessageConnection, MessageTooLarge
+from ghrah_kernel.wire import MessageConnection, MessageTooLarge, message_pipe
 
 
 def assert_no_endpoint_workers():
@@ -20,7 +19,7 @@ def assert_no_endpoint_workers():
 
 def test_final_send_gate_runs_after_backpressure_and_failed_gate_returns_slot():
     async def scenario():
-        a, b = Pipe(duplex=True)
+        a, b = message_pipe()
         endpoint = AsyncEndpoint(MessageConnection(a))
         receiver = AsyncEndpoint(MessageConnection(b))
         try:
@@ -116,7 +115,7 @@ def test_cancelled_call_keeps_shared_receiver_alive():
 
 def test_endpoint_close_wakes_idle_receive_and_joins_workers():
     async def scenario():
-        a, b = Pipe(duplex=True)
+        a, b = message_pipe()
         endpoint = AsyncEndpoint(MessageConnection(a))
         receiving = asyncio.create_task(endpoint.receive())
         try:

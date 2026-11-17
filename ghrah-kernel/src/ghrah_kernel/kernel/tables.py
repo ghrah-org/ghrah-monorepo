@@ -6,6 +6,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from tempfile import TemporaryDirectory
 
 from ..client import RpcClient
 from ..protocol import ErrorRecord
@@ -36,6 +37,7 @@ class Domain:
     spawn_key: str = ""
     forced: bool = False
     entry_key: str = ""
+    launch_files: TemporaryDirectory | None = field(default=None, repr=False)
 
     def snapshot(self) -> dict:
         return {

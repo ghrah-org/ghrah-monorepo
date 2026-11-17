@@ -13,6 +13,7 @@ from _mechanism.scenarios import run_event_stream_chain
 from test_references import basis, denied, probe, release, until
 from test_service_chain import assert_clean
 
+from ghrah_kernel.kernel import streams as streams_module
 from ghrah_kernel.kernel.events import EventRecord
 from ghrah_kernel.kernel.pipe import create_pipe
 from ghrah_kernel.kernel.runtime import Kernel
@@ -404,7 +405,14 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
             meta = {"op": "wait", "targets": [{"kind": kind, "reference": node.handle_id}]}
         else:
             writer = kernel.derived(session, obj, source, {"write"})
-            read_fd, write_fd, capacity = create_pipe(4096)
+            if streams_module._BUFFER_BACKEND:
+                # Windows 走进程内缓冲后端：没有 FD，预置待读数据直接放缓冲。
+                read_fd = write_fd = -1
+                capacity = 4096
+                buffer = bytearray(b"secret")
+            else:
+                read_fd, write_fd, capacity = create_pipe(4096)
+                buffer = None
             kernel.streams.records[obj.object_id] = Stream(
                 obj.object_id,
                 "local-test",
@@ -414,8 +422,10 @@ def test_final_delivery_gate_strips_staged_event_and_pipe_read_after_revoke():
                 write_fd,
                 capacity,
                 buffered=len(b"secret"),
+                buffer=buffer,
             )
-            os.write(write_fd, b"secret")
+            if write_fd >= 0:
+                os.write(write_fd, b"secret")
             meta = {"op": "read", "handle": node.handle_id, "max_bytes": 16}
         entered, released = asyncio.Event(), asyncio.Event()
         replies = []
@@ -555,7 +565,9 @@ def test_expected_stop_with_active_stream_and_subscription_keeps_stopped_state()
             pending = asyncio.create_task(client.read(channel["handle_id"]))
             await until(lambda: io_waiting(host))
             status = await host.control.kill(host.services["tools"]["domain_id"])
-            assert status["state"] == "stopped" and status["reaped"] and status["exit_code"] == -15
+            assert status["state"] == "stopped" and status["reaped"]
+            # Windows 终止子进程的退出码不是 POSIX 信号编码，断言按平台区分。
+            assert status["exit_code"] == (1 if os.name == "nt" else -15)
             await denied(pending, "CHANNEL_CLOSED")
         assert_clean(host)
         assert all(domain["state"] == "stopped" for domain in host.final_report["domains"])

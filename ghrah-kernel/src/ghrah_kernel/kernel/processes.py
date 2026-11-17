@@ -7,11 +7,11 @@
 import asyncio
 import os
 import secrets
-from multiprocessing import Pipe
 
 from ..client import RpcClient
 from ..endpoint import AsyncEndpoint
-from ..wire import MessageConnection
+from ..subprocesses import module_command, start_process
+from ..wire import MessageConnection, message_pipe
 from .tables import Domain, KernelFault
 
 
@@ -55,30 +55,37 @@ class Processes:
             if old.reaped:
                 raise KernelFault("DOMAIN_RETIRED", "旧启动键不能复活实例")
             return old.snapshot()
-        provider_parent, provider_child = Pipe(duplex=True)
-        caller_parent, caller_child = Pipe(duplex=True)
+        provider_parent, provider_child = message_pipe()
+        caller_parent, caller_child = message_pipe()
         credential, enrollment = secrets.token_hex(16), secrets.token_hex(16)
+        launch_files = None
         try:
-            process = await asyncio.create_subprocess_exec(
+            command, launch_files = module_command(
                 record.executable,
-                "-m",
                 record.module,
-                *record.arguments,
-                "--provider-fd",
-                str(provider_child.fileno()),
-                "--caller-fd",
-                str(caller_child.fileno()),
-                "--credential",
-                credential,
-                "--enrollment",
-                enrollment,
-                "--config-json",
-                record.configuration,
+                (
+                    *record.arguments,
+                    "--provider-fd",
+                    str(provider_child.fileno()),
+                    "--caller-fd",
+                    str(caller_child.fileno()),
+                    "--credential",
+                    credential,
+                    "--enrollment",
+                    enrollment,
+                    "--config-json",
+                    record.configuration,
+                ),
+            )
+            process = await start_process(
+                *command,
                 env={**os.environ, **dict(record.environment)},
-                pass_fds=(provider_child.fileno(), caller_child.fileno()),
-                start_new_session=True,
+                connections=(provider_child, caller_child),
+                new_session=True,
             )
         except BaseException:
+            if launch_files is not None:
+                launch_files.cleanup()
             provider_parent.close()
             caller_parent.close()
             raise
@@ -97,6 +104,7 @@ class Processes:
             fixture=fixture,
             spawn_key=spawn_key,
             entry_key=selected,
+            launch_files=launch_files,
         )
         self.domains[domain.domain_id] = domain
         domain.peer.event_handler = lambda message: self.kernel.events.receive(
@@ -129,6 +137,9 @@ class Processes:
 
     async def _monitor(self, domain: Domain) -> None:
         domain.exit_code = await domain.process.wait()
+        if domain.launch_files is not None:
+            domain.launch_files.cleanup()
+            domain.launch_files = None
         domain.reaped = True
         self.kernel.events.domain_closed(domain.domain_id)
         self.kernel.streams.domain_closed(domain.domain_id)

@@ -4,14 +4,13 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from multiprocessing import Pipe
 
 import cbor2
 import pytest
 
 from ghrah_kernel.payloads import PayloadUnavailable, decode_payload, encode_payload
 from ghrah_kernel.protocol import Envelope, ProtocolError, decode_envelope, encode_envelope
-from ghrah_kernel.wire import MAX_MESSAGE_BYTES, MessageConnection, MessageTooLarge
+from ghrah_kernel.wire import MAX_MESSAGE_BYTES, MessageConnection, MessageTooLarge, message_pipe
 
 
 @dataclass
@@ -52,7 +51,7 @@ def test_invalid_control_envelopes_are_rejected(fields):
 
 
 def test_stdlib_message_boundaries_and_exact_limit():
-    a, b = Pipe(duplex=True)
+    a, b = message_pipe()
     sender, receiver = MessageConnection(a), MessageConnection(b)
     try:
         messages = [b"first", b"x" * MAX_MESSAGE_BYTES, b"last"]
@@ -66,7 +65,7 @@ def test_stdlib_message_boundaries_and_exact_limit():
 
 
 def test_oversize_send_is_rejected_before_writing_and_connection_survives():
-    a, b = Pipe(duplex=True)
+    a, b = message_pipe()
     sender, receiver = MessageConnection(a, 32), MessageConnection(b, 32)
     try:
         with pytest.raises(MessageTooLarge):
@@ -79,7 +78,7 @@ def test_oversize_send_is_rejected_before_writing_and_connection_survives():
 
 
 def test_receive_limit_and_eof_are_delegated_to_stdlib():
-    a, b = Pipe(duplex=True)
+    a, b = message_pipe()
     try:
         a.send_bytes(b"x" * 33)
         with pytest.raises(OSError):
@@ -87,7 +86,7 @@ def test_receive_limit_and_eof_are_delegated_to_stdlib():
     finally:
         a.close()
         b.close()
-    a, b = Pipe(duplex=True)
+    a, b = message_pipe()
     a.close()
     try:
         with pytest.raises(EOFError):

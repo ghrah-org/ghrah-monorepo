@@ -32,7 +32,7 @@ def main() -> int:
                 args.report,
                 args.peer_fd,
                 args.peer_token,
-                json.loads(Path(args.config).read_text()),
+                json.loads(Path(args.config).read_text(encoding="utf-8")),
             )
         )
         return 0

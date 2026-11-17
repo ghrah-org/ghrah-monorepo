@@ -2,11 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unix 非阻塞管道创建；容量调整只作为宿主可选能力。"""
+"""Unix 非阻塞管道创建；无 fcntl 的平台由 Streams 改走内存缓冲。"""
 
-import fcntl
 import os
 from contextlib import suppress
+
+try:  #  Windows 没有 fcntl；模块仍需可导入，由调用方选择内存缓冲后端。
+    import fcntl
+except ImportError:  # pragma: no cover - 仅在 Windows 上成立
+    fcntl = None
 
 
 def create_pipe(quota: int) -> tuple[int, int, int]:
@@ -15,7 +19,12 @@ def create_pipe(quota: int) -> tuple[int, int, int]:
     支持 pipe2 的平台原子设置标志；其余平台使用 Python 的不可继承
     pipe，再设置非阻塞模式。Linux 继续尝试调整真实管道容量，最终额度
     不超过协商值及已知物理容量；无容量查询接口时由 Streams 严格核算额度。
+
+    无 ``fcntl`` 的平台（Windows）没有可用的非阻塞 FD 监听，应由调用方改用
+    进程内缓冲，不要走到这里。
     """
+    if fcntl is None:
+        raise OSError("当前平台没有 fcntl，不能创建非阻塞内核管道")
     pipe2 = getattr(os, "pipe2", None)
     fds = pipe2(os.O_NONBLOCK | os.O_CLOEXEC) if pipe2 is not None else os.pipe()
     try:

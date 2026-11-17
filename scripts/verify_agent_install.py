@@ -11,7 +11,6 @@ import os
 import secrets
 import tempfile
 from dataclasses import asdict
-from multiprocessing import Pipe
 from pathlib import Path
 
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -32,7 +31,7 @@ from ghrah_kernel.kernel.runtime import Kernel
 from ghrah_kernel.kernel_client import KernelClient
 from ghrah_kernel.launch import LaunchRecord
 from ghrah_kernel.supervisor import ServiceBinding, ServiceSpec, Supervisor
-from ghrah_kernel.wire import MessageConnection
+from ghrah_kernel.wire import MessageConnection, message_pipe
 
 
 async def verify(database: Path) -> dict:
@@ -105,7 +104,7 @@ async def verify(database: Path) -> dict:
     clients = []
 
     def connect(name, role):
-        own, peer = Pipe(duplex=True)
+        own, peer = message_pipe()
         token = secrets.token_hex(16)
         kernel.attach_caller(peer, token, role, **asdict(bindings[name]))
         client = KernelClient(RpcClient(AsyncEndpoint(MessageConnection(own))))
