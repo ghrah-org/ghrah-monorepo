@@ -111,6 +111,21 @@ _LOCKED_PROJECT_MUTATIONS = frozenset(
 _TERMINATE_ABSENT_ERRORS = frozenset({"agent_identity_mismatch", "agent_not_found"})
 
 
+def _is_terminate_absent(error_text: str) -> bool:
+    """判断 terminate 失败是否表示「运行侧已经没有该 Agent」。
+
+    旧 CoreUnit 命令面回稳定码（``agent_identity_mismatch`` / ``agent_not_found``）；
+    C3 端口化后 ``agents.delete`` 的失败经 ``ApiError`` 转成
+    ``NOT_FOUND: agent '<id>' is not online``（文本回执，不再是稳定码）。
+    两种形态都表示无需再终止，remove 可以继续删定义。
+    """
+    text = error_text.strip()
+    if text in _TERMINATE_ABSENT_ERRORS:
+        return True
+    lowered = text.lower()
+    return "not online" in lowered or lowered.startswith("not_found")
+
+
 def _strip_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     if _ENVELOPE_KEYS.isdisjoint(payload):
         return payload
@@ -1038,10 +1053,13 @@ class ProjectManager:
                 result = await handle.terminate_agent(target.agent_id, target.name)
                 if not result.get("success"):
                     error_text = str(result.get("error") or "")
-                    if error_text not in _TERMINATE_ABSENT_ERRORS:
+                    if not _is_terminate_absent(error_text):
                         terminate_error = error_text or "terminate rejected"
             except Exception as exc:  # noqa: BLE001
-                terminate_error = str(exc)
+                # 端口实现可能让 ApiError 直接抛出（``NOT_FOUND: ... is not
+                # online``），与回执失败同一语义，同样视作运行侧已无实例。
+                if not _is_terminate_absent(str(exc)):
+                    terminate_error = str(exc)
             if terminate_error is not None:
                 logger.warning(
                     "remove_agent: terminate %s failed: %s (definition kept)",
