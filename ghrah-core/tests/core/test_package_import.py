@@ -18,7 +18,7 @@ from ghrah.protocol.problem import ProblemCode
 
 from ghrah.ability.package.installed_store import parse_full_name
 from ghrah.ability.package.lock import lock_filename, read_lock
-from ghrah.ability.package.provider import strip_schema_metadata
+from ghrah.ability.package.provider import InstalledAbilityProvider, strip_schema_metadata
 from ghrah.core.wiring import build_core_catalog
 
 OP_SOURCE = '''\
@@ -324,6 +324,25 @@ def test_import_allows_skill_member_without_abi_precheck(tmp_path: Path) -> None
     assert view.skill_count == 1
     version_root = tmp_path / "ability" / "acme" / "demo" / "1.0.0"
     assert (version_root / "skills" / "guide" / "SKILL.md").is_file()
+
+
+def test_installed_skill_member_projects_as_skill_type(tmp_path: Path) -> None:
+    """安装后的 skill 成员可投影为可授予成员（type=skill、handler 保留原键）。"""
+    source = write_package(tmp_path / "src", with_skill=True)
+    archive = zip_package(source, tmp_path / "with-skill.zip")
+    catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
+    try:
+        asyncio.run(catalog.package_import(archive_path=str(archive), source_name="with-skill.zip"))
+    finally:
+        asyncio.run(catalog.aclose())
+
+    provider = InstalledAbilityProvider(tmp_path / "ability")
+    members = provider.package_members("acme.demo")
+    kinds = {(item.metadata.name, item.implementation.type) for item in members}
+    assert kinds == {("ping", "python"), ("guide", "skill")}
+    skill_member = next(item for item in members if item.implementation.type == "skill")
+    assert skill_member.implementation.handler == "guide"
+    assert skill_member.tool is None
 
 
 def test_malformed_zip_file_directory_collision_is_invalid_package(tmp_path: Path) -> None:
