@@ -44,7 +44,6 @@ def _manager(agentconf_db_path: str | None = None) -> ProjectManager:
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=None,  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
         agentconf_db_path=agentconf_db_path,
     )
 

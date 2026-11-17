@@ -443,7 +443,6 @@ class CoreClusterRegistry:
 
 def default_core_unit_factory(
     config: SubjectConfig,
-    manifest_store: Any = None,
     llm_factory: Callable[[Any], Any] | None = None,
     room_projector: Callable[[Any], Awaitable[None]] | None = None,
     ability_store_resolver: Callable[[str, str], Awaitable[Any]] | None = None,
@@ -596,7 +595,6 @@ def default_core_unit_factory(
             shell_allow_lookup=partial(shell_allow_lookup, project_id)
             if shell_allow_lookup is not None
             else None,
-            manifest_store=manifest_store,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_install_root=config.ability.install_root,
             ability_filesystem_roots=config.ability.filesystem_roots,

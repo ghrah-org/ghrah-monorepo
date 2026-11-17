@@ -34,7 +34,6 @@ async def test_coexistence_assembly_all_fibers_active(tmp_path: Path) -> None:
         assert fibers
         assert set(fibers) == {
             "sandbox",
-            "manifest_store",
             "ledger",
             "workspace",
             "taskstore",
@@ -47,7 +46,6 @@ async def test_coexistence_assembly_all_fibers_active(tmp_path: Path) -> None:
             assert fiber.state is FiberState.ACTIVE
 
         assert ctx.get("sandbox_executor") is not None
-        assert ctx.get("manifest_store") is not None
         # ledger 不再发布实例级服务（chain 永远读 Project Root）。
         assert ctx.get("ledger") is None
         assert ctx.get("workspace_service") is not None
@@ -67,7 +65,6 @@ async def test_full_assembly_all_fibers_active(
         fibers = await mount_builtin_units(ctx, config, profile="full")
         assert set(fibers) == {
             "sandbox",
-            "manifest_store",
             "ledger",
             "workspace",
             "taskstore",

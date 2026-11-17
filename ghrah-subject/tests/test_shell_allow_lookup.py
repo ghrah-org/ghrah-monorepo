@@ -14,7 +14,7 @@ import pytest
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.models import ShellAllowEntry, make_project_record
 from ghrah.subject.project.store import ProjectStore
-from ghrah.subject.runtime.service_keys import MANIFEST_STORE, PROJECT_STORE
+from ghrah.subject.runtime.service_keys import PROJECT_STORE
 from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
 
 
@@ -22,7 +22,7 @@ from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
 async def wired(tmp_path):
     store = ProjectStore(tmp_path / "subject.db")
     await store.start()
-    services = {PROJECT_STORE.name: store, MANIFEST_STORE.name: object()}
+    services = {PROJECT_STORE.name: store}
     ctx = SimpleNamespace(get=services.__getitem__, provide=services.__setitem__)
     unit = CoreClusterRegistryUnit(SubjectConfig(observer_http_api_enabled=False))
     await unit.init(ctx)

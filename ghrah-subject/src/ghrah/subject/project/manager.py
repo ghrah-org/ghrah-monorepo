@@ -75,7 +75,6 @@ from ghrah.subject.project.store import (
 from ghrah.subject.workspace.locator import locator_to_path, path_to_locator
 
 if TYPE_CHECKING:
-    from ghrah.subject.manifest_store.store import ManifestStore
     from ghrah.subject.runtime.service_keys import (
         CoreClusterRegistryService as ClusterRegistryProtocol,
     )
@@ -181,7 +180,7 @@ class ProjectManager:
         workspace_mgr: WorkspaceManager（register/list_records/get_record）。
         task_mgr: TaskManagerService（经 task_get 命令校验 task 属本 project）。
         cluster_registry: CoreClusterRegistryService（ensure_cluster + get_handle）。
-        manifest_store: ManifestStore（实例 manifest 渲染协调，MVP 跳过）。
+        cluster_registry: ClusterRegistryProtocol（ensure_cluster / handle 取用）。
         on_event: 事件回调（unit 注入）。
         bootstrap_workspace_locator: 首启 bootstrap 用的 workspace locator
             （派生自 config.project.bootstrap_workspace_locator）。
@@ -195,7 +194,6 @@ class ProjectManager:
         workspace_mgr: WorkspaceManager,
         task_mgr: TaskManagerService,
         cluster_registry: ClusterRegistryProtocol,
-        manifest_store: ManifestStore,
         template_store: Callable[[], Any] | None = None,
         *,
         on_event: OnEvent | None = None,
@@ -208,7 +206,6 @@ class ProjectManager:
         self._workspace_mgr = workspace_mgr
         self._task_mgr = task_mgr
         self._cluster_transport = cluster_registry
-        self._manifest_store = manifest_store
         # 模板库在 ProjectUnit 之后挂载的单元里 provide，故按调用期解析（同
         # PROJECT_STORE 的惰性读取范式），不在构造期固化实例。
         self._template_store = template_store

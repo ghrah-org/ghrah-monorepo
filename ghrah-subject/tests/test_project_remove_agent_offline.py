@@ -120,7 +120,6 @@ async def test_remove_agent_accepts_port_not_online_text() -> None:
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))
@@ -149,7 +148,6 @@ async def test_remove_agent_accepts_raised_port_api_error() -> None:
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))
@@ -169,7 +167,6 @@ async def test_remove_agent_keeps_definition_on_real_terminate_failure() -> None
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))

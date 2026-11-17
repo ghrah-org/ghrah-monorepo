@@ -35,7 +35,6 @@ from ghrah.subject.runtime.service_keys import (
     CORE_CATALOG_SERVICE,
     CORE_CLUSTER_REGISTRY,
     CORE_PORT_SERVICE,
-    MANIFEST_STORE,
     PROJECT_STORE,
     SANDBOX_EXECUTOR,
     WORKSPACE_SERVICE,
@@ -168,7 +167,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
         self._ctx: Any | None = None
         self._meta = UnitMeta(
             name="core_cluster_registry",
-            requires=frozenset({MANIFEST_STORE, WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
+            requires=frozenset({WORKSPACE_SERVICE, SANDBOX_EXECUTOR}),
             provides=frozenset({CORE_CATALOG_SERVICE, CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
             routes=RouteSpec(commands=_PROJECT_AGENT_COMMANDS | {_HITL_RESPONSE_COMMAND}),
         )
@@ -186,10 +185,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
 
     async def init(self, ctx: Any) -> None:
         self._ctx = ctx
-        store = ctx.get(MANIFEST_STORE.name)
         if self._unit_factory is None:
-            # 生产默认工厂：注入 manifest_store（从 ctx 取），
-            # 供 CoreUnit 内部解析 manifest_ref spawn。
+            # 生产默认工厂：项目级装配（持久化 / 房间投影 / shell 兜底）。
             async def project_room(message: Any) -> None:
                 rooms = message.metadata.get("room_ids") or [message.metadata.get("room_id")]
                 for room_id in rooms:
@@ -258,7 +255,6 @@ class CoreClusterRegistryUnit(SubjectUnit):
 
             self._unit_factory = default_core_unit_factory(
                 self._config,
-                manifest_store=store,
                 llm_factory=self._llm_factory,
                 room_projector=project_room,
                 shell_cwd_lookup=shell_cwd_lookup,

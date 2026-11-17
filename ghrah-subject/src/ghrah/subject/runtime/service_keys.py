@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ghrah.subject.manifest_store.store import ManifestStore
 from ghrah.subject.sandbox.executor import SandboxExecutor
 from ghrah.subject.sandbox.workspace import WorkspaceManager
 from ghrah.subject.task.store import TaskStore
@@ -33,7 +32,6 @@ __all__ = [
     "DESIRED_STATE_STORE",
     "EVENT_BRIDGE",
     "LEDGER",
-    "MANIFEST_STORE",
     "MCP_CLIENT_REGISTRY",
     "OBSERVER_ENDPOINT",
     "OBSERVER_EVENT_BUS",
@@ -271,7 +269,6 @@ WORKSPACE_MANAGER = SubjectServiceKey[WorkspaceManager]("workspace_manager", Wor
 COMMAND_RUNNER = SubjectServiceKey[CommandRunner]("command_runner")
 LEDGER = SubjectServiceKey[Any]("ledger")
 SANDBOX_EXECUTOR = SubjectServiceKey[SandboxExecutor]("sandbox_executor", SandboxExecutor)
-MANIFEST_STORE = SubjectServiceKey[ManifestStore]("manifest_store", ManifestStore)
 # 实例级 Agent 模板库：创建服务的唯一模板来源（T1-a 的 TemplateStore）。
 TEMPLATE_STORE = SubjectServiceKey[Any]("agent_template_store")
 OBSERVER_ENDPOINT = SubjectServiceKey[Any]("observer_endpoint")
