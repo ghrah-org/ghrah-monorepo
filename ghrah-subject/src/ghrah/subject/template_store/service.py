@@ -114,14 +114,16 @@ class AgentTemplateService:
         tag: str | None = None,
         deprecated: bool | None = None,
         include_archived: bool = False,
+        include_history: bool = False,
     ) -> list[AgentTemplateRecord]:
-        """列模板（默认排除归档）。"""
+        """列模板（默认只返回每个模板的最新版本，且排除归档）。"""
         return await self._store.list(
             namespace=namespace,
             name=name,
             tag=tag,
             deprecated=deprecated,
             include_archived=include_archived,
+            include_history=include_history,
         )
 
     async def versions(self, template_id: str) -> list[AgentTemplateRecord]:

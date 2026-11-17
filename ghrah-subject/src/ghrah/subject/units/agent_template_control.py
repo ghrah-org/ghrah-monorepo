@@ -180,6 +180,7 @@ def build_agent_template_control_router(
         tag: str | None = Query(default=None),
         deprecated: bool | None = Query(default=None),
         include_archived: bool = Query(default=False),
+        include_history: bool = Query(default=False),
         _: None = Depends(_ensure_enabled),
     ) -> dict[str, Any]:
         await _authorize(request)
@@ -190,6 +191,7 @@ def build_agent_template_control_router(
                 tag=tag,
                 deprecated=deprecated,
                 include_archived=include_archived,
+                include_history=include_history,
             )
         )
         return AgentTemplateListView(templates=[_summary(record) for record in records]).model_dump(

@@ -353,6 +353,34 @@ async def test_list_filters(running: Any) -> None:
     assert await names("?deprecated=false") == ["alpha", "gamma"]
 
 
+async def test_list_defaults_to_latest_and_can_include_history(running: Any) -> None:
+    """列表默认每个模板只返回最新版本；include_history=true 才列全部版本。"""
+    base, _, _ = running
+    status, created, _ = await _request(
+        f"{base}/api/v1/agent-templates",
+        method="POST",
+        body={"metadata": {"namespace": "writing", "name": "history_probe"}},
+    )
+    assert status == 201
+    template_id = created["template_id"]
+    status, _, _ = await _request(
+        f"{base}/api/v1/agent-templates/{template_id}",
+        method="PUT",
+        body={"expected_revision": 1, "title": "第二版"},
+    )
+    assert status == 200
+
+    status, listing, _ = await _request(f"{base}/api/v1/agent-templates?name=history_probe")
+    assert status == 200
+    assert [item["revision"] for item in listing["templates"]] == [2]
+
+    status, listing, _ = await _request(
+        f"{base}/api/v1/agent-templates?name=history_probe&include_history=true"
+    )
+    assert status == 200
+    assert [item["revision"] for item in listing["templates"]] == [1, 2]
+
+
 async def test_error_codes(running: Any) -> None:
     base, _, _ = running
     status, view, _ = await _request(

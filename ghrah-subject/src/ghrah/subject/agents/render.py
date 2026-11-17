@@ -235,7 +235,7 @@ def render_assembly(
     *,
     agent_name: str,
     workspaces: Mapping[str, str],
-    granted: list[GrantedPackage],
+    granted: list[GrantedPackage] | None,
 ) -> RenderedAssembly:
     """把模板渲染成装配输入 + 授权计划。
 
@@ -256,31 +256,45 @@ def render_assembly(
     config = _config(template)
     resolved_paths = _resolve_roots(list(template.path_request), workspaces)
 
-    granted_by_name = {item.package: item for item in granted}
+    # ``granted=None`` 表示调用方没有授权视图（例如 Subject 直接调 Core 创建，
+    # 授权由 Core 侧强制）：此时不裁剪成员，也不把任何包判成未授予。
+    granted_by_name: dict[str, GrantedPackage] = (
+        {} if granted is None else {item.package: item for item in granted}
+    )
     members: list[AgentAssemblyMember] = []
     grants: list[GrantPlan] = []
     missing: list[str] = []
     not_granted: list[str] = []
 
     for request in template.ability_request.packages:
-        fact = granted_by_name.get(request.package)
-        if fact is None:
-            missing.append(request.package)
-            continue
-        granted_ops = set(fact.operations)
-        if request.whole_container:
-            selected_ops = sorted(granted_ops)
-            requested_ops: list[tuple[str, bool, bool]] = []
-        else:
+        if granted is None:
+            # 无授权视图：按模板申请原样装配。
+            selected_ops = (
+                [] if request.whole_container else [item.key for item in request.operations]
+            )
             requested_ops = [
                 (item.key, item.visible, item.available) for item in request.operations
             ]
-            selected_ops = []
-            for key, _, _ in requested_ops:
-                if key in granted_ops:
-                    selected_ops.append(key)
-                else:
-                    not_granted.append(f"{request.package}.{key}")
+            fact = None
+        else:
+            fact = granted_by_name.get(request.package)
+            if fact is None:
+                missing.append(request.package)
+                continue
+            granted_ops = set(fact.operations)
+            if request.whole_container:
+                selected_ops = sorted(granted_ops)
+                requested_ops = []
+            else:
+                requested_ops = [
+                    (item.key, item.visible, item.available) for item in request.operations
+                ]
+                selected_ops = []
+                for key, _, _ in requested_ops:
+                    if key in granted_ops:
+                        selected_ops.append(key)
+                    else:
+                        not_granted.append(f"{request.package}.{key}")
         # 技能与脚本不进 members[]，只进授权行的 axes（见模块 docstring）。
         requested_skills = [
             (item.key, item.visible, [(s.key, s.visible, s.exec) for s in item.scripts])
@@ -301,18 +315,23 @@ def render_assembly(
                     ),
                 )
             )
-        grants.append(
-            GrantPlan(
-                package=request.package,
-                alias=fact.alias,
-                instance_id=fact.instance_id,
-                operations=tuple(selected_ops),
-                skills=tuple(item.key for item in request.skills),
-                scripts={item.key: tuple(s.key for s in item.scripts) for item in request.skills},
-                axes=axes,
-                allowed_roots=allowed_roots,
+        # 无授权视图时不产出授权计划：Subject 不写授权行（由 Core 启动核定器落实），
+        # 且 GrantPlan 的 alias / instance_id 只能来自授权事实。
+        if fact is not None:
+            grants.append(
+                GrantPlan(
+                    package=request.package,
+                    alias=fact.alias,
+                    instance_id=fact.instance_id,
+                    operations=tuple(selected_ops),
+                    skills=tuple(item.key for item in request.skills),
+                    scripts={
+                        item.key: tuple(s.key for s in item.scripts) for item in request.skills
+                    },
+                    axes=axes,
+                    allowed_roots=allowed_roots,
+                )
             )
-        )
 
     spec = AgentAssemblySpec(
         name=agent_name,
