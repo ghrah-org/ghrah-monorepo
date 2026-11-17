@@ -5,7 +5,7 @@
 """Subject 装配层（Ouroboros 形态）。
 
 ``assemble_subject(ctx, config, profile)``：
-1. ``mount_builtin_units``（默认配置 coexistence=7 / full=13，逐个挂载等 ACTIVE，
+1. ``mount_builtin_units``（默认配置 coexistence=7 / full=21，逐个挂载等 ACTIVE，
    规避 SQLite 并发开库锁）；
 2. 第三方 unit allowlist 挂载（``mount_third_party_units``）；
 3. 插件装配（``mount_enabled_plugins``：信任闸 → Project enabled 聚合 →
