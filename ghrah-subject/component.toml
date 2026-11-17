@@ -6,12 +6,19 @@ version = "0.2.0a0"
 [build]
 backend = "uv"
 member = "ghrah-subject"
-depends_on = ["ghrah-core", "ghrah-protocol", "ghrah-plugin", "ghrah-taskstore"]
+depends_on = ["ghrah-core", "ghrah-kernel", "ghrah-protocol", "ghrah-plugin", "ghrah-taskstore"]
 outputs = ["dist/*.whl"]
 
 [entries.server]
 kind = "process"
 argv = ["ghrah-subject-server"]
+transport = "http"
+ready = { type = "http", path = "/health" }
+health = { type = "http", path = "/health" }
+
+[entries.host]
+kind = "process"
+argv = ["ghrah-subject-host"]
 transport = "http"
 ready = { type = "http", path = "/health" }
 health = { type = "http", path = "/health" }
