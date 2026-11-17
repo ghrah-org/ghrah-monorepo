@@ -63,6 +63,7 @@ class ContextNode:
     metadata: dict[str, Any] = field(default_factory=dict)
     session_id: str = ""
     created_on_branch_id: str = ""
+    turn_id: str = ""
 
     def __post_init__(self) -> None:
         """确保可变字段在 frozen dataclass 中被隔离（deep copy）。"""

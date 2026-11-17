@@ -24,6 +24,10 @@ __all__ = [
     "CoreEventType",
     "CoreEvent",
     "HITLRequestEvent",
+    "HITLResolvedEvent",
+    "TurnOpenedEvent",
+    "TurnWaitingHitlEvent",
+    "TurnClosedEvent",
     "ActionChainUpdatedEvent",
     "AgentErrorEvent",
     "AgentResponseEvent",
@@ -56,6 +60,9 @@ class CoreEventType(str, Enum):  # noqa: UP042
 
     HITL_REQUEST = "hitl_request"
     HITL_RESOLVED = "hitl_resolved"
+    TURN_OPENED = "turn_opened"
+    TURN_WAITING_HITL = "turn_waiting_hitl"
+    TURN_CLOSED = "turn_closed"
     ACTION_CHAIN_UPDATED = "action_chain_updated"
     AGENT_ERROR = "agent_error"
     AGENT_RESPONSE = "agent_response"
@@ -103,6 +110,9 @@ class HITLRequestEvent(CoreEvent):
     tool_call: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict)
     shell_remember: ShellRememberOptions | None = None
+    turn_id: str | None = None
+    delivery_id: str | None = None
+    deadline_at: str | None = None
     promise_id: str = ""
     """审批响应定位键：Observer 凭此回发 hitl_response"""
     reason: str = ""
@@ -128,6 +138,40 @@ class HITLResolvedEvent(CoreEvent):
     ability_name: str = ""
     tool_call_id: str = ""
     status: str = ""
+    turn_id: str | None = None
+
+
+@dataclass
+class TurnOpenedEvent(CoreEvent):
+    """轮次已登记。"""
+
+    event_type: CoreEventType = field(default=CoreEventType.TURN_OPENED, init=False)
+    turn_id: str = ""
+    session_id: str = ""
+    status: str = "open"
+    opener_delivery_id: str | None = None
+
+
+@dataclass
+class TurnWaitingHitlEvent(CoreEvent):
+    """轮次首次进入本次审批等待阶段。"""
+
+    event_type: CoreEventType = field(default=CoreEventType.TURN_WAITING_HITL, init=False)
+    turn_id: str = ""
+    session_id: str = ""
+    promise_id: str = ""
+
+
+@dataclass
+class TurnClosedEvent(CoreEvent):
+    """通知读侧重新读取轮次状态。"""
+
+    event_type: CoreEventType = field(default=CoreEventType.TURN_CLOSED, init=False)
+    turn_id: str = ""
+    session_id: str = ""
+    status: str = ""
+    closing_kind: str = ""
+    end_node_id: str | None = None
 
 
 @dataclass

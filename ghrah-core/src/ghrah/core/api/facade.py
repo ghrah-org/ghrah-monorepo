@@ -35,6 +35,7 @@ from ghrah.protocol.ports.core import (
     BranchOperations,
     DeliveriesOperations,
     DeliveryId,
+    HitlOperations,
     MailboxOperations,
     ManifestOperations,
     MessageId,
@@ -44,6 +45,7 @@ from ghrah.protocol.ports.core import (
     RoomOperations,
     SessionId,
     SessionOperations,
+    TurnOperations,
 )
 from ghrah.protocol.views.common import (
     AgentIdView,
@@ -65,6 +67,8 @@ from ghrah.protocol.views.core import (
     ContentReadResult,
     DeliveryView,
     HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MailboxSummaryView,
     MessageReplyView,
     MessageView,
@@ -73,6 +77,8 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     ToolListView,
     ToolView,
+    TurnListView,
+    TurnView,
 )
 
 from ghrah.core.api.runtime import CoreRuntime
@@ -105,6 +111,8 @@ class CoreFacade:
         self._closer = closer
         self._registry = registry
         self._nodes = _Nodes(self)
+        self._turns = _Turns(self)
+        self._hitl = _Hitl(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
         self._mailbox = _Mailbox(self)
@@ -121,6 +129,16 @@ class CoreFacade:
     def nodes(self) -> NodeOperations:
         """链节点读取。"""
         return self._nodes
+
+    @property
+    def turns(self) -> TurnOperations:
+        """轮次读取。"""
+        return self._turns
+
+    @property
+    def hitl(self) -> HitlOperations:
+        """待审批请求读取。"""
+        return self._hitl
 
     @property
     def sessions(self) -> SessionOperations:
@@ -208,6 +226,58 @@ class CoreFacade:
             JSON 形状的出参
         """
         return await self._runtime.invoke(capability, dict(kwargs))
+
+
+class _Turns:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
+        return TurnView.model_validate(
+            await self._facade._call("turns.get", agent_id=agent_id, turn_id=turn_id)
+        )
+
+    async def list(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> TurnListView:
+        return TurnListView.model_validate(
+            await self._facade._call(
+                "turns.list",
+                agent_id=agent_id,
+                session_id=session_id,
+                status=status,
+                limit=limit,
+            )
+        )
+
+
+class _Hitl:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def get(self, *, agent_id: AgentId, promise_id: str) -> HitlRequestView:
+        return HitlRequestView.model_validate(
+            await self._facade._call("hitl.get", agent_id=agent_id, promise_id=promise_id)
+        )
+
+    async def list_pending(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+    ) -> HitlRequestListView:
+        return HitlRequestListView.model_validate(
+            await self._facade._call(
+                "hitl.list_pending",
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        )
 
 
 class _Nodes:

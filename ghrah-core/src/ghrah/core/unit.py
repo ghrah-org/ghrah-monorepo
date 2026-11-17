@@ -77,6 +77,8 @@ from ghrah.ability.surface.config import (
 )
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
+from ghrah.context.manager import ContextManager
+from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
 from ghrah.core.events import (
@@ -96,6 +98,9 @@ from ghrah.core.events import (
     SessionArchivedEvent,
     SessionCreatedEvent,
     SessionDeletedEvent,
+    TurnClosedEvent,
+    TurnOpenedEvent,
+    TurnWaitingHitlEvent,
 )
 from ghrah.core.hitl import HITLPromiseRegistry
 from ghrah.core.host_command_bridge import HostCommandBridge
@@ -308,6 +313,9 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
     event_type_map: dict[str, str] = {
         CoreEventType.HITL_REQUEST.value: "hitl_request",
         CoreEventType.HITL_RESOLVED.value: "hitl_resolved",
+        CoreEventType.TURN_OPENED.value: "turn_opened",
+        CoreEventType.TURN_WAITING_HITL.value: "turn_waiting_hitl",
+        CoreEventType.TURN_CLOSED.value: "turn_closed",
         CoreEventType.ACTION_CHAIN_UPDATED.value: "action_chain_updated",
         CoreEventType.AGENT_ERROR.value: "agent_error",
         CoreEventType.AGENT_RESPONSE.value: "agent_response",
@@ -337,6 +345,9 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
                 "context": event.context,
                 "promise_id": event.promise_id,
                 "reason": event.reason,
+                "turn_id": event.turn_id,
+                "delivery_id": event.delivery_id,
+                "deadline_at": event.deadline_at,
                 "shell_remember": event.shell_remember.model_dump()
                 if event.shell_remember is not None
                 else None,
@@ -349,7 +360,27 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
                 "ability_name": event.ability_name,
                 "tool_call_id": event.tool_call_id,
                 "status": event.status,
+                "turn_id": event.turn_id,
             }
+        )
+    elif isinstance(event, TurnOpenedEvent):
+        payload.update(
+            turn_id=event.turn_id,
+            session_id=event.session_id,
+            status=event.status,
+            opener_delivery_id=event.opener_delivery_id,
+        )
+    elif isinstance(event, TurnWaitingHitlEvent):
+        payload.update(
+            turn_id=event.turn_id, session_id=event.session_id, promise_id=event.promise_id
+        )
+    elif isinstance(event, TurnClosedEvent):
+        payload.update(
+            turn_id=event.turn_id,
+            session_id=event.session_id,
+            status=event.status,
+            closing_kind=event.closing_kind,
+            end_node_id=event.end_node_id,
         )
     elif isinstance(event, ActionChainUpdatedEvent):
         payload.update({"node": event.node, "branch": event.branch})
@@ -1375,6 +1406,28 @@ class CoreUnit:
     # HITL 命令
     # ----------------------------------------------------------------
 
+    async def _is_final_hitl(self, promise_id: str) -> bool:
+        """识别本作用域已结束的 promise，保留其它单元的待审批命令穿透。"""
+        try:
+            if self._config.message_manager is not None:
+                path = self._config.message_manager.db_path
+                async with SqliteBackend(path, read_only=True) as reader:
+                    row = await reader.load_hitl_request(None, promise_id)
+                    return row is not None and row["status"] != "pending"
+            supervisor = self._require_supervisor()
+            if isinstance(supervisor, SupervisorActor):
+                for agent in await supervisor.list_agents():
+                    handle = await supervisor.get_agent_handle_by_id(agent["agent_id"])
+                    cm = getattr(handle, "_context_manager", None)
+                    if isinstance(cm, ContextManager) and isinstance(cm.persistence, SqliteBackend):
+                        async with SqliteBackend(cm.persistence.db_path, read_only=True) as reader:
+                            row = await reader.load_hitl_request(agent["agent_id"], promise_id)
+                        if row is not None:
+                            return row["status"] != "pending"
+        except Exception:
+            logger.warning("Could not read final HITL state for %s", promise_id, exc_info=True)
+        return False
+
     async def _handle_hitl_response(
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any] | None:
@@ -1403,7 +1456,9 @@ class CoreUnit:
         tool_call_id = hp.tool_call_id
         promise_id = hp.promise_id
         if promise_id:
-            triplet = self._hitl_promises.resolve(promise_id)
+            triplet = self._hitl_promises.lookup(promise_id)
+            if triplet is None and await self._is_final_hitl(promise_id):
+                return self._ok({"resolved": False, "status": "already_resolved"})
             if triplet is None and not (agent_name and ability_name and tool_call_id):
                 logger.debug(
                     "hitl_response: promise '%s' not held by this CoreUnit; "
@@ -1420,6 +1475,23 @@ class CoreUnit:
         result: Any = hp.result
         if not hp.approved and hp.reason and result is None:
             result = {"reason": hp.reason}
+
+        active_promise = promise_id or self._hitl_promises.lookup_promise(
+            agent_name, ability_name, tool_call_id
+        )
+        turn_id = None
+        durably_resolved = False
+        cm = getattr(agent_handle, "_context_manager", None)
+        if active_promise and isinstance(cm, ContextManager):
+            stored = await cm.resolve_hitl_request(
+                active_promise, approved=hp.approved, resolved_by=None, resolution=result
+            )
+            if stored.persisted and not stored.changed:
+                return self._ok({"resolved": False, "status": "already_resolved"})
+            turn_id = stored.turn_id
+            durably_resolved = stored.changed
+        if active_promise:
+            self._hitl_promises.remove(active_promise)
 
         executor = getattr(agent_handle, "_ability_executor", None)
         if executor is not None and hasattr(executor, "receive_hitl_response"):
@@ -1438,6 +1510,7 @@ class CoreUnit:
             )
             resolved = True
 
+        resolved = resolved or durably_resolved
         if resolved:
             self._emit_event(
                 EventType.HITL_RESOLVED.value,
@@ -1447,6 +1520,7 @@ class CoreUnit:
                     "ability_name": ability_name,
                     "tool_call_id": tool_call_id,
                     "status": "approved" if hp.approved else "rejected",
+                    "turn_id": turn_id,
                 },
             )
 

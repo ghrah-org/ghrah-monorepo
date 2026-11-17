@@ -520,3 +520,33 @@ async def test_interrupted_predecessor_releases_after_reopen(tmp_path):
         assert len(llm.calls) == 1
         assert await manager.get_deliveries(first.message_id) == (prior,)
         assert await manager.get_replies(first.message_id) == ()
+
+
+async def test_v6_delivery_migration_preserves_rows_and_policy_constraint(tmp_path):
+    """v6 待投递记录升级后可读，新增列使用和新库相同的默认值和约束。"""
+    path = tmp_path / "messages.sqlite"
+    async with make_manager(path) as manager:
+        request = await send_request(manager)
+
+    async with aiosqlite.connect(path) as db:
+        await db.execute("DROP INDEX IF EXISTS idx_deliveries_turn")
+        columns = await (await db.execute("PRAGMA table_info(mm_deliveries)")).fetchall()
+        for column in ("turn_id", "delivery_policy", "parked", "parked_reason"):
+            if column in {row[1] for row in columns}:
+                await db.execute(f"ALTER TABLE mm_deliveries DROP COLUMN {column}")
+        await db.execute("UPDATE mm_meta SET version=6")
+        await db.commit()
+
+    async with make_manager(path) as manager:
+        assert await manager.get_message(request.message_id) == request
+        async with aiosqlite.connect(path) as db:
+            assert await (await db.execute("SELECT version FROM mm_meta")).fetchone() == (7,)
+            rows = await (
+                await db.execute(
+                    "SELECT state, turn_id, delivery_policy, parked, parked_reason"
+                    " FROM mm_deliveries"
+                )
+            ).fetchall()
+            assert rows == [("pending", None, "queue", 0, None)] * 2
+            with pytest.raises(aiosqlite.IntegrityError):
+                await db.execute("UPDATE mm_deliveries SET delivery_policy='unknown'")

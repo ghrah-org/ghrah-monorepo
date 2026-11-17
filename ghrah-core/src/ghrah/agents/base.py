@@ -68,7 +68,8 @@ from ghrah.context.iteration_commit import (
     get_iteration_committer,
 )
 from ghrah.context.iteration_state import IterationState
-from ghrah.context.manager import ContextManager
+from ghrah.context.manager import ContextManager, DeliverySessionUnavailableError
+from ghrah.context.turn import TurnTerminalStatus
 from ghrah.context.window import parse_vendor_window_tokens
 from ghrah.core.ability_protocol import AbilityProtocol, ExecutorProtocol
 from ghrah.core.event_publisher import (
@@ -84,10 +85,13 @@ from ghrah.core.events import (
     BranchCreatedEvent,
     BranchDeletedEvent,
     ContextUsageUpdatedEvent,
+    CoreEvent,
     SessionActivatedEvent,
     SessionArchivedEvent,
     SessionCreatedEvent,
     SessionDeletedEvent,
+    TurnClosedEvent,
+    TurnOpenedEvent,
 )
 from ghrah.core.exceptions import (
     AgentError,
@@ -598,6 +602,12 @@ class ActorAgent:
                 raise RuntimeError("Session-routed receive cannot consume unscoped queued messages")
             selection = cm.use_session(target_session_id) if target_session_id else nullcontext()
             with selection, durable_iteration_scope(cm, committer, rollback, finish):
+                if finish is not None and target_session_id and message.metadata.get("turn_id"):
+                    cm.attach_turn(
+                        turn_id=message.metadata["turn_id"],
+                        session_id=target_session_id,
+                        opener_delivery_id=message.metadata["delivery_id"],
+                    )
                 try:
                     return await self._receive_once(message)
                 finally:
@@ -671,7 +681,63 @@ class ActorAgent:
 
         return await self._runner.run(operation)
 
+    async def _publish_turn_event(self, event: CoreEvent) -> None:
+        try:
+            await self._event_publisher.publish(event)
+        except Exception:
+            logger.warning("Failed to publish %s", event.event_type, exc_info=True)
+
     async def _receive_once(self, message: AgentMessage) -> AgentMessage:
+        """在 Runner 中执行输入并收敛轮次生命周期。"""
+        cm = self._context_manager
+        if (
+            cm.active_turn is None
+            and get_delivery_finisher(cm) is None
+            and not message.metadata.get("message_manager")
+        ):
+            await cm.open_turn(opener_delivery_id=message.metadata.get("delivery_id"))
+        active = cm.active_turn
+        status: TurnTerminalStatus = "interrupted"
+        closing_kind = "cancelled"
+        try:
+            if active is not None:
+                await self._publish_turn_event(
+                    TurnOpenedEvent(
+                        agent_name=self.config.name,
+                        turn_id=active.turn_id,
+                        session_id=active.session_id,
+                        opener_delivery_id=active.opener_delivery_id,
+                    )
+                )
+            response = await self._execute_received_message(message)
+            if response.type == MessageType.ERROR:
+                status, closing_kind = "failed", "error"
+            else:
+                status, closing_kind = "closed", "completed"
+            return response
+        except DeliverySessionUnavailableError:
+            raise
+        except Exception:
+            status, closing_kind = "failed", "error"
+            raise
+        finally:
+            if active is not None:
+                end_node_id = cm.active_head.id
+                await cm.close_turn(
+                    status=status, closing_kind=closing_kind, end_node_id=end_node_id
+                )
+                await self._publish_turn_event(
+                    TurnClosedEvent(
+                        agent_name=self.config.name,
+                        turn_id=active.turn_id,
+                        session_id=active.session_id,
+                        status=status,
+                        closing_kind=closing_kind,
+                        end_node_id=end_node_id,
+                    )
+                )
+
+    async def _execute_received_message(self, message: AgentMessage) -> AgentMessage:
         """处理 Runner 领取的消息并驱动一次执行循环。
 
         LLM 调用移入 _action 层，receive 不再直接传递 llm。

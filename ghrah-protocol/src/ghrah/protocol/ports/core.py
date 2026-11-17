@@ -50,6 +50,8 @@ from ghrah.protocol.views.core import (
     ContentReadResult,
     DeliveryView,
     HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MailboxSummaryView,
     MessageReplyView,
     MessageView,
@@ -57,6 +59,8 @@ from ghrah.protocol.views.core import (
     PublishedMessageView,
     SessionCatalogView,
     ToolView,
+    TurnListView,
+    TurnView,
 )
 
 __all__ = [
@@ -67,6 +71,8 @@ __all__ = [
     "BranchOperations",
     "CoreCatalogPort",
     "CorePort",
+    "TurnOperations",
+    "HitlOperations",
     "DeliveriesOperations",
     "DeliveryId",
     "MailboxOperations",
@@ -432,6 +438,42 @@ class ManifestOperations(Protocol):
         ...
 
 
+class TurnOperations(Protocol):
+    """轮次的只读访问。"""
+
+    async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
+        """读取单个轮次。"""
+        ...
+
+    async def list(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> TurnListView:
+        """列出轮次。"""
+        ...
+
+
+class HitlOperations(Protocol):
+    """审批请求的只读访问。"""
+
+    async def get(self, *, agent_id: AgentId, promise_id: str) -> HitlRequestView:
+        """查询审批当前或历史状态。"""
+        ...
+
+    async def list_pending(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+    ) -> HitlRequestListView:
+        """查询当前待审批请求。"""
+        ...
+
+
 class CorePort(Protocol):
     """Core 作用域端口：一个端口实例对应一个作用域。
 
@@ -441,6 +483,12 @@ class CorePort(Protocol):
 
     @property
     def nodes(self) -> NodeOperations: ...
+
+    @property
+    def turns(self) -> TurnOperations: ...
+
+    @property
+    def hitl(self) -> HitlOperations: ...
 
     @property
     def sessions(self) -> SessionOperations: ...

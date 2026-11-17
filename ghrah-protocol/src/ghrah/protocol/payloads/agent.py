@@ -265,6 +265,9 @@ class HITLRequestPayload(BaseModel):
     agent_name: str
     ability_name: str
     shell_remember: ShellRememberOptions | None = None
+    turn_id: str | None = None
+    delivery_id: str | None = None
+    deadline_at: str | None = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
@@ -363,6 +366,7 @@ class HITLResolvedPayload(BaseModel):
     tool_call_id: str = ""
     status: str
     """终态：approved / rejected / timeout"""
+    turn_id: str | None = None
 
 
 class UnregisterAbilityPayload(BaseModel):

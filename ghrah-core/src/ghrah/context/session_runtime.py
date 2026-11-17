@@ -164,6 +164,7 @@ class SessionRuntime:
         is_snapshot: bool = False,
         action_results: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        turn_id: str = "",
     ) -> ContextNode:
         """向指定 Branch 追加节点并原子前移其 Head。"""
         effective_branch_id = branch_id or self.session.active_branch_id
@@ -178,6 +179,7 @@ class SessionRuntime:
             is_snapshot=is_snapshot,
             action_results=action_results,
             metadata=metadata,
+            turn_id=turn_id,
         )
         self.branches[branch.branch_id] = replace(branch, head_node_id=node.id)
         self.validate()

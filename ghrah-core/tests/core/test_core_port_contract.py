@@ -202,3 +202,42 @@ async def test_dispatch_command_reaches_started_unit_only(
         assert "promise_id" in str(result.get("error"))
     finally:
         await port.aclose()
+
+
+async def test_turn_and_hitl_queries_are_scoped_and_node_view_has_identity(tmp_path: Path) -> None:
+    from ghrah.context.manager import ContextManager
+
+    path = tmp_path / "scope.db"
+    port = _port("scope", path)
+    try:
+        async with SqliteBackend(path) as backend:
+            cm = ContextManager("a", persistence=backend)
+            await cm.persist()
+            turn_id = await cm.open_turn()
+            cm.begin_iteration()
+            node = cm.commit_iteration()
+            await cm.persist()
+            await cm.open_hitl_request(
+                promise_id="promise",
+                ability_name="tool",
+                tool_call_id="call",
+                tool_call={"x": 1},
+                reason="approval",
+                options={},
+                deadline_at=None,
+            )
+        turns = await port.turns.list(agent_id="a", status="waiting_hitl", limit=1)
+        assert [view.turn_id for view in turns.items] == [turn_id]
+        assert (await port.nodes.get(agent_id="a", node_id=node.id)).turn_id == turn_id
+        assert (await port.turns.get(agent_id="a", turn_id=turn_id)).injections == 0
+        assert (await port.hitl.get(agent_id="a", promise_id="promise")).tool_call == {"x": 1}
+        assert (await port.turns.list(agent_id="a", session_id="other")).items == []
+        assert (await port.hitl.list_pending(agent_id="b")).items == []
+        with pytest.raises(CoreApiError) as turn_error:
+            await port.turns.get(agent_id="b", turn_id=turn_id)
+        with pytest.raises(CoreApiError) as hitl_error:
+            await port.hitl.get(agent_id="b", promise_id="promise")
+        assert turn_error.value.problem.code is ProblemCode.NOT_FOUND
+        assert hitl_error.value.problem.code is ProblemCode.NOT_FOUND
+    finally:
+        await port.aclose()

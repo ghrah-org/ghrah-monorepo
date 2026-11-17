@@ -32,6 +32,10 @@ __all__ = [
     "ChainMetaView",
     "ContentReadResult",
     "DeliveryView",
+    "TurnView",
+    "TurnListView",
+    "HitlRequestView",
+    "HitlRequestListView",
     "HistoryView",
     "MailboxSummaryView",
     "MessageIdListView",
@@ -72,6 +76,7 @@ class NodeView(BaseModel):
     agent_name: str = ""
     session_id: str = ""
     created_on_branch_id: str = ""
+    turn_id: str | None = None
     timestamp: str = ""
     iteration: int = 0
     ability_names: list[str] = Field(default_factory=list)
@@ -192,6 +197,71 @@ class DeliveryView(BaseModel):
     blocked_reason: str | None = None
     last_node_id: str | None = None
     resume_requested: bool = False
+    turn_id: str | None = None
+    delivery_policy: str = "queue"
+    parked: bool = False
+    parked_reason: str | None = None
+    display_state: str = ""
+
+
+class TurnView(BaseModel):
+    """链库中的执行轮次及其锚点。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    agent_name: str
+    session_id: str
+    status: str
+    closing_kind: str | None = None
+    base_node_id: str | None = None
+    start_node_id: str | None = None
+    end_node_id: str | None = None
+    branch_id: str | None = None
+    end_branch_id: str | None = None
+    opener_delivery_id: str | None = None
+    opened_at: str
+    waiting_since: str | None = None
+    closed_at: str | None = None
+    injections: int = 0
+
+
+class TurnListView(BaseModel):
+    """一个 Agent 的轮次列表。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    items: list[TurnView] = Field(default_factory=list)
+
+
+class HitlRequestView(BaseModel):
+    """审批请求及其持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    promise_id: str
+    turn_id: str
+    delivery_id: str | None = None
+    ability_name: str
+    tool_call: dict[str, Any]
+    reason: str
+    options: dict[str, Any]
+    status: str
+    created_at: str
+    deadline_at: str | None = None
+    resolved_at: str | None = None
+    resolved_by: str | None = None
+    resolution: Any = None
+
+
+class HitlRequestListView(BaseModel):
+    """一个 Agent 的待审批请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    items: list[HitlRequestView] = Field(default_factory=list)
 
 
 class MessageView(BaseModel):

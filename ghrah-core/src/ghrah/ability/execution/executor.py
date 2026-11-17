@@ -20,10 +20,11 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, ExecutionServices
 from ghrah.ability.execution.hook_runner import HookRunner
 from ghrah.ability.execution.hook_store import HookStore
 from ghrah.ability.execution.hooks import HookPoint, HookResult
@@ -32,7 +33,7 @@ from ghrah.ability.paths import ABILITY_PATH_SPECS
 from ghrah.chat.content import ToolCallBlock
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
-from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent
+from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent, TurnWaitingHitlEvent
 from ghrah.core.hitl import HITLFutureStore, HITLPromiseRegistry, HITLResult
 from ghrah.types.results import ActionOutcome, ActionResult
 
@@ -678,40 +679,19 @@ class LocalAbilityExecutor(AbilityExecutor):
         call: OperationCall,
         services: ExecutionServices,
     ) -> HITLWaitResult:
-        """处理 HITL Hook 结果。
-
-        在单体模式下，创建 asyncio.Future 等待 HITL 审批：
-        1. 生成 promise_id，发布 HITLRequestEvent（携带 promise_id）到 EventPublisher
-        2. 创建 HITL Future（promise 登记到注册表）并等待
-        3. 收到审批结果后继续或终止
-
-        Args:
-            hook_result: Hook 返回的结果
-            call: 本次调用的值对象
-            services: 执行期服务表
-
-        Returns:
-            审批终态回执：outcome 附 promise_id / tool_call_id / 拒绝理由（归因字段）
-        """
-        # 调用参数不能决定审批归因；没有外部调用 ID 的内部路由生成独立标识。
+        """登记审批请求后发布事件，等待人工审批或超时。"""
         tool_call_id = call.tool_call_id or uuid.uuid4().hex
         promise_id = uuid.uuid4().hex
-
-        # 发布 HITL 请求事件（promise_id 随载荷下发，Observer 凭此回发审批；
-        # reason 为触发审批的 Hook 拦截原因，审批人可见"为何要审"）
-        await self._event_publisher.publish(
-            HITLRequestEvent(
-                agent_name=self._agent_name,
-                ability_name=call.member.member,
-                tool_call=dict(call.arguments),
-                context={"tool_call_id": tool_call_id},
-                promise_id=promise_id,
-                reason=hook_result.message or "",
-                shell_remember=hook_result.shell_remember,
-            )
+        degraded = (
+            self._hitl_timeout_limit > 0
+            and self._consecutive_hitl_timeouts >= self._hitl_timeout_limit
         )
-
-        # 创建 Future 并等待
+        wait_timeout = self._hitl_degraded_timeout if degraded else self._hitl_timeout
+        deadline_at = (
+            (datetime.now(UTC) + timedelta(seconds=wait_timeout)).isoformat()
+            if 0 <= wait_timeout < float("inf")
+            else None
+        )
         future = self._hitl_store.create_future(
             agent_name=self._agent_name,
             ability_name=call.member.member,
@@ -725,25 +705,89 @@ class LocalAbilityExecutor(AbilityExecutor):
                 tool_call_id=tool_call_id,
             )
 
-        # 熔断降级：连续超时达阈值后改用短等待（审批通道疑似离线）
-        degraded = (
-            self._hitl_timeout_limit > 0
-            and self._consecutive_hitl_timeouts >= self._hitl_timeout_limit
-        )
-        wait_timeout = self._hitl_degraded_timeout if degraded else self._hitl_timeout
-
-        # 等待 HITL 结果（带超时）
+        cm = services.get(CONTEXT_MANAGER)
+        turn_id = None
         try:
-            hitl_result: HITLResult = await asyncio.wait_for(future, timeout=wait_timeout)
-            outcome: HitlOutcome = "approved" if hitl_result.approved else "rejected"
-            # 任何人工响应都证明审批通道在线——熔断计数全量复位
-            self._consecutive_hitl_timeouts = 0
+            stored = None
+            if cm is not None:
+                stored = await cm.open_hitl_request(
+                    promise_id=promise_id,
+                    ability_name=call.member.member,
+                    tool_call_id=tool_call_id,
+                    tool_call=dict(call.arguments),
+                    reason=hook_result.message or "",
+                    options=hook_result.shell_remember.model_dump(mode="json")
+                    if hook_result.shell_remember is not None
+                    else {},
+                    deadline_at=deadline_at,
+                )
+                turn_id = stored.turn_id
+            await self._event_publisher.publish(
+                HITLRequestEvent(
+                    agent_name=self._agent_name,
+                    ability_name=call.member.member,
+                    tool_call=dict(call.arguments),
+                    context={"tool_call_id": tool_call_id},
+                    promise_id=promise_id,
+                    reason=hook_result.message or "",
+                    shell_remember=hook_result.shell_remember,
+                    turn_id=turn_id,
+                    delivery_id=stored.delivery_id if stored else None,
+                    deadline_at=deadline_at,
+                )
+            )
+            if stored and stored.changed and stored.turn_id and stored.session_id:
+                try:
+                    await self._event_publisher.publish(
+                        TurnWaitingHitlEvent(
+                            agent_name=self._agent_name,
+                            turn_id=stored.turn_id,
+                            session_id=stored.session_id,
+                            promise_id=promise_id,
+                        )
+                    )
+                except Exception:
+                    logger.warning("Could not publish turn_waiting_hitl", exc_info=True)
+            hitl_result = None
+            try:
+                hitl_result = await asyncio.wait_for(future, timeout=wait_timeout)
+            except TimeoutError:
+                if cm is not None and stored is not None and stored.persisted:
+                    terminal = await cm.expire_hitl_request(promise_id)
+                    turn_id = terminal.turn_id or turn_id
+                    if terminal.status in ("approved", "rejected"):
+                        hitl_result = HITLResult(
+                            approved=terminal.status == "approved", result=terminal.resolution
+                        )
+            else:
+                if cm is not None and stored is not None and stored.persisted:
+                    # 兼容单体调用者直接唤醒 Future，Core 命令已落库时 CAS 无副作用。
+                    terminal = await cm.resolve_hitl_request(
+                        promise_id,
+                        approved=hitl_result.approved,
+                        resolved_by=None,
+                        resolution=hitl_result.result,
+                    )
+                    if not terminal.changed and terminal.status in ("approved", "rejected"):
+                        hitl_result = HITLResult(
+                            approved=terminal.status == "approved", result=terminal.resolution
+                        )
+
+            outcome: HitlOutcome
+            if hitl_result is None:
+                outcome = "timeout"
+                self._consecutive_hitl_timeouts += 1
+                logger.warning(
+                    "HITL request timed out: ability=%s, tool_call_id=%s, consecutive=%s",
+                    call.member.member,
+                    tool_call_id,
+                    self._consecutive_hitl_timeouts,
+                )
+            else:
+                outcome = "approved" if hitl_result.approved else "rejected"
+                self._consecutive_hitl_timeouts = 0
             if self._hitl_promise_registry is not None:
                 self._hitl_promise_registry.remove(promise_id)
-            logger.info(
-                f"LocalAbilityExecutor[{self._agent_name}] HITL {outcome}: "
-                f"ability={call.member.member}, tool_call_id={tool_call_id}"
-            )
             await self._event_publisher.publish(
                 HITLResolvedEvent(
                     agent_name=self._agent_name,
@@ -751,44 +795,17 @@ class LocalAbilityExecutor(AbilityExecutor):
                     ability_name=call.member.member,
                     tool_call_id=tool_call_id,
                     status=outcome,
+                    turn_id=turn_id,
                 )
             )
             return HITLWaitResult(
                 outcome=outcome,
                 promise_id=promise_id,
                 tool_call_id=tool_call_id,
-                reason=hitl_result.result,
+                reason=hitl_result.result if hitl_result is not None else None,
+                degraded=degraded if outcome == "timeout" else False,
+                degraded_timeout=self._hitl_degraded_timeout if outcome == "timeout" else 0.0,
             )
-        except TimeoutError:
-            self._consecutive_hitl_timeouts += 1
-            logger.warning(
-                f"LocalAbilityExecutor[{self._agent_name}] HITL request timed out: "
-                f"ability={call.member.member}, tool_call_id={tool_call_id}, "
-                f"consecutive={self._consecutive_hitl_timeouts}"
-            )
-            if self._hitl_promise_registry is not None:
-                self._hitl_promise_registry.remove_triplet(
-                    agent_name=self._agent_name,
-                    ability_name=call.member.member,
-                    tool_call_id=tool_call_id,
-                )
-            await self._event_publisher.publish(
-                HITLResolvedEvent(
-                    agent_name=self._agent_name,
-                    promise_id=promise_id,
-                    ability_name=call.member.member,
-                    tool_call_id=tool_call_id,
-                    status="timeout",
-                )
-            )
-            return HITLWaitResult(
-                outcome="timeout",
-                promise_id=promise_id,
-                tool_call_id=tool_call_id,
-                degraded=degraded,
-                degraded_timeout=self._hitl_degraded_timeout,
-            )
-
         finally:
             if self._hitl_promise_registry is not None:
                 self._hitl_promise_registry.remove(promise_id)

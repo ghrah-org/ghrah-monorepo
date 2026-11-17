@@ -29,6 +29,7 @@ from ghrah.core.api.runtime import CoreCatalogRuntime, CoreRuntime
 from ghrah.core.read.ability import AbilityReadStore
 from ghrah.core.read.chain import ChainReadStore
 from ghrah.core.read.mailbox import MailboxReadStore
+from ghrah.core.read.turn import TurnReadStore
 from ghrah.core.unit import CoreUnitConfig
 from ghrah.core.units.registry import (
     ConfigFactory,
@@ -154,7 +155,8 @@ def build_core_port(
         reclaim_stale=True,
     )
     registry.set_ability_store_factory(abilities.store)
-    runtime = CoreRuntime(build_handlers(chain, mailbox, abilities, registry))
+    turns = TurnReadStore(db_path=Path(db_path))
+    runtime = CoreRuntime(build_handlers(chain, mailbox, abilities, registry, turns))
     return CoreFacade(
         runtime=runtime,
         scope_id=scope_id,

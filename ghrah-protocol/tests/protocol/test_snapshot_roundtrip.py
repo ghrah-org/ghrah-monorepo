@@ -18,6 +18,11 @@ from typing import TypeVar
 import pytest
 from pydantic import BaseModel
 
+from ghrah.protocol.payloads.turn import (
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnWaitingHitlPayload,
+)
 from ghrah.protocol.types import (
     PluginCrashedPayload,
     PluginLifecyclePayload,
@@ -56,6 +61,9 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 # 本批新增快照：名称 → Pydantic 模型（与 TS PAYLOAD_SCHEMA_MAP 同步维护）
 S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
+    "TurnOpenedPayload": TurnOpenedPayload,
+    "TurnWaitingHitlPayload": TurnWaitingHitlPayload,
+    "TurnClosedPayload": TurnClosedPayload,
     "PluginNegotiatePayload": PluginNegotiatePayload,
     "PluginNegotiateResultPayload": PluginNegotiateResultPayload,
     "PluginLifecyclePayload": PluginLifecyclePayload,

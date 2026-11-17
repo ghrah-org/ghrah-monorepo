@@ -25,8 +25,11 @@ import dataclasses
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
+from ghrah.context import hitl, turn
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.chain import ActionChain
@@ -38,6 +41,7 @@ from ghrah.context.iteration_commit import (
 from ghrah.context.message_store import MessageStore
 from ghrah.context.node import ContextNode
 from ghrah.context.persistence import ContextChanges, PersistenceBackend
+from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.session_runtime import SessionRuntime
 from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
@@ -119,6 +123,7 @@ class ContextManager:
         self._window_manager = window_manager
         self._persistence = persistence
         self._auto_persist = auto_persist
+        self._active_turn: turn.ActiveTurn | None = None
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
         validate_agent = getattr(ability_content, "validate_agent", None)
@@ -257,6 +262,164 @@ class ContextManager:
     def compact_method(self) -> str:
         """compact 综合方法名。"""
         return self._compact_method
+
+    @property
+    def active_turn(self) -> turn.ActiveTurn | None:
+        """当前执行轮次的内存引用。"""
+        return self._active_turn
+
+    @property
+    def active_turn_id(self) -> str | None:
+        """当前执行轮次 ID。"""
+        return self._active_turn.turn_id if self._active_turn else None
+
+    def attach_turn(self, *, turn_id: str, session_id: str, opener_delivery_id: str) -> None:
+        """挂载调度器已持久化的轮次。"""
+        self._active_turn = turn.ActiveTurn(
+            turn_id, self._agent_name, session_id, opener_delivery_id, "mm"
+        )
+
+    async def open_turn(self, *, opener_delivery_id: str | None = None) -> str | None:
+        """为直接收到的输入开启轮次。"""
+        active = turn.ActiveTurn(
+            uuid4().hex, self._agent_name, self.active_session_id, opener_delivery_id, "self"
+        )
+        if isinstance(self._persistence, SqliteBackend) and self._persistence.connected:
+            try:
+                async with self._persistence.transaction() as db:
+                    now = datetime.now(UTC).isoformat()
+                    await turn.normalize_open_turns(db, agent_name=self._agent_name, now=now)
+                    await turn.insert_turn_placeholder(db, active, opened_at=now)
+            except Exception:
+                logger.warning("Failed to persist direct turn %s", active.turn_id, exc_info=True)
+                return None
+        self._active_turn = active
+        return active.turn_id
+
+    async def close_turn(
+        self, *, status: turn.TurnTerminalStatus, closing_kind: str, end_node_id: str | None = None
+    ) -> None:
+        """清除当前轮次引用，直收轮次同时保存终态。"""
+        active = self._active_turn
+        self._active_turn = None
+        if (
+            active is None
+            or active.owner == "mm"
+            or not isinstance(self._persistence, SqliteBackend)
+        ):
+            return
+        try:
+            await self.wait_for_persist()
+            async with self._persistence.transaction() as db:
+                await turn.close_turn(
+                    db,
+                    turn_id=active.turn_id,
+                    status=status,
+                    closing_kind=closing_kind,
+                    end_node_id=end_node_id,
+                    closed_at=datetime.now(UTC).isoformat(),
+                )
+        except Exception:
+            logger.warning("Failed to close turn %s", active.turn_id, exc_info=True)
+
+    async def normalize_turns(self) -> None:
+        """恢复上下文时归一属于该 Agent 的遗留轮次。"""
+        if not isinstance(self._persistence, SqliteBackend):
+            return
+        try:
+            async with self._persistence.transaction() as db:
+                await turn.normalize_open_turns(
+                    db, agent_name=self._agent_name, now=datetime.now(UTC).isoformat()
+                )
+        except Exception:
+            logger.warning("Failed to normalize turns for %s", self._agent_name, exc_info=True)
+
+    async def open_hitl_request(
+        self,
+        *,
+        promise_id: str,
+        ability_name: str,
+        tool_call_id: str,
+        tool_call: dict[str, Any],
+        reason: str,
+        options: dict[str, Any],
+        deadline_at: str | None,
+    ) -> hitl.HITLWriteResult:
+        """登记待审批请求。持久化不可用时继续内存审批。"""
+        active = self._active_turn
+        if active is None or not isinstance(self._persistence, SqliteBackend):
+            logger.warning("No durable active turn for HITL request %s", promise_id)
+            return hitl.HITLWriteResult()
+        try:
+            async with self._persistence.transaction() as db:
+                now = datetime.now(UTC).isoformat()
+                row = await hitl.insert_pending(
+                    db,
+                    turn_id=active.turn_id,
+                    promise_id=promise_id,
+                    ability_name=ability_name,
+                    tool_call_id=tool_call_id,
+                    tool_call=tool_call,
+                    reason=reason,
+                    options=options,
+                    last_node_id=self.active_head.id,
+                    now=now,
+                    deadline_at=deadline_at,
+                )
+                if row is not None:
+                    changed = await turn.set_waiting_hitl(db, active.turn_id, now)
+                    return hitl.HITLWriteResult(
+                        persisted=True,
+                        changed=changed,
+                        turn_id=active.turn_id,
+                        status="pending",
+                        session_id=row["session_id"],
+                        delivery_id=row["delivery_id"],
+                    )
+            logger.warning("Turn %s is unavailable for HITL request %s", active.turn_id, promise_id)
+        except Exception:
+            logger.warning("Failed to persist HITL request %s", promise_id, exc_info=True)
+        return hitl.HITLWriteResult()
+
+    async def resolve_hitl_request(
+        self,
+        promise_id: str,
+        *,
+        approved: bool,
+        resolved_by: str | None,
+        resolution: Any,
+    ) -> hitl.HITLWriteResult:
+        """原子记录人工审批结果。"""
+        return await self._finish_hitl_request(
+            promise_id, "approved" if approved else "rejected", resolved_by, resolution
+        )
+
+    async def expire_hitl_request(self, promise_id: str) -> hitl.HITLWriteResult:
+        """标记审批到期，返回竞争中先提交的终态。"""
+        return await self._finish_hitl_request(promise_id, "expired", None, {})
+
+    async def _finish_hitl_request(
+        self, promise_id: str, status: hitl.HitlOutcome, resolved_by: str | None, resolution: Any
+    ) -> hitl.HITLWriteResult:
+        if not isinstance(self._persistence, SqliteBackend):
+            return hitl.HITLWriteResult()
+        try:
+            async with self._persistence.transaction() as db:
+                result = await hitl.resolve_cas(
+                    db,
+                    agent_name=self._agent_name,
+                    promise_id=promise_id,
+                    status=status,
+                    resolved_by=resolved_by,
+                    resolution=resolution,
+                    now=datetime.now(UTC).isoformat(),
+                )
+                if result.changed and result.turn_id is not None:
+                    await turn.set_open(db, result.turn_id)
+                return result
+        except Exception:
+            logger.warning("Failed to update HITL request %s", promise_id, exc_info=True)
+            return hitl.HITLWriteResult()
 
     @property
     def persistence(self) -> PersistenceBackend | None:
@@ -839,6 +1002,7 @@ class ContextManager:
             messages_delta=delta,
             action_results=effective_result or [],
             metadata=node_metadata or None,
+            turn_id=self.active_turn_id or "",
         )
 
         # 7. 清理迭代状态
@@ -917,6 +1081,7 @@ class ContextManager:
         self._pending_compaction = candidate._pending_compaction
         self._in_iteration = candidate._in_iteration
         self._window_occupied = candidate._window_occupied
+        self._active_turn = candidate._active_turn
         self._system_prompt = candidate._system_prompt
         if node.metadata.get("node_kind") == "compact":
             self._compact_requested = False
@@ -1242,6 +1407,7 @@ class ContextManager:
 
         node = self._active_runtime.commit_node(
             ability_names=["compact"],
+            turn_id=self.active_turn_id or "",
             agent_state=self._active_runtime.active_head.agent_state,
             messages_delta=[],
             messages_snapshot=copy.deepcopy(snapshot_messages),
@@ -1607,6 +1773,8 @@ class ContextManager:
         self._active_session_id = checkpoint.active_session_id
         self._restore_active_context()
         self._in_iteration = False
+        self._active_turn = None
+        await self.normalize_turns()
 
         logger.debug(
             "Restored context for agent '%s': %d nodes, %d sessions, %d messages",

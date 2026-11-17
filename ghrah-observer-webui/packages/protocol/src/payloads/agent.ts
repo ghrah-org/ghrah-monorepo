@@ -148,6 +148,7 @@ export const HITLResolvedPayloadSchema = z.object({
   ability_name: z.string(),
   tool_call_id: z.string().optional().default(""),
   status: z.enum(["approved", "rejected", "timeout"]),
+  turn_id: z.string().nullable().optional(),
 });
 
 export const AgentSpawnedPayloadSchema = z.object({
@@ -353,6 +354,9 @@ export const HITLRequestPayloadSchema = z.object({
   context: z.record(z.unknown()).optional().default({}),
   reason: z.string().optional().default(""),
   shell_remember: ShellRememberOptionsSchema.nullable().optional(),
+  turn_id: z.string().nullable().optional(),
+  delivery_id: z.string().nullable().optional(),
+  deadline_at: z.string().nullable().optional(),
 });
 export type HITLRequestPayload = z.infer<typeof HITLRequestPayloadSchema>;
 

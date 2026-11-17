@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapp
 from contextlib import asynccontextmanager
 from contextvars import Context, ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,6 +29,7 @@ from uuid import uuid4
 import aiosqlite
 
 from ghrah.agents.runner import detached_runner_context
+from ghrah.context import turn
 from ghrah.context.iteration_commit import clear_durable_iteration_scope
 from ghrah.context.manager import DeliverySessionUnavailableError
 from ghrah.context.persistence.changes import ContextChanges
@@ -100,6 +102,10 @@ class DeliveryRecord:
     blocked_reason: str | None = None
     last_node_id: str | None = None
     resume_requested: bool = False
+    turn_id: str | None = None
+    delivery_policy: str = "queue"
+    parked: bool = False
+    parked_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +189,10 @@ CREATE TABLE IF NOT EXISTS mm_deliveries (
     blocked_reason TEXT,
     last_node_id TEXT,
     resume_requested INTEGER NOT NULL DEFAULT 0,
+    turn_id TEXT,
+    delivery_policy TEXT NOT NULL DEFAULT 'queue' CHECK (delivery_policy IN ('inject','queue')),
+    parked INTEGER NOT NULL DEFAULT 0,
+    parked_reason TEXT,
     UNIQUE (message_id, recipient_id)
 );
 CREATE INDEX IF NOT EXISTS mm_inbox ON mm_deliveries(recipient_id, seq);
@@ -308,11 +318,12 @@ class MessageManager:
             await self._db.execute("PRAGMA journal_mode=WAL")
             await self._db.execute("PRAGMA synchronous=NORMAL")
             await self._db.execute("PRAGMA foreign_keys=ON")
+            await self._db.execute("PRAGMA busy_timeout=5000")
             await self._db.executescript(_SCHEMA)
             async with self._transaction() as db:
                 row = await (await db.execute("SELECT * FROM mm_meta")).fetchone()
                 if row is None:
-                    await db.execute("INSERT INTO mm_meta VALUES (1, ?, 6)", (self._project_id,))
+                    await db.execute("INSERT INTO mm_meta VALUES (1, ?, 7)", (self._project_id,))
                 elif row["project_id"] != self._project_id or row["version"] not in (
                     1,
                     2,
@@ -320,6 +331,7 @@ class MessageManager:
                     4,
                     5,
                     6,
+                    7,
                 ):
                     raise ValueError("Message database project/schema mismatch")
                 for table, column in (
@@ -366,7 +378,28 @@ class MessageManager:
                         "ALTER TABLE mm_room_projections ADD COLUMN attempts "
                         "INTEGER NOT NULL DEFAULT 0"
                     )
-                await db.execute("UPDATE mm_meta SET version=6 WHERE singleton=1")
+                delivery_columns = await (
+                    await db.execute("PRAGMA table_info(mm_deliveries)")
+                ).fetchall()
+                names = {column[1] for column in delivery_columns}
+                for name, definition in (
+                    ("turn_id", "TEXT"),
+                    (
+                        "delivery_policy",
+                        "TEXT NOT NULL DEFAULT 'queue' "
+                        "CHECK (delivery_policy IN ('inject','queue'))",
+                    ),
+                    ("parked", "INTEGER NOT NULL DEFAULT 0"),
+                    ("parked_reason", "TEXT"),
+                ):
+                    if name not in names:
+                        await db.execute(
+                            f"ALTER TABLE mm_deliveries ADD COLUMN {name} {definition}"
+                        )
+                await db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_deliveries_turn ON mm_deliveries(turn_id)"
+                )
+                await db.execute("UPDATE mm_meta SET version=7 WHERE singleton=1")
                 await db.execute(
                     "UPDATE mm_deliveries SET state='interrupted', error=? "
                     "WHERE state='processing'",
@@ -381,6 +414,12 @@ class MessageManager:
                     "WHERE r.delivery_id=mm_deliveries.delivery_id)",
                     ("recovered: consumed before durable completion",),
                 )
+                if await (
+                    await db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'"
+                    )
+                ).fetchone():
+                    await turn.normalize_open_turns(db, now=datetime.now(UTC).isoformat())
             await self.refresh_agent_ids()
             await self.recover_completions()
             if start_dispatcher:
@@ -882,6 +921,7 @@ class MessageManager:
                     "LEFT JOIN mm_delivery_results r ON r.delivery_id=prior.delivery_id "
                     "WHERE current.delivery_id=? AND current.state='pending' "
                     "AND prior.state IN ('pending', 'processing') "
+                    "AND COALESCE(prior.parked, 0)=0 "
                     "ORDER BY prior.seq LIMIT 1",
                     (delivery_id,),
                 )
@@ -905,6 +945,10 @@ class MessageManager:
             row["blocked_reason"],
             row["last_node_id"],
             bool(row["resume_requested"]),
+            row["turn_id"],
+            row["delivery_policy"],
+            bool(row["parked"]),
+            row["parked_reason"],
         )
 
     async def get_replies(self, message_id: str) -> tuple[MessageRecord, ...]:
@@ -924,7 +968,7 @@ class MessageManager:
         """显式重试失败或中断投递；调用方须确认重复副作用风险。"""
         async with self._transaction() as db:
             cursor = await db.execute(
-                "UPDATE mm_deliveries SET state='pending', error=NULL "
+                "UPDATE mm_deliveries SET state='pending', error=NULL, turn_id=NULL "
                 "WHERE delivery_id=? AND state IN ('failed', 'interrupted') "
                 "AND consumed_node_id IS NULL "
                 "AND blocked_reason IS NULL "
@@ -1379,7 +1423,7 @@ class MessageManager:
     def _next_delivery_sql() -> str:
         return (
             "SELECT d.* FROM mm_deliveries d WHERE d.recipient_id=? "
-            "AND d.state='pending' AND d.blocked_reason IS NULL "
+            "AND d.state='pending' AND d.blocked_reason IS NULL AND d.parked=0 "
             "AND NOT EXISTS (SELECT 1 FROM mm_messages reply JOIN mm_inline_waits w "
             "ON w.message_id=reply.reply_to WHERE reply.message_id=d.message_id "
             "AND w.state='waiting') "
@@ -1438,6 +1482,8 @@ class MessageManager:
                 raise ValueError(
                     "Compact commit must not consume input or publish outbound messages"
                 )
+            if delivery["turn_id"] and node.turn_id != delivery["turn_id"]:
+                raise RuntimeError("Atomic node does not match the delivery turn")
             await scope.backend.apply_changes_in_transaction(db, changes)
             if delivery["consumed_node_id"] is None and not compact:
                 if not any(
@@ -1450,6 +1496,8 @@ class MessageManager:
                     "WHERE delivery_id=?",
                     (node.id, node.session_id, scope.delivery_id),
                 )
+            if delivery["turn_id"]:
+                await turn.backfill_start(db, node)
             for draft in scope.drafts:
                 await self._insert_message(
                     db,
@@ -1583,11 +1631,23 @@ class MessageManager:
                             (reason, delivery_id),
                         )
                         return
+                turn_id = None
+                if target_session is not None and resume_node is None:
+                    now = datetime.now(UTC).isoformat()
+                    await turn.normalize_open_turns(
+                        db, agent_name=agent_id, session_id=target_session, now=now
+                    )
+                    turn_id = uuid4().hex
+                    await turn.insert_turn_placeholder(
+                        db,
+                        turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
+                        opened_at=now,
+                    )
                 await db.execute(
                     "UPDATE mm_deliveries SET state='processing', "
-                    "attempts=attempts+1, resume_requested=0 "
+                    "attempts=attempts+1, resume_requested=0, turn_id=? "
                     "WHERE delivery_id=?",
-                    (delivery_id,),
+                    (turn_id, delivery_id),
                 )
             message = AgentMessage(
                 id=record.message_id,
@@ -1608,6 +1668,7 @@ class MessageManager:
                     "message_id": record.message_id,
                     "delivery_id": delivery_id,
                     "message_kind": record.kind.value,
+                    "turn_id": turn_id,
                     "reply_to": record.reply_to,
                     "sender_session_id": record.sender_session_id,
                     "target_session_id": target_session,
@@ -1624,45 +1685,81 @@ class MessageManager:
             if result.type == MessageType.ERROR:
                 raise RuntimeError(result.content)
             await self._complete_delivery(delivery_id, result)
-        except asyncio.CancelledError:
+        except Exception as exc:
+            if delivery_id is not None:
+                await self._record_failure(
+                    delivery_id,
+                    DeliveryState.FAILED,
+                    str(exc),
+                    session_unavailable=isinstance(exc, DeliverySessionUnavailableError),
+                )
+            logger.warning("Message delivery failed: %s", delivery_id, exc_info=True)
+        except BaseException:
             if delivery_id is not None:
                 await self._record_failure(delivery_id, DeliveryState.INTERRUPTED, "Worker stopped")
             raise
-        except Exception as exc:
-            if delivery_id is not None:
-                if isinstance(exc, DeliverySessionUnavailableError):
-                    async with self._transaction() as db:
-                        cursor = await db.execute(
-                            "UPDATE mm_deliveries SET state='pending', "
-                            "blocked_reason='target_session_unavailable', error=? "
-                            "WHERE delivery_id=? AND consumed_node_id IS NULL",
-                            (str(exc), delivery_id),
-                        )
-                    if cursor.rowcount == 0:
-                        # 已消费续跑失去会话时不能降回待注入，也不能残留 processing。
-                        await self._record_failure(delivery_id, DeliveryState.FAILED, str(exc))
-                else:
-                    await self._record_failure(delivery_id, DeliveryState.FAILED, str(exc))
-            logger.warning("Message delivery failed: %s", delivery_id, exc_info=True)
         finally:
             self._workers.pop(agent_id, None)
             self._wake.set()
 
-    async def _record_failure(self, delivery_id: str, state: DeliveryState, error: str) -> None:
+    async def _record_failure(
+        self,
+        delivery_id: str,
+        state: DeliveryState,
+        error: str,
+        *,
+        session_unavailable: bool = False,
+    ) -> None:
         # close 期间也必须保存中断；若磁盘失败，processing 留待下次 open 恢复。
         try:
             async with self._lock:
                 if self._db is None:
                     return
-                await self._db.execute(
-                    "UPDATE mm_deliveries SET state=?, error=? "
-                    "WHERE delivery_id=? AND (state='processing' OR "
-                    "(state IN ('failed', 'interrupted') AND EXISTS "
-                    "(SELECT 1 FROM mm_delivery_results r "
-                    "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
-                    (state.value, error, delivery_id),
-                )
-                await self._db.commit()
+                db = self._db
+                try:
+                    await db.execute("BEGIN IMMEDIATE")
+                    delivery = await (
+                        await db.execute(
+                            "SELECT turn_id, last_node_id, consumed_node_id "
+                            "FROM mm_deliveries WHERE delivery_id=?",
+                            (delivery_id,),
+                        )
+                    ).fetchone()
+                    blocked = (
+                        session_unavailable
+                        and delivery is not None
+                        and delivery["consumed_node_id"] is None
+                    )
+                    if blocked:
+                        await db.execute(
+                            "UPDATE mm_deliveries SET state='pending', turn_id=NULL, "
+                            "blocked_reason='target_session_unavailable', error=? "
+                            "WHERE delivery_id=?",
+                            (error, delivery_id),
+                        )
+                    else:
+                        await db.execute(
+                            "UPDATE mm_deliveries SET state=?, error=? "
+                            "WHERE delivery_id=? AND (state='processing' OR "
+                            "(state IN ('failed', 'interrupted') AND EXISTS "
+                            "(SELECT 1 FROM mm_delivery_results r "
+                            "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
+                            (state.value, error, delivery_id),
+                        )
+                    if delivery is not None and delivery["turn_id"]:
+                        failed = state == DeliveryState.FAILED and not blocked
+                        await turn.close_turn(
+                            db,
+                            turn_id=delivery["turn_id"],
+                            status="failed" if failed else "interrupted",
+                            closing_kind="error" if failed else "cancelled",
+                            end_node_id=delivery["last_node_id"],
+                            closed_at=datetime.now(UTC).isoformat(),
+                        )
+                    await db.commit()
+                except BaseException:
+                    await db.rollback()
+                    raise
         except Exception:
             logger.exception("Could not persist delivery failure: %s", delivery_id)
 
@@ -1719,6 +1816,15 @@ class MessageManager:
                         if result.content_blocks is not None
                         else None,
                     ),
+                )
+            if delivery["turn_id"]:
+                await turn.close_turn(
+                    db,
+                    turn_id=delivery["turn_id"],
+                    status="closed",
+                    closing_kind="completed",
+                    end_node_id=result_node_id or delivery["last_node_id"],
+                    closed_at=datetime.now(UTC).isoformat(),
                 )
         await self._finish_result(delivery_id)
 

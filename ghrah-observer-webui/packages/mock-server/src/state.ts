@@ -2304,8 +2304,10 @@ export class MockState {
       throw new Error(`agent scope is ambiguous or missing: ${agentName}`);
     }
     const agent = matches[0];
+    const promiseId = `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`;
     const payload: HITLRequestPayload = {
-      promise_id: `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`,
+      promise_id: promiseId,
+      turn_id: `mock-turn-${promiseId}`,
       agent_id: agent.agentId,
       project_id: agent.projectId,
       agent_name: agentName,

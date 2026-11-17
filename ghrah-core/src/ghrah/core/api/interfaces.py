@@ -59,6 +59,8 @@ from ghrah.protocol.views.core import (
     ContentReadResult,
     DeliveryView,
     HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MailboxSummaryView,
     MessageReplyView,
     MessageView,
@@ -66,6 +68,8 @@ from ghrah.protocol.views.core import (
     PublishedMessageView,
     SessionCatalogView,
     ToolListView,
+    TurnListView,
+    TurnView,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -561,9 +565,51 @@ class AbilitiesDisableToolRequest(BaseModel):
     change: UnbindToolRequest
 
 
+class TurnGetRequest(BaseModel):
+    """读取单个所属轮次。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str
+
+
+class TurnListRequest(BaseModel):
+    """按 Agent 列出轮次。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None = None
+    status: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class HitlGetRequest(BaseModel):
+    """读取某条审批记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    promise_id: str
+
+
+class HitlListRequest(BaseModel):
+    """查询本 Agent 当前待审批项。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None = None
+
+
 CORE_INTERFACES = InterfaceRegistry(
     (
         Interface("nodes.get", NodeGetRequest, NodeView),
+        Interface("turns.get", TurnGetRequest, TurnView),
+        Interface("turns.list", TurnListRequest, TurnListView),
+        Interface("hitl.get", HitlGetRequest, HitlRequestView),
+        Interface("hitl.list_pending", HitlListRequest, HitlRequestListView),
         Interface("sessions.catalog", SessionsCatalogRequest, SessionCatalogView),
         Interface("sessions.history", SessionsHistoryRequest, HistoryView),
         Interface("sessions.head", SessionsHeadRequest, NodeIdView),

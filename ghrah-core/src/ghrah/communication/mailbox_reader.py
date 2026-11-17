@@ -129,8 +129,19 @@ class MailboxReader:
             raise ValueError("delivery_not_found")
         item = dict(row)
         item.pop("_sender", None)
+        state = item["state"]
         if item.get("blocked_reason"):
-            item["state"] = "blocked"
+            item["state"] = state = "blocked"
+        elif state == "failed" and item.get("parked"):
+            state = "parked"
+        elif state == "pending":
+            if item.get("consumed_node_id"):
+                state = "consumed"
+            elif item.get("turn_id"):
+                state = "injected"
+            else:
+                state = "queued"
+        item["display_state"] = state
         return item
 
     async def list_messages(

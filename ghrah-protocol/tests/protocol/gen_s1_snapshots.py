@@ -15,6 +15,11 @@ from pathlib import Path
 
 from ghrah.plugin.negotiator import PythonHalfInfo, TsHalfReport, negotiate
 
+from ghrah.protocol.payloads.turn import (
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnWaitingHitlPayload,
+)
 from ghrah.protocol.types import (
     PluginCrashedPayload,
     PluginLifecyclePayload,
@@ -53,6 +58,20 @@ SNAPSHOTS_DIR = (
 )
 
 SAMPLES: dict[str, object] = {
+    "TurnOpenedPayload": TurnOpenedPayload(
+        agent_name="beta", turn_id="turn", session_id="session", opener_delivery_id="delivery"
+    ),
+    "TurnWaitingHitlPayload": TurnWaitingHitlPayload(
+        agent_name="beta", turn_id="turn", session_id="session", promise_id="promise"
+    ),
+    "TurnClosedPayload": TurnClosedPayload(
+        agent_name="beta",
+        turn_id="turn",
+        session_id="session",
+        status="closed",
+        closing_kind="completed",
+        end_node_id="end",
+    ),
     "PluginNegotiatePayload": PluginNegotiatePayload(
         enabled_ts=[
             TsHalfReport(

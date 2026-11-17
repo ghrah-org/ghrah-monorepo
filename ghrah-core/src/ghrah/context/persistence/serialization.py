@@ -266,6 +266,7 @@ def serialize_node(node: ContextNode) -> dict[str, Any]:
         "metadata": node.metadata,
         "session_id": node.session_id,
         "created_on_branch_id": node.created_on_branch_id,
+        "turn_id": node.turn_id or None,
     }
 
 
@@ -297,6 +298,7 @@ def deserialize_node(data: dict[str, Any]) -> ContextNode:
         metadata=data["metadata"],
         session_id=data.get("session_id", ""),
         created_on_branch_id=data.get("created_on_branch_id", ""),
+        turn_id=data.get("turn_id") or "",
     )
 
 
