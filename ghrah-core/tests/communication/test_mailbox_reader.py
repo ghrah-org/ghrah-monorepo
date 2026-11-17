@@ -43,6 +43,9 @@ async def test_mailbox_scope_pagination_and_offline_reads(tmp_path: Path) -> Non
         ]
         assert all(len(item["deliveries"]) == 1 for item in items)
         assert all(item["deliveries"][0]["recipient_id"] == "b" for item in items)
+        assert all(item["deliveries"][0]["display_state"] == "queued" for item in items)
+        detail = await reader.get_delivery(items[0]["deliveries"][0]["delivery_id"])
+        assert (detail["state"], detail["display_state"]) == ("pending", "queued")
         assert (await reader.summary())["inbox_counts"] == {"pending": 3}
         assert second["next_before_seq"] is None
     async with MailboxReader(db, AgentIdentity(project_id="p", agent_id="a")) as reader:

@@ -5,12 +5,14 @@
 """真实 SQLite 绑定下的轮次终态与投递保序。"""
 
 import asyncio
+import sqlite3
 
 import pytest
 from _helpers import ScriptedLLM
 
 from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
+from ghrah.chat.message import ChatMessage
 from ghrah.communication import DeliveryState, MessageManager
 from ghrah.context.manager import DeliverySessionUnavailableError
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -162,3 +164,72 @@ async def test_message_ability_command_uses_a_turn_and_emits_scoped_events(runti
     assert set(payloads) == {"core:turn_opened", "core:turn_closed"}
     for payload in payloads.values():
         assert (payload["agent_id"], payload["turn_id"]) == ("agent", delivery.turn_id)
+
+
+async def test_claim_failure_terminates_delivery_without_hot_loop(runtime, monkeypatch):
+    """领取事务异常后投递必须终结，避免调度器反复领取同一行。"""
+    agent, backend, mm = runtime
+    from ghrah.context import turn as turn_module
+
+    async def fail_normalize(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(turn_module, "normalize_open_turns", fail_normalize)
+    request = await send(mm)
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    (delivery,) = await mm.get_deliveries(request.message_id)
+    assert delivery.state == DeliveryState.FAILED
+    assert "database is locked" in (delivery.error or "")
+    # 再扫一次不应重新领取该行。
+    attempts_before = delivery.attempts
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    assert (await mm.get_deliveries(request.message_id))[0].attempts == attempts_before
+
+
+async def test_claim_degrades_without_turn_schema(runtime):
+    """链库未迁移时降级为无轮次投递，不阻塞也不反复重试。"""
+    agent, backend, mm = runtime
+    with sqlite3.connect(backend.db_path) as db:
+        db.executescript(
+            "DROP TABLE IF EXISTS hitl_requests; DROP TABLE IF EXISTS turns; "
+            "DROP INDEX IF EXISTS idx_nodes_turn;"
+        )
+    request = await send(mm)
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    (delivery,) = await mm.get_deliveries(request.message_id)
+    assert delivery.state == DeliveryState.COMPLETED
+    assert delivery.turn_id is None
+
+
+async def test_consumed_session_loss_closes_turn_interrupted(runtime, monkeypatch):
+    """已消费输入在会话丢失时：投递按既有语义 failed，轮次收敛为 interrupted。"""
+    agent, backend, mm = runtime
+    cm = agent._context_manager
+
+    async def consume_then_lose_session(message):
+        cm.begin_iteration()
+        cm.add_messages(
+            [
+                ChatMessage.user(
+                    "input",
+                    source="user",
+                    metadata={
+                        "delivery_id": message.metadata.get("delivery_id"),
+                        "message_id": message.metadata.get("message_id"),
+                    },
+                )
+            ]
+        )
+        await cm.commit_iteration_async()
+        raise DeliverySessionUnavailableError("Session became unavailable")
+
+    monkeypatch.setattr(agent, "_execute_received_message", consume_then_lose_session)
+    request = await send(mm)
+    await mm.dispatch_pending()
+    (delivery,) = await mm.get_deliveries(request.message_id)
+    assert delivery.state == DeliveryState.FAILED
+    assert delivery.consumed_node_id is not None
+    row = await backend.load_turn("agent", delivery.turn_id)
+    assert row["status"] == "interrupted"
+    assert row["closing_kind"] == "cancelled"
+    assert row["start_node_id"] == delivery.consumed_node_id

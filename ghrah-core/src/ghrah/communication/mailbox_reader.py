@@ -14,6 +14,22 @@ import aiosqlite
 from ghrah.protocol.payloads.entity import AgentIdentity
 
 
+def _display_state(item: dict[str, Any]) -> str:
+    """由底层 state 与派生列得出展示状态。"""
+    state = item["state"]
+    if item.get("blocked_reason"):
+        return "blocked"
+    if state == "failed" and item.get("parked"):
+        return "parked"
+    if state == "pending":
+        if item.get("consumed_node_id"):
+            return "consumed"
+        if item.get("turn_id"):
+            return "injected"
+        return "queued"
+    return state
+
+
 class MailboxReader:
     """通过同文件只读事务查询单个实体的消息，生命周期限定在一次查询。"""
 
@@ -108,6 +124,7 @@ class MailboxReader:
             item = dict(delivery)
             if item.get("blocked_reason"):
                 item["state"] = "blocked"
+            item["display_state"] = _display_state(item)
             projected.append(item)
         return {"message": message, "deliveries": projected}
 
@@ -129,19 +146,9 @@ class MailboxReader:
             raise ValueError("delivery_not_found")
         item = dict(row)
         item.pop("_sender", None)
-        state = item["state"]
         if item.get("blocked_reason"):
-            item["state"] = state = "blocked"
-        elif state == "failed" and item.get("parked"):
-            state = "parked"
-        elif state == "pending":
-            if item.get("consumed_node_id"):
-                state = "consumed"
-            elif item.get("turn_id"):
-                state = "injected"
-            else:
-                state = "queued"
-        item["display_state"] = state
+            item["state"] = "blocked"
+        item["display_state"] = _display_state(item)
         return item
 
     async def list_messages(

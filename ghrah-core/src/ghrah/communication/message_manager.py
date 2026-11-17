@@ -414,11 +414,7 @@ class MessageManager:
                     "WHERE r.delivery_id=mm_deliveries.delivery_id)",
                     ("recovered: consumed before durable completion",),
                 )
-                if await (
-                    await db.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'"
-                    )
-                ).fetchone():
+                if await self._has_turn_schema(db):
                     await turn.normalize_open_turns(db, now=datetime.now(UTC).isoformat())
             await self.refresh_agent_ids()
             await self.recover_completions()
@@ -1225,6 +1221,16 @@ class MessageManager:
             raise RuntimeError("MessageManager is not open")
         return self._db
 
+    async def _has_turn_schema(self, db: aiosqlite.Connection) -> bool:
+        """判断链库是否已完成轮次与审批迁移。"""
+        rows = await (
+            await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('turns', 'hitl_requests')"
+            )
+        ).fetchall()
+        return len(rows) == 2
+
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
         async with self._lock:
@@ -1633,16 +1639,23 @@ class MessageManager:
                         return
                 turn_id = None
                 if target_session is not None and resume_node is None:
-                    now = datetime.now(UTC).isoformat()
-                    await turn.normalize_open_turns(
-                        db, agent_name=agent_id, session_id=target_session, now=now
-                    )
-                    turn_id = uuid4().hex
-                    await turn.insert_turn_placeholder(
-                        db,
-                        turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
-                        opened_at=now,
-                    )
+                    if await self._has_turn_schema(db):
+                        now = datetime.now(UTC).isoformat()
+                        await turn.normalize_open_turns(
+                            db, agent_name=agent_id, session_id=target_session, now=now
+                        )
+                        turn_id = uuid4().hex
+                        await turn.insert_turn_placeholder(
+                            db,
+                            turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
+                            opened_at=now,
+                        )
+                    else:
+                        # 链库尚未迁移时降级为无轮次投递，避免领取失败后反复重试。
+                        logger.warning(
+                            "Turn schema is missing; delivery %s runs without a turn",
+                            delivery_id,
+                        )
                 await db.execute(
                     "UPDATE mm_deliveries SET state='processing', "
                     "attempts=attempts+1, resume_requested=0, turn_id=? "
@@ -1738,16 +1751,24 @@ class MessageManager:
                             (error, delivery_id),
                         )
                     else:
+                        # 领取事务回滚后投递仍为 pending；必须在这里终结，
+                        # 否则调度器会反复领取同一行形成热循环。
                         await db.execute(
                             "UPDATE mm_deliveries SET state=?, error=? "
-                            "WHERE delivery_id=? AND (state='processing' OR "
+                            "WHERE delivery_id=? AND (state IN ('processing', 'pending') OR "
                             "(state IN ('failed', 'interrupted') AND EXISTS "
                             "(SELECT 1 FROM mm_delivery_results r "
                             "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
                             (state.value, error, delivery_id),
                         )
                     if delivery is not None and delivery["turn_id"]:
-                        failed = state == DeliveryState.FAILED and not blocked
+                        # session 不可用不是业务失败：即使输入已消费（投递按既有
+                        # 语义记 failed），轮次也收敛为 interrupted，避免终态语义混淆。
+                        failed = (
+                            state == DeliveryState.FAILED
+                            and not blocked
+                            and not session_unavailable
+                        )
                         await turn.close_turn(
                             db,
                             turn_id=delivery["turn_id"],
