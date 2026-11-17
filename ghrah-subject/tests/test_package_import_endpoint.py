@@ -8,12 +8,15 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from ghrah.ability.package.lock import lock_filename, read_lock
+from ghrah.ability.package.provider import strip_schema_metadata
 from ghrah.core.wiring import build_core_catalog
 from ghrah.protocol.enums import EventType
 
@@ -23,54 +26,76 @@ from ghrah.subject.units.ability_control import (
     register_ability_control_error_handlers,
 )
 
-MANIFEST = """\
-format: ghrah.ability-definition
-schema_version: '1'
-identity:
-  namespace: acme
-  name: demo
-  version: '1.0.0'
-title: Demo Package
-description: 上传导入测试包。
-members:
-  operations:
-    ping:
-      title: Ping
-      description: 探活。
-      entry: operations/ping.py
-      input_schema:
-        type: object
-        properties: {host: {type: string}}
-        required: [host]
-        additionalProperties: false
-      output_schema:
-        type: object
-        properties: {ok: {type: boolean}}
-        required: [ok]
-        additionalProperties: false
-      tags: [probe]
-      effects: [net:request]
-      permissions: {net_access: true}
-      execution: {mode: request, timeout_ms: 5000, cancellation: unsupported,
-                  on_revoke: drain, retry: never}
-"""
+OP_SOURCE = '''\
+"""最小可授予 operation：入口签名与 schema 都必须能被运行时接受。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ghrah.types.results import ActionOutcome, ActionResult
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class _Projects:
-    """导入端点不需要项目，只需要 project_store 存在。"""
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    async def get(self, project_id: str) -> None:
-        del project_id
-        return None
+    host: str = Field(description="探活目标")
 
 
-class _Bus:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+class Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    async def publish(self, event_type: str, payload: dict[str, Any]) -> int:
-        self.calls.append((event_type, payload))
-        return 1
+    ok: bool = Field(description="是否可达")
+
+
+async def execute(call: Any, services: Any) -> ActionResult:
+    """入口：返回固定结果。"""
+    del call, services
+    return ActionResult(outcome=ActionOutcome.SUCCESS, data=Output(ok=True).model_dump())
+'''
+
+
+def _load_op_module() -> Any:
+    """在内存里执行 operation 源码，拿到与运行期一致的 Input/Output。"""
+    module = ModuleType("subject_fixture_op")
+    module.__dict__["__builtins__"] = __builtins__
+    exec(compile(OP_SOURCE, "<fixture>", "exec"), module.__dict__)
+    return module
+
+
+def manifest_text() -> str:
+    """按模块真实 pydantic 模型生成 manifest，保证 schema 与入口一致。"""
+    module = _load_op_module()
+    document = {
+        "format": "ghrah.ability-definition",
+        "schema_version": "1",
+        "identity": {"namespace": "acme", "name": "demo", "version": "1.0.0"},
+        "title": "Demo Package",
+        "description": "上传导入测试包。",
+        "members": {
+            "operations": {
+                "ping": {
+                    "title": "Ping",
+                    "description": "探活。",
+                    "entry": "operations/ping.py",
+                    "input_schema": strip_schema_metadata(module.Input.model_json_schema()),
+                    "output_schema": strip_schema_metadata(module.Output.model_json_schema()),
+                    "tags": ["probe"],
+                    "effects": [],
+                    "permissions": {},
+                    "execution": {
+                        "mode": "request",
+                        "timeout_ms": 5000,
+                        "cancellation": "unsupported",
+                        "on_revoke": "drain",
+                        "retry": "never",
+                    },
+                }
+            }
+        },
+    }
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
 
 
 def package_zip(*, top: str | None = "demo", payload: bytes = b"") -> bytes:
@@ -82,11 +107,30 @@ def package_zip(*, top: str | None = "demo", payload: bytes = b"") -> bytes:
         def add(name: str, data: bytes) -> None:
             handle.writestr(f"{prefix}{name}", data)
 
-        add("ability.yaml", MANIFEST.encode("utf-8"))
-        add("operations/ping.py", b'MARKER = "alpha"\n')
+        add("ability.yaml", manifest_text().encode("utf-8"))
+        add("operations/ping.py", OP_SOURCE.encode("utf-8"))
         if payload:
             add("assets/blob.bin", payload)
     return buffer.getvalue()
+
+
+class _Projects:
+    """导入端点不需要项目，只需要 project_store 存在。"""
+
+    async def get(self, project_id: str) -> None:
+        del project_id
+        return None
+
+
+class _Bus:
+    """只记录事件的假总线；导入成功应发出一条变更事件。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(self, event_type: str, payload: dict[str, Any]) -> int:
+        self.calls.append((event_type, payload))
+        return 1
 
 
 def make_client(
