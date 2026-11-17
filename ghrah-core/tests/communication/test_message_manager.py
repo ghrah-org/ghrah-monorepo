@@ -368,14 +368,16 @@ async def test_v1_schema_upgrade_preserves_messages_and_pending_deliveries(tmp_p
         assert len(await manager.get_replies(request.message_id)) == 1
 
 
-async def test_wait_reports_failed_predecessor_without_mutating_pending_request(tmp_path):
-    """同队列前序失败立即可诊断；后续请求仍保留以便显式恢复。"""
+async def test_failed_predecessor_releases_same_session_queue(tmp_path):
+    """前序失败释放顺序门，保留错误且不生成回复。"""
 
-    async def fail(message):
-        return AgentMessage.create_reply(message, "missing ability", MessageType.ERROR)
+    async def receive(message):
+        if message.content == "first":
+            return AgentMessage.create_reply(message, "missing ability", MessageType.ERROR)
+        return AgentMessage.create_reply(message, "later reply")
 
     async with make_manager(tmp_path / "messages.sqlite") as manager:
-        manager.bind("b", fail)
+        manager.bind("b", receive)
         first = await manager.send(
             sender_id="a",
             recipient_ids=("b",),
@@ -384,7 +386,9 @@ async def test_wait_reports_failed_predecessor_without_mutating_pending_request(
             kind=MessageKind.REQUEST,
         )
         await manager.dispatch_pending()
-        prior = (await manager.get_deliveries(first.message_id))[0]
+        (prior,) = await manager.get_deliveries(first.message_id)
+        assert (prior.state, prior.error) == (DeliveryState.FAILED, "missing ability")
+        assert await manager.get_replies(first.message_id) == ()
         later = await manager.send(
             sender_id="a",
             recipient_ids=("b",),
@@ -393,10 +397,126 @@ async def test_wait_reports_failed_predecessor_without_mutating_pending_request(
             kind=MessageKind.REQUEST,
         )
         await manager.dispatch_pending()
+        (completed,) = await manager.get_deliveries(later.message_id)
+        assert (completed.state, completed.attempts) == (DeliveryState.COMPLETED, 1)
+        (reply,) = await manager.wait_replies(later.message_id, timeout=1)
+        assert reply.content == "later reply"
+        assert await manager.get_queue_blocker(completed.delivery_id) is None
+        assert await manager.get_deliveries(first.message_id) == (prior,)
+        assert await manager.get_replies(first.message_id) == ()
+
+
+async def test_failed_predecessor_is_not_a_blocker_for_offline_recipient(tmp_path):
+    """后续投递在收件人离线时仍待处理，前序失败不影响阻塞诊断。"""
+
+    async def fail(message):
+        return AgentMessage.create_reply(message, "missing ability", MessageType.ERROR)
+
+    async with make_manager(tmp_path / "messages.sqlite") as manager:
+        manager.bind("b", fail)
+        first = await send_request(manager)
+        await manager.dispatch_pending()
+        assert (await manager.get_deliveries(first.message_id))[0].state == DeliveryState.FAILED
+        await manager.unbind("b")
+        later = await send_request(manager, key="later")
+        pending = (await manager.get_deliveries(later.message_id))[0]
+        assert (pending.recipient_id, pending.state, pending.attempts) == (
+            "b",
+            DeliveryState.PENDING,
+            0,
+        )
+        assert await manager.get_queue_blocker(pending.delivery_id) is None
+
+
+async def test_inflight_predecessor_blocks_same_session(tmp_path):
+    """执行中的前序维持同会话 FIFO，完成后下一条只执行一次。"""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def receive(message):
+        calls.append(message.content)
+        if message.content == "first":
+            entered.set()
+            await release.wait()
+        return AgentMessage.create_reply(message, f"{message.content} reply")
+
+    async with make_manager(tmp_path / "messages.sqlite") as manager:
+        manager.bind("b", receive)
+        first = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="first",
+            idempotency_key="first",
+            kind=MessageKind.REQUEST,
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        (prior,) = await manager.get_deliveries(first.message_id)
+        assert prior.state == DeliveryState.PROCESSING
+        later = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="later",
+            idempotency_key="later",
+            kind=MessageKind.REQUEST,
+        )
+        (pending,) = await manager.get_deliveries(later.message_id)
+        assert (pending.state, pending.attempts) == (DeliveryState.PENDING, 0)
+        assert await manager.get_queue_blocker(pending.delivery_id) == prior
         with pytest.raises(RuntimeError, match="message_queue_blocked") as caught:
             await manager.wait_replies(later.message_id, timeout=1)
         assert prior.delivery_id in str(caught.value)
-        assert "missing ability" in str(caught.value)
-        pending = (await manager.get_deliveries(later.message_id))[0]
-        assert (pending.state, pending.attempts) == (DeliveryState.PENDING, 0)
-        assert await manager.get_queue_blocker(pending.delivery_id) == prior
+        assert "Wait for the blocking delivery to finish" in str(caught.value)
+        assert await manager.get_deliveries(later.message_id) == (pending,)
+
+        release.set()
+        await manager.dispatch_pending()
+        assert calls == ["first", "later"]
+        (first_reply,) = await manager.get_replies(first.message_id)
+        (later_reply,) = await manager.get_replies(later.message_id)
+        assert (first_reply.content, later_reply.content) == ("first reply", "later reply")
+        for request in (first, later):
+            (delivery,) = await manager.get_deliveries(request.message_id)
+            assert (delivery.state, delivery.attempts) == (DeliveryState.COMPLETED, 1)
+
+
+async def test_interrupted_predecessor_releases_after_reopen(tmp_path):
+    """重开数据库后，后续请求直接执行，已中断投递仍可单独处理。"""
+    path = tmp_path / "messages.sqlite"
+    entered = asyncio.Event()
+
+    async def hang(message):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async with make_manager(path) as manager:
+        manager.bind("b", hang)
+        first = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="interrupted",
+            idempotency_key="first",
+            kind=MessageKind.REQUEST,
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+
+    async with make_manager(path) as manager:
+        (prior,) = await manager.get_deliveries(first.message_id)
+        assert (prior.state, prior.attempts) == (DeliveryState.INTERRUPTED, 1)
+        b, llm = make_agent("b", ["after reopen"])
+        manager.bind("b", b.receive)
+        later = await manager.send(
+            sender_id="a",
+            recipient_ids=("b",),
+            content="later",
+            idempotency_key="later",
+            kind=MessageKind.REQUEST,
+        )
+        await manager.dispatch_pending()
+        (completed,) = await manager.get_deliveries(later.message_id)
+        assert (completed.state, completed.attempts) == (DeliveryState.COMPLETED, 1)
+        (reply,) = await manager.get_replies(later.message_id)
+        assert reply.content == "after reopen"
+        assert len(llm.calls) == 1
+        assert await manager.get_deliveries(first.message_id) == (prior,)
+        assert await manager.get_replies(first.message_id) == ()

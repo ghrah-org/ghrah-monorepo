@@ -192,6 +192,7 @@ class ActorAgent:
         self._hook_view = self._hook_store.view()
         if hasattr(self._ability_executor, "update_hook_runner"):
             self._ability_executor.update_hook_runner(self._hook_runner)
+        # 供 Agent 循环和本地测试使用的内存队列。生产投递由 MessageManager 负责。
         self._message_queue: asyncio.Queue[ChatMessage] = asyncio.Queue()
         self._runner = AgentRunner(config.name)
         self._iteration_state = IterationState()
@@ -398,13 +399,16 @@ class ActorAgent:
         )
 
     async def inject_message(self, message: ChatMessage) -> None:
-        """向 Agent 注入消息，在下一轮迭代中被消费。
+        """将消息放入内存队列，在下一轮迭代中消费。
 
-        线程安全，可从外部（WebSocket、HITL 回调等）异步调用。
         消息会在 _drive_loop 的下一次迭代开始时注入到 ContextManager。
 
         Args:
             message: 要注入的 ChatMessage
+
+        Deprecated:
+            生产投递由 MessageManager 负责。本方法仅供本地和测试模式使用，
+            后续版本移除。新代码请使用 MessageManager。
         """
         await self._message_queue.put(message)
         logger.info(

@@ -372,8 +372,7 @@ class MessageManager:
                     "WHERE state='processing'",
                     ("Previous process stopped before durable completion",),
                 )
-                # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用，
-                # 而 retry/resume 都不会接受它——它会永久卡住该收件人的队列。
+                # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用。
                 # 这里按「已消费即完成」收尾，保留说明性 error 供排查。
                 await db.execute(
                     "UPDATE mm_deliveries SET state='completed', error=? "
@@ -787,8 +786,8 @@ class MessageManager:
                                 f"blocking_delivery={blocker.delivery_id}, "
                                 f"state={blocker.state}, "
                                 f"reason={blocker.error or blocker.blocked_reason}. "
-                                "Recover the preceding delivery explicitly or use a new session. "
-                                "The pending request is retained."
+                                "Wait for the blocking delivery to finish, or fix its session; "
+                                "the pending request is retained."
                             )
                 await asyncio.sleep(min(self._poll_interval, 0.05))
 
@@ -871,7 +870,7 @@ class MessageManager:
         return tuple(self._delivery_record(row) for row in rows)
 
     async def get_queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
-        """从权威投递表查询同会话中阻塞待收消息的前序失败，不修改队列。"""
+        """查询阻塞待收消息的同会话前序投递，限底层状态为 pending 或 processing。"""
         async with self._lock:
             row = await (
                 await self._require_db().execute(
@@ -882,8 +881,7 @@ class MessageManager:
                     "AND prior.seq<current.seq "
                     "LEFT JOIN mm_delivery_results r ON r.delivery_id=prior.delivery_id "
                     "WHERE current.delivery_id=? AND current.state='pending' "
-                    "AND (prior.state IN ('failed', 'interrupted') "
-                    "OR (prior.state!='completed' AND prior.blocked_reason IS NOT NULL)) "
+                    "AND prior.state IN ('pending', 'processing') "
                     "ORDER BY prior.seq LIMIT 1",
                     (delivery_id,),
                 )
@@ -979,7 +977,11 @@ class MessageManager:
         expected_last_node_id: str,
         acknowledge_side_effect_risk: bool,
     ) -> None:
-        """显式申请从最后持久节点续跑；须确认未提交外部副作用的重复风险。"""
+        """显式申请从最后持久节点续跑。
+
+        当前仅供内部调用，未接入产品命令。调用方须满足事务前置条件，
+        并确认未提交外部副作用的重复风险。
+        """
         if acknowledge_side_effect_risk is not True:
             raise ValueError("Explicit acknowledgement of side-effect risk is required")
         async with self._transaction() as db:
@@ -1383,7 +1385,8 @@ class MessageManager:
             "AND w.state='waiting') "
             "AND NOT EXISTS (SELECT 1 FROM mm_deliveries prior "
             "WHERE prior.recipient_id=d.recipient_id AND prior.seq<d.seq "
-            "AND prior.state!='completed' AND prior.target_session_id IS d.target_session_id) "
+            "AND prior.state IN ('pending', 'processing') "
+            "AND prior.target_session_id IS d.target_session_id) "
             "ORDER BY d.seq LIMIT 1"
         )
 

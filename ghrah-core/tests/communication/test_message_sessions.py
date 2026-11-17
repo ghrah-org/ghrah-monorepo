@@ -130,7 +130,7 @@ async def test_offline_delivery_keeps_session_after_reopen(tmp_path):
             assert llm.calls[0][-1].text == "offline"
 
 
-async def test_closed_session_blocks_only_its_own_queue(tmp_path):
+async def test_new_session_request_independent_of_old_session_queue(tmp_path):
     path = tmp_path / "core.sqlite"
     async with SqliteBackend(path) as backend:
         await agent_for(backend, "a", [])
@@ -144,6 +144,13 @@ async def test_closed_session_blocks_only_its_own_queue(tmp_path):
                 kind=MessageKind.NOTIFICATION,
                 idempotency_key="first",
             )
+            queued = await mm.send(
+                sender_id="a",
+                recipient_ids=("b",),
+                content="queued behind closed task",
+                kind=MessageKind.REQUEST,
+                idempotency_key="queued",
+            )
             b2 = await b.create_session(name="open task")
             await b.activate_session(b2.session_id)
             await b.archive_session(b1)
@@ -152,7 +159,7 @@ async def test_closed_session_blocks_only_its_own_queue(tmp_path):
                 sender_id="a",
                 recipient_ids=("b",),
                 content="open task",
-                kind=MessageKind.NOTIFICATION,
+                kind=MessageKind.REQUEST,
                 idempotency_key="second",
             )
             await mm.bind_atomic(b)
@@ -162,7 +169,14 @@ async def test_closed_session_blocks_only_its_own_queue(tmp_path):
             assert blocked.blocked_reason == "target_session_unavailable"
             assert blocked.target_session_id == b1
             assert blocked.attempts == 0
-            assert (await mm.get_deliveries(second.message_id))[0].state == DeliveryState.COMPLETED
+            (old_pending,) = await mm.get_deliveries(queued.message_id)
+            assert (old_pending.state, old_pending.attempts) == (DeliveryState.PENDING, 0)
+            assert await mm.get_queue_blocker(old_pending.delivery_id) == blocked
+            (fresh,) = await mm.get_deliveries(second.message_id)
+            assert fresh.state == DeliveryState.COMPLETED
+            assert fresh.target_session_id == b2.session_id
+            (reply,) = await mm.get_replies(second.message_id)
+            assert reply.content == "new task done"
             assert len(llm.calls) == 1
             assert llm.calls[0][-1].text == "open task"
             with pytest.raises(ValueError, match="not open"):
@@ -279,13 +293,13 @@ async def test_legacy_unscoped_message_is_not_guessed_in_strict_mode(tmp_path):
             assert await mm.get_replies(request.message_id) == ()
 
 
-async def test_failed_old_session_is_diagnosed_without_blocking_new_session(tmp_path):
-    """旧会话失败可诊断，新会话请求独立执行且旧队列原样保留。"""
+async def test_failed_input_releases_old_session_queue(tmp_path):
+    """旧会话的前序失败后，原先排队的输入仍在该会话执行。"""
     path = tmp_path / "core.sqlite"
     async with SqliteBackend(path) as backend:
-        b, _ = await agent_for(backend, "b", ["new-session reply"])
+        b, llm = await agent_for(backend, "b", ["old-session reply"])
+        old_session = b._context_manager.active_session_id
         async with manager_for(path) as mm:
-            await mm.bind_atomic(b)
             failed = await mm.send_external(
                 sender="user",
                 recipient_ids=("b",),
@@ -299,31 +313,25 @@ async def test_failed_old_session_is_diagnosed_without_blocking_new_session(tmp_
                     }
                 },
             )
-            await mm.dispatch_pending()
-            failed_delivery = (await mm.get_deliveries(failed.message_id))[0]
-            assert failed_delivery.state == DeliveryState.FAILED
             queued = await mm.send_external(
                 sender="user",
                 recipient_ids=("b",),
                 content="old queued input",
                 idempotency_key="old-queued",
             )
-            with pytest.raises(RuntimeError, match="message_queue_blocked"):
-                await mm.wait_replies(queued.message_id, timeout=1)
             session = await b.create_session(name="new test session")
             await b.activate_session(session.session_id)
             await b._context_manager.persist()
-            fresh = await mm.send_external(
-                sender="user",
-                recipient_ids=("b",),
-                content="fresh input",
-                idempotency_key="fresh",
-            )
-            replies = await mm.wait_replies(fresh.message_id, timeout=2)
-            assert replies[0].content == "new-session reply"
-            old_pending = (await mm.get_deliveries(queued.message_id))[0]
-            assert (old_pending.state, old_pending.attempts) == (DeliveryState.PENDING, 0)
-            assert await mm.get_queue_blocker(old_pending.delivery_id) == failed_delivery
-            assert (await mm.get_deliveries(fresh.message_id))[
-                0
-            ].target_session_id == session.session_id
+            await mm.bind_atomic(b)
+            await mm.dispatch_pending()
+            (failed_delivery,) = await mm.get_deliveries(failed.message_id)
+            assert failed_delivery.state == DeliveryState.FAILED
+            assert failed_delivery.target_session_id == old_session
+            (completed,) = await mm.get_deliveries(queued.message_id)
+            assert (completed.state, completed.attempts) == (DeliveryState.COMPLETED, 1)
+            assert completed.target_session_id == completed.consumed_session_id == old_session
+            assert await mm.get_queue_blocker(completed.delivery_id) is None
+            (reply,) = await mm.wait_replies(queued.message_id, timeout=1)
+            assert reply.content == "old-session reply"
+            assert len(llm.calls) == 1
+            assert b._context_manager.active_session_id == session.session_id
