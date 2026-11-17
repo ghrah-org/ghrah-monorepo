@@ -177,12 +177,17 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         if not info.get("success"):
             raise _fail("agents.get", info)
         data = dict(info.get("data") or {})
+        context_usage = data.get("context_usage")
         return AgentView(
             agent_id=request.agent_id,
             project_id=registry.scope,
             name=name,
             state=dict(data.get("state") or {}),
             abilities=[str(item) for item in (data.get("abilities") or [])],
+            available_ability_types=[
+                str(item) for item in (data.get("available_ability_types") or [])
+            ],
+            context_usage=(dict(context_usage) if isinstance(context_usage, dict) else None),
         )
 
     async def list_agents(request: AgentListRequest) -> Page[str]:

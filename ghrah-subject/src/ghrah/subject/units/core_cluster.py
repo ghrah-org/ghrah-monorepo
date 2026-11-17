@@ -126,6 +126,8 @@ _RUNTIME_REVIVING_COMMANDS = frozenset(
 
 # cluster 未挂载时无需（也不得）挂载即可完成的命令：读定义态或收敛性终止。
 # stopped/archived 后 cluster 已 dispose，这些命令从 Project AgentSpec 兜底。
+# 注意：cluster 已登记不等于有在线实例（spawn 失败前就 ensure 过 cluster），
+# 因此 get_agent_info 在挂载状态下还会先探测 runtime，离线同样走定义态。
 _NO_MOUNT_COMMANDS = frozenset({"get_agent_info", "session_list", "terminate_agent"})
 
 
@@ -135,6 +137,12 @@ def _is_version_conflict(project_id: str, error: str) -> bool:
         f"Project {project_id} modified" in error
         or "concurrent modification during update" in error
     )
+
+
+def _agent_offline_error(error: Any) -> bool:
+    """识别端口 ``agents.get`` 的「不在线」失败（``ApiError`` NOT_FOUND 文案）。"""
+    text = str(error or "")
+    return "NOT_FOUND" in text or "not_found" in text or "not online" in text
 
 
 class CoreClusterRegistryUnit(SubjectUnit):
@@ -378,7 +386,7 @@ class CoreClusterRegistryUnit(SubjectUnit):
                     str(project["project_root_locator"]),
                 )
             if command in _NO_MOUNT_COMMANDS and not self.service.has_cluster(cluster_id):
-                return self._no_mount_result(command, project, agent)
+                return self._definition_result(command, project, agent)
             handle = await self.service.ensure_cluster(
                 cluster_id,
                 project_id=str(project["project_id"]),
@@ -392,8 +400,24 @@ class CoreClusterRegistryUnit(SubjectUnit):
             target_field = _TARGET_FIELDS[command]
             if target_field:
                 core_payload[target_field] = agent["name"]
+            if command == "get_agent_info":
+                # cluster 已登记 ≠ 有在线实例：spawn 失败前 _ensure_agent_spawned
+                # 已 ensure_cluster。端口 agents.get 只认识在线 Agent，离线会
+                # NOT_FOUND；读侧命令应先探测 runtime，离线回定义态。
+                availability = await self._runtime_availability(handle, agent["agent_id"])
+                if availability == "offline":
+                    return self._definition_result(command, project, agent)
             result = await handle.dispatch(command, core_payload)
+            if (
+                command == "get_agent_info"
+                and not result.get("success")
+                and _agent_offline_error(result.get("error"))
+            ):
+                # 探测与取视图之间 Agent 被终止的竞态：仍回定义态而非失败。
+                return self._definition_result(command, project, agent)
             if result.get("success") and isinstance(result.get("data"), dict):
+                if command == "get_agent_info":
+                    self._fill_agent_info_view(result["data"])
                 result["data"].update(
                     {
                         "project_id": project["project_id"],
@@ -438,13 +462,15 @@ class CoreClusterRegistryUnit(SubjectUnit):
         return project, manager
 
     @staticmethod
-    def _no_mount_result(
+    def _definition_result(
         command: str, project: dict[str, Any], agent: dict[str, Any]
     ) -> dict[str, Any]:
-        """cluster 未挂载时的免挂载回执（读定义态 / 收敛性终止）。
+        """定义态回执（读定义态 / 收敛性终止），不需要在线实例。
 
-        stopped/archived 后 cluster 已 dispose：无 runtime 可终止、无活跃
-        session；get_agent_info 从 Project AgentSpec 返回定义态。
+        两条路径共用：cluster 未挂载（stopped/archived 后已 dispose），以及
+        cluster 已登记但 runtime 没有该 Agent 的在线实例（典型：spawn 失败，
+        定义已落 Project 名册）。此时无 runtime 可终止、无活跃 session；
+        get_agent_info 以 Project AgentSpec 为骨架作答。
         """
         identity = {
             "project_id": project["project_id"],
@@ -466,6 +492,37 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 **identity,
             },
         }
+
+    @staticmethod
+    async def _runtime_availability(handle: Any, agent_id: str) -> str:
+        """探测 Agent 在线态；探测失败按 ``unknown`` 处理（不误判离线）。"""
+        try:
+            runtime = await handle.get_entity_runtime(agent_id)
+        except Exception:  # noqa: BLE001 - 读侧探测失败不阻断命令
+            logger.warning(
+                "get_agent_info: runtime probe failed for agent %s",
+                agent_id,
+                exc_info=True,
+            )
+            return "unknown"
+        return str((runtime or {}).get("availability") or "unknown")
+
+    @staticmethod
+    def _fill_agent_info_view(data: dict[str, Any]) -> None:
+        """补齐 ``get_agent_info`` 回执里观察端依赖的缺省字段。
+
+        C3 之前回执直接来自 CoreUnit ``_handle_get_agent_info``，含
+        ``available_ability_types`` / ``context_usage``；端口视图 ``AgentView``
+        现已承载这两个字段（由 Core handler 透传），这里只兜底：老版本端口、
+        或某单元确实没有对应数据时，仍给出观察端可消费的缺省值。
+
+        - ``available_ability_types``：无类型目录时为空列表；
+        - ``context_usage``：None = 暂无可恢复的用量快照，观察端按既有分支跳过；
+        - ``runtime_state``：能走到在线分支即 running（离线分支走定义态回执）。
+        """
+        data.setdefault("available_ability_types", [])
+        data.setdefault("context_usage", None)
+        data.setdefault("runtime_state", "running")
 
     @staticmethod
     def _resolve_agent(

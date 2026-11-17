@@ -235,7 +235,13 @@ class MailboxSummaryView(BaseModel):
 
 
 class AgentView(BaseModel):
-    """一个在线 Agent 的定义与状态（``agents.get``）。"""
+    """一个在线 Agent 的定义与状态（``agents.get``）。
+
+    ``available_ability_types`` / ``context_usage`` 与 CoreUnit
+    ``get_agent_info`` 的回执同源：C3 端口化把它们从回执里丢掉了，而观察端
+    仍依赖这两个字段（用量快照恢复、能力弹窗）。这里作为可选字段补齐；
+    ``context_usage`` 为 None 表示该单元暂无可恢复的用量快照。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -244,6 +250,8 @@ class AgentView(BaseModel):
     name: str = ""
     state: dict[str, Any] = Field(default_factory=dict)
     abilities: list[str] = Field(default_factory=list)
+    available_ability_types: list[str] = Field(default_factory=list)
+    context_usage: dict[str, Any] | None = None
 
 
 class AgentRuntimeView(BaseModel):
