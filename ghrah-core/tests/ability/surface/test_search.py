@@ -111,7 +111,7 @@ def test_200_random_queries_never_return_ungranted_members(allowed_step, make_to
 
 
 class _Store:
-    project_id = "project"
+    scope_id = "project"
 
     def __init__(self, catalog):
         self.catalog = catalog

@@ -783,7 +783,7 @@ class StartupGrantMaterializer:
                 entry.member.member,
             ) in ready
 
-        async def project() -> tuple[str, ...]:
+        async def projected_tools() -> tuple[str, ...]:
             run = materialization.abilities.bound_run
             if not run:
                 return ()
@@ -798,7 +798,7 @@ class StartupGrantMaterializer:
                 return ()
             return tuple(entry.tool_name for entry in entries)
 
-        return project
+        return projected_tools
 
     def _split(
         self, catalog: Any, resolved: list[ResolvedAbility]
@@ -1041,7 +1041,7 @@ class StartupGrantMaterializer:
                         version_digest=instance.version_digest,
                     ),
                     identity=InvocationIdentity(
-                        project_id=self._store.project_id,
+                        project_id=self._store.scope_id,
                         agent=agent,
                         run=run,
                         agent_name=agent_name,
@@ -1097,7 +1097,7 @@ class StartupGrantMaterializer:
             bound_run = call.identity.run
             if not bound_run or bound_run != current_run:
                 return _denial(binding, "stale_invocation")
-            actor = AccessIdentity(store.project_id, agent, current_run)
+            actor = AccessIdentity(store.scope_id, agent, current_run)
             try:
                 basis = await store.admit_tool(
                     actor,

@@ -388,7 +388,7 @@ class AbilityReadStore:
         try:
             store = await self.store()
         except AbilityUnavailableError:
-            return AbilityInstancesView(project_id=operator.project_id)
+            return AbilityInstancesView(project_id=operator.scope_id)
         return await build_instances_view(store, operator)
 
     async def status(self) -> AbilityApiStatus:

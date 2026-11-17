@@ -118,7 +118,7 @@ def test_projection_is_sorted_by_tool_name_and_empty_when_nothing_selected() -> 
 class _Store:
     """最小关系库端口：固定一份投影并记录实际使用的受信身份。"""
 
-    project_id = "project"
+    scope_id = "project"
 
     def __init__(self, view: AbilityTreeView) -> None:
         self._view = view
@@ -166,7 +166,7 @@ async def test_surface_excludes_unavailable_and_unmaterialized_members() -> None
     # not_granted 从未进入关系投影；revoked 只剩陈旧选择；其余按条件排除。
     assert [entry.tool_name for entry in entries] == ["alpha", "zeta"]
     assert all(entry.available for entry in entries)
-    assert store.actor.project_id == "project"
+    assert store.actor.scope_id == "project"
     assert store.actor.subject_id == "alice"
     assert store.actor.run_id == "alice-run"
 

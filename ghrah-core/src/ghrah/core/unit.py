@@ -620,7 +620,7 @@ class CoreUnit:
             startup_materializer = build_startup_materializer(
                 store=self._config.ability_store,
                 source=assembly.source,
-                project_id=self._config.project_id,
+                scope_id=self._config.project_id,
                 policy=self._config.ability_grant_policy,
                 workspace_root=self._config.workspace_root,
                 auto_approve_abilities=self._config.auto_approve_abilities,

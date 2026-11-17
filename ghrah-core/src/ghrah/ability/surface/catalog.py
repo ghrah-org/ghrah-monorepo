@@ -100,9 +100,9 @@ async def read_agent_catalog(agent: str, run: str, *, store: AbilityAccessStore)
 
     if not run or store.current_run(agent) != run:
         raise AccessError("access_denied")
-    catalog = await store.surface_snapshot(AccessIdentity(store.project_id, agent, run), agent)
+    catalog = await store.surface_snapshot(AccessIdentity(store.scope_id, agent, run), agent)
     if (catalog.project_id, catalog.agent_id, catalog.run_id) != (
-        store.project_id,
+        store.scope_id,
         agent,
         run,
     ) or store.current_run(agent) != run:

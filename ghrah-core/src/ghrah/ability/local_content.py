@@ -39,7 +39,7 @@ class LocalGrantedContentProvider:
     ) -> None:
         self.store = store
         self.agent_id = agent_id
-        self._identity = AccessIdentity(store.project_id, agent_id, "")
+        self._identity = AccessIdentity(store.scope_id, agent_id, "")
         self.mcp_service = mcp_service
 
     def bind_run(self, run: str) -> None:
@@ -72,7 +72,7 @@ class LocalGrantedContentProvider:
         """执行服务与工具调用必须来自同一项目、稳定主体和运行代次。"""
         identity = call.identity
         if (
-            identity.project_id != self._identity.project_id
+            identity.project_id != self._identity.scope_id
             or identity.agent != self.agent_id
             or not identity.run
             or identity.run != self._identity.run_id

@@ -136,7 +136,7 @@ class McpDeployment:
         """观察当前宿主是否显式接线该快照成员；不产生授权或工具选择。"""
         return not self._closed and any(
             isinstance(b, McpPackageBinding)
-            and (b.project_id, b.agent_id) == (self.store.project_id, agent)
+            and (b.project_id, b.agent_id) == (self.store.scope_id, agent)
             and any(m.reference == reference for m in b.members)
             for b in self._bindings
         )
@@ -148,7 +148,7 @@ class McpDeployment:
         bindings = tuple(
             b
             for b in self._bindings
-            if (b.project_id, b.agent_id) == (self.store.project_id, agent_id)
+            if (b.project_id, b.agent_id) == (self.store.scope_id, agent_id)
         )
         service = AgentMcpService(self, agent_id, bindings)
         self._agents.add(service)
@@ -207,7 +207,7 @@ class AgentMcpService:
     ) -> None:
         self._owner = owner
         self._bindings = bindings
-        self._identity = AccessIdentity(owner.store.project_id, agent_id, "")
+        self._identity = AccessIdentity(owner.store.scope_id, agent_id, "")
         self._active: dict[str, _Activation] = {}
         self._closed = False
         self._epoch = 0
@@ -237,7 +237,7 @@ class AgentMcpService:
         """无分隔歧义的受信 scope；显示名称不参与。"""
         return json.dumps(
             [
-                self._identity.project_id,
+                self._identity.scope_id,
                 self._identity.subject_id,
                 self._identity.run_id,
             ],
@@ -253,7 +253,7 @@ class AgentMcpService:
             or self._owner.store.current_run(self._identity.subject_id) != run
         ):
             raise McpConfigError("Cannot bind MCP service to another run")
-        self._identity = AccessIdentity(self._identity.project_id, self._identity.subject_id, run)
+        self._identity = AccessIdentity(self._identity.scope_id, self._identity.subject_id, run)
 
     def stop_admission(self) -> None:
         """同步关闭新调用接纳，随后由生命周期 owner 异步清理。"""
@@ -409,7 +409,7 @@ class AgentMcpService:
         """按固定成员调用；参数只作为远端 payload，不能切换身份或服务器。"""
         await self.refresh()
         if (call.identity.project_id, call.identity.agent, call.identity.run) != (
-            self._identity.project_id,
+            self._identity.scope_id,
             self._identity.subject_id,
             self._identity.run_id,
         ):

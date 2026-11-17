@@ -33,7 +33,7 @@ def build_startup_materializer(
     *,
     store: Any,
     source: Any,
-    project_id: str,
+    scope_id: str,
     policy: Any,
     workspace_root: str | None,
     filesystem_roots: tuple[str, ...] = (),
@@ -54,7 +54,7 @@ def build_startup_materializer(
     Args:
         store: 启动授权关系库（``AbilityAccessStore``）。
         source: 新版能力来源（``BuiltinAbilitySource``），用成员视图构造工具。
-        project_id: 项目标识，写入操作员身份。
+        scope_id: 作用域名（不透明标识），写入操作员身份。
         policy: 部署方启动策略；None = 不授予任何能力。
         workspace_root: 默认工作目录与路径变量的展开基准。
         filesystem_roots: 部署方显式配置的文件硬边界。
@@ -71,7 +71,7 @@ def build_startup_materializer(
     return StartupGrantMaterializer(
         store=store,
         source=source,
-        actor=AccessIdentity(project_id, "deployment", "deployment", True, "deployment"),
+        actor=AccessIdentity(scope_id, "deployment", "deployment", True, "deployment"),
         policy=policy,
         workspace_root=workspace_root,
         filesystem_roots=filesystem_roots,
