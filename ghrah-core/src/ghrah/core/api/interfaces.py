@@ -483,6 +483,7 @@ class AbilitiesPackageImportRequest(BaseModel):
     archive_path: str
     source_name: str
 
+
 class AbilitiesPackageGroupsGlobalRequest(BaseModel):
     """``abilities.package_groups`` 的目录侧请求信封（全局视图，无作用域）。"""
 

@@ -365,6 +365,7 @@ async def test_v3_relation_database_requires_explicit_identity_reset(tmp_path):
     finally:
         await db.close()
 
+
 SKILL_ONLY_YAML = """\
 format: ghrah.ability-definition
 schema_version: '1'

@@ -197,6 +197,7 @@ class BuiltinAbilitySource:
         if self.packages is not None and not full_name.startswith("ghrah."):
             return self.packages.package_members(full_name)
         raise ManifestNotFoundError(f"Ability package not found: {full_name}")
+
     def list_abilities(self, namespace: str | None = None) -> list[str]:
         """列出新增驱动的内置成员，忽略未选用的旧注册表。"""
         names = sorted(self._manifests)

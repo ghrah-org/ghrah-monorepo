@@ -144,6 +144,7 @@ def write_package(
         )
     return root
 
+
 def zip_package(source: Path, archive: Path, *, top: str | None = "demo") -> Path:
     """把源包目录压成 zip；``top`` 决定是否套一层顶层目录。"""
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
@@ -276,6 +277,7 @@ async def test_real_zip_extension_with_wrong_bytes_is_invalid(tmp_path: Path) ->
     finally:
         await catalog.aclose()
     assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
+
 
 def test_import_rejects_schema_that_does_not_match_module(tmp_path: Path) -> None:
     """手写 schema 与模块 pydantic 不一致：安装期就拒，不留到建 agent。"""

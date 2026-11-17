@@ -328,6 +328,7 @@ def test_template_and_instances_must_align() -> None:
             agent="a",
         )
 
+
 async def test_template_grants_skill_members_as_content(store):
     """模板点名 Skill 成员时按内容授予，节点带技能。"""
     db, version, root = store

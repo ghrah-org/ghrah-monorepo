@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from ghrah.ability.package.lock import lock_filename, read_lock
 from ghrah.core.wiring import build_core_catalog
 from ghrah.protocol.enums import EventType
+
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.units.ability_control import (
     build_ability_control_router,

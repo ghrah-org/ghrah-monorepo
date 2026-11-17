@@ -49,7 +49,6 @@ ARCHIVE_SUFFIXES: dict[str, ArchiveFormat] = {".zip": "zip"}
 MAX_TREE_DEPTH = 16
 
 
-
 class ArchiveError(ValueError):
     """归档不可用；``code`` 映射到 Core 的错误码。"""
 

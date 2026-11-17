@@ -181,6 +181,7 @@ class InstalledAbilityProvider:
             *(_ability_safe_name(key) for key in sorted(definition.skills)),
         ]
         return [self.manifest(f"{package}.{member}") for member in members]
+
     def installed_root(self, package: str, release: str) -> Path | None:
         """定位仍带安装记录的版本目录；不 import 包代码，也不跟随链接。
 

@@ -135,9 +135,7 @@ class ManifestResolver:
             model_overrides=model_overrides,
         )
 
-    def _from_manifest(
-        self, ability_manifest: AbilityManifest, ref: AbilityRef
-    ) -> ResolvedAbility:
+    def _from_manifest(self, ability_manifest: AbilityManifest, ref: AbilityRef) -> ResolvedAbility:
         """把一个成员声明投影成已解析能力，并合并模板申请的权限。"""
         return ResolvedAbility(
             ability_name=ability_manifest.full_name,
@@ -148,6 +146,7 @@ class ManifestResolver:
             declared_permissions=ability_manifest.metadata.permissions,
             requested_permissions=ref.permissions,
         )
+
     def _resolve_abilities(self, ability_refs: list[AbilityRef]) -> list[ResolvedAbility]:
         """解析 AbilityRef 列表为 ResolvedAbility 列表。
 
@@ -165,7 +164,7 @@ class ManifestResolver:
                     # 两种解释都不成立时抛回原始错误，保留它给出的具体原因。
                     try:
                         members = self._catalog.load_package_members(ref.ref)
-                    except (ManifestNotFoundError, ManifestValidationError):
+                    except ManifestNotFoundError, ManifestValidationError:
                         raise error from None
                     resolved.extend(self._from_manifest(item, ref) for item in members)
                     continue

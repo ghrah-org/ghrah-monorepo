@@ -411,6 +411,7 @@ class TestWindowConfigZeroValues:
 
         assert result.config.communication_timeout == -1
 
+
 class _PackageCatalog:
     """最小目录：一个包 = 1 个工具成员 + 1 个技能成员。"""
 
@@ -482,6 +483,7 @@ def test_ref_to_missing_member_still_raises() -> None:
 
     with pytest.raises(ManifestNotFoundError):
         resolver.resolve(agent)
+
 
 def test_two_segment_package_ref_still_expands_when_member_lookup_fails_hard() -> None:
     """``ns.name`` 既是包全名又像成员名：成员查找抛校验错误时也要退到整包展开。"""
