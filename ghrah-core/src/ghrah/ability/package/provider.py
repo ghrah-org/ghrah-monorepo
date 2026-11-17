@@ -124,8 +124,27 @@ class InstalledAbilityProvider:
         package, _, member = full_name.rpartition(".")
         definition = self.capture(package).definition()
         operation = definition.operations.get(member)
+        if operation is None and member not in definition.skills:
+            # skill 键常是 kebab-case，而 ability 名只允许 [a-z0-9_]：反向归一后再查一次
+            member = member.replace("_", "-")
         if operation is None:
-            raise ManifestValidationError(f"安装包没有成员：{full_name}")
+            skill = definition.skills.get(member)
+            if skill is None:
+                raise ManifestValidationError(f"安装包没有成员：{full_name}")
+            return AbilityManifest(
+                manifest="ability",
+                version="1",
+                metadata=AbilityMetadata(
+                    namespace=package,
+                    name=_ability_safe_name(member),
+                    title=skill.title,
+                    description=skill.description,
+                    tags=list(skill.tags),
+                    permissions=PermissionFlags(),
+                ),
+                tool=None,
+                implementation=ImplementationDef(type="skill", handler=member),
+            )
         return AbilityManifest(
             manifest="ability",
             version="1",
@@ -142,6 +161,26 @@ class InstalledAbilityProvider:
             tool=None,
             implementation=ImplementationDef(type="python", handler=member),
         )
+
+    def package_members(self, package: str) -> list[AbilityManifest]:
+        """把一个安装包的全部成员投影成可授予清单（operation + skill）。
+
+        这是「一个 ref 即整包」的入口：调用方不需要知道成员是工具还是技能，
+        投影出来的 ``implementation.type`` 已经分好类——``python`` 进工具面，
+        ``skill`` 进技能面。
+
+        Args:
+            package: 包全名（``namespace.name``）
+
+        Returns:
+            成员清单；先 operations 后 skills，各自按成员键排序
+        """
+        definition = self.capture(package).definition()
+        members = [
+            *sorted(definition.operations),
+            *(_ability_safe_name(key) for key in sorted(definition.skills)),
+        ]
+        return [self.manifest(f"{package}.{member}") for member in members]
 
     def installed_root(self, package: str, release: str) -> Path | None:
         """定位仍带安装记录的版本目录；不 import 包代码，也不跟随链接。
@@ -261,6 +300,21 @@ class McpSnapshotOperation(Ability):
         from ghrah.ability.mcp_wiring import execute_mcp_member
 
         return await execute_mcp_member(call, services)
+
+
+def _ability_safe_name(member: str) -> str:
+    """把成员键归一成 ability 合法名（只保留 ``[a-z0-9_]``）。
+
+    operation 键本就是 snake_case；skill 键常带连字符，直接当 ability 名会被
+    ``AbilityMetadata`` 的名字规则拒绝，因此在投影处做一次归一。
+
+    Args:
+        member: 定义里的成员键
+
+    Returns:
+        合法 ability 名
+    """
+    return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in member.lower())
 
 
 def validate_source_tree(root: Path) -> None:

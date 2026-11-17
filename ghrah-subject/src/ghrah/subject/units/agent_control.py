@@ -365,7 +365,7 @@ def build_agent_control_router(
                     "endpoint_name": change.endpoint_name,
                     "system_prompt": change.system_prompt,
                     "desired_state": change.desired_state,
-                    "manifest_ref": "",
+                    "manifest_ref": change.manifest_ref,
                     "abilities": None,
                 },
             },

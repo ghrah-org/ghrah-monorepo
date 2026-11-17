@@ -364,3 +364,73 @@ async def test_v3_relation_database_requires_explicit_identity_reset(tmp_path):
             assert (await cursor.fetchone())[0] == "alice"
     finally:
         await db.close()
+
+
+SKILL_ONLY_YAML = """\
+format: ghrah.ability-definition
+schema_version: '1'
+identity:
+  namespace: demo
+  version: '0.2.0'
+title: Skill Only
+description: 只有技能、没有 Operation 的包。
+members:
+  operations: {}
+  skills:
+    guide:
+      title: 写作指南
+      description: 写作指南。
+      body:
+        path: skills/guide/SKILL.md
+        media_type: text/markdown
+"""
+
+
+def write_skill_only_package(root: Path) -> AbilityVersion:
+    """落一个只有 skill、零 Operation 的包并捕获版本。"""
+    (root / "skills" / "guide").mkdir(parents=True)
+    (root / "ability.yaml").write_text(SKILL_ONLY_YAML, encoding="utf-8", newline="\n")
+    (root / "skills" / "guide" / "SKILL.md").write_text(SKILL_MD, encoding="utf-8", newline="\n")
+    return capture_ability_version((root / "ability.yaml").read_text(encoding="utf-8"), root=root)
+
+
+@pytest.fixture
+async def skill_store(tmp_path):
+    """只有技能的实例：提交版本、选定实例并登记 Agent。"""
+    root = tmp_path / "demo"
+    version = write_skill_only_package(root)
+    db = await AbilityAccessStore.open(
+        tmp_path / "project.db",
+        "project",
+        operators=frozenset({"admin", "deploy"}),
+        runs={"alice": "alice-run"}.get,
+    )
+    try:
+        await db.commit_version(ADMIN, version)
+        await db.select_instance(ADMIN, "demo", version.digest, tmp_path)
+        await db.register_agent(ADMIN, "alice")
+        yield db, version, root
+    finally:
+        await db.close()
+
+
+async def test_skill_only_package_grants_and_reads_its_body(skill_store):
+    """零 Operation 的包也能授予：节点带技能，正文可读。"""
+    db, _, _ = skill_store
+
+    view = await _grant(
+        db,
+        GrantAbilityRequest(
+            alias="guides",
+            instance_id="demo",
+            skill=SkillReadScope(key="guide"),
+            expected_revision=0,
+        ),
+    )
+
+    node = view.abilities[0]
+    assert [skill.key for skill in node.skills] == ["guide"]
+    assert node.operations == []
+    fence = await db.resolve(ALICE, "guides", "skill/guide")
+    result = await db.read_content(ALICE, fence, ContentReadRequest())
+    assert result.content == SKILL_MD

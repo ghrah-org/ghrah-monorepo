@@ -176,6 +176,28 @@ class BuiltinAbilitySource:
                 return self.packages.manifest(full_name)
         raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
 
+    def load_package_members(self, full_name: str) -> list[AbilityManifest]:
+        """把一个包的全部成员投影成可授予清单（内置按前缀，安装包走 provider）。
+
+        Args:
+            full_name: 包全名（``namespace.name``）
+
+        Returns:
+            成员清单；先内置成员，再安装包成员
+
+        Raises:
+            ManifestNotFoundError: 该名字不是包，或包内没有任何成员
+        """
+        prefix = f"{full_name}."
+        matched = [
+            manifest for name, manifest in self._manifests.items() if name.startswith(prefix)
+        ]
+        if matched:
+            return [AbilityManifest.model_validate(item.model_dump()) for item in matched]
+        if self.packages is not None and not full_name.startswith("ghrah."):
+            return self.packages.package_members(full_name)
+        raise ManifestNotFoundError(f"Ability package not found: {full_name}")
+
     def list_abilities(self, namespace: str | None = None) -> list[str]:
         """列出新增驱动的内置成员，忽略未选用的旧注册表。"""
         names = sorted(self._manifests)

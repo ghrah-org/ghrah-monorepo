@@ -238,16 +238,30 @@ def _template_facts(
         instance = catalog.get(alias)
         if instance is None:
             raise GrantReconcileError(f"模板引用了本次启动未解析的包实例：{alias}")
-        exposed = {key for key, item in instance.definition["operations"].items() if item["expose"]}
-        unknown = set(members) - exposed
+        # 模板里的成员既可能是 Operation（工具），也可能是 Skill（内容）：
+        # 前者要求 expose，后者按内容地址授予，两者都进同一个节点。
+        operations = {
+            key for key, item in instance.definition["operations"].items() if item["expose"]
+        }
+        skills = set(instance.definition["skills"])
+        requested = set(members)
+        unknown = requested - operations - skills
         if unknown:
-            raise GrantReconcileError(f"模板申请的 Operation 不可暴露：{alias}/{sorted(unknown)}")
-        if not members:
+            raise GrantReconcileError(
+                f"模板申请的成员不存在：{alias}/{sorted(unknown)}"
+                f"（可用的 Operation：{sorted(operations)}；Skill：{sorted(skills)}）"
+            )
+        if not requested:
             continue
+        granted_operations = requested & operations
+        granted_skills = requested & skills
         result[alias] = GrantFacts(
-            members=frozenset(members),
-            content=frozenset(),
-            axes={f"operations/{key}": (True, True) for key in members},
+            members=frozenset(granted_operations),
+            content=frozenset(f"skill/{key}" for key in granted_skills),
+            axes={
+                **{f"operations/{key}": (True, True) for key in granted_operations},
+                **{f"skill/{key}": (True, True) for key in granted_skills},
+            },
         )
     return result
 

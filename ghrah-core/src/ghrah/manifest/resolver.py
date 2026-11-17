@@ -21,12 +21,12 @@ from ghrah.core.config.builders import (
     build_model_overrides_from_config,
     build_window_from_overrides,
 )
-from ghrah.manifest.ability import AbilityHooks
+from ghrah.manifest.ability import AbilityHooks, AbilityManifest
 from ghrah.manifest.agent import (
     AbilityRef,
     AgentManifest,
 )
-from ghrah.manifest.errors import ManifestValidationError
+from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import AbilityCatalogPort
 from ghrah.manifest.types import ImplementationDef, PermissionFlags, SurfaceConfig, ToolSchema
 from ghrah.types.config_types import AgentConfig, ContextConfig, WindowConfig
@@ -135,6 +135,18 @@ class ManifestResolver:
             model_overrides=model_overrides,
         )
 
+    def _from_manifest(self, ability_manifest: AbilityManifest, ref: AbilityRef) -> ResolvedAbility:
+        """把一个成员声明投影成已解析能力，并合并模板申请的权限。"""
+        return ResolvedAbility(
+            ability_name=ability_manifest.full_name,
+            tool_schema=ability_manifest.tool,
+            permissions=ability_manifest.metadata.permissions.merge(ref.permissions),
+            implementation=ability_manifest.implementation,
+            hooks=ability_manifest.hooks,
+            declared_permissions=ability_manifest.metadata.permissions,
+            requested_permissions=ref.permissions,
+        )
+
     def _resolve_abilities(self, ability_refs: list[AbilityRef]) -> list[ResolvedAbility]:
         """解析 AbilityRef 列表为 ResolvedAbility 列表。
 
@@ -144,17 +156,19 @@ class ManifestResolver:
         resolved: list[ResolvedAbility] = []
         for ref in ability_refs:
             if ref.ref:
-                ability_manifest = self._catalog.load_ability(ref.ref)
-                permissions = ability_manifest.metadata.permissions.merge(ref.permissions)
-                r = ResolvedAbility(
-                    ability_name=ability_manifest.full_name,
-                    tool_schema=ability_manifest.tool,
-                    permissions=permissions,
-                    implementation=ability_manifest.implementation,
-                    hooks=ability_manifest.hooks,
-                    declared_permissions=ability_manifest.metadata.permissions,
-                    requested_permissions=ref.permissions,
-                )
+                try:
+                    ability_manifest = self._catalog.load_ability(ref.ref)
+                except (ManifestNotFoundError, ManifestValidationError) as error:
+                    # 两段名天然有歧义：``cutting-tool.requirement`` 既是包全名，也能被
+                    # 读成「包 cutting-tool 的成员 requirement」。先按成员试，失败再按整包解释；
+                    # 两种解释都不成立时抛回原始错误，保留它给出的具体原因。
+                    try:
+                        members = self._catalog.load_package_members(ref.ref)
+                    except ManifestNotFoundError, ManifestValidationError:
+                        raise error from None
+                    resolved.extend(self._from_manifest(item, ref) for item in members)
+                    continue
+                r = self._from_manifest(ability_manifest, ref)
             elif ref.type:
                 r = ResolvedAbility.from_builtin(ref.type, catalog=self._catalog)
                 if ref.permissions:
