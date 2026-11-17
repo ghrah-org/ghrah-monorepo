@@ -1930,30 +1930,30 @@ catalog = ctx.get(CORE_CATALOG)  # -&gt; CoreCatalogPort（无作用域）</code
 <p>能力侧的 HITL 物化只此一处：<code>HITLRequiredAbility</code> 给宿主能力追加一个 <code>PRE_EXECUTE</code> 的 <code>HITLApprovalHook</code>，且该 Hook 只在 <code>call.member.member == 宿主名</code> 时触发（<code>ghrah-core/src/ghrah/ability/permissions/hitl.py:43</code>、<code>ghrah-core/src/ghrah/ability/permissions/hitl.py:59</code>、<code>ghrah-core/src/ghrah/ability/permissions/hitl.py:115</code>）。</p>
 <h3 id="85-权限ghrahabilityaccess">8.5 权限：<code>ghrah.ability.access</code></h3>
 <h4 id="851-关系库-schema">8.5.1 关系库 schema</h4>
-<p><code>AbilityAccessStore</code> 打开的就是项目 ActionChain sqlite 同一个文件（<code>ghrah-core/src/ghrah/ability/access/store.py:4</code>），表版本 <code>ability_tree_schema.version = 5</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:58</code>）。口径：<strong>9 张表 + 1 个索引</strong>（<code>ghrah-core/src/ghrah/ability/access/store.py:57</code>）。</p>
+<p><code>AbilityAccessStore</code> 打开的就是项目 ActionChain sqlite 同一个文件（<code>ghrah-core/src/ghrah/ability/access/store.py:4</code>），表版本 <code>ability_tree_schema.version = 6</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:58</code>）。口径：<strong>9 张表 + 1 个索引</strong>（<code>ghrah-core/src/ghrah/ability/access/store.py:57</code>）。租户列名为 <code>scope</code>（不透明作用域标识）：打开 v5 库时会在原事务内把各表的 <code>project</code> 列改名为 <code>scope</code>，不改写授权事实（<code>_upgrade_v5_to_v6</code>，<code>ghrah-core/src/ghrah/ability/access/store.py:108</code>）。</p>
 <table>
 <thead><tr><th>表</th><th>主键</th><th>存什么</th></tr></thead>
 <tbody>
-<tr><td><code>ability_tree_schema</code></td><td><code>version</code>（CHECK=5）</td><td>版本标记</td></tr>
-<tr><td><code>ability_versions</code></td><td><code>(project, digest)</code></td><td>已提交版本：<code>definition</code> / <code>implementation</code> / <code>manifest</code></td></tr>
-<tr><td><code>ability_content</code></td><td><code>(project, digest)</code></td><td>内容 blob</td></tr>
-<tr><td><code>ability_instances</code></td><td><code>(project, id)</code></td><td>实例 → <code>digest</code> + <code>root</code> + <code>revision</code></td></tr>
-<tr><td><code>ability_agents</code></td><td><code>(project, id)</code></td><td>Agent 的关系修订号</td></tr>
-<tr><td><code>ability_grants</code></td><td><code>(project, agent, alias)</code></td><td><code>members</code> / <code>roots</code> / <code>content</code> / <code>axes</code> / <code>revision</code> / <code>source</code></td></tr>
-<tr><td><code>ability_tools</code></td><td><code>(project, agent, name)</code></td><td>工具选择 → <code>alias</code> / <code>member</code> / <code>grant_revision</code> / <code>revision</code></td></tr>
+<tr><td><code>ability_tree_schema</code></td><td><code>version</code>（CHECK=6）</td><td>版本标记</td></tr>
+<tr><td><code>ability_versions</code></td><td><code>(scope, digest)</code></td><td>已提交版本：<code>definition</code> / <code>implementation</code> / <code>manifest</code></td></tr>
+<tr><td><code>ability_content</code></td><td><code>(scope, digest)</code></td><td>内容 blob</td></tr>
+<tr><td><code>ability_instances</code></td><td><code>(scope, id)</code></td><td>实例 → <code>digest</code> + <code>root</code> + <code>revision</code></td></tr>
+<tr><td><code>ability_agents</code></td><td><code>(scope, id)</code></td><td>Agent 的关系修订号</td></tr>
+<tr><td><code>ability_grants</code></td><td><code>(scope, agent, alias)</code></td><td><code>members</code> / <code>roots</code> / <code>content</code> / <code>axes</code> / <code>revision</code> / <code>source</code></td></tr>
+<tr><td><code>ability_tools</code></td><td><code>(scope, agent, name)</code></td><td>工具选择 → <code>alias</code> / <code>member</code> / <code>grant_revision</code> / <code>revision</code></td></tr>
 <tr><td><code>ability_changes</code></td><td>自增 <code>seq</code></td><td>修订通知（<code>reason</code>、<code>actor</code>、<code>before_revision</code>、<code>version_digest</code>、<code>source</code>、<code>policy</code>）</td></tr>
-<tr><td><code>ability_registrations</code></td><td><code>(project, agent)</code></td><td>启动占位（<code>token</code>、<code>state</code>、<code>owned_revision</code>）</td></tr>
+<tr><td><code>ability_registrations</code></td><td><code>(scope, agent)</code></td><td>启动占位（<code>token</code>、<code>state</code>、<code>owned_revision</code>）</td></tr>
 </tbody></table>
-<p>打开时做三道硬检查：缺 <code>ability_tree_schema</code> 但存在任何 <code>ability_*</code> 表 → 拒绝继承（<code>ghrah-core/src/ghrah/ability/access/store.py:327</code>）；版本 ≠ 5 → 要求显式重建（<code>ghrah-core/src/ghrah/ability/access/store.py:334</code>）；<code>read_limit</code> 必须在 1..65536（<code>ghrah-core/src/ghrah/ability/access/store.py:310</code>）。</p>
+<p>打开时做三道硬检查：缺 <code>ability_tree_schema</code> 但存在任何 <code>ability_*</code> 表 → 拒绝继承（<code>ghrah-core/src/ghrah/ability/access/store.py:349</code>）；版本 ∉ {5, 6} → 要求显式重建，v5 自动原地升级到 v6（<code>ghrah-core/src/ghrah/ability/access/store.py:365</code>）；<code>read_limit</code> 必须在 1..65536（<code>ghrah-core/src/ghrah/ability/access/store.py:340</code>）。</p>
 <h4 id="852-身份与围栏">8.5.2 身份与围栏</h4>
 <table>
 <thead><tr><th>类型</th><th>字段</th><th>语义</th></tr></thead>
 <tbody>
-<tr><td><code>AccessIdentity</code></td><td><code>project_id</code>、<code>subject_id</code>、<code>run_id</code>、<code>operator</code>、<code>source</code></td><td>受信调用方身份；<code>source ∈ {admin, deployment, agent-default, migration}</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:112</code>、<code>ghrah-core/src/ghrah/ability/access/store.py:102</code>）</td></tr>
-<tr><td><code>MemberFence</code></td><td><code>instance_id</code>、<code>instance_revision</code>、<code>member</code>、<code>agent_id</code>、<code>run_id</code>、<code>alias</code>、<code>grant_revision</code>、<code>tool_name</code>、<code>tool_revision</code>、<code>version_digest</code></td><td>&quot;确定实例 + 获授关系 + 工具选择&quot;的代次快照，不随同名关系复活（<code>ghrah-core/src/ghrah/ability/access/store.py:131</code>）</td></tr>
+<tr><td><code>AccessIdentity</code></td><td><code>scope_id</code>（兼容只读别名 <code>project_id</code>）、<code>subject_id</code>、<code>run_id</code>、<code>operator</code>、<code>source</code></td><td>受信调用方身份；<code>source ∈ {admin, deployment, agent-default, migration}</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:137</code>、<code>ghrah-core/src/ghrah/ability/access/store.py:133</code>）</td></tr>
+<tr><td><code>MemberFence</code></td><td><code>instance_id</code>、<code>instance_revision</code>、<code>member</code>、<code>agent_id</code>、<code>run_id</code>、<code>alias</code>、<code>grant_revision</code>、<code>tool_name</code>、<code>tool_revision</code>、<code>version_digest</code></td><td>&quot;确定实例 + 获授关系 + 工具选择&quot;的代次快照，不随同名关系复活（<code>ghrah-core/src/ghrah/ability/access/store.py:161</code>）</td></tr>
 </tbody></table>
 <p><code>subject_id</code> 必须是规范 32 位小写 UUID（<code>ghrah-core/src/ghrah/ability/access/identity.py:11</code>）——名称不能当恢复凭据。</p>
-<p><code>operator</code> 资格不是自称：<code>_operator(actor)</code> 要求 <code>project_id</code> 匹配 <strong>且</strong> <code>actor.operator</code> <strong>且</strong> <code>subject_id ∈ operators</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:378</code>）。生产注入的 operators 是 <code>frozenset({&quot;deployment&quot;})</code>（<code>ghrah-core/src/ghrah/core/read/ability.py:120</code>、<code>ghrah-core/src/ghrah/core/runtime.py:168</code>）。</p>
+<p><code>operator</code> 资格不是自称：<code>_operator(actor)</code> 要求 <code>scope_id</code> 匹配 <strong>且</strong> <code>actor.operator</code> <strong>且</strong> <code>subject_id ∈ operators</code>（<code>ghrah-core/src/ghrah/ability/access/store.py:411</code>）。生产注入的 operators 是 <code>frozenset({&quot;deployment&quot;})</code>（<code>ghrah-core/src/ghrah/core/read/ability.py:120</code>、<code>ghrah-core/src/ghrah/core/runtime.py:168</code>）。</p>
 <h4 id="853-决策入口">8.5.3 决策入口</h4>
 <table>
 <thead><tr><th>入口</th><th>语义</th><th>落点</th></tr></thead>

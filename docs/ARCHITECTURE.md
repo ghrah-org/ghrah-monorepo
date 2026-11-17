@@ -2063,32 +2063,32 @@ Hook 裁决有四条分支（`ghrah-core/src/ghrah/ability/execution/executor.py
 
 #### 8.5.1 关系库 schema
 
-`AbilityAccessStore` 打开的就是项目 ActionChain sqlite 同一个文件（`ghrah-core/src/ghrah/ability/access/store.py:4`），表版本 `ability_tree_schema.version = 5`（`ghrah-core/src/ghrah/ability/access/store.py:58`）。口径：**9 张表 + 1 个索引**（`ghrah-core/src/ghrah/ability/access/store.py:57`）。
+`AbilityAccessStore` 打开的就是项目 ActionChain sqlite 同一个文件（`ghrah-core/src/ghrah/ability/access/store.py:4`），表版本 `ability_tree_schema.version = 6`（`ghrah-core/src/ghrah/ability/access/store.py:58`）。口径：**9 张表 + 1 个索引**（`ghrah-core/src/ghrah/ability/access/store.py:57`）。租户列名为 `scope`（不透明作用域标识）：打开 v5 库时会在原事务内把各表的 `project` 列改名为 `scope`，不改写授权事实（`_upgrade_v5_to_v6`，`ghrah-core/src/ghrah/ability/access/store.py:108`）。
 
 | 表 | 主键 | 存什么 |
 | --- | --- | --- |
-| `ability_tree_schema` | `version`（CHECK=5） | 版本标记 |
-| `ability_versions` | `(project, digest)` | 已提交版本：`definition` / `implementation` / `manifest` |
-| `ability_content` | `(project, digest)` | 内容 blob |
-| `ability_instances` | `(project, id)` | 实例 → `digest` + `root` + `revision` |
-| `ability_agents` | `(project, id)` | Agent 的关系修订号 |
-| `ability_grants` | `(project, agent, alias)` | `members` / `roots` / `content` / `axes` / `revision` / `source` |
-| `ability_tools` | `(project, agent, name)` | 工具选择 → `alias` / `member` / `grant_revision` / `revision` |
+| `ability_tree_schema` | `version`（CHECK=6） | 版本标记 |
+| `ability_versions` | `(scope, digest)` | 已提交版本：`definition` / `implementation` / `manifest` |
+| `ability_content` | `(scope, digest)` | 内容 blob |
+| `ability_instances` | `(scope, id)` | 实例 → `digest` + `root` + `revision` |
+| `ability_agents` | `(scope, id)` | Agent 的关系修订号 |
+| `ability_grants` | `(scope, agent, alias)` | `members` / `roots` / `content` / `axes` / `revision` / `source` |
+| `ability_tools` | `(scope, agent, name)` | 工具选择 → `alias` / `member` / `grant_revision` / `revision` |
 | `ability_changes` | 自增 `seq` | 修订通知（`reason`、`actor`、`before_revision`、`version_digest`、`source`、`policy`） |
-| `ability_registrations` | `(project, agent)` | 启动占位（`token`、`state`、`owned_revision`） |
+| `ability_registrations` | `(scope, agent)` | 启动占位（`token`、`state`、`owned_revision`） |
 
-打开时做三道硬检查：缺 `ability_tree_schema` 但存在任何 `ability_*` 表 → 拒绝继承（`ghrah-core/src/ghrah/ability/access/store.py:327`）；版本 ≠ 5 → 要求显式重建（`ghrah-core/src/ghrah/ability/access/store.py:334`）；`read_limit` 必须在 1..65536（`ghrah-core/src/ghrah/ability/access/store.py:310`）。
+打开时做三道硬检查：缺 `ability_tree_schema` 但存在任何 `ability_*` 表 → 拒绝继承（`ghrah-core/src/ghrah/ability/access/store.py:349`）；版本 ∉ {5, 6} → 要求显式重建，v5 自动原地升级到 v6（`ghrah-core/src/ghrah/ability/access/store.py:365`）；`read_limit` 必须在 1..65536（`ghrah-core/src/ghrah/ability/access/store.py:340`）。
 
 #### 8.5.2 身份与围栏
 
 | 类型 | 字段 | 语义 |
 | --- | --- | --- |
-| `AccessIdentity` | `project_id`、`subject_id`、`run_id`、`operator`、`source` | 受信调用方身份；`source ∈ {admin, deployment, agent-default, migration}`（`ghrah-core/src/ghrah/ability/access/store.py:112`、`ghrah-core/src/ghrah/ability/access/store.py:102`） |
-| `MemberFence` | `instance_id`、`instance_revision`、`member`、`agent_id`、`run_id`、`alias`、`grant_revision`、`tool_name`、`tool_revision`、`version_digest` | "确定实例 + 获授关系 + 工具选择"的代次快照，不随同名关系复活（`ghrah-core/src/ghrah/ability/access/store.py:131`） |
+| `AccessIdentity` | `scope_id`（兼容只读别名 `project_id`）、`subject_id`、`run_id`、`operator`、`source` | 受信调用方身份；`source ∈ {admin, deployment, agent-default, migration}`（`ghrah-core/src/ghrah/ability/access/store.py:137`、`ghrah-core/src/ghrah/ability/access/store.py:133`） |
+| `MemberFence` | `instance_id`、`instance_revision`、`member`、`agent_id`、`run_id`、`alias`、`grant_revision`、`tool_name`、`tool_revision`、`version_digest` | "确定实例 + 获授关系 + 工具选择"的代次快照，不随同名关系复活（`ghrah-core/src/ghrah/ability/access/store.py:161`） |
 
 `subject_id` 必须是规范 32 位小写 UUID（`ghrah-core/src/ghrah/ability/access/identity.py:11`）——名称不能当恢复凭据。
 
-`operator` 资格不是自称：`_operator(actor)` 要求 `project_id` 匹配 **且** `actor.operator` **且** `subject_id ∈ operators`（`ghrah-core/src/ghrah/ability/access/store.py:378`）。生产注入的 operators 是 `frozenset({"deployment"})`（`ghrah-core/src/ghrah/core/read/ability.py:120`、`ghrah-core/src/ghrah/core/runtime.py:168`）。
+`operator` 资格不是自称：`_operator(actor)` 要求 `scope_id` 匹配 **且** `actor.operator` **且** `subject_id ∈ operators`（`ghrah-core/src/ghrah/ability/access/store.py:411`）。生产注入的 operators 是 `frozenset({"deployment"})`（`ghrah-core/src/ghrah/core/read/ability.py:120`、`ghrah-core/src/ghrah/core/runtime.py:168`）。
 
 #### 8.5.3 决策入口
 
