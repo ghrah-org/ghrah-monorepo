@@ -111,12 +111,8 @@ describe("agent template contracts", () => {
   });
 
   it("rejects unknown fields on template contracts", () => {
-    expect(() =>
-      AgentTemplateCreateRequestSchema.parse({ metadata, unknown: true }),
-    ).toThrow();
-    expect(() =>
-      AgentTemplateMetadataViewSchema.parse({ ...metadata, unknown: 1 }),
-    ).toThrow();
+    expect(() => AgentTemplateCreateRequestSchema.parse({ metadata, unknown: true })).toThrow();
+    expect(() => AgentTemplateMetadataViewSchema.parse({ ...metadata, unknown: 1 })).toThrow();
     expect(() =>
       AgentTemplateMetadataViewSchema.parse({ namespace: "Writing", name: "weekly_report" }),
     ).toThrow();
@@ -145,7 +141,9 @@ describe("agent template contracts", () => {
 
   it("rejects path requests whose scope and package disagree", () => {
     const base = { workspace_role: "default", subpath: "docs", access: "read", deny: false };
-    expect(AgentTemplatePathRequestViewSchema.parse({ ...base, scope: "agent" }).package).toBeNull();
+    expect(
+      AgentTemplatePathRequestViewSchema.parse({ ...base, scope: "agent" }).package,
+    ).toBeNull();
     expect(() =>
       AgentTemplatePathRequestViewSchema.parse({
         ...base,
