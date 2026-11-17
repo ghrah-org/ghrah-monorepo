@@ -13,17 +13,13 @@ import pytest
 from pydantic import ValidationError
 
 from ghrah.subject.agents.render import GrantedPackage, RenderError, render_assembly
-from ghrah.subject.template_store.models import AgentTemplateRecord
+from ghrah.subject.template_store.models import AgentTemplateConfig
 
 _WORKSPACES = {"default": "/ws", "shared": "/shared"}
 
 
-def _template(**overrides: object) -> AgentTemplateRecord:
+def _template(**overrides: object) -> AgentTemplateConfig:
     payload: dict[str, object] = {
-        "template_id": "t" * 32,
-        "revision": 1,
-        "created_at": "2026-11-17T00:00:00+00:00",
-        "updated_at": "2026-11-17T00:00:00+00:00",
         "metadata": {"namespace": "writing", "name": "weekly", "title": "周报"},
         "model": {"endpoint_name": "default-llm", "model_overrides": {"temperature": 0.3}},
         "prompt": {"system_prompt": "先列事实"},
@@ -56,7 +52,7 @@ def _template(**overrides: object) -> AgentTemplateRecord:
         ],
     }
     payload.update(overrides)
-    return AgentTemplateRecord.model_validate(payload)
+    return AgentTemplateConfig.model_validate(payload)
 
 
 def _granted(**overrides: object) -> GrantedPackage:

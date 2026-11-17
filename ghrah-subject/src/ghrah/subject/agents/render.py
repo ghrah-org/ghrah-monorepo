@@ -39,7 +39,7 @@ from ghrah.protocol.views.core import (
     AgentSurfaceSpec,
 )
 
-from ghrah.subject.template_store.models import AgentTemplatePathRequest, AgentTemplateRecord
+from ghrah.subject.template_store.models import AgentTemplateConfig, AgentTemplatePathRequest
 
 __all__ = [
     "GrantedPackage",
@@ -183,7 +183,7 @@ def _package_axes(
     return axes
 
 
-def _config(template: AgentTemplateRecord) -> AgentAssemblyConfig:
+def _config(template: AgentTemplateConfig) -> AgentAssemblyConfig:
     """模板五组 → 装配输入的 config 段。"""
     if not template.model.endpoint_name:
         raise RenderError("assembly_not_ready", "model.endpoint_name is required")
@@ -231,7 +231,7 @@ def _config(template: AgentTemplateRecord) -> AgentAssemblyConfig:
 
 
 def render_assembly(
-    template: AgentTemplateRecord,
+    template: AgentTemplateConfig,
     *,
     agent_name: str,
     workspaces: Mapping[str, str],
@@ -240,7 +240,8 @@ def render_assembly(
     """把模板渲染成装配输入 + 授权计划。
 
     Args:
-        template: 指定 revision 的模板记录（调用方按 ``revision`` 读取）。
+        template: 指定 revision 的模板**配置快照**（不含 ``template_id``/``revision``/
+            时间戳；那些是行与列的职责，不参与渲染）。
         agent_name: 项目内唯一的实例名（不是模板名）。
         workspaces: ``workspace_role`` → 绝对根；缺失即 ``missing_workspace``。
         granted: 该项目当前的已授予包事实（来自端口能力视图）。
