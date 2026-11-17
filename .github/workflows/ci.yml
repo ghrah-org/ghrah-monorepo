@@ -82,6 +82,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
+      - name: 宿主真实启动、句柄继承与内核流兼容
+        run: uv run pytest ghrah-subject/tests/host ghrah-kernel/tests/test_portability.py ghrah-kernel/tests/test_stream_buffer.py ghrah-kernel/tests/test_events_streams.py ghrah-kernel/tests/integration/test_identity_scope.py -q
       # 路径、编码、换行与大小写语义的聚焦回归。
       - run: uv run pytest ghrah-core/tests/ability/package ghrah-core/tests/ability/surface -q
       - name: 内置包索引检查
