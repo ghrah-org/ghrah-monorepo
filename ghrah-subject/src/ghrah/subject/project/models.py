@@ -32,6 +32,9 @@ from pydantic import (
 __all__ = [
     "PROJECT_TRANSITIONS",
     "AGENT_TRANSITIONS_NOTE",
+    "AgentOrigin",
+    "AgentPresentation",
+    "AgentRecord",
     "AgentSpec",
     "IsolationSpec",
     "PathGrant",
@@ -158,19 +161,79 @@ class AgentSpec(EndpointReferenceModel):
     runtime_error: str = ""
 
 
+class AgentPresentation(BaseModel):
+    """创建时从模板快照的展示字段；之后只影响观察端，不影响 Core。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    icon: str = ""
+    deprecated: bool = False
+
+
+class AgentOrigin(BaseModel):
+    """来源审计：只记录「来自哪个模板的哪一版」。
+
+    运行期不回读模板——模板只做创建时一次性填充，改模板不影响既有实例。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    template_id: str
+    revision: int = Field(ge=1)
+
+
+class AgentRecord(BaseModel):
+    """项目记录里的 Agent 元素（薄对象）。
+
+    只承载身份、展示、编排状态与来源，**不承载任何配置**：
+    ``model``/``prompt``/``context``/``ability``/``permission``/``paths`` 的权威在
+    Core 的实例快照，模板只在创建时填一次。
+
+    旧形状（``AgentSpec``）的元素不兼容：含旧字段的行会因 ``extra="forbid"``
+    直接解析失败，必须先跑 ``scripts/purge_legacy_agents.py`` 清空并留档。
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_id: str = ""
+    project_id: str = ""
+    name: str
+    presentation: AgentPresentation = Field(default_factory=AgentPresentation)
+    origin: AgentOrigin | None = None
+    desired_state: Literal["running", "stopped"] = "running"
+    runtime_status: Literal["pending", "running", "stopped", "failed", "lost"] = "pending"
+    last_error: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_serializer("created_at", "updated_at")
+    def _ser_dt(self, value: datetime) -> str:
+        return value.isoformat()
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_dt(cls, value: Any) -> Any:
+        if value is None or isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+        return value
+
+
 class IsolationSpec(BaseModel):
     """Project 隔离配置（Foxtrail Stage 3b 施加依据，MVP 仅记录）。
-
-    Attributes:
-        agent_path_grants: agent_name → 其 PathGrant 列表（runtime 写操作前
-            校验目标路径落在该 agent grants 内）。
-        agent_private_dir: 是否为每个 agent 在 default workspace 内分配
-            ``<workspace_root>/<agent_name>/`` 私有目录。
-        effect_allowlist: 允许的 effect action 类名集合（收紧自全局）。
-            MVP 用 ``set[str]`` 占位；Foxtrail Stage 3b 收紧为
-            ``frozenset[ActionClass]``。None 表示不收紧（继承全局）。
-        hitl_override: project 级 HITL 策略覆盖键值。
-        task_scope: 是否将 agent 执行限定在 project 关联 task 作用域。
+    agent_path_grants: agent_name → 其 PathGrant 列表（runtime 写操作前
+        校验目标路径落在该 agent grants 内）。
+    agent_private_dir: 是否为每个 agent 在 default workspace 内分配
+        ``<workspace_root>/<agent_name>/`` 私有目录。
+    effect_allowlist: 允许的 effect action 类名集合（收紧自全局）。
+        MVP 用 ``set[str]`` 占位；Foxtrail Stage 3b 收紧为
+        ``frozenset[ActionClass]``。None 表示不收紧（继承全局）。
+    hitl_override: project 级 HITL 策略覆盖键值。
+    task_scope: 是否将 agent 执行限定在 project 关联 task 作用域。
     """
 
     model_config = ConfigDict(frozen=True)
