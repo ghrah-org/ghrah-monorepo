@@ -24,6 +24,7 @@ from ghrah.protocol.ability_control import (
     AbilityPackageImportView,
     AbilityPackageVersionProfileView,
 )
+from ghrah.protocol.shell_allow import ShellAllowValidationRequest, ShellBuiltinRulesView
 
 from ghrah.core.api.runtime import CoreCatalogRuntime
 
@@ -46,6 +47,14 @@ class CoreCatalog:
     ) -> None:
         self._runtime = runtime
         self._closer = closer
+
+    async def validate_shell_allow(self, *, request: ShellAllowValidationRequest) -> None:
+        """调用 Core 校验命令记忆，不保存。"""
+        await self._call("shell.validate_allow", **request.model_dump(mode="json"))
+
+    async def shell_builtin_rules(self) -> ShellBuiltinRulesView:
+        """读取内置规则说明。"""
+        return ShellBuiltinRulesView.model_validate(await self._call("shell.builtin_rules"))
 
     async def packages(self) -> AbilityPackageCatalogView:
         """已安装能力包目录。"""

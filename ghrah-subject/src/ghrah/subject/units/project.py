@@ -13,17 +13,13 @@ DesiredStateStore），把 manager 的 ``on_event`` 回调桥到 internal event_
 from __future__ import annotations
 
 import logging
-import shlex
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from ghrah.protocol.shell.bash_classify_frontend import classify_command_expression
-from ghrah.protocol.shell.shell_allow import (
-    extract_shell_class,
-    irreversible_reason,
-    is_builtin_shell_expression,
-)
+from ghrah.protocol.errors import ApiError
+from ghrah.protocol.ports.core import CoreCatalogPort
+from ghrah.protocol.shell_allow import ShellAllowValidationRequest
 from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
@@ -43,7 +39,7 @@ from ghrah.subject.runtime.service_keys import (
 )
 from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, UnitMeta
 from ghrah.subject.units._commands import PROJECT_COMMANDS
-from ghrah.subject.units.ability_control import AbilityApiError, _authorized
+from ghrah.subject.units.ability_control import PROBLEM_TO_HTTP, AbilityApiError, _authorized
 
 __all__ = ["ProjectUnit", "build_project_shell_allow_router"]
 
@@ -53,7 +49,9 @@ logger = logging.getLogger(__name__)
 _READ_ONLY_COMMANDS = frozenset({"project_get", "project_list", "agent_entity_list"})
 
 
-def build_project_shell_allow_router(*, config: SubjectConfig, store: ProjectStore) -> APIRouter:
+def build_project_shell_allow_router(
+    *, config: SubjectConfig, store: ProjectStore, catalog: CoreCatalogPort
+) -> APIRouter:
     """提供项目 Shell 记忆增删查，直接复用 ProjectStore。"""
     router = APIRouter(prefix="/api/v1/projects/{project_id}/shell-allow")
 
@@ -71,18 +69,15 @@ def build_project_shell_allow_router(*, config: SubjectConfig, store: ProjectSto
     async def get_shell_allow(project_id: str, request: Request) -> dict[str, Any]:
         """读取项目记忆并附带只读内置规则说明。"""
         record = await project_record(request, project_id)
+        try:
+            builtins = await catalog.shell_builtin_rules()
+        except ApiError as error:
+            code = PROBLEM_TO_HTTP.get(error.problem.code.value, "internal")
+            raise AbilityApiError(code, error.problem.detail) from error
         return {
             "project_id": project_id,
             "entries": [entry.model_dump(mode="json") for entry in record.shell_allow],
-            "builtins": [
-                {"key": "uv:run:pytest", "label": "uv run pytest", "readonly": True},
-                {
-                    "key": "uv:run:ruff",
-                    "label": "uv run ruff (recognized subcommands)",
-                    "readonly": True,
-                },
-                {"key": "pnpm:script:test", "label": "pnpm test", "readonly": True},
-            ],
+            "builtins": [rule.model_dump(mode="json") for rule in builtins.rules],
         }
 
     @router.post("")
@@ -95,28 +90,13 @@ def build_project_shell_allow_router(*, config: SubjectConfig, store: ProjectSto
             entry = ShellAllowEntry.model_validate({**payload, "created_at": datetime.now(UTC)})
         except ValidationError as error:
             raise AbilityApiError("invalid_request", str(error)) from error
-        command = entry.key
-        if entry.kind == "class":
-            parts = entry.key.split(":", 2)
-            prefixes = {
-                "uv:run": ["uv", "run"],
-                "pnpm:script": ["pnpm", "run"],
-                "npm:script": ["npm", "run"],
-            }
-            if len(parts) != 3:
-                raise AbilityApiError("invalid_request", "Invalid shell class key")
-            family, name = ":".join(parts[:2]), parts[2]
-            if family not in prefixes or not name:
-                raise AbilityApiError("invalid_request", "Invalid shell class key")
-            command = shlex.join([*prefixes[family], name])
-        expression = classify_command_expression(command)
-        reason = irreversible_reason(expression)
-        if reason is not None:
-            raise AbilityApiError("invalid_request", reason)
-        if entry.kind == "class" and extract_shell_class(expression) != entry.key:
-            raise AbilityApiError("invalid_request", "Unsupported shell class")
-        if is_builtin_shell_expression(expression):
-            raise AbilityApiError("invalid_request", "Builtin rules do not need project memory")
+        try:
+            await catalog.validate_shell_allow(
+                request=ShellAllowValidationRequest(kind=entry.kind, key=entry.key)
+            )
+        except ApiError as error:
+            code = PROBLEM_TO_HTTP.get(error.problem.code.value, "internal")
+            raise AbilityApiError(code, error.problem.detail) from error
         for existing in record.shell_allow:
             if (existing.kind, existing.key) == (entry.kind, entry.key):
                 return existing.model_dump(mode="json")

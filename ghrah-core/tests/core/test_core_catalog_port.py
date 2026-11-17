@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from ghrah.protocol.errors import ApiError
+from ghrah.protocol.problem import ProblemCode
+from ghrah.protocol.shell_allow import ShellAllowValidationRequest
+
 from ghrah.core.wiring import build_core_catalog
 
 
@@ -39,5 +44,56 @@ async def test_catalog_ignores_missing_database(tmp_path: Path) -> None:
         assert packages.installed_available is False
         groups = await catalog.package_groups()
         assert groups.scope == "distribution"
+    finally:
+        await catalog.aclose()
+
+
+@pytest.mark.parametrize(
+    ("kind", "key"),
+    [
+        ("exact", "python demo.py --name 'a b'"),
+        ("class", "pnpm:script:lint"),
+        ("class", "uv:run:mypy"),
+    ],
+)
+async def test_shell_validation_without_project_or_agent(kind, key) -> None:
+    """通过真正的端口、请求校验和处理器校验记忆，无需创建 Agent 或项目。"""
+    catalog = build_core_catalog()
+    try:
+        await catalog.validate_shell_allow(request=ShellAllowValidationRequest(kind=kind, key=key))
+        rules = await catalog.shell_builtin_rules()
+        assert [rule.key for rule in rules.rules] == [
+            "uv:run:pytest",
+            "uv:run:ruff",
+            "pnpm:script:test",
+        ]
+        assert all(rule.readonly for rule in rules.rules)
+    finally:
+        await catalog.aclose()
+
+
+@pytest.mark.parametrize(
+    ("kind", "key"),
+    [
+        ("exact", "rm -rf /tmp/x"),
+        ("exact", "python demo.py > /etc/passwd"),
+        ("exact", "pnpm test"),
+        ("class", "uv:run:rm"),
+        ("class", "uv:run:python"),
+        ("class", "pnpm:script:exec"),
+        ("class", "pnpm:script:lint;rm -rf /"),
+        ("class", "arbitrary"),
+    ],
+)
+async def test_shell_validation_rejects_with_public_error(kind, key) -> None:
+    """非法、危险和无需存储的内置规则均通过公开错误契约返回。"""
+    catalog = build_core_catalog()
+    try:
+        with pytest.raises(ApiError) as caught:
+            await catalog.validate_shell_allow(
+                request=ShellAllowValidationRequest(kind=kind, key=key)
+            )
+        assert caught.value.problem.code == ProblemCode.INVALID_ARGUMENT
+        assert caught.value.problem.capability == "shell.validate_allow"
     finally:
         await catalog.aclose()

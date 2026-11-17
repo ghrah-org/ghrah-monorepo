@@ -36,6 +36,7 @@ from ghrah.protocol.ability_tree import (
     RevokeAbilityRequest,
     UnbindToolRequest,
 )
+from ghrah.protocol.shell_allow import ShellAllowValidationRequest, ShellBuiltinRulesView
 from ghrah.protocol.views.common import Page
 from ghrah.protocol.views.core import (
     AgentRuntimeView,
@@ -479,6 +480,14 @@ class CoreCatalogPort(Protocol):
     目录读面不打开数据库、不建单元，只读安装根与受信配置，
     因此在零作用域（尚未创建任何项目）时也可用。
     """
+
+    async def validate_shell_allow(self, *, request: ShellAllowValidationRequest) -> None:
+        """校验待保存的命令记忆；拒绝时抛 ApiError，不读写项目存储。"""
+        ...
+
+    async def shell_builtin_rules(self) -> ShellBuiltinRulesView:
+        """读取 Core 内置放行规则的只读说明。"""
+        ...
 
     async def packages(self) -> AbilityPackageCatalogView:
         """已安装能力包目录（全局）。"""
