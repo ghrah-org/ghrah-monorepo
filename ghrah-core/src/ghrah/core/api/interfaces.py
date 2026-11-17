@@ -15,6 +15,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
@@ -543,6 +544,28 @@ class AbilitiesRevokeRequest(BaseModel):
     change: RevokeAbilityRequest
 
 
+class AbilitiesWriteGrantRequest(BaseModel):
+    """``abilities.write_grant`` 的请求信封：只写事实，不做运行投影。
+
+    形状与 :class:`AbilitiesGrantRequest` 相同，分开定义是为了让「写事实 ≠ 在线
+    生效」这条语义出现在能力名与 docstring 上，而不是靠调用方记住布尔参数。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    change: GrantAbilityRequest
+
+
+class AbilitiesWriteRevokeRequest(BaseModel):
+    """``abilities.write_revoke`` 的请求信封：只撤销事实，不做运行投影。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    change: RevokeAbilityRequest
+
+
 class AbilitiesEnableToolRequest(BaseModel):
     """``abilities.enable_tool`` 的请求信封。"""
 
@@ -601,6 +624,8 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("abilities.status", AbilitiesStatusRequest, AbilityApiStatus),
         Interface("abilities.grant", AbilitiesGrantRequest, AbilityTreeChangeResult),
         Interface("abilities.revoke", AbilitiesRevokeRequest, AbilityTreeChangeResult),
+        Interface("abilities.write_grant", AbilitiesWriteGrantRequest, AbilityGrantWriteView),
+        Interface("abilities.write_revoke", AbilitiesWriteRevokeRequest, AbilityGrantWriteView),
         Interface("abilities.enable_tool", AbilitiesEnableToolRequest, AbilityTreeChangeResult),
         Interface("abilities.disable_tool", AbilitiesDisableToolRequest, AbilityTreeChangeResult),
         Interface("agents.create", AgentCreateRequest, AgentIdView),

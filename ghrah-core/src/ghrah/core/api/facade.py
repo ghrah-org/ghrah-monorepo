@@ -16,6 +16,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityPackageGroupsView,
     AbilityTreeChangeResult,
@@ -713,6 +714,28 @@ class _Abilities:
             change=change.model_dump(mode="json"),
         )
         return AbilityTreeChangeResult.model_validate(raw)
+
+    async def write_grant(
+        self, *, agent_id: AgentId, change: GrantAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只写授权事实（装配期），不做运行投影。"""
+        raw = await self._facade._call(
+            "abilities.write_grant",
+            agent_id=agent_id,
+            change=change.model_dump(mode="json"),
+        )
+        return AbilityGrantWriteView.model_validate(raw)
+
+    async def write_revoke(
+        self, *, agent_id: AgentId, change: RevokeAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只撤销授权事实（补偿回滚），不做运行投影。"""
+        raw = await self._facade._call(
+            "abilities.write_revoke",
+            agent_id=agent_id,
+            change=change.model_dump(mode="json"),
+        )
+        return AbilityGrantWriteView.model_validate(raw)
 
     async def enable_tool(
         self, *, agent_id: AgentId, change: BindToolRequest

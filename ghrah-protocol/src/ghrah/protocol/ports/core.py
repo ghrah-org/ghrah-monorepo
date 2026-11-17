@@ -19,6 +19,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
@@ -324,6 +325,23 @@ class AbilityOperations(Protocol):
         self, *, agent_id: AgentId, change: RevokeAbilityRequest
     ) -> AbilityTreeChangeResult:
         """撤销能力；返回写后的视图与修订号。"""
+        ...
+
+    async def write_grant(
+        self, *, agent_id: AgentId, change: GrantAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只写授权事实，不做运行投影。
+
+        装配期专用（Agent 尚未注册时先落授权）：与 :meth:`grant` 的区别是
+        **不读运行实例、不产出工具表投影**，因此只回报关系修订。写入来源记为
+        ``assembly``，与管理员写入在审计上可区分。
+        """
+        ...
+
+    async def write_revoke(
+        self, *, agent_id: AgentId, change: RevokeAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只撤销授权事实，不做运行投影；用于创建失败时的补偿回滚。"""
         ...
 
     async def enable_tool(

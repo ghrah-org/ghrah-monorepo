@@ -9,6 +9,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeView,
     AbilityPackageCatalogView,
@@ -42,6 +43,8 @@ from ghrah.core.api.interfaces import (
     AbilitiesRevokeRequest,
     AbilitiesStatusRequest,
     AbilitiesTreeRequest,
+    AbilitiesWriteGrantRequest,
+    AbilitiesWriteRevokeRequest,
 )
 from ghrah.core.read.ability import AbilityReadStore
 
@@ -110,6 +113,14 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
             change=request.change,
         )
 
+    async def write_grant(request: AbilitiesWriteGrantRequest) -> AbilityGrantWriteView:
+        """只写授权事实（装配期），不读运行实例、不产出投影。"""
+        return await store.write_grant(agent_id=request.agent_id, change=request.change)
+
+    async def write_revoke(request: AbilitiesWriteRevokeRequest) -> AbilityGrantWriteView:
+        """只撤销授权事实（创建失败补偿），不产出投影。"""
+        return await store.write_revoke(agent_id=request.agent_id, change=request.change)
+
     async def enable_tool(request: AbilitiesEnableToolRequest) -> AbilityTreeChangeResult:
         """绑定工具。"""
         return await store.enable_tool(
@@ -140,6 +151,8 @@ def make_ability_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         "abilities.status": status,
         "abilities.grant": grant,
         "abilities.revoke": revoke,
+        "abilities.write_grant": write_grant,
+        "abilities.write_revoke": write_revoke,
         "abilities.enable_tool": enable_tool,
         "abilities.disable_tool": disable_tool,
         "abilities.package_groups": package_groups,

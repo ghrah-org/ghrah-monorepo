@@ -35,6 +35,7 @@ __all__ = [
     "AbilityExecutionView",
     "AbilityGrantPolicyView",
     "AbilityGrantView",
+    "AbilityGrantWriteView",
     "AbilityInstanceVersionView",
     "AbilityInstanceView",
     "AbilityInstancesView",
@@ -226,6 +227,19 @@ class AbilityTreeChangeResult(TreeModel):
 
     format: Literal["ghrah.ability-control.change.v1"] = "ghrah.ability-control.change.v1"
     view: AbilityTreeView | None = None
+    revision: int = Field(ge=0)
+
+
+class AbilityGrantWriteView(TreeModel):
+    """装配期写授权的回执：只回报写入后的关系修订，不含运行投影。
+
+    与 :class:`AbilityTreeChangeResult` 的分工：后者带 ``view``，构造它需要受信
+    run 身份；本视图服务「Agent 尚未注册」的创建期写入，语义是**写事实**，
+    不代表在线生效。
+    """
+
+    format: Literal["ghrah.ability-control.grant-write.v1"] = "ghrah.ability-control.grant-write.v1"
+    agent_id: str
     revision: int = Field(ge=0)
 
 
