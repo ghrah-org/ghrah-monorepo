@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Agent 实例相关的 Core 侧实现：配置快照（权威）与装配输入解析。
+
+两个模块的分工：
+
+- :mod:`ghrah.core.agents.instance_store`：把「创建时的实例配置」落到
+  ``<project_root>/db/agents.sqlite3``。它是运行期配置的**唯一基准**，重启按
+  ``agent_id`` 读它恢复，不再回读 Subject 的模板。
+- :mod:`ghrah.core.agents.assembly`：把端口的 ``AgentAssemblySpec`` 解析成
+  spawn 需要的 ``ResolvedAgent``（配置 + 逐成员 ``ResolvedAbility``）。
+  这是 v3 装配输入替换 ``manifest_ref`` 解析的落点。
+"""
+
+from __future__ import annotations
+
+from ghrah.core.agents.assembly import AssemblyError, resolve_assembly
+from ghrah.core.agents.instance_store import (
+    AgentInstanceRecord,
+    AgentInstanceStore,
+    AgentInstanceStoreError,
+)
+
+__all__ = [
+    "AgentInstanceRecord",
+    "AgentInstanceStore",
+    "AgentInstanceStoreError",
+    "AssemblyError",
+    "resolve_assembly",
+]
