@@ -574,6 +574,9 @@ def default_core_unit_factory(
             project_id=project_id,
             hitl_timeout=config.core.command_timeout,
             workspace_root=config.workspace_root,
+            # AgentConf 库路径与 REST 控制面同源：spawn 校验/默认 LLM 工厂读同一份库。
+            # 仅在非空时传入：旧版 ghrah-core 没有该字段，未配置路径的部署不应因此起不来。
+            **({"agentconf_db_path": config.agentconf_db_path} if config.agentconf_db_path else {}),
             auto_approve_abilities=tuple(config.hitl_policy.auto_approve_abilities),
             require_approval_by_default=config.hitl_policy.require_approval_by_default,
             safe_extra_commands=tuple(config.hitl_policy.safe_extra_commands),

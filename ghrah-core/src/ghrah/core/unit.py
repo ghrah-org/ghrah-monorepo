@@ -164,6 +164,11 @@ class CoreUnitConfig:
             出口（网关路由/凭据轮换/成本计量包装）的唯一接缝；注入即全责，
             model_overrides 等默认逻辑由注入方自理。仅进程内部署形态可用
             （Callable 不可序列化，与 command_runner 同边界）。
+        agentconf_db_path: AgentConf 库路径（``None`` = ``~/.agentconf/config.db``）。
+            仅用于**未注入 llm_factory** 时的默认解析链：spawn 的模型校验与
+            默认 LLM 工厂读同一份库。注入 llm_factory 时不参与（注入即全责）。
+            装配方（Subject）从 ``GHRAH_SUBJECT_AGENTCONF_DB_PATH`` 透传，
+            保证 REST 控制面与 spawn/LLM 看到同一批端点。
         manifest_store: ManifestStoreProtocol 实现（duck-typed），
             供 manifest_ref spawn 解析 agent manifest。None = standalone
             模式（manifest_ref spawn 明确报错，对齐 ROOM_BRIDGE_UNAVAILABLE
@@ -201,6 +206,9 @@ class CoreUnitConfig:
     # _default_llm_factory 的 model_overrides 逻辑，由注入方自理）。
     message_manager: Any = None  # 已打开的项目 MessageManager，由装配方管理生命周期
     llm_factory: Callable[[Any], Any] | None = None
+    # AgentConf 库路径：仅在未注入 llm_factory 时用于 spawn 模型校验与默认
+    # LLM 工厂；None = AgentsConfig 缺省库（~/.agentconf/config.db）。
+    agentconf_db_path: str | None = None
     # duck-typed ManifestStoreProtocol；None = standalone（manifest_ref spawn 报错）
     manifest_store: Any = None
     ability_source: str = "builtin"
@@ -638,13 +646,21 @@ class CoreUnit:
             )
         self._startup_materializer = startup_materializer
 
+        # 未注入 llm_factory 时，把 AgentConf 库路径绑定进默认工厂：spawn 的
+        # 模型校验（_validate_model_config）与 LLM 创建必须读同一份库。
+        llm_factory = self._config.llm_factory
+        if llm_factory is None and self._config.agentconf_db_path:
+            from ghrah.agents.builder import default_llm_factory
+
+            llm_factory = default_llm_factory(self._config.agentconf_db_path)
+
         supervisor = SupervisorActor(
             default_timeout=self._config.default_timeout,
             event_publisher=self._publisher,
             room_bridge=room_bridge,
             max_cluster_members=self._config.max_cluster_members,
             manifest_store=self._config.manifest_store,
-            llm_factory=self._config.llm_factory,
+            llm_factory=llm_factory,
             message_manager=self._config.message_manager,
             builtin_abilities=True,
             ability_materializer=startup_materializer,
@@ -866,7 +882,7 @@ class CoreUnit:
                 "migrate legacy Agent configuration"
             )
         try:
-            with AgentsConfig() as config:
+            with AgentsConfig(self._config.agentconf_db_path) as config:
                 config.resolve_model_endpoint(name)
         except Exception as exc:
             raise ValueError(f"model_configuration_invalid: {name}") from exc

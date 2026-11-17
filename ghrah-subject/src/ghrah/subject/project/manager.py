@@ -204,6 +204,7 @@ class ProjectManager:
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
         shell_allowed_roots: tuple[str, ...] = (),
+        agentconf_db_path: str | None = None,
     ) -> None:
         self._store = store
         self._workspace_mgr = workspace_mgr
@@ -216,6 +217,9 @@ class ProjectManager:
         self._shell_allowed_roots = tuple(
             str(Path(root).expanduser().resolve()) for root in shell_allowed_roots if root
         )
+        # AgentConf 库路径（None = AgentsConfig 缺省库）；实体模型目录/校验与
+        # SubjectConfig / 能力管理 REST 同源，避免同一部署读两份库。
+        self.agentconf_db_path = agentconf_db_path
         self._create_lock = asyncio.Lock()
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self._scoped_resources: list[Any] = []

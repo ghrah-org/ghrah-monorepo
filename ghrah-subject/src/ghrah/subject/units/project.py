@@ -199,6 +199,7 @@ class ProjectUnit(SubjectUnit):
                 *self._config.ability.filesystem_roots,
                 self._config.sandbox.workspace_root,
             ),
+            agentconf_db_path=self._config.agentconf_db_path,
         )
         self._manager.register_scoped_resource(self._task_store)
         ctx.provide(PROJECT_MANAGER.name, self._manager)

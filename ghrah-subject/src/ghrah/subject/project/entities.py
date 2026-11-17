@@ -44,13 +44,20 @@ class AgentEntityManager:
         """返回允许通过旧类型接口配置的能力目录。"""
         return []
 
-    @staticmethod
-    def model_catalog() -> dict[str, Any]:
+    @property
+    def _agentconf_db_path(self) -> str | None:
+        """AgentConf 库路径（与 SubjectConfig / 能力管理 REST 同源）。
+
+        ProjectManager 未注入时为 None，``AgentsConfig`` 回落缺省库（旧行为）。
+        """
+        return getattr(self._projects, "agentconf_db_path", None)
+
+    def model_catalog(self) -> dict[str, Any]:
         """只返回既有模型配置名称，不向观察端传输凭据。"""
         from agentconf import AgentsConfig
 
         try:
-            with AgentsConfig() as config:
+            with AgentsConfig(self._agentconf_db_path) as config:
                 return {
                     "model_config_names": sorted(
                         a.name for a in config.list_model_endpoints() if a.model_type == "llm"
@@ -59,13 +66,12 @@ class AgentEntityManager:
         except Exception:
             return {"model_config_names": [], "model_catalog_error": "model_catalog_unavailable"}
 
-    @staticmethod
-    def validate_model_name(name: str) -> None:
+    def validate_model_name(self, name: str) -> None:
         """校验 agentconf 的完整配置引用；不发送模型请求。"""
         from agentconf import AgentsConfig
 
         try:
-            with AgentsConfig() as config:
+            with AgentsConfig(self._agentconf_db_path) as config:
                 config.resolve_model_endpoint(name)
         except Exception as exc:
             raise StableError(
