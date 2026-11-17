@@ -39,6 +39,7 @@ const entityPrompt = ref<string | null>(null);
 const startNow = ref(false);
 const source = ref<"types" | "manifest">("types");
 const manifest = ref("");
+const revision = ref(1);
 const success = ref("");
 const confirmation = ref<{ label: string; action: () => Promise<unknown> } | null>(null);
 const project = computed(() => projects.projects.get(props.projectId));
@@ -53,13 +54,7 @@ const canContext = computed(
     !snapshot.value.runtime.busy &&
     snapshot.value.specification.desired_state === "running",
 );
-const canConfigure = computed(
-  () =>
-    writable.value &&
-    snapshot.value?.runtime.availability === "offline" &&
-    snapshot.value.specification.desired_state === "stopped" &&
-    !snapshot.value.specification.manifest_ref,
-);
+const canConfigure = computed(() => false);
 const hasConfigurableTypes = computed(
   () => (stringArrayOrNull(snapshot.value?.abilities.available_types)?.length ?? 0) > 0,
 );
@@ -67,10 +62,9 @@ const canCreate = computed(
   () =>
     writable.value &&
     !!name.value.trim() &&
-    (!startNow.value || active.value) &&
-    (source.value === "manifest"
-      ? !!manifest.value.trim()
-      : selectedTypes.value.length > 0 && !!modelName.value),
+    !!manifest.value.trim() &&
+    Number(revision.value) >= 1 &&
+    (!startNow.value || active.value),
 );
 function stringArrayOrNull(value: unknown): string[] | null {
   const parsed = z.array(z.string()).safeParse(value);
@@ -171,9 +165,8 @@ const deliveryStates = new Set([
 ]);
 
 function applySnapshot(value: AgentSnapshot) {
-  if (entityPrompt.value === null) entityPrompt.value = value.specification.system_prompt;
+  // 配置由 Core 实例快照承载：这里不再回填模型/提示词/能力到表单。
   snapshot.value = value;
-  modelName.value = value.specification.endpoint_name ?? "";
   const fallback = stringArrayOrNull(value.abilities.model_config_names) ?? [];
   modelNames.value = fallback;
   void preferEndpointNames(fallback);
@@ -181,13 +174,8 @@ function applySnapshot(value: AgentSnapshot) {
     typeof value.abilities.model_catalog_error === "string"
       ? value.abilities.model_catalog_error
       : "";
-  selectedTypes.value = [...(value.specification.abilities ?? [])];
-  types.value = [
-    ...new Set([
-      ...z.array(z.string()).parse(value.abilities.available_types ?? []),
-      ...selectedTypes.value,
-    ]),
-  ];
+  selectedTypes.value = [];
+  types.value = [...new Set(z.array(z.string()).parse(value.abilities.available_types ?? []))];
   uncertain.value = false;
 }
 async function refresh() {
@@ -327,10 +315,8 @@ async function create() {
         project_id: props.projectId,
         name: name.value.trim(),
         start: startNow.value,
-        endpoint_name: source.value === "types" ? modelName.value : null,
-        system_prompt: prompt.value,
-        manifest_ref: source.value === "manifest" ? manifest.value.trim() : "",
-        ability_types: source.value === "types" ? selectedTypes.value : null,
+        template_id: manifest.value.trim(),
+        revision: Math.max(1, Number(revision.value) || 1),
       });
       if (!result.success)
         throw new Error(
@@ -436,18 +422,20 @@ onMounted(() => {
             {{ t("agentEntity.noModelConfigs") }}
           </p>
           <p v-if="modelCatalogError" role="alert">{{ modelCatalogError }}</p>
-          <label v-if="source === 'manifest'"
-            >{{ t("agentEntity.manifest") }}<input v-model="manifest" :disabled="busy" required
+          <label
+            >{{ t("agentEntity.manifest")
+            }}<input v-model="manifest" :disabled="busy" required data-testid="template-id"
           /></label>
-          <fieldset v-else :disabled="busy">
-            <legend>{{ t("agentEntity.types") }}</legend>
-            <div class="entity-options">
-              <label v-for="type in types" :key="type" class="entity-check"
-                ><input v-model="selectedTypes" type="checkbox" :value="type" />{{ type }}</label
-              >
-            </div>
-            <p v-if="!types.length">{{ t("agentEntity.noTypes") }}</p>
-          </fieldset>
+          <label
+            >{{ t("agentEntity.revision")
+            }}<input
+              v-model.number="revision"
+              type="number"
+              min="1"
+              :disabled="busy"
+              required
+              data-testid="template-revision"
+          /></label>
           <label class="entity-check"
             ><input v-model="startNow" type="checkbox" :disabled="busy || !active" />{{
               t("agentEntity.startNow")
@@ -501,10 +489,10 @@ onMounted(() => {
               <dd>{{ snapshot.runtime.incarnation_id ?? t("agentEntity.none") }}</dd>
             </dl>
             <p
-              v-if="snapshot.specification.runtime_error || snapshot.runtime.error"
+              v-if="snapshot.specification.last_error || snapshot.runtime.error"
               class="entity-error"
             >
-              {{ snapshot.runtime.error || snapshot.specification.runtime_error }}
+              {{ snapshot.runtime.error || snapshot.specification.last_error }}
             </p>
             <p v-if="snapshot.context.error" class="entity-error">
               {{ t("agentEntity.tabs.context") }}: {{ snapshot.context.error }}
@@ -540,7 +528,7 @@ onMounted(() => {
             </div>
             <p>{{ t("agentEntity.lifecycleHint") }}</p>
             <p>{{ t("agentEntity.modelHint") }}</p>
-            <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.modelManifest") }}</p>
+            <p v-if="snapshot.specification.origin">{{ t("agentEntity.modelManifest") }}</p>
             <template v-else>
               <label
                 >{{ t("agentEntity.modelConfig") }}
@@ -579,7 +567,9 @@ onMounted(() => {
               {{ t("agentEntity.configured") }}:
               {{
                 abilityView.configured?.join(", ") ||
-                snapshot.specification.manifest_ref ||
+                (snapshot.specification.origin
+                  ? `${snapshot.specification.origin.template_id}@${snapshot.specification.origin.revision}`
+                  : "") ||
                 t("agentEntity.defaultAbilities")
               }}
             </p>
@@ -588,7 +578,7 @@ onMounted(() => {
               {{ abilityView.loaded?.join(", ") || t("agentEntity.none") }}
             </p>
             <p>{{ t("agentEntity.abilityHint") }}</p>
-            <p v-if="snapshot.specification.manifest_ref">{{ t("agentEntity.manifestLocked") }}</p>
+            <p v-if="snapshot.specification.origin">{{ t("agentEntity.manifestLocked") }}</p>
             <fieldset v-if="hasConfigurableTypes" :disabled="!canConfigure">
               <legend>{{ t("agentEntity.types") }}</legend>
               <div class="entity-options">

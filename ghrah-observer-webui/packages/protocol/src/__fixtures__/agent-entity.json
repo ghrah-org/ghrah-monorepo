@@ -113,9 +113,7 @@
       "agent_id": "a1",
       "operation": {
         "type": "abilities.configure",
-        "ability_types": [
-          "send_message"
-        ],
+        "ability_types": ["send_message"],
         "expected_revision": 2
       }
     },
@@ -152,9 +150,7 @@
       "presentation": {
         "title": "设计",
         "description": "",
-        "tags": [
-          "design"
-        ],
+        "tags": ["design"],
         "icon": "",
         "deprecated": false
       },
@@ -186,9 +182,7 @@
       }
     },
     "abilities": {
-      "available_types": [
-        "send_message"
-      ],
+      "available_types": ["send_message"],
       "origin": {
         "template_id": "tpl_designer",
         "revision": 1
@@ -222,9 +216,7 @@
     },
     {
       "type": "abilities.configure",
-      "ability_types": [
-        "send_message"
-      ]
+      "ability_types": ["send_message"]
     },
     {
       "type": "context.activate_session",

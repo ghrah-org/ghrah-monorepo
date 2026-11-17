@@ -2,11 +2,9 @@
   "project_id": "proj-001",
   "agent": {
     "name": "frontend-dev",
-    "manifest_ref": "ghrah/frontend",
-    "instance_manifest_path": ".ghrah/agents/frontend-dev.yaml",
-    "system_prompt": "You are the frontend developer.",
-    "abilities": ["conversation"],
-    "path_grants": []
+    "template_id": "tpl-frontend",
+    "revision": 1,
+    "desired_state": "running"
   },
   "expected_version": 3
 }

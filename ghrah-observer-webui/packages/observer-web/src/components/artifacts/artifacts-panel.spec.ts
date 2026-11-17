@@ -171,7 +171,8 @@ describe("ArtifactsPanel", () => {
     expect(wrapper.text()).toContain("Requirement draft");
   });
 
-  it("falls back to Agent path_grants when the project has no mounted workspaces", async () => {
+  it.skip("falls back to Agent path_grants when the project has no mounted workspaces", async () => {
+    // Agent 记录不再承载 path_grants：没有挂载 workspace 时不再反推可用工作区。
     const projects = useProjectsStore();
     projects.setProjectsFromList([
       {

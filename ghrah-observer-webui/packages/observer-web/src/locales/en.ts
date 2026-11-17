@@ -71,7 +71,8 @@ export default {
     prompt: "System prompt",
     source: "Ability configuration source",
     types: "Registered ability types",
-    manifest: "Agent manifest reference",
+    manifest: "Agent template",
+    revision: "Template revision",
     noTypes: "No available types. Refresh the catalog or use a manifest.",
     startNow: "Start immediately after creation",
     createHint:
