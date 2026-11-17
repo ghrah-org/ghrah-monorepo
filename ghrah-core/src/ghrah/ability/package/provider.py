@@ -124,27 +124,8 @@ class InstalledAbilityProvider:
         package, _, member = full_name.rpartition(".")
         definition = self.capture(package).definition()
         operation = definition.operations.get(member)
-        if operation is None and member not in definition.skills:
-            # skill 键常是 kebab-case，而 ability 名只允许 [a-z0-9_]：反向归一后再查一次
-            member = member.replace("_", "-")
         if operation is None:
-            skill = definition.skills.get(member)
-            if skill is None:
-                raise ManifestValidationError(f"安装包没有成员：{full_name}")
-            return AbilityManifest(
-                manifest="ability",
-                version="1",
-                metadata=AbilityMetadata(
-                    namespace=package,
-                    name=_ability_safe_name(member),
-                    title=skill.title,
-                    description=skill.description,
-                    tags=list(skill.tags),
-                    permissions=PermissionFlags(),
-                ),
-                tool=None,
-                implementation=ImplementationDef(type="skill", handler=member),
-            )
+            raise ManifestValidationError(f"安装包没有成员：{full_name}")
         return AbilityManifest(
             manifest="ability",
             version="1",
@@ -161,26 +142,6 @@ class InstalledAbilityProvider:
             tool=None,
             implementation=ImplementationDef(type="python", handler=member),
         )
-
-    def package_members(self, package: str) -> list[AbilityManifest]:
-        """把一个安装包的全部成员投影成可授予清单（operation + skill）。
-
-        这是「一个 ref 即整包」的入口：调用方不需要知道成员是工具还是技能，
-        投影出来的 ``implementation.type`` 已经把它分好类——``python`` 进工具面，
-        ``skill`` 进技能面。
-
-        Args:
-            package: 包全名（``namespace.name``）
-
-        Returns:
-            成员清单；顺序为先 operations 后 skills，各自按成员键排序
-        """
-        definition = self.capture(package).definition()
-        members = [
-            *sorted(definition.operations),
-            *(_ability_safe_name(key) for key in sorted(definition.skills)),
-        ]
-        return [self.manifest(f"{package}.{member}") for member in members]
 
     def installed_root(self, package: str, release: str) -> Path | None:
         """定位仍带安装记录的版本目录；不 import 包代码，也不跟随链接。
@@ -302,65 +263,70 @@ class McpSnapshotOperation(Ability):
         return await execute_mcp_member(call, services)
 
 
-def _ability_safe_name(member: str) -> str:
-    """把成员键归一成 ability 合法名（只保留 ``[a-z0-9_]``）。
-
-    operation 键本就是 snake_case；skill 键常带连字符，直接当 ability 名会被
-    ``AbilityMetadata`` 的名字规则拒绝，因此在投影处做一次归一。
-
-    Args:
-        member: 定义里的成员键
-
-    Returns:
-        合法 ability 名
-    """
-    return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in member.lower())
-
-
 def validate_source_tree(root: Path) -> None:
-    """安装期 ABI 预检：装进去的每个成员都必须能被 ``ref`` 授予并执行。
+    """安装期 ABI 预检：上传包里的每个 Operation 都必须能被建 agent 期接受。
 
-    安装是唯一能拦住「装得进去、建 agent 才报错」的时机，因此这里做两件事：
+    安装是唯一能拦住「装得进去、建 agent 才报错」的时机，因此这里对
+    ``ability.yaml`` 声明的 operations 逐个做入口 ABI 校验：
+    ``async def execute(call, services)``，且 ``Input`` / ``Output`` 的 pydantic
+    schema 与声明逐字段一致。下面复用运行时同一个加载器（``_load_module``）与
+    同一套校验（``_validate_entry``），保证「安装期通过」与「建 agent 期通过」
+    是同一个判定。
 
-    - **skill 成员一律拒绝**：provider 只把 ``operations`` 投影成可授予的成员，
-      skill 没有 ``ref`` 入口，装进来也进不了模型；
-    - **operation 成员做入口 ABI 校验**：``async def execute(call, services)``
-      且 ``Input`` / ``Output`` 的 pydantic schema 与 ``ability.yaml`` 声明逐字段一致。
+    **信任边界（重要）**：预检会 ``exec`` 上传包里的 operation 源码，也就是
+    「上传安装 = 在 Subject 进程内执行一次包代码」，且不在沙箱内。因此它必须
+    只在操作者已通过鉴权之后执行（Subject 上传端点在调用 ``package_import``
+    之前先过 ``_authorized``；远程请求必须配置 Bearer token，回环默认放行）。
+    不要把本函数挪到任何鉴权之前，也不要假设上传包是可信数据。
 
-    下面复用运行时同一个加载器（``_load_module``）与同一套校验（``_validate_entry``），
-    保证「安装期通过」与「建 agent 期通过」是同一个判定。
+    **skill 成员不在此预检**：skill 没有可执行的 ``ref`` 入口，其内容
+    （``skills/<key>/…``）由安装器既有的内容校验覆盖；skill 成员的授权/授予
+    能力由模板与装配线承接，本函数既不校验也不拒绝。
 
     Args:
         root: 解包后的源包根目录
 
     Raises:
-        ManifestValidationError: 任一成员不能被授予或 ABI 不一致
+        ManifestValidationError: 任一 operation 的入口文件缺失或 ABI 不一致
     """
     definition = parse_definition(
         (root / "ability.yaml").read_text(encoding="utf-8"), source=str(root)
     )
-
     token = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
     namespace = f"_ghrah_ability_precheck_{token}"
-    for member, operation in definition.operations.items():
-        path = root / operation.entry.path
-        if not path.is_file():
-            raise ManifestValidationError(f"成员 {member} 的入口文件不存在：{operation.entry.path}")
-        for name, directory in (
-            (namespace, root),
-            (namespace + ".operations", path.parent),
-        ):
-            if name not in sys.modules:
-                parent = ModuleType(name)
-                parent.__path__ = [str(directory)]
-                sys.modules[name] = parent
-        module_name = f"{namespace}.operations.{member}"
-        try:
+    try:
+        for member, operation in definition.operations.items():
+            path = root / operation.entry.path
+            if not path.is_file():
+                raise ManifestValidationError(
+                    f"成员 {member} 的入口文件不存在：{operation.entry.path}"
+                )
+            for name, directory in (
+                (namespace, root),
+                (namespace + ".operations", path.parent),
+            ):
+                if name not in sys.modules:
+                    parent = ModuleType(name)
+                    parent.__path__ = [str(directory)]
+                    sys.modules[name] = parent
+            module_name = f"{namespace}.operations.{member}"
             module = _load_module(module_name, path)
             _validate_entry(module, operation.input_schema, operation.output_schema)
-        except BaseException:
-            sys.modules.pop(module_name, None)
-            raise
+    finally:
+        _clear_precheck_modules(namespace)
+
+
+def _clear_precheck_modules(namespace: str) -> None:
+    """清理本次预检在 ``sys.modules`` 留下的父包与已加载成员。
+
+    成功与失败路径都要清：预检模块只为一次校验存在，长驻 Subject 进程反复
+    导入时不能只增不减（``_load_module`` 会把成员与包内 helper 写进
+    ``sys.modules``）。清理按命名空间前缀进行，幂等。
+    """
+    prefix = f"{namespace}."
+    leaked = [name for name in sys.modules if name == namespace or name.startswith(prefix)]
+    for name in leaked:
+        sys.modules.pop(name, None)
 
 
 def _load_module(name: str, path: Path) -> ModuleType:

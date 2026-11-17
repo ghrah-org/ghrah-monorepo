@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import zipfile
 from pathlib import Path
 from types import ModuleType
@@ -17,7 +18,7 @@ from ghrah.protocol.problem import ProblemCode
 
 from ghrah.ability.package.installed_store import parse_full_name
 from ghrah.ability.package.lock import lock_filename, read_lock
-from ghrah.ability.package.provider import InstalledAbilityProvider, strip_schema_metadata
+from ghrah.ability.package.provider import strip_schema_metadata
 from ghrah.core.wiring import build_core_catalog
 
 OP_SOURCE = '''\
@@ -293,31 +294,66 @@ def test_import_rejects_schema_that_does_not_match_module(tmp_path: Path) -> Non
     archive = zip_package(source, tmp_path / "bad-schema.zip")
     catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
 
+    prefix = "_ghrah_ability_precheck_"
+    before = {name for name in sys.modules if name.startswith(prefix)}
     with pytest.raises(ApiError) as failure:
         asyncio.run(catalog.package_import(archive_path=str(archive), source_name="bad-schema.zip"))
 
     assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
     assert "Input" in (failure.value.problem.detail or "")
     assert not (tmp_path / "ability" / "acme").exists()
+    # 失败路径同样不能把预检父包 / 成员留在 sys.modules 里。
+    after = {name for name in sys.modules if name.startswith(prefix)}
+    assert after == before
 
 
-def test_import_accepts_skill_member_and_projects_it(tmp_path: Path) -> None:
-    """纯 skill 成员也能装、也能被投影成可授予成员（type=skill）。"""
+def test_import_allows_skill_member_without_abi_precheck(tmp_path: Path) -> None:
+    """skill 成员不进 operation 预检：装得进去，内容由安装器校验覆盖。"""
     source = write_package(tmp_path / "src", with_skill=True)
     archive = zip_package(source, tmp_path / "with-skill.zip")
     catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
 
-    view = asyncio.run(
-        catalog.package_import(archive_path=str(archive), source_name="with-skill.zip")
-    )
+    try:
+        view = asyncio.run(
+            catalog.package_import(archive_path=str(archive), source_name="with-skill.zip")
+        )
+    finally:
+        asyncio.run(catalog.aclose())
 
     assert view.operation_count == 1
     assert view.skill_count == 1
+    version_root = tmp_path / "ability" / "acme" / "demo" / "1.0.0"
+    assert (version_root / "skills" / "guide" / "SKILL.md").is_file()
 
-    provider = InstalledAbilityProvider(tmp_path / "ability")
-    members = provider.package_members("acme.demo")
-    kinds = {(item.metadata.name, item.implementation.type) for item in members}
-    assert kinds == {("ping", "python"), ("guide", "skill")}
-    skill_member = next(item for item in members if item.implementation.type == "skill")
-    assert skill_member.implementation.handler == "guide"
-    assert skill_member.tool is None
+
+def test_malformed_zip_file_directory_collision_is_invalid_package(tmp_path: Path) -> None:
+    """条目「文件 collide」+「collide/child.py」：mkdir 失败要映射成 422 而非 500。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    archive = tmp_path / "collide.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("demo/collide", "file")
+        handle.writestr("demo/collide/child.py", "x = 1\n")
+    catalog = build_core_catalog(install_root=str(install_root))
+
+    with pytest.raises(ApiError) as failure:
+        asyncio.run(catalog.package_import(archive_path=str(archive), source_name="collide.zip"))
+
+    assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
+    assert not (install_root / "acme").exists()
+
+
+def test_precheck_modules_do_not_leak_after_success(tmp_path: Path) -> None:
+    """安装期预检的父包与已加载成员在成功路径也要从 sys.modules 清掉。"""
+    source = write_package(tmp_path / "src")
+    archive = zip_package(source, tmp_path / "demo.zip")
+    catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
+
+    prefix = "_ghrah_ability_precheck_"
+    before = {name for name in sys.modules if name.startswith(prefix)}
+    try:
+        asyncio.run(catalog.package_import(archive_path=str(archive), source_name="demo.zip"))
+    finally:
+        asyncio.run(catalog.aclose())
+    after = {name for name in sys.modules if name.startswith(prefix)}
+    assert after == before

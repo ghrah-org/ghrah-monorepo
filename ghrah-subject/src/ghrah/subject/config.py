@@ -420,6 +420,9 @@ class SubjectConfig:
     ability_packages_install: bool = True
     #: 单个上传归档的体积上限（字节，默认 256 MiB）。
     #: 流式落盘、边写边判，内存占用不随文件变大。
+    #: 这是**归档字节**口径，与 Core 的解压预算（总 1 GiB / 单文件 512 MiB /
+    #: 20000 条目，见 ``ghrah.ability.package.archive.ArchiveLimits``）不联动；
+    #: 调整本上限时须同时评估 Core 侧的解压预算。
     ability_upload_max_bytes: int = 256 << 20
     observer_http_api_token: str = ""
     observer_cors_origins: tuple[str, ...] = (
