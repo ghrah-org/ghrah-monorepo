@@ -39,6 +39,7 @@ from ghrah.protocol.ability_tree import (
 from ghrah.protocol.shell_allow import ShellAllowValidationRequest, ShellBuiltinRulesView
 from ghrah.protocol.views.common import Page
 from ghrah.protocol.views.core import (
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
@@ -356,6 +357,16 @@ class AgentOperations(Protocol):
 
     async def get(self, *, agent_id: AgentId) -> AgentView:
         """读取在线 Agent 的定义与状态；不在线抛 ``NOT_FOUND``。"""
+        ...
+
+    async def config(self, *, agent_id: AgentId) -> AgentConfigView:
+        """读取 Agent 的配置事实（只读）。
+
+        与 :meth:`runtime` 分工：本方法返回配置与授权事实（模型、提示词、上限、
+        上下文、能力授权、审批策略、路径），运行态仍由 :meth:`runtime` 返回；
+        **不含 ``project_id``**（Core 没有项目身份）。查无或实例快照缺失抛
+        ``NOT_FOUND``，由调用方决定是否标记为丢失。
+        """
         ...
 
     async def delete(self, *, agent_id: AgentId) -> None:

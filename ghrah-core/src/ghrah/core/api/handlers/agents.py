@@ -180,7 +180,6 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         context_usage = data.get("context_usage")
         return AgentView(
             agent_id=request.agent_id,
-            project_id=registry.scope,
             name=name,
             state=dict(data.get("state") or {}),
             abilities=[str(item) for item in (data.get("abilities") or [])],

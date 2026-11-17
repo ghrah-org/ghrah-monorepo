@@ -60,7 +60,8 @@ async def test_get_agent_passes_through_context_usage_and_ability_types() -> Non
     view = await handler(AgentGetRequest(agent_id=AGENT_ID))
 
     assert view.agent_id == AGENT_ID
-    assert view.project_id == "project-1"
+    # Core 没有项目身份：视图不再携带 project_id（项目归属由 Subject 记录持有）。
+    assert "project_id" not in type(view).model_fields
     assert view.name == "requirement"
     assert view.state == {"name": "requirement", "initialized": True}
     assert view.abilities == ["conversation"]
