@@ -25,8 +25,6 @@ YAML 与协议层 ``AgentTemplateSpec`` 都不是，同一模板事实不得双�
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -49,9 +47,7 @@ __all__ = [
     "AgentTemplateRecord",
     "AgentTemplateScript",
     "AgentTemplateSkill",
-    "AgentTemplateSnapshotSummary",
     "AgentTemplateSurface",
-    "snapshot_digest",
 ]
 
 #: 命名空间正则沿用旧 Manifest ``AgentMetadata``，保证迁移逐字段可搬。
@@ -77,17 +73,6 @@ def _ordered_unique(field_name: str, values: list[str]) -> list[str]:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field_name} 的元素必须是非空字符串")
     return list(values)
-
-
-def snapshot_digest(snapshot: str) -> str:
-    """快照 digest：``sha256:<hex>``，对快照文本的 UTF-8 字节求值。
-
-    快照文本本身即以 ``sort_keys=True`` + 紧凑分隔符写出，因此 digest 与
-    「对规范化对象排序序列化后求哈希」等价，无需二次解析。
-    """
-    import hashlib
-
-    return "sha256:" + hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
 
 
 class _TemplateModel(BaseModel):
@@ -364,21 +349,15 @@ class AgentTemplateConfig(_TemplateModel):
         """规范化后的配置对象（全字段显式，JSON 可用）。"""
         return self.model_dump(mode="json")
 
-    def snapshot_json(self) -> str:
-        """修订快照文本：``sort_keys`` + 紧凑分隔符（digest 的规范形式）。"""
-        return json.dumps(
-            self.document(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-
 
 class AgentTemplateRecord(_TemplateModel):
-    """一行模板 + 其配置（读模型；时间戳为 RFC 3339 UTC 文本）。"""
+    """一行模板版本 + 其配置（读模型；时间戳为 RFC 3339 UTC 文本）。"""
 
     template_id: str
     revision: int = Field(ge=1)
+    is_latest: int = Field(default=1, ge=0, le=1)
+    format: str
+    reference_count: int = Field(default=0, ge=0)
     metadata: AgentTemplateMetadata
     model: AgentTemplateModel = Field(default_factory=AgentTemplateModel)
     prompt: AgentTemplatePrompt = Field(default_factory=AgentTemplatePrompt)
@@ -396,8 +375,13 @@ class AgentTemplateRecord(_TemplateModel):
 
     @property
     def archived(self) -> bool:
-        """是否已归档（v0 只归档不删除）。"""
+        """是否已归档（``archived_at`` 非空即软删除）。"""
         return self.archived_at is not None
+
+    @property
+    def latest(self) -> bool:
+        """是否该模板的最新版本。"""
+        return self.is_latest == 1
 
     def config(self) -> AgentTemplateConfig:
         """取本记录的配置对象（快照口径）。"""
@@ -410,17 +394,3 @@ class AgentTemplateRecord(_TemplateModel):
             permission_request=self.permission_request,
             path_request=self.path_request,
         )
-
-    def snapshot_json(self) -> str:
-        """本条记录的修订快照文本。"""
-        return self.config().snapshot_json()
-
-
-@dataclass(frozen=True)
-class AgentTemplateSnapshotSummary:
-    """修订历史摘要（列表不返回快照正文）。"""
-
-    revision: int
-    created_at: str
-    digest: str
-    size_bytes: int

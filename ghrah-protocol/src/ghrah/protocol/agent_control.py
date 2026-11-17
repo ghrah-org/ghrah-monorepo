@@ -410,12 +410,12 @@ class AgentTemplateDetailView(TreeModel):
 
 
 class AgentTemplateRevisionSummaryView(TreeModel):
-    """修订历史摘要（不返回快照正文）。"""
+    """版本列表项：一行一个版本（不返回配置正文）。"""
 
     revision: int = Field(ge=1)
     created_at: str
-    digest: str
-    size_bytes: int = Field(ge=0)
+    is_latest: bool
+    reference_count: int = Field(ge=0)
 
 
 class AgentTemplateRevisionsView(TreeModel):

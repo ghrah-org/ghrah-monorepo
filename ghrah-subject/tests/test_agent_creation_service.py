@@ -21,6 +21,7 @@ from ghrah.subject.agents.creation import (
     create_agent,
 )
 from ghrah.subject.agents.render import GrantedPackage
+from ghrah.subject.template_store.models import AgentTemplateConfig, AgentTemplateRecord
 
 _NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
 _WORKSPACES = {"default": "/ws"}
@@ -70,13 +71,39 @@ _GRANTED = [
 
 
 class _Templates:
+    """假模板源：按 ``(template_id, revision)`` 返回构造好的记录。"""
+
     def __init__(self, snapshot: dict[str, Any] | None) -> None:
-        self._snapshot = snapshot
+        self._record = None if snapshot is None else _record_from(snapshot)
         self.asked: list[tuple[str, int]] = []
 
-    async def get_revision(self, template_id: str, revision: int) -> dict | None:
+    async def get_version(self, template_id: str, revision: int) -> AgentTemplateRecord | None:
         self.asked.append((template_id, revision))
-        return self._snapshot
+        if self._record is None:
+            return None
+        return self._record.model_copy(update={"template_id": template_id, "revision": revision})
+
+
+def _record_from(snapshot: dict[str, Any]) -> AgentTemplateRecord:
+    """把七组配置 dict 转成一条模板记录（``archived_at`` 单独传）。"""
+    config = AgentTemplateConfig.model_validate(
+        {key: value for key, value in snapshot.items() if key != "archived_at"}
+    )
+    return AgentTemplateRecord(
+        template_id="t" * 32,
+        revision=1,
+        format="ghrah.agent-templates.v1",
+        metadata=config.metadata,
+        model=config.model,
+        prompt=config.prompt,
+        context_policy=config.context_policy,
+        ability_request=config.ability_request,
+        permission_request=config.permission_request,
+        path_request=config.path_request,
+        created_at="2026-11-17T00:00:00Z",
+        updated_at="2026-11-17T00:00:00Z",
+        archived_at=snapshot.get("archived_at"),
+    )
 
 
 def _creator(captured: list[Any]):

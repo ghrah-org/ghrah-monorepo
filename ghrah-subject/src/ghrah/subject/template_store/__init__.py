@@ -26,7 +26,6 @@ from ghrah.subject.template_store.models import (
     AgentTemplateRecord,
     AgentTemplateScript,
     AgentTemplateSkill,
-    AgentTemplateSnapshotSummary,
     AgentTemplateSurface,
 )
 from ghrah.subject.template_store.service import AgentTemplateService
@@ -55,7 +54,6 @@ __all__ = [
     "AgentTemplateScript",
     "AgentTemplateService",
     "AgentTemplateSkill",
-    "AgentTemplateSnapshotSummary",
     "AgentTemplateSurface",
     "TemplateConflictError",
     "TemplateIdentityConflictError",

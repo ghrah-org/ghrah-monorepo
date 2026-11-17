@@ -215,17 +215,17 @@ def build_agent_template_control_router(
         _: None = Depends(_ensure_enabled),
     ) -> dict[str, Any]:
         await _authorize(request)
-        summaries = await _guarded(service.history(template_id))
+        records = await _guarded(service.versions(template_id))
         return AgentTemplateRevisionsView(
             template_id=template_id,
             revisions=[
                 AgentTemplateRevisionSummaryView(
-                    revision=summary.revision,
-                    created_at=summary.created_at,
-                    digest=summary.digest,
-                    size_bytes=summary.size_bytes,
+                    revision=record.revision,
+                    created_at=record.created_at,
+                    is_latest=record.latest,
+                    reference_count=record.reference_count,
                 )
-                for summary in summaries
+                for record in records
             ],
         ).model_dump(mode="json")
 

@@ -72,6 +72,7 @@ from ghrah.subject.project.store import (
     ProjectNotFoundError,
     ProjectStore,
 )
+from ghrah.subject.template_store.store import TemplateStore
 from ghrah.subject.workspace.locator import locator_to_path, path_to_locator
 
 if TYPE_CHECKING:
@@ -864,6 +865,10 @@ class ProjectManager:
                 expected,
                 lambda r: r.model_copy(update={"agents": [*r.agents, record]}),
             )
+            # 模板引用计数：记录已落库后才 +1，保证「记录存在 ⇒ 计数已计」；
+            # 失败只可能少计（热度指标，不做补偿）。
+            if isinstance(templates, TemplateStore):
+                await templates.increment_reference(spec.template_id, spec.revision)
             if spec.desired_state == "stopped":
                 await handle.terminate_agent(created.agent_id, spec.name)
                 await self.mark_agent_runtime(project_id, created.agent_id, None, status="stopped")

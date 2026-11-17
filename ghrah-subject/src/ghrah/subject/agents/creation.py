@@ -30,7 +30,7 @@ from ghrah.subject.project.models import (
     AgentPresentation,
     AgentRecord,
 )
-from ghrah.subject.template_store.models import AgentTemplateConfig
+from ghrah.subject.template_store.models import AgentTemplateConfig, AgentTemplateRecord
 
 __all__ = [
     "CreateAgentRequest",
@@ -42,10 +42,10 @@ __all__ = [
 
 
 class TemplateSource(Protocol):
-    """按 ``template_id + revision`` 读模板快照的只读口径。"""
+    """按 ``(template_id, revision)`` 读模板版本的只读口径。"""
 
-    async def get_revision(self, template_id: str, revision: int) -> dict | None:
-        """取某版本的配置快照；不存在返回 ``None``。"""
+    async def get_version(self, template_id: str, revision: int) -> AgentTemplateRecord | None:
+        """取指定版本；不存在返回 ``None``。"""
         ...
 
 
@@ -139,14 +139,12 @@ async def create_agent(
     Raises:
         CreationError: 模板缺失/归档、模板不足以创建、或 Core 创建失败。
     """
-    snapshot = await templates.get_revision(request.template_id, request.revision)
-    if snapshot is None:
+    record = await templates.get_version(request.template_id, request.revision)
+    if record is None:
         raise CreationError("template_not_found", request.template_id)
-    if snapshot.get("archived_at") is not None:
+    if record.archived:
         raise CreationError("template_archived", request.template_id)
-    config = AgentTemplateConfig.model_validate(
-        {key: value for key, value in snapshot.items() if key != "archived_at"}
-    )
+    config = record.config()
 
     try:
         rendered = render_assembly(

@@ -48,6 +48,7 @@ def _record(template_id: str = "tpl-1") -> AgentTemplateRecord:
     return AgentTemplateRecord(
         template_id=template_id,
         revision=1,
+        format="ghrah.agent-templates.v1",
         metadata={"namespace": "writing", "name": "weekly_report", "title": "周报"},
         created_at="2026-11-17T00:00:00Z",
         updated_at="2026-11-17T00:00:00Z",
@@ -232,8 +233,8 @@ async def test_create_detail_list_and_defaults(running: Any) -> None:
     assert status == 200
     assert revisions["format"] == "ghrah.agent-templates.revisions.v1"
     assert [item["revision"] for item in revisions["revisions"]] == [1]
-    assert revisions["revisions"][0]["digest"].startswith("sha256:")
-    assert revisions["revisions"][0]["size_bytes"] > 0
+    assert revisions["revisions"][0]["is_latest"] is True
+    assert revisions["revisions"][0]["reference_count"] == 0
 
     status, references, _ = await _request(
         f"{base}/api/v1/agent-templates/{template_id}/references"
