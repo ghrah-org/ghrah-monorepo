@@ -294,6 +294,38 @@ class PortClusterHandle:
         await self._port.agents.delete(agent_id=agent_id)
         return {"success": True, "data": None}
 
+    async def create_assembly(self, spec: Any) -> Any:
+        """按装配输入创建/恢复 Agent：转 ``agents.create_assembly``。"""
+        if not self.is_connected:
+            raise RuntimeError(f"cluster '{self._cluster_id}' is shut down")
+        return await self._port.agents.create_assembly(spec=spec)
+
+    async def start_assembly(self, agent_id: str) -> Any:
+        """按实例快照启动 Agent：转 ``agents.start_assembly``。"""
+        if not self.is_connected:
+            raise RuntimeError(f"cluster '{self._cluster_id}' is shut down")
+        return await self._port.agents.start_assembly(agent_id=agent_id)
+
+    async def stop_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止 Agent 并保留快照：转 ``agents.stop_assembly``。"""
+        if not self.is_connected:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        await self._port.agents.stop_assembly(agent_id=agent_id)
+        return {"success": True, "data": None}
+
+    async def update_assembly(self, agent_id: str, spec: Any) -> Any:
+        """覆盖实例快照并应用：转 ``agents.update_assembly``。"""
+        if not self.is_connected:
+            raise RuntimeError(f"cluster '{self._cluster_id}' is shut down")
+        return await self._port.agents.update_assembly(agent_id=agent_id, spec=spec)
+
+    async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止（若在线）并删除实例快照：转 ``agents.delete_assembly``。"""
+        if not self.is_connected:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        await self._port.agents.delete_assembly(agent_id=agent_id)
+        return {"success": True, "data": None}
+
     async def send_message(self, payload: Any) -> dict[str, Any]:
         """把消息定向发给指定 Agent：转 ``messages.append``。"""
         if not self.is_connected:

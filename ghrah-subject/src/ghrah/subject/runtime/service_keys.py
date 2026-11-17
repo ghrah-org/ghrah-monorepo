@@ -218,6 +218,18 @@ class ClusterHandle(Protocol):
     async def terminate_agent(self, agent_id: str, agent_name: str) -> dict[str, Any]:
         """发 terminate_agent，返回 command_result dict。"""
 
+    async def start_assembly(self, agent_id: str) -> Any:
+        """按实例快照启动 Agent（幂等）。"""
+
+    async def stop_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止 Agent 进程并保留快照。"""
+
+    async def update_assembly(self, agent_id: str, spec: Any) -> dict[str, Any]:
+        """用新的装配输入覆盖实例快照并应用。"""
+
+    async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止（若在线）并删除实例快照。"""
+
     async def send_message(self, payload: Any) -> dict[str, Any]:
         """向本 cluster 内指定 agent 发消息。"""
 

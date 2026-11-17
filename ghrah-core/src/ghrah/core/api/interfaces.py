@@ -305,6 +305,30 @@ class AgentCreateAssemblyRequest(BaseModel):
     spec: AgentAssemblySpec
 
 
+class AgentAssemblyTargetRequest(BaseModel):
+    """``agents.start_assembly`` / ``stop_assembly`` / ``delete_assembly`` 的请求信封。
+
+    这些操作只认身份：配置一律来自 Core 的实例快照，不接收模板或装配输入。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+
+
+class AgentAssemblyUpdateRequest(BaseModel):
+    """``agents.update_assembly`` 的请求信封：用新的装配输入覆盖实例快照。
+
+    ``agent_id`` 必须指向已有快照；``spec.config`` / ``spec.members`` 是**新的事实**，
+    写入快照后应用到活实例（在线则重启，离线则只留下次启动生效）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    spec: AgentAssemblySpec
+
+
 class AgentGetRequest(BaseModel):
     """``agents.get`` 的请求信封。"""
 
@@ -656,6 +680,10 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("agents.get", AgentGetRequest, AgentView),
         Interface("agents.config", AgentConfigRequest, AgentConfigView),
         Interface("agents.create_assembly", AgentCreateAssemblyRequest, AgentStartView),
+        Interface("agents.start_assembly", AgentAssemblyTargetRequest, AgentStartView),
+        Interface("agents.stop_assembly", AgentAssemblyTargetRequest, AckView),
+        Interface("agents.update_assembly", AgentAssemblyUpdateRequest, AgentStartView),
+        Interface("agents.delete_assembly", AgentAssemblyTargetRequest, AckView),
         Interface("agents.list", AgentListRequest, Page[str]),
         Interface("agents.delete", AgentDeleteRequest, AckView),
         Interface("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),

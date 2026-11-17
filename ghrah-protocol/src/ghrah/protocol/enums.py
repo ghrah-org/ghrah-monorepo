@@ -64,6 +64,11 @@ class CommandType(StrEnum):
     # 装配输入 v3：按 AgentAssemblySpec 创建/恢复，配置落在 Core 实例快照。
     CREATE_AGENT_ASSEMBLY = "create_agent_assembly"
     GET_AGENT_CONFIG = "get_agent_config"
+    # 实例生命周期：全部以 Core 的实例快照为配置权威，不接收模板。
+    START_AGENT_ASSEMBLY = "start_agent_assembly"
+    STOP_AGENT_ASSEMBLY = "stop_agent_assembly"
+    UPDATE_AGENT_ASSEMBLY = "update_agent_assembly"
+    DELETE_AGENT_ASSEMBLY = "delete_agent_assembly"
 
     # ─── Supervisor 类（Observer → Subject → Core）───
 

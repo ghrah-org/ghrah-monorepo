@@ -384,6 +384,34 @@ class AgentOperations(Protocol):
         """
         ...
 
+    async def start_assembly(self, *, agent_id: AgentId) -> AgentStartView:
+        """从实例快照启动一个 Agent（幂等）。
+
+        配置完全来自 Core 的实例快照，不接收模板；已在线时直接返回当前 incarnation。
+        快照缺失抛 ``NOT_FOUND``。
+        """
+        ...
+
+    async def stop_assembly(self, *, agent_id: AgentId) -> None:
+        """停止一个 Agent 的进程，**保留**实例快照以便再次启动（幂等）。"""
+        ...
+
+    async def update_assembly(
+        self, *, agent_id: AgentId, spec: AgentAssemblySpec
+    ) -> AgentStartView:
+        """用新的装配输入覆盖实例快照并应用（在线重启、离线下次启动生效）。
+
+        ``spec`` 是新的配置事实；写入后快照即为权威，不再回读模板。
+        """
+        ...
+
+    async def delete_assembly(self, *, agent_id: AgentId) -> None:
+        """停止（若在线）并删除实例快照；不存在时幂等成功。
+
+        与 :meth:`delete` 的区别：后者只要求在线、且不动快照。
+        """
+        ...
+
     async def get(self, *, agent_id: AgentId) -> AgentView:
         """读取在线 Agent 的定义与状态；不在线抛 ``NOT_FOUND``。"""
         ...

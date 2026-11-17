@@ -383,9 +383,7 @@ class AgentEntityManager:
                     project, agent = await self._save(project, agent, {"desired_state": "stopped"})
                 if runtime["availability"] == "online":
                     try:
-                        result = await self._handle(project, agent).terminate_agent(
-                            agent.agent_id, agent.name
-                        )
+                        result = await self._handle(project, agent).stop_assembly(agent.agent_id)
                     except Exception as exc:
                         raise StableError("agent_stop_failed", str(exc)) from exc
                     if not result.get("success"):

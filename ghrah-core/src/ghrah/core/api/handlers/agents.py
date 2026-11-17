@@ -29,6 +29,8 @@ from ghrah.protocol.views.core import (
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
 from ghrah.core.api.interfaces import (
+    AgentAssemblyTargetRequest,
+    AgentAssemblyUpdateRequest,
     AgentConfigRequest,
     AgentCreateAssemblyRequest,
     AgentCreateFromTemplateRequest,
@@ -157,6 +159,49 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         if not result.get("success"):
             raise _fail("agents.create_assembly", result)
         return AgentStartView.model_validate(result.get("data") or {})
+
+    async def start_assembly(request: AgentAssemblyTargetRequest) -> AgentStartView:
+        """从实例快照启动 Agent（幂等；配置不来自模板）。"""
+        result = await registry.handle_command(
+            command="start_agent_assembly",
+            payload={"agent_id": request.agent_id},
+        )
+        if not result.get("success"):
+            raise _fail("agents.start_assembly", result)
+        return AgentStartView.model_validate(result.get("data") or {})
+
+    async def stop_assembly(request: AgentAssemblyTargetRequest) -> AckView:
+        """停止 Agent，保留实例快照（幂等）。"""
+        result = await registry.handle_command(
+            command="stop_agent_assembly",
+            payload={"agent_id": request.agent_id},
+        )
+        if not result.get("success"):
+            raise _fail("agents.stop_assembly", result)
+        return AckView(ok=True)
+
+    async def update_assembly(request: AgentAssemblyUpdateRequest) -> AgentStartView:
+        """用新的装配输入覆盖快照并应用（在线重启，离线下次启动生效）。"""
+        result = await registry.handle_command(
+            command="update_agent_assembly",
+            payload={
+                "agent_id": request.agent_id,
+                "spec": request.spec.model_dump(mode="json"),
+            },
+        )
+        if not result.get("success"):
+            raise _fail("agents.update_assembly", result)
+        return AgentStartView.model_validate(result.get("data") or {})
+
+    async def delete_assembly(request: AgentAssemblyTargetRequest) -> AckView:
+        """停止（若在线）并删除实例快照；不存在时幂等成功。"""
+        result = await registry.handle_command(
+            command="delete_agent_assembly",
+            payload={"agent_id": request.agent_id},
+        )
+        if not result.get("success"):
+            raise _fail("agents.delete_assembly", result)
+        return AckView(ok=True)
 
     async def config(request: AgentConfigRequest) -> AgentConfigView:
         """按 ``agent_id`` 读 Core 持有的配置事实。"""
@@ -312,6 +357,10 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
     return {
         "agents.create": create,
         "agents.create_assembly": create_assembly,
+        "agents.start_assembly": start_assembly,
+        "agents.stop_assembly": stop_assembly,
+        "agents.update_assembly": update_assembly,
+        "agents.delete_assembly": delete_assembly,
         "agents.config": config,
         "agents.create_from_template": create_from_template,
         "agents.get": get_agent,

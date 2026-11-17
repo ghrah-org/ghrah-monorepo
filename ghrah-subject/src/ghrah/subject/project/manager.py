@@ -46,7 +46,6 @@ from ghrah.protocol.types import (
     ProjectUpdatePayload,
     RecoveryAction,
 )
-from ghrah.protocol.views.core import AgentAssemblySpec
 from pydantic import ValidationError
 
 from ghrah.subject.agents.creation import CreateAgentRequest, CreationError, create_agent
@@ -870,7 +869,7 @@ class ProjectManager:
             if isinstance(templates, TemplateStore):
                 await templates.increment_reference(spec.template_id, spec.revision)
             if spec.desired_state == "stopped":
-                await handle.terminate_agent(created.agent_id, spec.name)
+                await handle.stop_assembly(created.agent_id)
                 await self.mark_agent_runtime(project_id, created.agent_id, None, status="stopped")
             await self._emit_agent("project_agent_added", updated, record)
             return _ok(
@@ -990,9 +989,7 @@ class ProjectManager:
         if not agent.agent_id:
             return None, "stable_agent_id_required: persisted record has no agent_id"
         try:
-            view = await handle.create_assembly(
-                AgentAssemblySpec(name=agent.name, agent_id=agent.agent_id)
-            )
+            view = await handle.start_assembly(agent.agent_id)
         except Exception as exc:  # noqa: BLE001 — 恢复失败只影响诊断，不推翻记录
             logger.warning("resume agent %s failed: %s", agent.name, exc)
             return None, str(exc)
@@ -1063,7 +1060,7 @@ class ProjectManager:
         if handle is not None:
             terminate_error: str | None = None
             try:
-                result = await handle.terminate_agent(target.agent_id, target.name)
+                result = await handle.delete_assembly(target.agent_id)
                 if not result.get("success"):
                     error_text = str(result.get("error") or "")
                     if not _is_terminate_absent(error_text):

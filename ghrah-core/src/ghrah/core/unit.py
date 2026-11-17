@@ -294,6 +294,10 @@ _COMMANDS: frozenset[str] = frozenset(
         CommandType.AGENT_RESET.value,
         CommandType.CREATE_AGENT_ASSEMBLY.value,
         CommandType.GET_AGENT_CONFIG.value,
+        CommandType.START_AGENT_ASSEMBLY.value,
+        CommandType.STOP_AGENT_ASSEMBLY.value,
+        CommandType.UPDATE_AGENT_ASSEMBLY.value,
+        CommandType.DELETE_AGENT_ASSEMBLY.value,
         CommandType.HITL_RESPONSE.value,
         CommandType.SESSION_CREATE.value,
         CommandType.SESSION_ACTIVATE.value,
@@ -538,6 +542,10 @@ class CoreUnit:
             CommandType.AGENT_COMPACT_CONTEXT.value: self._handle_agent_compact_context,
             CommandType.AGENT_RESET.value: self._handle_agent_reset,
             CommandType.CREATE_AGENT_ASSEMBLY.value: self._handle_create_agent_assembly,
+            CommandType.START_AGENT_ASSEMBLY.value: self._handle_start_agent_assembly,
+            CommandType.STOP_AGENT_ASSEMBLY.value: self._handle_stop_agent_assembly,
+            CommandType.UPDATE_AGENT_ASSEMBLY.value: self._handle_update_agent_assembly,
+            CommandType.DELETE_AGENT_ASSEMBLY.value: self._handle_delete_agent_assembly,
             CommandType.GET_AGENT_CONFIG.value: self._handle_get_agent_config,
             CommandType.EXECUTE_ABILITY.value: self._handle_execute_ability,
             CommandType.HITL_RESPONSE.value: self._handle_hitl_response,
@@ -1051,13 +1059,9 @@ class CoreUnit:
 
         from ghrah.core.agents import (
             AssemblyError,
-            config_from_snapshot,
             config_to_snapshot,
             resolve_assembly,
-            resolve_members,
-            surface_from_snapshot,
         )
-        from ghrah.manifest.resolver import ResolvedAgent
 
         del cmd_ctx
         source = self._require_assembly().source
@@ -1074,26 +1078,7 @@ class CoreUnit:
             record = await store.get(spec.agent_id)
             if record is None:
                 return self._err(f"agent instance snapshot not found: {spec.agent_id}")
-            try:
-                resolved = ResolvedAgent(
-                    config=config_from_snapshot(record.config),
-                    abilities=resolve_members(source, record.members),
-                    surface=surface_from_snapshot(record.surface),
-                )
-            except AssemblyError as error:
-                return self._err(str(error))
-            result = await self._spawn_resolved(resolved)
-            if result.get("success"):
-                await store.save(
-                    agent_id=record.agent_id,
-                    name=record.name,
-                    config=record.config,
-                    members=record.members,
-                    surface=record.surface,
-                    mcp_refs=record.mcp_refs,
-                    incarnation_id=(result.get("data") or {}).get("incarnation_id"),
-                )
-            return result
+            return await self._restore_from_snapshot(record)
 
         agent_id = uuid4().hex
         try:
@@ -1115,6 +1100,193 @@ class CoreUnit:
             incarnation_id=(result.get("data") or {}).get("incarnation_id"),
         )
         return result
+
+    async def _online_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """按 ``agent_id`` 查在线实例；不在线返回 ``None``。"""
+        supervisor = self._require_supervisor()
+        for item in await supervisor.list_agents():
+            if str(item.get("agent_id") or "") == agent_id:
+                return item
+        return None
+
+    async def _restore_from_snapshot(self, record: Any) -> dict[str, Any]:
+        """从实例快照装配并拉起；成功后刷新 ``incarnation_id``。
+
+        创建（恢复分支）、启动、更新三处共用：配置与成员一律以快照为唯一来源。
+        """
+        from ghrah.core.agents import (
+            AssemblyError,
+            config_from_snapshot,
+            resolve_members,
+            surface_from_snapshot,
+        )
+        from ghrah.manifest.resolver import ResolvedAgent
+
+        source = self._require_assembly().source
+        try:
+            resolved = ResolvedAgent(
+                config=config_from_snapshot(record.config),
+                abilities=resolve_members(source, record.members),
+                surface=surface_from_snapshot(record.surface),
+            )
+        except AssemblyError as error:
+            return self._err(str(error))
+        result = await self._spawn_resolved(resolved)
+        if not result.get("success"):
+            return result
+        store = self._require_agent_instances()
+        await store.save(
+            agent_id=record.agent_id,
+            name=record.name,
+            config=record.config,
+            members=record.members,
+            surface=record.surface,
+            mcp_refs=record.mcp_refs,
+            incarnation_id=(result.get("data") or {}).get("incarnation_id"),
+        )
+        return result
+
+    async def _handle_start_agent_assembly(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """从实例快照启动（幂等）：已在线直接返回当前实例。"""
+        del cmd_ctx
+        agent_id = str(payload.get("agent_id") or "").strip()
+        if not agent_id:
+            return self._err("agent_id is required")
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        record = await store.get(agent_id)
+        if record is None:
+            return self._err(f"agent instance snapshot not found: {agent_id}")
+        online = await self._online_agent(agent_id)
+        if online is not None:
+            return self._ok(
+                {
+                    "name": str(online.get("name") or record.name),
+                    "agent_id": agent_id,
+                    "recovery_mode": "resumed",
+                    "incarnation_id": online.get("incarnation_id"),
+                }
+            )
+        return await self._restore_from_snapshot(record)
+
+    async def _handle_stop_agent_assembly(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """停止进程并**保留**快照；已停止时幂等成功。"""
+        del cmd_ctx
+        agent_id = str(payload.get("agent_id") or "").strip()
+        if not agent_id:
+            return self._err("agent_id is required")
+        supervisor = self._require_supervisor()
+        online = await self._online_agent(agent_id)
+        if online is None:
+            return self._ok({"agent_id": agent_id, "name": "", "stopped": False})
+        name = str(online.get("name") or "")
+        incarnation_id = online.get("incarnation_id")
+        await supervisor.terminate_agent(name)
+        self._emit_event(
+            EventType.AGENT_TERMINATED.value,
+            {
+                "name": name,
+                "agent_id": agent_id,
+                "incarnation_id": incarnation_id,
+            },
+        )
+        return self._ok(
+            {
+                "agent_id": agent_id,
+                "name": name,
+                "stopped": True,
+                "incarnation_id": incarnation_id,
+            }
+        )
+
+    async def _handle_update_agent_assembly(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """用新的装配输入覆盖快照并应用：先落库（权威），再重启活实例。"""
+        from ghrah.core.agents import AssemblyError, config_to_snapshot, resolve_assembly
+
+        del cmd_ctx
+        agent_id = str(payload.get("agent_id") or "").strip()
+        if not agent_id:
+            return self._err("agent_id is required")
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        record = await store.get(agent_id)
+        if record is None:
+            return self._err(f"agent instance snapshot not found: {agent_id}")
+        try:
+            spec = AgentAssemblySpec.model_validate(payload.get("spec") or {})
+        except ValidationError as error:
+            return self._err(f"invalid assembly spec: {error}")
+        spec = spec.model_copy(update={"agent_id": agent_id})
+        source = self._require_assembly().source
+        try:
+            resolved = resolve_assembly(spec, source, workspace_root=self._config.workspace_root)
+        except AssemblyError as error:
+            return self._err(str(error))
+        resolved.config = replace(resolved.config, agent_id=agent_id)
+        surface = spec.config.surface.model_dump() if spec.config.surface is not None else None
+        await store.save(
+            agent_id=agent_id,
+            name=resolved.config.name,
+            config=config_to_snapshot(resolved.config),
+            members=[item.model_dump() for item in spec.members],
+            surface=surface,
+            mcp_refs=list(spec.config.mcp_refs),
+            incarnation_id=record.incarnation_id,
+        )
+        supervisor = self._require_supervisor()
+        online = await self._online_agent(agent_id)
+        if online is not None:
+            await supervisor.terminate_agent(str(online.get("name") or ""))
+        result = await self._spawn_resolved(resolved)
+        if result.get("success"):
+            await store.save(
+                agent_id=agent_id,
+                name=resolved.config.name,
+                config=config_to_snapshot(resolved.config),
+                members=[item.model_dump() for item in spec.members],
+                surface=surface,
+                mcp_refs=list(spec.config.mcp_refs),
+                incarnation_id=(result.get("data") or {}).get("incarnation_id"),
+            )
+        return result
+
+    async def _handle_delete_agent_assembly(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """停止（若在线）并删除快照；两边都不存在时幂等成功。"""
+        del cmd_ctx
+        agent_id = str(payload.get("agent_id") or "").strip()
+        if not agent_id:
+            return self._err("agent_id is required")
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        supervisor = self._require_supervisor()
+        online = await self._online_agent(agent_id)
+        if online is not None:
+            name = str(online.get("name") or "")
+            await supervisor.terminate_agent(name)
+            self._emit_event(
+                EventType.AGENT_TERMINATED.value,
+                {
+                    "name": name,
+                    "agent_id": agent_id,
+                    "incarnation_id": online.get("incarnation_id"),
+                },
+            )
+        deleted = await store.delete(agent_id)
+        return self._ok({"agent_id": agent_id, "deleted": deleted, "stopped": online is not None})
 
     async def _handle_get_agent_config(
         self, payload: dict[str, Any], cmd_ctx: Any
