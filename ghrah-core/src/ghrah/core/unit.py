@@ -48,6 +48,7 @@ from ghrah.protocol.types import (
     DelegatePayload,
     EventType,
     ExecuteAbilityPayload,
+    GetAgentConfigPayload,
     GetAgentInfoPayload,
     HITLResponsePayload,
     ListAgentsPayload,
@@ -61,6 +62,8 @@ from ghrah.protocol.types import (
     TerminateAgentPayload,
     generate_request_id,
 )
+from ghrah.protocol.views.core import AgentAssemblySpec
+from pydantic import ValidationError
 
 from ghrah.ability.assembly import (
     AbilityAssembly,
@@ -200,6 +203,8 @@ class CoreUnitConfig:
     shell_cwd_provider: Callable[[], Awaitable[str | None]] | None = None
     shell_allow_lookup: ShellAllowLookup | None = None
     persistence_factory: Callable[[Any], Any] | None = None
+    # 实例配置快照库路径（<project_root>/db/agents.sqlite3）；None = standalone 不落盘。
+    agent_instances_path: str | None = None
     # per-cluster LLM 工厂注入（(AgentConfig) -> LLMProtocol；None = Core 内建
     # 默认，即 agentconf 解析）。与 persistence_factory 同范式：部署方显式
     # 声明 LLM 出口（网关/凭据/计量包装），注入即全责（不再套用
@@ -287,6 +292,8 @@ _COMMANDS: frozenset[str] = frozenset(
         CommandType.EXECUTE_ABILITY.value,
         CommandType.AGENT_COMPACT_CONTEXT.value,
         CommandType.AGENT_RESET.value,
+        CommandType.CREATE_AGENT_ASSEMBLY.value,
+        CommandType.GET_AGENT_CONFIG.value,
         CommandType.HITL_RESPONSE.value,
         CommandType.SESSION_CREATE.value,
         CommandType.SESSION_ACTIVATE.value,
@@ -514,6 +521,8 @@ class CoreUnit:
         # 授权装配边界（builtin 模式唯一入口）；None = 未接线。
         self._startup_materializer: Any = None
         self._mcp_deployment: Any = None
+        # 实例配置快照（运行期配置权威）；未注入路径时为 None（standalone）。
+        self._agent_instances: Any = None
 
         self._handlers: dict[str, _CommandHandler] = {
             CommandType.SPAWN_AGENT.value: self._handle_spawn_agent,
@@ -528,6 +537,8 @@ class CoreUnit:
             CommandType.GET_AGENT_INFO.value: self._handle_get_agent_info,
             CommandType.AGENT_COMPACT_CONTEXT.value: self._handle_agent_compact_context,
             CommandType.AGENT_RESET.value: self._handle_agent_reset,
+            CommandType.CREATE_AGENT_ASSEMBLY.value: self._handle_create_agent_assembly,
+            CommandType.GET_AGENT_CONFIG.value: self._handle_get_agent_config,
             CommandType.EXECUTE_ABILITY.value: self._handle_execute_ability,
             CommandType.HITL_RESPONSE.value: self._handle_hitl_response,
             CommandType.SESSION_CREATE.value: self._handle_session_create,
@@ -563,6 +574,14 @@ class CoreUnit:
             raise RuntimeError("CoreUnit not initialized (init(ctx) first)")
         return self._assembly
 
+    def _require_agent_instances(self) -> Any:
+        """取实例配置快照库；未配置路径时抛错（零隐式，不静默跳过持久化）。"""
+        if self._agent_instances is None:
+            raise RuntimeError(
+                "agent instance store not configured (CoreUnitConfig.agent_instances_path)"
+            )
+        return self._agent_instances
+
     # ----------------------------------------------------------------
     # 生命周期
     # ----------------------------------------------------------------
@@ -574,6 +593,9 @@ class CoreUnit:
         except BaseException:
             if self._mcp_deployment is not None:
                 await self._mcp_deployment.close()
+            if self._agent_instances is not None:
+                await self._agent_instances.close()
+                self._agent_instances = None
             raise
 
     async def _init(self, ctx: Any) -> None:
@@ -669,6 +691,13 @@ class CoreUnit:
         )
         self._supervisor = supervisor
 
+        if self._config.agent_instances_path:
+            from ghrah.core.agents import AgentInstanceStore
+
+            instance_store = AgentInstanceStore(self._config.agent_instances_path)
+            await instance_store.start()
+            self._agent_instances = instance_store
+
         logger.info("CoreUnit initialized (project_id=%s)", self._config.project_id)
 
     async def start(self) -> None:
@@ -711,6 +740,9 @@ class CoreUnit:
         finally:
             if self._mcp_deployment is not None:
                 await self._mcp_deployment.close()
+            if self._agent_instances is not None:
+                await self._agent_instances.close()
+                self._agent_instances = None
         logger.info("CoreUnit stopped")
 
     # ----------------------------------------------------------------
@@ -922,7 +954,8 @@ class CoreUnit:
     async def _handle_reserved_spawn(self, sp: SpawnAgentPayload) -> dict[str, Any]:
         """在持有预留时解析模板并核定启动授权。"""
         source = self._require_assembly().source
-        supervisor = self._require_supervisor()
+        # 提前校验 supervisor 已就绪；真正的 spawn 在 _spawn_resolved 内完成。
+        self._require_supervisor()
         if sp.abilities:
             AbilityAssembly.refuse(
                 "direct-abilities spawn",
@@ -943,6 +976,18 @@ class CoreUnit:
         if sp.validate_model:
             self._validate_model_config(resolved.config.endpoint_name)
         resolved.config = replace(resolved.config, agent_id=sp.config.agent_id)
+        return await self._spawn_resolved(resolved, tags=list(manifest.metadata.tags))
+
+    async def _spawn_resolved(
+        self, resolved: Any, *, tags: list[str] | None = None
+    ) -> dict[str, Any]:
+        """把已解析的 Agent 落成运行实例。
+
+        manifest 路径与装配输入 v3 共用这一段：核定启动授权 → 物化工具表 →
+        spawn → 发事件。``resolved`` 是 ``ResolvedAgent``（config + abilities +
+        surface），两个入口只是构造它的方式不同。
+        """
+        supervisor = self._require_supervisor()
         supervisor.check_spawn(resolved.config)
         materialization = await self._materialize_builtin_abilities(
             resolved.config.effective_agent_id, resolved
@@ -965,7 +1010,7 @@ class CoreUnit:
                 abilities=ability_instances,
                 persistence_factory=self._config.persistence_factory,
                 llm_factory=self._config.llm_factory,
-                tags=list(manifest.metadata.tags),
+                tags=list(tags or []),
                 tool_table_projector=tool_table_projector,
             )
         except RegistryError as e:
@@ -991,6 +1036,158 @@ class CoreUnit:
                 "incarnation_id": incarnation_id,
             }
         )
+
+    async def _handle_create_agent_assembly(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """按装配输入 v3 创建或恢复 Agent。
+
+        - ``agent_id`` 为空：**新建**。配置来自 ``spec.config``，成员来自
+          ``spec.members``（Subject 已按授权渲染）；成功后把配置写进实例快照。
+        - ``agent_id`` 非空：**恢复**。配置与成员从快照读，``spec`` 只提供身份，
+          不回读 Subject 的模板。
+        """
+        from uuid import uuid4
+
+        from ghrah.core.agents import (
+            AssemblyError,
+            config_from_snapshot,
+            config_to_snapshot,
+            resolve_assembly,
+            resolve_members,
+            surface_from_snapshot,
+        )
+        from ghrah.manifest.resolver import ResolvedAgent
+
+        del cmd_ctx
+        source = self._require_assembly().source
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        try:
+            spec = AgentAssemblySpec.model_validate(payload.get("spec") or {})
+        except ValidationError as error:
+            return self._err(f"invalid assembly spec: {error}")
+
+        if spec.agent_id:
+            record = await store.get(spec.agent_id)
+            if record is None:
+                return self._err(f"agent instance snapshot not found: {spec.agent_id}")
+            try:
+                resolved = ResolvedAgent(
+                    config=config_from_snapshot(record.config),
+                    abilities=resolve_members(source, record.members),
+                    surface=surface_from_snapshot(record.surface),
+                )
+            except AssemblyError as error:
+                return self._err(str(error))
+            result = await self._spawn_resolved(resolved)
+            if result.get("success"):
+                await store.save(
+                    agent_id=record.agent_id,
+                    name=record.name,
+                    config=record.config,
+                    members=record.members,
+                    surface=record.surface,
+                    mcp_refs=record.mcp_refs,
+                    incarnation_id=(result.get("data") or {}).get("incarnation_id"),
+                )
+            return result
+
+        agent_id = uuid4().hex
+        try:
+            resolved = resolve_assembly(spec, source, workspace_root=self._config.workspace_root)
+        except AssemblyError as error:
+            return self._err(str(error))
+        resolved.config = replace(resolved.config, agent_id=agent_id)
+        result = await self._spawn_resolved(resolved)
+        if not result.get("success"):
+            return result
+        surface = spec.config.surface.model_dump() if spec.config.surface is not None else None
+        await store.save(
+            agent_id=agent_id,
+            name=resolved.config.name,
+            config=config_to_snapshot(resolved.config),
+            members=[item.model_dump() for item in spec.members],
+            surface=surface,
+            mcp_refs=list(spec.config.mcp_refs),
+            incarnation_id=(result.get("data") or {}).get("incarnation_id"),
+        )
+        return result
+
+    async def _handle_get_agent_config(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """按 ``agent_id`` 读 Core 的实例配置事实。
+
+        事实来源是实例快照（配置）与快照里冻结的成员申请（路径）；``grants`` 是
+        授权关系库的事实，本命令不复制它——需要成员级授权时走 ``abilities`` 面。
+        """
+        from dataclasses import asdict as _asdict
+
+        from ghrah.protocol.views.core import (
+            AgentConfigContextView,
+            AgentConfigCoreOnlyView,
+            AgentConfigModelView,
+            AgentConfigPathView,
+            AgentConfigPersistenceView,
+            AgentConfigPromptView,
+            AgentConfigView,
+        )
+
+        del cmd_ctx
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        request = GetAgentConfigPayload.model_validate(payload)
+        record = await store.get(request.agent_id)
+        if record is None:
+            return self._err(f"agent instance snapshot not found: {request.agent_id}")
+        from ghrah.core.agents import config_from_snapshot
+
+        config = config_from_snapshot(record.config)
+        persistence = None
+        if config.context is not None:
+            context_data = _asdict(config.context)
+            persistence = AgentConfigPersistenceView(
+                type=context_data.get("persistence_type"),
+                compress=context_data.get("persistence_compress"),
+                auto_persist=context_data.get("auto_persist"),
+                root_dir=context_data.get("persistence_root_dir"),
+                run_id=context_data.get("persistence_run_id"),
+            )
+        paths = [
+            AgentConfigPathView(root=str(root), access="write", deny=False)
+            for item in record.members
+            for root in ((item.get("permissions") or {}).get("allowed_paths") or [])
+        ]
+        view = AgentConfigView(
+            agent_id=record.agent_id,
+            name=config.name,
+            description=config.description,
+            model=AgentConfigModelView(
+                endpoint_name=config.endpoint_name,
+                model_overrides=(
+                    _asdict(config.model_overrides) if config.model_overrides is not None else None
+                ),
+            ),
+            prompt=AgentConfigPromptView(system_prompt=config.system_prompt),
+            context=AgentConfigContextView(
+                max_iterations=config.max_iterations,
+                communication_timeout=config.communication_timeout,
+                window=_asdict(config.window) if config.window is not None else None,
+                persistence=persistence,
+            ),
+            paths=paths,
+            core_only=AgentConfigCoreOnlyView(
+                workspace_root=config.workspace_root or "",
+                cluster_context_injection=config.cluster_context_injection,
+                environment_context_injection=config.environment_context_injection,
+            ),
+        )
+        return self._ok(view.model_dump(mode="json"))
 
     async def _materialize_builtin_abilities(self, agent: str, resolved: Any) -> Any:
         """经授权装配边界物化工具表。"""

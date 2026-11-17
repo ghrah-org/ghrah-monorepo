@@ -54,9 +54,12 @@ from ghrah.protocol.views.common import (
     SessionIdView,
 )
 from ghrah.protocol.views.core import (
+    AgentAssemblySpec,
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     BranchListView,
@@ -608,6 +611,16 @@ class _Agents:
             agent_id=agent_id,
         )
         return AgentIdView.model_validate(raw).agent_id
+
+    async def create_assembly(self, *, spec: AgentAssemblySpec) -> AgentStartView:
+        """按装配输入 v3 创建或恢复 Agent。"""
+        raw = await self._facade._call("agents.create_assembly", spec=spec.model_dump(mode="json"))
+        return AgentStartView.model_validate(raw)
+
+    async def config(self, *, agent_id: AgentId) -> AgentConfigView:
+        """读取 Agent 的配置事实（不含项目身份）。"""
+        raw = await self._facade._call("agents.config", agent_id=agent_id)
+        return AgentConfigView.model_validate(raw)
 
     async def get(self, *, agent_id: AgentId) -> AgentView:
         """读取在线 Agent 的定义与状态。"""

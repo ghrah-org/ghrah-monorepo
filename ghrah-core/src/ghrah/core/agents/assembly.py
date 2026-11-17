@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """把端口的 ``AgentAssemblySpec`` 解析成 spawn 需要的 ``ResolvedAgent``。
 
-这是装配输入 v3 的落点：旧链路用 ``manifest_ref`` 读 YAML 再解析，新链路直接
+这是装配输入 v3 的落点：旧链路读 YAML 模板再解析，新链路直接
 吃 Subject 渲染好的规格——配置来自 ``spec.config``，成员来自 ``spec.members``。
 
 口径要点：
@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from ghrah.protocol.views.core import AgentAssemblySpec, AgentMemberPermissions
@@ -27,9 +28,16 @@ from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.core.config.builders import build_model_overrides_from_dict, build_window_from_dict
 from ghrah.manifest.resolver import ResolvedAbility, ResolvedAgent
 from ghrah.manifest.types import PermissionFlags, SurfaceConfig
-from ghrah.types.config_types import AgentConfig, ContextConfig
+from ghrah.types.config_types import AgentConfig, ContextConfig, ModelOverrides, WindowConfig
 
-__all__ = ["AssemblyError", "resolve_assembly"]
+__all__ = [
+    "AssemblyError",
+    "config_from_snapshot",
+    "config_to_snapshot",
+    "resolve_assembly",
+    "resolve_members",
+    "surface_from_snapshot",
+]
 
 _PERMISSION_FIELDS = (
     "require_hitl",
@@ -154,10 +162,83 @@ def resolve_assembly(
     if spec.agent_id:
         raise AssemblyError("recovery mode must read the Core snapshot, not resolve a spec")
     config = _build_config(spec, workspace_root)
-    abilities = [_resolve_member(source, item.member, item.permissions) for item in spec.members]
+    abilities = resolve_members(source, [item.model_dump() for item in spec.members])
     surface = (
         SurfaceConfig.model_validate(spec.config.surface.model_dump())
         if spec.config is not None and spec.config.surface is not None
         else None
     )
     return ResolvedAgent(config=config, abilities=abilities, surface=surface)
+
+
+def resolve_members(
+    source: BuiltinAbilitySource,
+    members: list[dict[str, Any]],
+) -> list[ResolvedAbility]:
+    """按快照里的成员申请重建能力列表（恢复路径用；成员定义来自能力来源）。
+
+    Args:
+        source: 能力来源；成员定义从它加载，**不从 Subject 的模板读**。
+        members: 快照里冻结的成员申请，元素形如
+            ``{"member": str, "permissions": dict | None, "axes": dict | None}``。
+
+    Returns:
+        与请求顺序一致的 ``ResolvedAbility`` 列表。
+    """
+    resolved: list[ResolvedAbility] = []
+    for item in members:
+        member = str(item.get("member") or "")
+        if not member:
+            raise AssemblyError("member entry without a name in snapshot")
+        raw = item.get("permissions")
+        request = AgentMemberPermissions.model_validate(raw) if raw is not None else None
+        resolved.append(_resolve_member(source, member, request))
+    return resolved
+
+
+def config_to_snapshot(config: AgentConfig) -> dict[str, Any]:
+    """``AgentConfig`` → 可 JSON 序列化的快照形态（嵌套 dataclass 一并展开）。"""
+    return {
+        "name": config.name,
+        "agent_id": config.agent_id,
+        "endpoint_name": config.endpoint_name,
+        "description": config.description,
+        "system_prompt": config.system_prompt,
+        "max_iterations": config.max_iterations,
+        "communication_timeout": config.communication_timeout,
+        "window": asdict(config.window) if config.window is not None else None,
+        "context": asdict(config.context) if config.context is not None else None,
+        "model_overrides": (
+            asdict(config.model_overrides) if config.model_overrides is not None else None
+        ),
+        "workspace_root": config.workspace_root,
+        "cluster_context_injection": config.cluster_context_injection,
+        "environment_context_injection": config.environment_context_injection,
+    }
+
+
+def config_from_snapshot(data: dict[str, Any]) -> AgentConfig:
+    """快照形态 → ``AgentConfig``；缺失的嵌套段按未声明处理。"""
+    window = data.get("window")
+    context = data.get("context")
+    overrides = data.get("model_overrides")
+    return AgentConfig(
+        name=str(data.get("name") or ""),
+        agent_id=str(data.get("agent_id") or ""),
+        endpoint_name=data.get("endpoint_name"),
+        description=str(data.get("description") or ""),
+        system_prompt=str(data.get("system_prompt") or ""),
+        max_iterations=int(data.get("max_iterations", 10)),
+        communication_timeout=float(data.get("communication_timeout", 300.0)),
+        window=WindowConfig(**window) if isinstance(window, dict) else None,
+        context=ContextConfig(**context) if isinstance(context, dict) else None,
+        model_overrides=ModelOverrides(**overrides) if isinstance(overrides, dict) else None,
+        workspace_root=data.get("workspace_root"),
+        cluster_context_injection=bool(data.get("cluster_context_injection", False)),
+        environment_context_injection=bool(data.get("environment_context_injection", False)),
+    )
+
+
+def surface_from_snapshot(data: dict[str, Any] | None) -> SurfaceConfig | None:
+    """快照里的表面覆盖 → ``SurfaceConfig``；``None`` 表示未覆盖。"""
+    return SurfaceConfig.model_validate(data) if data is not None else None

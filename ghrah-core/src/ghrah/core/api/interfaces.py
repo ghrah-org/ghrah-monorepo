@@ -49,9 +49,12 @@ from ghrah.protocol.views.common import (
     SessionIdView,
 )
 from ghrah.protocol.views.core import (
+    AgentAssemblySpec,
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     BranchListView,
@@ -280,6 +283,26 @@ class AgentCreateFromTemplateRequest(BaseModel):
 
     template: AgentTemplateSpec
     agent_id: str | None = None
+
+
+class AgentConfigRequest(BaseModel):
+    """``agents.config`` 的请求信封：按 ``agent_id`` 读配置事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+
+
+class AgentCreateAssemblyRequest(BaseModel):
+    """``agents.create_assembly`` 的请求信封：装配输入 v3。
+
+    与 ``agents.create``（旧 spawn 规格）并存到 T3-b；
+    新链路只用这一条，配置由 Core 落实例快照。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: AgentAssemblySpec
 
 
 class AgentGetRequest(BaseModel):
@@ -631,6 +654,8 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("agents.create", AgentCreateRequest, AgentIdView),
         Interface("agents.create_from_template", AgentCreateFromTemplateRequest, AgentIdView),
         Interface("agents.get", AgentGetRequest, AgentView),
+        Interface("agents.config", AgentConfigRequest, AgentConfigView),
+        Interface("agents.create_assembly", AgentCreateAssemblyRequest, AgentStartView),
         Interface("agents.list", AgentListRequest, Page[str]),
         Interface("agents.delete", AgentDeleteRequest, AckView),
         Interface("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),

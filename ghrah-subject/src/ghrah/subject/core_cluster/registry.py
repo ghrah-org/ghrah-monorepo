@@ -588,6 +588,10 @@ def default_core_unit_factory(
             hitl_degraded_timeout=config.hitl_policy.hitl_degraded_timeout,
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
+            # 实例配置快照：运行期配置权威落在项目 Root 内，与链库同目录。
+            agent_instances_path=str(
+                ProjectPaths.from_locator(project_root_locator).db_dir / "agents.sqlite3"
+            ),
             shell_cwd_provider=shell_cwd_provider if shell_cwd_lookup is not None else None,
             shell_allow_lookup=partial(shell_allow_lookup, project_id)
             if shell_allow_lookup is not None

@@ -129,7 +129,7 @@ class TestMetaContract:
         assert meta.routes.long_running_commands == frozenset()
         assert meta.routes.events == frozenset()
 
-    def test_meta_commands_exactly_24(self) -> None:
+    def test_meta_commands_exactly_26(self) -> None:
         unit = create_core_unit(CoreUnitConfig(project_id="default"))
         expected = {
             CommandType.SPAWN_AGENT.value,
@@ -145,6 +145,8 @@ class TestMetaContract:
             CommandType.EXECUTE_ABILITY.value,
             CommandType.AGENT_COMPACT_CONTEXT.value,
             CommandType.AGENT_RESET.value,
+            CommandType.CREATE_AGENT_ASSEMBLY.value,
+            CommandType.GET_AGENT_CONFIG.value,
             CommandType.HITL_RESPONSE.value,
             CommandType.SESSION_CREATE.value,
             CommandType.SESSION_ACTIVATE.value,
@@ -157,7 +159,7 @@ class TestMetaContract:
             CommandType.BRANCH_ARCHIVE.value,
             CommandType.BRANCH_DELETE.value,
         }
-        assert len(unit.meta.routes.commands) == 24
+        assert len(unit.meta.routes.commands) == 26
         assert unit.meta.routes.commands == expected
 
 

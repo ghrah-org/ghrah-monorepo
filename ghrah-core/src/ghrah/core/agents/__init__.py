@@ -10,12 +10,19 @@
   ``agent_id`` 读它恢复，不再回读 Subject 的模板。
 - :mod:`ghrah.core.agents.assembly`：把端口的 ``AgentAssemblySpec`` 解析成
   spawn 需要的 ``ResolvedAgent``（配置 + 逐成员 ``ResolvedAbility``）。
-  这是 v3 装配输入替换 ``manifest_ref`` 解析的落点。
+  这是 v3 装配输入替换「读 YAML 模板再解析」的落点。
 """
 
 from __future__ import annotations
 
-from ghrah.core.agents.assembly import AssemblyError, resolve_assembly
+from ghrah.core.agents.assembly import (
+    AssemblyError,
+    config_from_snapshot,
+    config_to_snapshot,
+    resolve_assembly,
+    resolve_members,
+    surface_from_snapshot,
+)
 from ghrah.core.agents.instance_store import (
     AgentInstanceRecord,
     AgentInstanceStore,
@@ -27,5 +34,9 @@ __all__ = [
     "AgentInstanceStore",
     "AgentInstanceStoreError",
     "AssemblyError",
+    "config_from_snapshot",
+    "config_to_snapshot",
     "resolve_assembly",
+    "resolve_members",
+    "surface_from_snapshot",
 ]

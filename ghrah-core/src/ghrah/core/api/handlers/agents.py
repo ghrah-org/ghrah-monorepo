@@ -16,8 +16,10 @@ from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import AckView, AgentIdView, Page
 from ghrah.protocol.views.core import (
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     ToolListView,
@@ -27,6 +29,8 @@ from ghrah.protocol.views.core import (
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
 from ghrah.core.api.interfaces import (
+    AgentConfigRequest,
+    AgentCreateAssemblyRequest,
     AgentCreateFromTemplateRequest,
     AgentCreateRequest,
     AgentDeleteRequest,
@@ -143,6 +147,26 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
     async def create(request: AgentCreateRequest) -> AgentIdView:
         """创建并启动一个 Agent（单元内同步完成激活）。"""
         return await _spawn("agents.create", request.spec)
+
+    async def create_assembly(request: AgentCreateAssemblyRequest) -> AgentStartView:
+        """按装配输入 v3 创建或恢复 Agent（配置由 Core 落实例快照）。"""
+        result = await registry.handle_command(
+            command="create_agent_assembly",
+            payload={"spec": request.spec.model_dump(mode="json")},
+        )
+        if not result.get("success"):
+            raise _fail("agents.create_assembly", result)
+        return AgentStartView.model_validate(result.get("data") or {})
+
+    async def config(request: AgentConfigRequest) -> AgentConfigView:
+        """按 ``agent_id`` 读 Core 持有的配置事实。"""
+        result = await registry.handle_command(
+            command="get_agent_config",
+            payload={"agent_id": request.agent_id},
+        )
+        if not result.get("success"):
+            raise _fail("agents.config", result)
+        return AgentConfigView.model_validate(result.get("data") or {})
 
     async def create_from_template(request: AgentCreateFromTemplateRequest) -> AgentIdView:
         """按模板创建 Agent：模板先解析成 spawn 规格。"""
@@ -287,6 +311,8 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
 
     return {
         "agents.create": create,
+        "agents.create_assembly": create_assembly,
+        "agents.config": config,
         "agents.create_from_template": create_from_template,
         "agents.get": get_agent,
         "agents.list": list_agents,
