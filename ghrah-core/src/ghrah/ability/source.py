@@ -189,14 +189,16 @@ class BuiltinAbilitySource:
             return cached
         manifests: dict[str, AbilityManifest] = {}
         for skill in ability_catalog.scan_ability_definitions().skills:
-            member = skill.full_name
-            package, _, key = member.rpartition(".")
-            manifests[member] = AbilityManifest(
+            raw = skill.full_name
+            package, _, key = raw.rpartition(".")
+            package = package or raw
+            safe_name = key.replace("-", "_") or package
+            manifest = AbilityManifest(
                 manifest="ability",
                 version="1",
                 metadata=AbilityMetadata(
-                    namespace=package or member,
-                    name=key.replace("-", "_") or member,
+                    namespace=package,
+                    name=safe_name,
                     title=skill.title,
                     description=skill.description,
                     tags=list(skill.tags),
@@ -205,6 +207,13 @@ class BuiltinAbilitySource:
                 tool=None,
                 implementation=ImplementationDef(type="skill", handler=skill.key),
             )
+            # 装配侧既可能用声明里的原始键（kebab-case），也可能用归一后的 member 名；
+            # 两个键都登记，取值都指向同一个投影（`manifest.full_name` 是归一后的）。
+            manifests[raw] = manifest
+            manifests[manifest.full_name] = manifest
+            if raw == package:
+                # 退化身份（成员键与包同名，如 `research`）也要能按包名取到。
+                manifests[package] = manifest
         self._skill_manifests = manifests
         return manifests
 
@@ -226,11 +235,16 @@ class BuiltinAbilitySource:
         ]
         # 技能成员与工具成员同在「整包」里：只有工具面的包（如 ``ghrah.cluster``）
         # 走 prefix 命中，纯技能包（如 ``ghrah.ability-builder``）只能从这里取到。
-        skills = [
-            AbilityManifest.model_validate(item.model_dump())
-            for name, item in self._builtin_skill_manifests().items()
-            if name == full_name or name.startswith(prefix)
-        ]
+        # 同一技能在原始键与归一键下各登记一次，按 ``manifest.full_name`` 去重。
+        skills: list[AbilityManifest] = []
+        seen: set[str] = set()
+        for name, item in self._builtin_skill_manifests().items():
+            if name != full_name and not name.startswith(prefix):
+                continue
+            if item.full_name in seen:
+                continue
+            seen.add(item.full_name)
+            skills.append(AbilityManifest.model_validate(item.model_dump()))
         if matched or skills:
             return [
                 *[AbilityManifest.model_validate(item.model_dump()) for item in matched],
