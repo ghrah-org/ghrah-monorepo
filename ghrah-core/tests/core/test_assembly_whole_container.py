@@ -62,12 +62,13 @@ def test_whole_container_expands_into_all_members() -> None:
     assert [item.ability_name for item in resolved] == ["acme.demo.ping", "acme.demo.guide"]
 
 
-def test_whole_container_skips_control_members() -> None:
+def test_whole_container_keeps_control_members_for_the_startup_split() -> None:
+    """控制成员也要进装配结果：启动核定把它们分到 control 通道（不写授权账本）。"""
     resolved = resolve_members(
         _Source(),  # type: ignore[arg-type]
         [{"member": "ghrah.core", "whole_container": True}],
     )
-    assert [item.ability_name for item in resolved] == []
+    assert [item.ability_name for item in resolved] == ["ghrah.core.end_task"]
 
 
 def test_explicit_member_still_resolves() -> None:

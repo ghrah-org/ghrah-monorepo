@@ -12,8 +12,9 @@
   不写进 ``PermissionFlags``，让 ``model_fields_set`` 保留下来，交给
   ``resolve_effective_permission`` 沿用包声明上限；写成默认值等于把「未申请」
   误判成「显式收紧」。
-- **控制成员静默跳过**：``conversation`` / ``end_task`` 由 Agent 原控制机制提供，
-  模板里选中它们（整包或逐个勾选）都不算错，装配时跳过即可——沿用旧行为。
+- **控制成员照常解析**：``conversation`` / ``end_task`` 由启动核定分到 control
+  通道（不进授权账本、不受授权投影裁剪），但必须真正进装配结果——模板选了它们，
+  Agent 才有对应的循环步骤。
 """
 
 from __future__ import annotations
@@ -125,25 +126,21 @@ def _resolve_member(
     request: AgentMemberPermissions | None,
     *,
     version: str | None = None,
-) -> ResolvedAbility | None:
+) -> ResolvedAbility:
     """加载一个成员并把 L2 申请合并到包声明上。
 
-    控制成员（``conversation`` / ``end_task``）由 Agent 原控制机制提供，装配期
-    静默跳过——模板里选中它们（整包或逐个勾选）都按这个口径处理，不算错误。
+    控制成员（``conversation`` / ``end_task``）与普通成员一样在这里解析：启动核定
+    会把它们分到 control 通道（不写授权账本），所以模板里选中它们必须真正进
+    装配结果，不能在这里丢掉。
 
     Args:
         member: 成员全名（``<package>.<key>``）。
         version: 能力件版本；内核件为 ``None``。多版本并存时由它决定读哪一层目录。
-
-    Returns:
-        解析后的能力；控制成员返回 ``None``（由调用方跳过）。
     """
     try:
         manifest = source.load_ability(member, version=version)
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
         raise AssemblyError(f"member not resolvable: {member}: {error}") from error
-    if _is_control_member(manifest):
-        return None
     declared = manifest.metadata.permissions
     requested = _permissions(request)
     return ResolvedAbility(
@@ -211,19 +208,15 @@ def resolve_members(
         raw = item.get("permissions")
         request = AgentMemberPermissions.model_validate(raw) if raw is not None else None
         if bool(item.get("whole_container")):
-            # 「整包」：按包名展开成全部成员；控制成员仍由 Agent 原控制机制提供。
+            # 「整包」：按包名展开成全部成员（控制成员也进，由启动核定分流）。
             try:
                 manifests = source.load_package_members(member)
             except Exception as error:  # noqa: BLE001 — 统一折成装配错误
                 raise AssemblyError(f"package not resolvable: {member}: {error}") from error
             for manifest in manifests:
-                ability = _resolve_member(source, manifest.full_name, request)
-                if ability is not None:
-                    resolved.append(ability)
+                resolved.append(_resolve_member(source, manifest.full_name, request))
             continue
-        ability = _resolve_member(source, member, request)
-        if ability is not None:
-            resolved.append(ability)
+        resolved.append(_resolve_member(source, member, request))
     return resolved
 
 
