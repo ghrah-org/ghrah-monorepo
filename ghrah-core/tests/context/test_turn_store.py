@@ -84,3 +84,42 @@ async def test_context_restore_only_normalizes_its_own_turns(tmp_path):
         assert interrupted["start_node_id"] is None
         assert interrupted["base_node_id"] == interrupted["end_node_id"] == restored.active_head.id
         assert (await backend.load_turn("b", second_turn))["status"] == "open"
+
+
+async def test_suggested_rollback_targets_include_compact_member(tmp_path):
+    """compact 是普通成员：建议回滚目标包含它，排除逻辑只剩 incomplete。"""
+    runtime = SessionRuntime.create(agent_name="agent")
+    branch = runtime.session.active_branch_id
+    async with SqliteBackend(tmp_path / "core.sqlite") as backend:
+        active = turn.ActiveTurn("turn", "agent", runtime.session.session_id, None, "self")
+        async with backend.transaction() as db:
+            await turn.insert_turn_placeholder(db, active, opened_at=datetime.now(UTC).isoformat())
+        compact = runtime.commit_node(turn_id=active.turn_id, metadata={"node_kind": "compact"})
+        await backend.apply_changes(
+            ContextChanges(
+                agent_name="agent",
+                sessions=(runtime.session,),
+                branches=(runtime.get_branch(branch),),
+                nodes=(compact,),
+            )
+        )
+        ordinary = runtime.commit_node(turn_id=active.turn_id)
+        await backend.apply_changes(
+            ContextChanges(
+                agent_name="agent",
+                branches=(runtime.get_branch(branch),),
+                nodes=(ordinary,),
+            )
+        )
+        async with backend.transaction() as db:
+            row = await turn.close_turn(
+                db,
+                turn_id=active.turn_id,
+                status="interrupted",
+                closing_kind="cancelled",
+                end_node_id=ordinary.id,
+                closed_at=datetime.now(UTC).isoformat(),
+            )
+            suggestions = await turn.suggest_rollback_targets(db, row, limit=10)
+        assert compact.id in suggestions
+        assert ordinary.id in suggestions

@@ -176,6 +176,10 @@ async def test_crash_scene_recovers_once_before_loading(rollback_runtime, with_m
         marker_snapshot = snapshot(backend.db_path)
         assert marker_snapshot["nodes"] == before["nodes"]
         assert marker_snapshot["branches"] == before["branches"]
+        # 连续两次 open 幂等：标记不重复写，链不重复建。
+        await mm.close()
+        await mm.open(start_dispatcher=False)
+        assert snapshot(backend.db_path) == marker_snapshot
     recovered = ContextManager("agent", persistence=backend)
     await recovered.restore("agent")
     view = await port.turns.get(agent_id="agent", turn_id=turn_id)
@@ -356,3 +360,176 @@ async def test_routed_ability_revocation_leaves_no_retry_branch(rollback_runtime
 
     assert len(cm.list_branches(session_id)) == branches_before
     assert snapshot(backend.db_path)["branches"] == db_before
+
+
+async def test_cross_process_abort_revokes_atomic_commit(rollback_runtime):
+    """进程内吊销集看不到的跨进程中止，由 DB 权威层在提交事务中拦下。"""
+    agent, backend, mm, _ = rollback_runtime
+    cm = agent._context_manager
+    opener = await send(mm, "cross-process")
+    opener_id = opener.deliveries[0].delivery_id
+    turn_id = await cm.open_turn(opener_delivery_id=opener_id)
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE mm_deliveries SET state='processing', turn_id=? WHERE delivery_id=?",
+            (turn_id, opener_id),
+        )
+        await db.execute(
+            "UPDATE turns SET status='aborted', closing_kind='external_abort', "
+            "closed_at='2026-11-18T00:00:00Z' WHERE turn_id=?",
+            (turn_id,),
+        )
+    # 模拟另一进程中止：内存吊销集并不知道该轮已中止。
+    cm.check_turn_revoked()
+    candidate = cm._commit_candidate()
+    candidate.begin_iteration()
+    node = candidate.commit_iteration()
+    changes = ContextChanges(
+        agent_name="agent",
+        nodes=(node,),
+        sessions=(candidate.get_active_session(),),
+        branches=(candidate.get_active_session_branch(),),
+    )
+    scope = _AtomicDelivery(mm, backend, opener_id, "agent", [], cm)
+    before = snapshot(backend.db_path)
+    with pytest.raises(turn.TurnRevokedError):
+        await mm._apply_atomic(scope, changes)
+    assert snapshot(backend.db_path) == before
+
+
+async def test_consecutive_failures_do_not_pick_previous_diagnosis(rollback_runtime, monkeypatch):
+    """连续两次异常：第二次诊断挂在恢复分支上，最近正确节点不得是上一次的 incomplete。"""
+    agent, backend, mm, port = rollback_runtime
+    cm = agent._context_manager
+    calls = 0
+
+    async def action(data):
+        nonlocal calls
+        calls += 1
+        if calls % 2 == 1:
+            return {"results": [], "llm_metadata": {"pending_tool_call_ids": ["unfinished"]}}
+        raise RuntimeError("action failed")
+
+    monkeypatch.setattr(agent, "_action", action)
+    monkeypatch.setattr(agent.config, "max_iterations", 2)
+    branches_before = len(cm.list_branches(cm.active_session_id))
+    first = await send(mm, "first")
+    await mm.dispatch_pending()
+    (first_delivery,) = await mm.get_deliveries(first.message_id)
+    first_view = await port.turns.get(agent_id="agent", turn_id=first_delivery.turn_id)
+    first_diagnosis = await backend.load_node("agent", first_view.incomplete_node_id)
+    assert first_diagnosis.parent_id == first_view.end_node_id
+
+    second = await send(mm, "second")
+    await mm.dispatch_pending()
+    (second_delivery,) = await mm.get_deliveries(second.message_id)
+    second_view = await port.turns.get(agent_id="agent", turn_id=second_delivery.turn_id)
+    second_diagnosis = await backend.load_node("agent", second_view.incomplete_node_id)
+    assert second_diagnosis.parent_id == second_view.end_node_id
+    assert second_diagnosis.id != first_diagnosis.id
+    assert second_diagnosis.parent_id != first_diagnosis.id
+    assert second_view.start_node_id != first_diagnosis.id
+    assert second_diagnosis.metadata["last_correct_node_id"] == second_view.end_node_id
+    assert len(cm.list_branches(cm.active_session_id)) == branches_before + 2
+
+
+async def test_crash_after_abort_commit_recovers_recovery_branch(rollback_runtime, monkeypatch):
+    """中止事务提交后、内存安装前崩溃：重启后终态与恢复分支都来自持久事实。"""
+    agent, backend, _, _ = rollback_runtime
+    cm = agent._context_manager
+    turn_id = await cm.open_turn()
+    node = append_node(cm, "committed")
+    await cm.persist()
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE nodes SET metadata=json_set(metadata,'$.pending_tool_call_ids',json(?)) "
+            "WHERE id=?",
+            (json.dumps(["tool-1"]), node.id),
+        )
+    monkeypatch.setattr(cm, "_install_convergence", lambda changes: None)
+    outcome = await cm.abort_turn(
+        turn_id=turn_id, reason="crash-after-commit", settle_deliveries=None
+    )
+    assert outcome.changed and outcome.row["status"] == "aborted"
+    row = await backend.load_turn("agent", turn_id)
+    metadata = json.loads(row["metadata"])
+    assert metadata["recovery_branch_id"] and metadata["incomplete_node_id"]
+    assert row["end_node_id"] == node.id
+
+    restored = ContextManager("agent", persistence=backend)
+    await restored.restore("agent")
+    reloaded = json.loads((await backend.load_turn("agent", turn_id))["metadata"])
+    assert restored.get_active_session_branch().branch_id == reloaded["recovery_branch_id"]
+    assert restored.active_head.id == node.id
+    async with backend.transaction() as db:
+        session_row = await (
+            await db.execute(
+                "SELECT active_branch_id FROM sessions WHERE agent_name='agent' AND session_id=?",
+                (restored.active_session_id,),
+            )
+        ).fetchone()
+        branch_row = await (
+            await db.execute(
+                "SELECT head_node_id FROM branches WHERE branch_id=?",
+                (reloaded["recovery_branch_id"],),
+            )
+        ).fetchone()
+    assert session_row["active_branch_id"] == reloaded["recovery_branch_id"]
+    assert branch_row["head_node_id"] == node.id
+
+
+async def test_crash_after_failure_convergence_keeps_single_diagnosis(
+    rollback_runtime, monkeypatch
+):
+    """失败收敛提交后、内存安装前崩溃：重启不重复写诊断，活动分支落到恢复分支。"""
+    agent, backend, _, _ = rollback_runtime
+    cm = agent._context_manager
+    turn_id = await cm.open_turn()
+    node = append_node(cm, "committed")
+    await cm.persist()
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE nodes SET metadata=json_set(metadata,'$.pending_tool_call_ids',json(?)) "
+            "WHERE id=?",
+            (json.dumps(["tool-1"]), node.id),
+        )
+    monkeypatch.setattr(cm, "_install_convergence", lambda changes: None)
+    outcome = await cm.converge_turn(
+        turn_id=turn_id, error=RuntimeError("boom"), settle_deliveries=None
+    )
+    assert outcome.changed and outcome.row["status"] == "failed"
+    row = await backend.load_turn("agent", turn_id)
+    metadata = json.loads(row["metadata"])
+    assert metadata["incomplete_node_id"] and metadata["recovery_branch_id"]
+
+    restored = ContextManager("agent", persistence=backend)
+    await restored.restore("agent")
+    checkpoint = await backend.load_checkpoint("agent")
+    diagnoses = [
+        item for item in checkpoint.nodes if item.metadata.get("node_kind") == "incomplete"
+    ]
+    assert len(diagnoses) == 1
+    assert restored.get_active_session_branch().branch_id == metadata["recovery_branch_id"]
+    assert restored.active_head.id == row["end_node_id"] == node.id
+
+
+async def test_zero_node_failure_records_phase_without_diagnosis(rollback_runtime, monkeypatch):
+    """首个提交前失败：只写轮次终态与原因，不建诊断节点/恢复分支。"""
+    agent, backend, mm, _ = rollback_runtime
+
+    async def action(data):
+        raise RuntimeError("first call failed")
+
+    monkeypatch.setattr(agent, "_action", action)
+    branches_before = snapshot(backend.db_path)["branches"]
+    request = await send(mm, "zero-node")
+    await mm.dispatch_pending()
+    (delivery,) = await mm.get_deliveries(request.message_id)
+    assert delivery.state.value == "failed"
+    row = await backend.load_turn("agent", delivery.turn_id)
+    metadata = json.loads(row["metadata"])
+    assert row["status"] == "failed" and row["start_node_id"] is None
+    assert metadata["abort_phase"] == "iteration"
+    assert "first call failed" in metadata["abort_reason"]
+    assert "incomplete_node_id" not in metadata
+    assert snapshot(backend.db_path)["branches"] == branches_before

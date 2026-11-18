@@ -332,6 +332,7 @@ async def test_compact_commits_without_loading_or_consuming_injections(runtime):
     scope.consumed_deliveries.clear()
     await mm._apply_atomic(scope, changes)
     assert (await backend.load_turn("agent", turn_id))["start_node_id"] == compact.id
+    assert (await mm.get_deliveries(opener.message_id))[0].last_node_id == compact.id
     assert (await mm.get_deliveries(incoming.message_id))[0].consumed_node_id is None
     assert len(await mm.load_turn_inputs(turn_id)) == 1
     assert not scope.consumed

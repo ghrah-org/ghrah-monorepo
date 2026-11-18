@@ -253,3 +253,27 @@ async def test_atomic_entry_early_failure_clears_compact_request(
                 last_node_id=cm.active_head.id,
             )
     assert not cm.compact_requested
+
+
+async def test_compact_only_turn_failure_then_next_turn_continues(rollback_runtime):
+    """首节点即 compact 的轮次失败后，用户直接发下一条：新轮从 compact 继续，无诊断/无恢复分支。"""
+    agent, backend, mm, port = rollback_runtime
+    cm = agent._context_manager
+    branch_count = len(cm.list_branches(cm.active_session_id))
+    turn_id = await cm.open_turn()
+    compact = cm.commit_compact_node([])
+    await cm.persist()
+    await cm.close_turn(status="failed", closing_kind="error")
+    failed = await port.turns.get(agent_id="agent", turn_id=turn_id)
+    assert failed.status == "failed"
+    assert failed.start_node_id == failed.end_node_id == compact.id
+    assert failed.incomplete_node_id is None
+    assert len(cm.list_branches(cm.active_session_id)) == branch_count
+
+    request = await send(mm, "next-after-compact")
+    await mm.dispatch_pending()
+    (delivery,) = await mm.get_deliveries(request.message_id)
+    assert delivery.state.value == "completed"
+    later = await backend.load_turn("agent", delivery.turn_id)
+    assert later["base_node_id"] == compact.id
+    assert later["start_node_id"] is not None
