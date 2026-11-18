@@ -405,6 +405,20 @@ class AgentOperations(Protocol):
         """
         ...
 
+    async def update_model(
+        self,
+        *,
+        agent_id: AgentId,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> AgentStartView:
+        """只改实例快照里的模型段（端点引用 + 请求参数），其余配置保持现值。
+
+        在线实例重启生效；离线时只落库，下次启动生效。对应旧的
+        ``model.configure`` 操作。
+        """
+        ...
+
     async def delete_assembly(self, *, agent_id: AgentId) -> None:
         """停止（若在线）并删除实例快照；不存在时幂等成功。
 

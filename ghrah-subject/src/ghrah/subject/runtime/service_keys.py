@@ -230,6 +230,14 @@ class ClusterHandle(Protocol):
     async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
         """停止（若在线）并删除实例快照。"""
 
+    async def update_model(
+        self,
+        agent_id: str,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """只改实例快照里的模型段。"""
+
     async def send_message(self, payload: Any) -> dict[str, Any]:
         """向本 cluster 内指定 agent 发消息。"""
 

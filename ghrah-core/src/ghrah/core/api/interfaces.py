@@ -329,6 +329,20 @@ class AgentAssemblyUpdateRequest(BaseModel):
     spec: AgentAssemblySpec
 
 
+class AgentModelUpdateRequest(BaseModel):
+    """``agents.update_model`` 的请求信封：只改实例快照里的模型段。
+
+    对应旧的 ``model.configure`` 操作：只携带端点引用与请求参数，其余配置
+    （提示词、上限、上下文、能力面、路径）保持快照现值不动。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    endpoint_name: str = Field(min_length=1)
+    model_overrides: dict[str, Any] | None = None
+
+
 class AgentGetRequest(BaseModel):
     """``agents.get`` 的请求信封。"""
 
@@ -684,6 +698,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("agents.stop_assembly", AgentAssemblyTargetRequest, AckView),
         Interface("agents.update_assembly", AgentAssemblyUpdateRequest, AgentStartView),
         Interface("agents.delete_assembly", AgentAssemblyTargetRequest, AckView),
+        Interface("agents.update_model", AgentModelUpdateRequest, AgentStartView),
         Interface("agents.list", AgentListRequest, Page[str]),
         Interface("agents.delete", AgentDeleteRequest, AckView),
         Interface("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),

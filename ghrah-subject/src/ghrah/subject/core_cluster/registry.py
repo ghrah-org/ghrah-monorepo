@@ -211,6 +211,24 @@ class CoreUnitHandle:
             {"agent_id": agent_id, "spec": spec.model_dump(mode="json")},
         )
 
+    async def update_model(
+        self,
+        agent_id: str,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """只改实例快照里的模型段；在线实例重启生效。"""
+        if not self._alive:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        return await self._dispatch(
+            "update_agent_model",
+            {
+                "agent_id": agent_id,
+                "endpoint_name": endpoint_name,
+                "model_overrides": model_overrides,
+            },
+        )
+
     async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
         """停止（若在线）并删除实例快照；两边都不存在时幂等成功。"""
         if not self._alive:

@@ -297,6 +297,7 @@ _COMMANDS: frozenset[str] = frozenset(
         CommandType.START_AGENT_ASSEMBLY.value,
         CommandType.STOP_AGENT_ASSEMBLY.value,
         CommandType.UPDATE_AGENT_ASSEMBLY.value,
+        CommandType.UPDATE_AGENT_MODEL.value,
         CommandType.DELETE_AGENT_ASSEMBLY.value,
         CommandType.HITL_RESPONSE.value,
         CommandType.SESSION_CREATE.value,
@@ -545,6 +546,7 @@ class CoreUnit:
             CommandType.START_AGENT_ASSEMBLY.value: self._handle_start_agent_assembly,
             CommandType.STOP_AGENT_ASSEMBLY.value: self._handle_stop_agent_assembly,
             CommandType.UPDATE_AGENT_ASSEMBLY.value: self._handle_update_agent_assembly,
+            CommandType.UPDATE_AGENT_MODEL.value: self._handle_update_agent_model,
             CommandType.DELETE_AGENT_ASSEMBLY.value: self._handle_delete_agent_assembly,
             CommandType.GET_AGENT_CONFIG.value: self._handle_get_agent_config,
             CommandType.EXECUTE_ABILITY.value: self._handle_execute_ability,
@@ -1287,6 +1289,85 @@ class CoreUnit:
             )
         deleted = await store.delete(agent_id)
         return self._ok({"agent_id": agent_id, "deleted": deleted, "stopped": online is not None})
+
+    async def _handle_update_agent_model(
+        self, payload: dict[str, Any], cmd_ctx: Any
+    ) -> dict[str, Any]:
+        """只改快照里的模型段（端点引用 + 请求参数），其余配置保持现值。
+
+        在线实例需要重启才能载入新模型；离线时只落库，下次启动生效。
+        """
+        from dataclasses import replace as _replace
+
+        from ghrah.core.agents import config_from_snapshot, config_to_snapshot
+
+        del cmd_ctx
+        agent_id = str(payload.get("agent_id") or "").strip()
+        endpoint_name = str(payload.get("endpoint_name") or "").strip()
+        if not agent_id:
+            return self._err("agent_id is required")
+        if not endpoint_name:
+            return self._err("endpoint_name is required")
+        try:
+            store = self._require_agent_instances()
+        except RuntimeError as error:
+            return self._err(str(error))
+        record = await store.get(agent_id)
+        if record is None:
+            return self._err(f"agent instance snapshot not found: {agent_id}")
+        config = config_from_snapshot(record.config)
+        overrides = payload.get("model_overrides")
+        updated = _replace(
+            config,
+            endpoint_name=endpoint_name,
+            model_overrides=(None if overrides is None else self._model_overrides(overrides)),
+        )
+        snapshot = config_to_snapshot(updated)
+        await store.save(
+            agent_id=agent_id,
+            name=record.name,
+            config=snapshot,
+            members=record.members,
+            surface=record.surface,
+            mcp_refs=record.mcp_refs,
+            incarnation_id=record.incarnation_id,
+        )
+        # 在线才重启（新模型需要重新装配）；离线时只落库，下次启动生效。
+        if self._supervisor is None:
+            return self._ok(
+                {
+                    "name": record.name,
+                    "agent_id": agent_id,
+                    "recovery_mode": "resumed",
+                    "incarnation_id": record.incarnation_id,
+                }
+            )
+        online = await self._online_agent(agent_id)
+        if online is not None:
+            await self._supervisor.terminate_agent(str(online.get("name") or ""))
+            refreshed = await store.get(agent_id)
+            if refreshed is None:  # pragma: no cover - 刚写过，行必在
+                return self._err(f"agent instance snapshot not found: {agent_id}")
+            return await self._restore_from_snapshot(refreshed)
+        return self._ok(
+            {
+                "name": record.name,
+                "agent_id": agent_id,
+                "recovery_mode": "resumed",
+                "incarnation_id": record.incarnation_id,
+            }
+        )
+
+    def _model_overrides(self, payload: dict[str, Any]) -> Any:
+        """把 wire 上的模型参数折成 ``ModelOverrides``（dataclass，未知键丢弃）。"""
+        from dataclasses import fields
+
+        from ghrah.types.config_types import ModelOverrides
+
+        names = {item.name for item in fields(ModelOverrides)}
+        return ModelOverrides(
+            **{key: value for key, value in payload.items() if key in names and value is not None}
+        )
 
     async def _handle_get_agent_config(
         self, payload: dict[str, Any], cmd_ctx: Any

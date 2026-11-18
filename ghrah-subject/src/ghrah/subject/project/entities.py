@@ -354,10 +354,25 @@ class AgentEntityManager:
             if incarnation is not None and incarnation != runtime.get("incarnation_id"):
                 raise StableError("agent_incarnation_conflict")
             if kind == "model.configure":
-                raise StableError(
-                    "agent_config_immutable",
-                    "模型与提示词由 Core 的实例快照承载，创建后不可经 Subject 改写",
+                # 配置权威在 Core 的实例快照：这里只把「改模型」这件事交给 Core，
+                # 由它落库并按需重启；Subject 不再持有模型与提示词。
+                try:
+                    result = await self._handle(project, agent).update_model(
+                        agent.agent_id,
+                        op["endpoint_name"],
+                        op.get("model_overrides"),
+                    )
+                except Exception as exc:
+                    raise StableError("agent_config_update_failed", str(exc)) from exc
+                if not result.get("success"):
+                    raise StableError("agent_config_update_failed", str(result.get("error") or ""))
+                project, agent = await self._load(identity)
+                await self._save(
+                    project,
+                    agent,
+                    {"runtime_status": "running", "last_error": ""},
                 )
+                return await self._snapshot(*await self._load(identity))
             if kind == "abilities.configure":
                 raise StableError(
                     "abilities_managed_by_access_store",

@@ -69,6 +69,8 @@ class CommandType(StrEnum):
     STOP_AGENT_ASSEMBLY = "stop_agent_assembly"
     UPDATE_AGENT_ASSEMBLY = "update_agent_assembly"
     DELETE_AGENT_ASSEMBLY = "delete_agent_assembly"
+    # 局部更新：只改实例快照里的模型引用与请求参数（对应旧 model.configure）。
+    UPDATE_AGENT_MODEL = "update_agent_model"
 
     # ─── Supervisor 类（Observer → Subject → Core）───
 

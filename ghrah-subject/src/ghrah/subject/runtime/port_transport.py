@@ -319,6 +319,22 @@ class PortClusterHandle:
             raise RuntimeError(f"cluster '{self._cluster_id}' is shut down")
         return await self._port.agents.update_assembly(agent_id=agent_id, spec=spec)
 
+    async def update_model(
+        self,
+        agent_id: str,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """只改实例快照里的模型段：转 ``agents.update_model``。"""
+        if not self.is_connected:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        await self._port.agents.update_model(
+            agent_id=agent_id,
+            endpoint_name=endpoint_name,
+            model_overrides=model_overrides,
+        )
+        return {"success": True, "data": None}
+
     async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
         """停止（若在线）并删除实例快照：转 ``agents.delete_assembly``。"""
         if not self.is_connected:

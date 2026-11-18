@@ -159,6 +159,49 @@ async def test_update_without_snapshot_is_explicit(tmp_path: Path) -> None:
         await store.close()
 
 
+async def test_update_model_rewrites_only_the_model_segment(tmp_path: Path) -> None:
+    """``update_agent_model`` 只改模型段，其余配置保持快照现值。"""
+    unit, store, _ = await _unit(tmp_path, online=False)
+    try:
+        await _seed(store)
+        result = await unit.handle_command(
+            "update_agent_model",
+            {
+                "agent_id": AGENT_ID,
+                "endpoint_name": "glm-x",
+                "model_overrides": {"temperature": 0.2, "max_tokens": 2048},
+            },
+            None,
+        )
+
+        assert result is not None and result["success"] is True, result
+        record = await store.get(AGENT_ID)
+        assert record is not None
+        assert record.config["endpoint_name"] == "glm-x"
+        assert record.config["model_overrides"]["temperature"] == 0.2
+        # 其余配置不受影响
+        assert record.config["system_prompt"] == "先列事实"
+        assert record.config["max_iterations"] == -1
+        assert record.members == [{"member": "ghrah.fs.read_file"}]
+    finally:
+        await store.close()
+
+
+async def test_update_model_without_snapshot_is_explicit(tmp_path: Path) -> None:
+    unit, store, _ = await _unit(tmp_path)
+    try:
+        result = await unit.handle_command(
+            "update_agent_model",
+            {"agent_id": "missing", "endpoint_name": "glm-x"},
+            None,
+        )
+
+        assert result is not None and result["success"] is False
+        assert "snapshot not found" in str(result["error"])
+    finally:
+        await store.close()
+
+
 async def test_lifecycle_commands_require_agent_id(tmp_path: Path) -> None:
     unit, store, _ = await _unit(tmp_path)
     try:

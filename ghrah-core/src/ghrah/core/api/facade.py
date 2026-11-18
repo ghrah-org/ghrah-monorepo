@@ -641,6 +641,22 @@ class _Agents:
         """停止（若在线）并删除实例快照；不存在时幂等成功。"""
         await self._facade._call("agents.delete_assembly", agent_id=agent_id)
 
+    async def update_model(
+        self,
+        *,
+        agent_id: AgentId,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> AgentStartView:
+        """只改实例快照里的模型段（端点引用 + 请求参数）。"""
+        raw = await self._facade._call(
+            "agents.update_model",
+            agent_id=agent_id,
+            endpoint_name=endpoint_name,
+            model_overrides=model_overrides,
+        )
+        return AgentStartView.model_validate(raw)
+
     async def config(self, *, agent_id: AgentId) -> AgentConfigView:
         """读取 Agent 的配置事实（不含项目身份）。"""
         raw = await self._facade._call("agents.config", agent_id=agent_id)

@@ -38,6 +38,7 @@ from ghrah.core.api.interfaces import (
     AgentDeleteRequest,
     AgentGetRequest,
     AgentListRequest,
+    AgentModelUpdateRequest,
     AgentRuntimeRequest,
 )
 from ghrah.core.units.registry import RuntimeRegistry
@@ -203,6 +204,20 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
             raise _fail("agents.delete_assembly", result)
         return AckView(ok=True)
 
+    async def update_model(request: AgentModelUpdateRequest) -> AgentStartView:
+        """只改实例快照里的模型段，其余配置保持不变。"""
+        result = await registry.handle_command(
+            command="update_agent_model",
+            payload={
+                "agent_id": request.agent_id,
+                "endpoint_name": request.endpoint_name,
+                "model_overrides": request.model_overrides,
+            },
+        )
+        if not result.get("success"):
+            raise _fail("agents.update_model", result)
+        return AgentStartView.model_validate(result.get("data") or {})
+
     async def config(request: AgentConfigRequest) -> AgentConfigView:
         """按 ``agent_id`` 读 Core 持有的配置事实。"""
         result = await registry.handle_command(
@@ -361,6 +376,7 @@ def make_agent_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         "agents.stop_assembly": stop_assembly,
         "agents.update_assembly": update_assembly,
         "agents.delete_assembly": delete_assembly,
+        "agents.update_model": update_model,
         "agents.config": config,
         "agents.create_from_template": create_from_template,
         "agents.get": get_agent,
