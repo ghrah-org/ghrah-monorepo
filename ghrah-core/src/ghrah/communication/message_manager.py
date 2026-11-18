@@ -42,7 +42,7 @@ from ghrah.communication.delivery_queue import (
     settle_terminal_turns,
     settle_turn_deliveries,
 )
-from ghrah.context import turn
+from ghrah.context import recovery, turn
 from ghrah.context.iteration_commit import clear_durable_iteration_scope
 from ghrah.context.manager import DeliverySessionUnavailableError
 from ghrah.context.persistence.changes import ContextChanges
@@ -424,16 +424,24 @@ class MessageManager:
                     "WHERE state='processing'",
                     ("Previous process stopped before durable completion",),
                 )
+                with_turns = await self._has_turn_schema(db)
+                preserve_aborted = (
+                    " AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id=mm_deliveries.turn_id "
+                    "AND t.status='aborted')"
+                    if with_turns
+                    else ""
+                )
                 # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用。
                 # 这里按「已消费即完成」收尾，保留说明性 error 供排查。
                 await db.execute(
                     "UPDATE mm_deliveries SET state='completed', error=? "
                     "WHERE state='interrupted' AND consumed_node_id IS NOT NULL "
                     "AND NOT EXISTS (SELECT 1 FROM mm_delivery_results r "
-                    "WHERE r.delivery_id=mm_deliveries.delivery_id)",
+                    "WHERE r.delivery_id=mm_deliveries.delivery_id)" + preserve_aborted,
                     ("recovered: consumed before durable completion",),
                 )
-                if await self._has_turn_schema(db):
+                if with_turns:
+                    await recovery.mark_crash_scenes(db)
                     await turn.normalize_open_turns(db, now=datetime.now(UTC).isoformat())
                 await settle_terminal_turns(db)
             await self.refresh_agent_ids()
@@ -607,6 +615,42 @@ class MessageManager:
             db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
         )
 
+    async def has_active_turn(self, agent_id: str) -> bool:
+        """检查调度器是否已为该接收方持久领取一轮。"""
+        async with self._lock:
+            db = self._require_db()
+            return await has_turns(db) and await turn.has_active_turn(db, agent_id)
+
+    @staticmethod
+    async def converge_turn_deliveries(
+        db: aiosqlite.Connection,
+        *,
+        turn_id: str,
+        opener_delivery_id: str | None,
+        opener_state: str,
+        opener_error: str,
+        terminal_state: str,
+    ) -> int:
+        """在轮次宿主事务内收敛开轮投递并释放未消费注入。"""
+        if opener_delivery_id is not None:
+            await db.execute(
+                "UPDATE mm_deliveries SET state=?,error=?,resume_requested=0 WHERE delivery_id=? "
+                "AND turn_id=? AND state IN ('processing','pending')",
+                (opener_state, opener_error, opener_delivery_id, turn_id),
+            )
+            await db.execute(
+                "UPDATE mm_inline_waits SET state='released' "
+                "WHERE parent_delivery_id=? AND state='waiting'",
+                (opener_delivery_id,),
+            )
+        released = await settle_turn_deliveries(
+            db,
+            turn_id=turn_id,
+            opener_delivery_id=opener_delivery_id,
+            terminal_state=terminal_state,
+        )
+        return len(released)
+
     async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
         """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""
         async with self._lock:
@@ -685,6 +729,8 @@ class MessageManager:
     ) -> PreparedMessage:
         """在原子接收本轮中准备出站；持久提交前不会投递，回滚会丢弃。"""
         scope = _ATOMIC.get()
+        if scope is not None and scope.manager is self:
+            scope.context_manager.check_turn_revoked()
         if (
             scope is None
             or scope.manager is not self
@@ -1019,6 +1065,7 @@ class MessageManager:
         scope = _ATOMIC.get()
         if scope is None or scope.manager is not self or not scope.active:
             raise RuntimeError("Inline wait requires an atomic delivery")
+        scope.context_manager.check_turn_revoked()
         request = await self.get_message(message_id)
         async with self._lock:
             row = await (
@@ -1626,7 +1673,8 @@ class MessageManager:
         reason = blocker_reason_sql(with_turns)
         return (
             "SELECT d.* FROM mm_deliveries d WHERE d.recipient_id=? "
-            "AND d.state='pending' AND d.turn_id IS NULL AND d.consumed_node_id IS NULL "
+            "AND d.state='pending' AND ((d.turn_id IS NULL AND d.consumed_node_id IS NULL) "
+            "OR (d.resume_requested=1 AND d.consumed_node_id IS NOT NULL)) "
             "AND d.blocked_reason IS NULL AND d.parked=0 "
             "AND NOT EXISTS (SELECT 1 FROM mm_messages reply JOIN mm_inline_waits w "
             "ON w.message_id=reply.reply_to WHERE reply.message_id=d.message_id "
@@ -1655,7 +1703,11 @@ class MessageManager:
                     "SELECT * FROM mm_deliveries WHERE delivery_id=?", (scope.delivery_id,)
                 )
             ).fetchone()
-            if delivery is None or delivery["state"] != DeliveryState.PROCESSING.value:
+            if delivery is None:
+                raise KeyError(scope.delivery_id)
+            if delivery["turn_id"]:
+                await turn.require_active(db, delivery["turn_id"])
+            if delivery["state"] != DeliveryState.PROCESSING.value:
                 raise RuntimeError("Delivery is no longer processing")
             if delivery["target_session_id"] is not None:
                 if node.session_id != delivery["target_session_id"]:
@@ -1686,14 +1738,6 @@ class MessageManager:
                 raise ValueError(
                     "Compact commit must not consume input or publish outbound messages"
                 )
-            if delivery["turn_id"]:
-                active_turn = await (
-                    await db.execute(
-                        "SELECT status FROM turns WHERE turn_id=?", (delivery["turn_id"],)
-                    )
-                ).fetchone()
-                if active_turn is None or active_turn["status"] not in ("open", "waiting_hitl"):
-                    raise RuntimeError("Delivery turn is no longer active")
             if compact and scope.consumed_deliveries:
                 raise ValueError("Compact commit must not consume injected input")
             input_ids = {message.metadata.get("delivery_id") for message in node.messages_delta}
@@ -1845,8 +1889,10 @@ class MessageManager:
                 if (
                     row is None
                     or row["state"] != DeliveryState.PENDING.value
-                    or row["turn_id"] is not None
-                    or row["consumed_node_id"] is not None
+                    or (
+                        not row["resume_requested"]
+                        and (row["turn_id"] is not None or row["consumed_node_id"] is not None)
+                    )
                 ):
                     return
                 delivery_id = row["delivery_id"]
@@ -1944,6 +1990,8 @@ class MessageManager:
             if result.type == MessageType.ERROR:
                 raise RuntimeError(result.content)
             await self._complete_delivery(delivery_id, result)
+        except turn.TurnRevokedError:
+            logger.debug("Delivery lost its turn execution right: %s", delivery_id)
         except Exception as exc:
             if delivery_id is not None:
                 await self._record_failure(
@@ -1984,6 +2032,14 @@ class MessageManager:
                             (delivery_id,),
                         )
                     ).fetchone()
+                    if delivery is not None and delivery["turn_id"]:
+                        async with db.execute(
+                            "SELECT status FROM turns WHERE turn_id=?", (delivery["turn_id"],)
+                        ) as cursor:
+                            stored = await cursor.fetchone()
+                        if stored is not None and stored["status"] == "aborted":
+                            await db.rollback()
+                            return
                     blocked = (
                         session_unavailable
                         and delivery is not None
@@ -2059,6 +2115,8 @@ class MessageManager:
                 ):
                     raise ValueError("Final result conflicts with the durable result")
             else:
+                if delivery["turn_id"]:
+                    await turn.require_active(db, delivery["turn_id"])
                 if delivery["state"] != DeliveryState.PROCESSING.value:
                     raise RuntimeError("Only processing deliveries may record a final result")
                 if delivery["consumed_node_id"] is not None and result_node_id is None:
@@ -2090,7 +2148,7 @@ class MessageManager:
                         else None,
                     ),
                 )
-            if delivery["turn_id"]:
+            if delivery["turn_id"] and existing is None:
                 await turn.close_turn(
                     db,
                     turn_id=delivery["turn_id"],
@@ -2108,6 +2166,7 @@ class MessageManager:
         await self._finish_result(delivery_id)
 
     async def _finish_atomic(self, scope: _AtomicDelivery, result: AgentMessage) -> None:
+        scope.context_manager.check_turn_revoked()
         if not scope.consumed or scope.last_node_id is None:
             raise RuntimeError("Atomic final result requires a durably consumed input")
         if scope.drafts:
@@ -2119,7 +2178,8 @@ class MessageManager:
             row = await (
                 await db.execute(
                     "SELECT d.state, d.message_id, d.recipient_id, d.target_session_id, "
-                    "d.consumed_session_id, r.content, r.result_node_id, r.content_blocks "
+                    "d.consumed_session_id, d.turn_id, d.last_node_id, "
+                    "r.content, r.result_node_id, r.content_blocks "
                     "FROM mm_deliveries d JOIN mm_delivery_results r "
                     "ON r.delivery_id=d.delivery_id WHERE d.delivery_id=?",
                     (delivery_id,),
@@ -2129,6 +2189,22 @@ class MessageManager:
                 raise RuntimeError("No durable final result to complete")
             if row["state"] == DeliveryState.COMPLETED.value:
                 return False
+            if row["turn_id"] and await has_turns(db):
+                closed = await turn.close_turn(
+                    db,
+                    turn_id=row["turn_id"],
+                    status="closed",
+                    closing_kind="completed",
+                    end_node_id=row["result_node_id"] or row["last_node_id"],
+                    closed_at=datetime.now(UTC).isoformat(),
+                )
+                if closed is not None:
+                    await settle_turn_deliveries(
+                        db,
+                        turn_id=row["turn_id"],
+                        opener_delivery_id=delivery_id,
+                        terminal_state="completed",
+                    )
             message = await self._read_message(db, row["message_id"])
             if message.kind == MessageKind.REQUEST:
                 reply_id = await self._insert_message(

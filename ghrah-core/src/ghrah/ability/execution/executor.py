@@ -31,6 +31,7 @@ from ghrah.ability.execution.hooks import HookPoint, HookResult
 from ghrah.ability.execution.invocation import MemberReference, OperationCall
 from ghrah.ability.paths import ABILITY_PATH_SPECS
 from ghrah.chat.content import ToolCallBlock
+from ghrah.context.turn import TurnRevokedError
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
 from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent, TurnWaitingHitlEvent
@@ -706,10 +707,12 @@ class LocalAbilityExecutor(AbilityExecutor):
             )
 
         cm = services.get(CONTEXT_MANAGER)
+        previous_phase = cm.execution_phase if cm is not None else "unknown"
         turn_id = None
         try:
             stored = None
             if cm is not None:
+                cm.execution_phase = "waiting_hitl"
                 stored = await cm.open_hitl_request(
                     promise_id=promise_id,
                     ability_name=call.member.member,
@@ -750,7 +753,25 @@ class LocalAbilityExecutor(AbilityExecutor):
                     logger.warning("Could not publish turn_waiting_hitl", exc_info=True)
             hitl_result = None
             try:
-                hitl_result = await asyncio.wait_for(future, timeout=wait_timeout)
+                event = cm.turn_abort_event() if cm is not None else None
+                if event is None:
+                    hitl_result = await asyncio.wait_for(future, timeout=wait_timeout)
+                else:
+                    aborted = asyncio.create_task(event.wait())
+                    try:
+                        done, _ = await asyncio.wait(
+                            (future, aborted),
+                            timeout=wait_timeout,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if event.is_set():
+                            raise TurnRevokedError("turn aborted while waiting for HITL")
+                        if future not in done:
+                            raise TimeoutError
+                        hitl_result = future.result()
+                    finally:
+                        aborted.cancel()
+                        await asyncio.gather(aborted, return_exceptions=True)
             except TimeoutError:
                 if cm is not None and stored is not None and stored.persisted:
                     terminal = await cm.expire_hitl_request(promise_id)
@@ -807,6 +828,8 @@ class LocalAbilityExecutor(AbilityExecutor):
                 degraded_timeout=self._hitl_degraded_timeout if outcome == "timeout" else 0.0,
             )
         finally:
+            if cm is not None:
+                cm.execution_phase = previous_phase
             if self._hitl_promise_registry is not None:
                 self._hitl_promise_registry.remove(promise_id)
             self._hitl_store.cancel_future(self._agent_name, call.member.member, tool_call_id)

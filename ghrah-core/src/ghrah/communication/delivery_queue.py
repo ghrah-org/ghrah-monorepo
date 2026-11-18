@@ -157,7 +157,7 @@ async def release_turn_inputs(
 
 async def settle_turn_deliveries(
     db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None, terminal_state: str
-) -> None:
+) -> list[str]:
     """在关闭事务内释放未消费注入并终结已消费注入。"""
     await db.execute(
         "UPDATE mm_deliveries SET state=? WHERE turn_id=? AND delivery_id IS NOT ? "
@@ -166,15 +166,14 @@ async def settle_turn_deliveries(
         "WHERE r.delivery_id=mm_deliveries.delivery_id)",
         (terminal_state, turn_id, opener_delivery_id),
     )
-    await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
+    return await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
 
 
 async def settle_terminal_turns(db: aiosqlite.Connection) -> None:
     """幂等修复终态轮次上的残留输入。"""
     if not await has_turns(db):
         return
-    # 兼容旧库中 schema 已接受的 aborted 行。
-    statuses = (*TERMINAL_STATUSES, "aborted")
+    statuses = TERMINAL_STATUSES
     placeholders = ",".join("?" for _ in statuses)
     rows = await (
         await db.execute(

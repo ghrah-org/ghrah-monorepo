@@ -17,13 +17,15 @@ from ghrah.context.branch import ActionBranch
 from ghrah.context.node import ContextNode
 
 TurnCloseStatus = Literal["closed", "failed", "interrupted"]
-TurnTerminalStatus = Literal[TurnCloseStatus, "rolled_back"]
+TurnTerminalStatus = Literal[TurnCloseStatus, "rolled_back", "aborted"]
 TERMINAL_STATUSES: tuple[TurnTerminalStatus, ...] = (
     "closed",
     "failed",
     "interrupted",
     "rolled_back",
+    "aborted",
 )
+_CLOSE_STATUSES = ("closed", "failed", "interrupted")
 _ROLLBACK_STATUSES = tuple(status for status in TERMINAL_STATUSES if status != "rolled_back")
 _ROLLBACK_PLACEHOLDERS = ",".join("?" for _ in _ROLLBACK_STATUSES)
 RollbackTarget = Literal["base", "node"]
@@ -67,23 +69,27 @@ async def backfill_start(db: aiosqlite.Connection, node: ContextNode) -> None:
         return
     await db.execute(
         """
-        WITH RECURSIVE ancestors(id, parent_id, turn_id) AS (
-            SELECT id, parent_id, turn_id FROM nodes WHERE id=?
+        WITH RECURSIVE ancestors(id, parent_id, turn_id, node_kind) AS (
+            SELECT id, parent_id, turn_id, json_extract(metadata, '$.node_kind')
+            FROM nodes WHERE id=?
             UNION ALL
-            SELECT n.id, n.parent_id, n.turn_id
+            SELECT n.id, n.parent_id, n.turn_id, json_extract(n.metadata, '$.node_kind')
             FROM nodes n JOIN ancestors a ON n.id=a.parent_id
-            WHERE a.turn_id=?
+            WHERE a.turn_id=? OR a.node_kind=?
         )
         UPDATE turns SET start_node_id=?, branch_id=?,
-            base_node_id=(SELECT id FROM ancestors WHERE turn_id IS NOT ? LIMIT 1)
+            base_node_id=(SELECT id FROM ancestors
+                          WHERE turn_id IS NOT ? AND COALESCE(node_kind, '')<>? LIMIT 1)
         WHERE turn_id=? AND start_node_id IS NULL AND status IN ('open', 'waiting_hitl')
         """,
         (
             node.parent_id,
             node.turn_id,
+            INCOMPLETE_KIND,
             node.id,
             node.created_on_branch_id,
             node.turn_id,
+            INCOMPLETE_KIND,
             node.turn_id,
         ),
     )
@@ -118,42 +124,129 @@ async def close_turn(
     closed_at: str,
 ) -> aiosqlite.Row | None:
     """幂等终结轮次，同时清理仍待审批的请求。"""
-    if status not in _ROLLBACK_STATUSES:
+    if status not in _CLOSE_STATUSES:
         raise ValueError("Invalid turn closing status")
-    anchors = await (
-        await db.execute(
-            "SELECT t.start_node_id, s.active_branch_id, b.head_node_id "
-            "FROM turns t LEFT JOIN sessions s "
-            "ON s.session_id=t.session_id AND s.agent_name=t.agent_name "
-            "LEFT JOIN branches b ON b.branch_id=s.active_branch_id AND b.session_id=t.session_id "
-            f"WHERE t.turn_id=? AND t.{_ACTIVE}",
-            (turn_id,),
+    return await _finalize_turn(
+        db,
+        turn_id=turn_id,
+        status=status,
+        closing_kind=closing_kind,
+        end_node_id=end_node_id,
+        closed_at=closed_at,
+    )
+
+
+class TurnRevokedError(RuntimeError):
+    """当前执行对应的轮次已失去提交资格。"""
+
+
+class CompactClaimedError(RuntimeError):
+    """空闲压缩期间已领取新轮次，压缩改由该轮执行。"""
+
+
+async def has_active_turn(db: aiosqlite.Connection, agent_name: str) -> bool:
+    """检查该 Agent 是否已有持久活动轮次。"""
+    async with db.execute(
+        f"SELECT 1 FROM turns WHERE agent_name=? AND {_ACTIVE} LIMIT 1", (agent_name,)
+    ) as cursor:
+        return await cursor.fetchone() is not None
+
+
+async def require_active(db: aiosqlite.Connection, turn_id: str) -> None:
+    """在写事务中验证轮次仍持有执行权。"""
+    async with db.execute(
+        f"SELECT 1 FROM turns WHERE turn_id=? AND {_ACTIVE}", (turn_id,)
+    ) as cursor:
+        if await cursor.fetchone() is None:
+            raise TurnRevokedError("turn is no longer active")
+
+
+async def abort_turn(
+    db: aiosqlite.Connection,
+    *,
+    turn_id: str,
+    end_node_id: str | None,
+    closed_at: str,
+    metadata_patch: dict[str, Any],
+) -> aiosqlite.Row | None:
+    """终结活动轮次并取消待审批请求。"""
+    return await _finalize_turn(
+        db,
+        turn_id=turn_id,
+        status="aborted",
+        closing_kind="external_abort",
+        end_node_id=end_node_id,
+        closed_at=closed_at,
+        metadata_patch=metadata_patch,
+    )
+
+
+async def _finalize_turn(
+    db: aiosqlite.Connection,
+    *,
+    turn_id: str,
+    status: TurnTerminalStatus,
+    closing_kind: str,
+    end_node_id: str | None,
+    closed_at: str,
+    metadata_patch: dict[str, Any] | None = None,
+) -> aiosqlite.Row | None:
+    async with db.execute(
+        f"""
+        WITH RECURSIVE head_path(id, parent_id, created_on_branch_id, metadata, depth) AS (
+            SELECT n.id, n.parent_id, n.created_on_branch_id, n.metadata, 0
+            FROM turns t JOIN sessions s USING (session_id, agent_name)
+            JOIN branches b ON b.branch_id=s.active_branch_id
+            JOIN nodes n ON n.id=b.head_node_id WHERE t.turn_id=?
+            UNION ALL
+            SELECT n.id, n.parent_id, n.created_on_branch_id, n.metadata, h.depth+1
+            FROM nodes n JOIN head_path h ON n.id=h.parent_id
+            WHERE NOT ({NOT_INCOMPLETE_SQL.replace("metadata", "h.metadata")})
         )
-    ).fetchone()
+        SELECT t.start_node_id, s.active_branch_id, h.id AS base,
+               json_extract(h.metadata, '$.node_kind') AS base_kind
+        FROM turns t LEFT JOIN sessions s USING (session_id, agent_name)
+        LEFT JOIN head_path h ON {NOT_INCOMPLETE_SQL.replace("metadata", "h.metadata")}
+        WHERE t.turn_id=? AND t.{_ACTIVE} ORDER BY h.depth LIMIT 1
+        """,
+        (turn_id, turn_id),
+    ) as cursor:
+        anchors = await cursor.fetchone()
     if anchors is None:
         return None
     branch = anchors["active_branch_id"]
-    head = anchors["head_node_id"]
+    base = anchors["base"]
+    end = None if anchors["base_kind"] == "compact" else base
+    end_branch = branch if end is not None else None
     if anchors["start_node_id"] is not None:
-        node = await (
-            await db.execute(
-                "SELECT id, created_on_branch_id FROM nodes WHERE turn_id=? "
-                "ORDER BY (id IS ?) DESC, rowid DESC LIMIT 1",
-                (turn_id, end_node_id),
-            )
-        ).fetchone()
+        async with db.execute(
+            f"SELECT id, created_on_branch_id FROM nodes WHERE turn_id=? "
+            f"AND {NOT_INCOMPLETE_SQL} ORDER BY (id IS ?) DESC, rowid DESC LIMIT 1",
+            (turn_id, end_node_id),
+        ) as cursor:
+            node = await cursor.fetchone()
         if node is not None:
-            head, branch = node
+            end, end_branch = node
     cursor = await db.execute(
         f"""
         UPDATE turns SET status=?, closing_kind=?, closed_at=?, waiting_since=NULL,
-            end_node_id=?, end_branch_id=?,
+            end_node_id=?, end_branch_id=?, metadata=COALESCE(json_patch(metadata, ?), metadata),
             base_node_id=CASE WHEN start_node_id IS NULL THEN ? ELSE base_node_id END,
             branch_id=CASE WHEN start_node_id IS NULL THEN ? ELSE branch_id END
         WHERE turn_id=? AND {_ACTIVE}
         RETURNING *
         """,
-        (status, closing_kind, closed_at, head, branch, head, branch, turn_id),
+        (
+            status,
+            closing_kind,
+            closed_at,
+            end,
+            end_branch,
+            json.dumps(metadata_patch) if metadata_patch is not None else None,
+            base,
+            branch,
+            turn_id,
+        ),
     )
     row = await cursor.fetchone()
     await cursor.close()

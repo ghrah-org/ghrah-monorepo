@@ -22,16 +22,17 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
+import json
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import aiosqlite
 
-from ghrah.context import hitl, turn
+from ghrah.context import hitl, recovery, turn
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.chain import ActionChain
@@ -126,6 +127,12 @@ class ContextManager:
         self._persistence = persistence
         self._auto_persist = auto_persist
         self._active_turn: turn.ActiveTurn | None = None
+        self._iteration_turn_id: str | None = None
+        self._revoked_turns: set[str] = set()
+        self._turn_abort_event: asyncio.Event | None = None
+        self._convergence_lock = asyncio.Lock()
+        self._pending_convergences: list[ContextChanges] = []
+        self.execution_phase = "unknown"
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
         validate_agent = getattr(ability_content, "validate_agent", None)
@@ -277,9 +284,46 @@ class ContextManager:
 
     def attach_turn(self, *, turn_id: str, session_id: str, opener_delivery_id: str) -> None:
         """挂载调度器已持久化的轮次。"""
-        self._active_turn = turn.ActiveTurn(
-            turn_id, self._agent_name, session_id, opener_delivery_id, "mm"
+        self._attach_turn(
+            turn.ActiveTurn(turn_id, self._agent_name, session_id, opener_delivery_id, "mm")
         )
+
+    def _attach_turn(self, active: turn.ActiveTurn) -> None:
+        self._active_turn = active
+        self._turn_abort_event = asyncio.Event()
+        if active.turn_id in self._revoked_turns:
+            self._turn_abort_event.set()
+
+    def request_turn_abort(self, turn_id: str) -> None:
+        """吊销该轮提交资格，并唤醒属于该轮的审批等待。"""
+        self._revoked_turns.add(turn_id)
+        if self.active_turn_id == turn_id:
+            self.consume_compact_request()
+            if self._turn_abort_event is not None:
+                self._turn_abort_event.set()
+
+    def turn_abort_event(self) -> asyncio.Event | None:
+        """获取该轮审批等待使用的中止信号。"""
+        return self._turn_abort_event
+
+    def check_turn_revoked(self) -> None:
+        """确认当前执行与迭代归属仍持有提交资格。"""
+        active_id = self.active_turn_id
+        if active_id in self._revoked_turns or (
+            self._in_iteration and self._iteration_turn_id != active_id
+        ):
+            raise turn.TurnRevokedError("turn is no longer active")
+
+    def require_turn(self, expected_turn_id: str | None) -> None:
+        """验证跨异步边界的操作仍属于原轮次。"""
+        if self.active_turn_id != expected_turn_id:
+            raise turn.TurnRevokedError("execution turn changed")
+        self.check_turn_revoked()
+
+    @property
+    def has_durable_turn(self) -> bool:
+        """当前执行有持久轮次，可依据现场收敛。"""
+        return self._active_turn is not None and isinstance(self._persistence, SqliteBackend)
 
     async def open_turn(self, *, opener_delivery_id: str | None = None) -> str | None:
         """为直接收到的输入开启轮次。"""
@@ -295,7 +339,7 @@ class ContextManager:
             except Exception:
                 logger.warning("Failed to persist direct turn %s", active.turn_id, exc_info=True)
                 return None
-        self._active_turn = active
+        self._attach_turn(active)
         return active.turn_id
 
     async def close_turn(
@@ -304,6 +348,11 @@ class ContextManager:
         """清除当前轮次引用，直收轮次同时保存终态。"""
         active = self._active_turn
         self._active_turn = None
+        self._turn_abort_event = None
+        self.consume_compact_request()
+        self.execution_phase = "unknown"
+        if active is not None:
+            self._revoked_turns.discard(active.turn_id)
         if (
             active is None
             or active.owner == "mm"
@@ -323,6 +372,239 @@ class ContextManager:
                 )
         except Exception:
             logger.warning("Failed to close turn %s", active.turn_id, exc_info=True)
+
+    async def abort_turn(
+        self,
+        *,
+        turn_id: str | None,
+        session_id: str | None = None,
+        reason: str = "",
+        settle_deliveries: recovery.SettleDeliveries | None = None,
+    ) -> recovery.ConvergenceOutcome:
+        """提交中止事务，登记内存收敛后唤醒旧执行。"""
+        task = asyncio.create_task(
+            self._converge_turn(
+                turn_id=turn_id,
+                session_id=session_id,
+                reason="external_abort",
+                status="aborted",
+                closing_kind="external_abort",
+                description=reason,
+                settle_deliveries=settle_deliveries,
+            )
+        )
+        cancelled = False
+        while True:
+            try:
+                outcome = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return outcome
+
+    async def converge_turn(
+        self,
+        *,
+        turn_id: str,
+        error: Exception,
+        settle_deliveries: recovery.SettleDeliveries | None,
+    ) -> recovery.ConvergenceOutcome:
+        """依据持久现场终结失败的执行。"""
+        return await self._converge_turn(
+            turn_id=turn_id,
+            session_id=None,
+            reason="error",
+            status="failed",
+            closing_kind="error",
+            description=str(error),
+            error=error,
+            settle_deliveries=settle_deliveries,
+        )
+
+    async def _converge_turn(
+        self,
+        *,
+        turn_id: str | None,
+        session_id: str | None,
+        reason: str,
+        status: Literal["aborted", "failed"],
+        closing_kind: str,
+        description: str,
+        settle_deliveries: recovery.SettleDeliveries | None,
+        error: Exception | None = None,
+    ) -> recovery.ConvergenceOutcome:
+        backend = self._persistence
+        if not isinstance(backend, SqliteBackend) or not backend.connected:
+            raise ValueError("persistence_unavailable")
+
+        async with self._convergence_lock:
+            await self.wait_for_persist()
+            async with backend.transaction() as db:
+                if turn_id is None:
+                    async with db.execute(
+                        "SELECT * FROM turns WHERE agent_name=? AND (? IS NULL OR session_id=?) "
+                        "AND status IN ('open','waiting_hitl') LIMIT 2",
+                        (self._agent_name, session_id, session_id),
+                    ) as cursor:
+                        candidates = await cursor.fetchall()
+                    if not candidates:
+                        raise ValueError("turn_not_found")
+                    if len(candidates) != 1:
+                        raise ValueError("ambiguous_active_turn")
+                    row = candidates[0]
+                else:
+                    row = await turn.load_turn_for_rollback(
+                        db, turn_id=turn_id, agent_name=self._agent_name
+                    )
+                    if session_id is not None and row["session_id"] != session_id:
+                        raise ValueError("turn_not_found")
+                if row["status"] in turn.TERMINAL_STATUSES:
+                    return recovery.ConvergenceOutcome(row)
+                resolved_id = row["turn_id"]
+                opener = row["opener_delivery_id"]
+                if opener is not None and settle_deliveries is not None:
+                    async with db.execute(
+                        "SELECT 1 FROM mm_delivery_results WHERE delivery_id=?", (opener,)
+                    ) as cursor:
+                        if await cursor.fetchone() is not None:
+                            return recovery.ConvergenceOutcome(row, result_pending=True)
+
+                scene = await recovery.load_scene(db, row)
+                phase = (
+                    "waiting_hitl"
+                    if scene.pending_hitl
+                    else self.execution_phase
+                    if self.active_turn_id == resolved_id
+                    else "unknown"
+                )
+                changes = await recovery.plan_convergence(
+                    db, row, scene, reason=reason, phase=phase, error=error
+                )
+                if changes is not None:
+                    await backend.apply_changes_in_transaction(db, changes)
+                metadata = {
+                    "abort_reason": description,
+                    "abort_phase": phase,
+                    **recovery.diagnosis_metadata(changes),
+                }
+                opts = {
+                    "turn_id": resolved_id,
+                    "end_node_id": scene.last["id"] if scene.last is not None else None,
+                    "closed_at": datetime.now(UTC).isoformat(),
+                }
+                if status == "aborted":
+                    updated = await turn.abort_turn(
+                        db, **opts, metadata_patch={**metadata, "aborted_by": "user"}
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE turns SET metadata=json_patch(metadata,?) WHERE turn_id=?",
+                        (json.dumps(metadata), resolved_id),
+                    )
+                    updated = await turn.close_turn(
+                        db, **opts, status="failed", closing_kind=closing_kind
+                    )
+                if updated is None:
+                    raise RuntimeError("Active turn changed during convergence")
+                released = 0
+                if settle_deliveries is not None:
+                    delivery_state = "interrupted" if status == "aborted" else "failed"
+                    released = await settle_deliveries(
+                        db,
+                        turn_id=resolved_id,
+                        opener_delivery_id=opener,
+                        opener_state=delivery_state,
+                        terminal_state=delivery_state,
+                        opener_error="aborted_by_user" if status == "aborted" else description,
+                    )
+
+            if changes is not None:
+                if self.in_iteration or self.active_turn is not None:
+                    self._pending_convergences.append(changes)
+                else:
+                    self._install_convergence(changes)
+            if status == "aborted":
+                self.request_turn_abort(resolved_id)
+            return recovery.ConvergenceOutcome(
+                updated,
+                changes,
+                changed=True,
+                cancelled_hitl=scene.pending_hitl,
+                released_deliveries=released,
+            )
+
+    def _install_convergence(self, changes: ContextChanges) -> None:
+        session = changes.sessions[0]
+        runtime = self._get_runtime(session.session_id)
+        for node in changes.nodes:
+            if runtime.chain.checkout(node.id) is None:
+                runtime.chain.ingest_node(node)
+        runtime.branches.update((branch.branch_id, branch) for branch in changes.branches)
+        runtime.session = session
+        runtime.validate()
+        if session.session_id == self.active_session_id:
+            self._restore_active_context()
+
+    async def finish_received_turn(
+        self,
+        *,
+        status: turn.TurnCloseStatus,
+        closing_kind: str,
+        end_node_id: str | None,
+        revoked: bool = False,
+    ) -> bool:
+        """收尾后安装已提交的诊断分支，返回是否应发普通关闭事件。"""
+        async with self._convergence_lock:
+            self.ensure_iteration_closed()
+            active = self._active_turn
+            revoked = revoked or self.active_turn_id in self._revoked_turns
+            if revoked and active is not None:
+                self._revoked_turns.discard(active.turn_id)
+                self._active_turn = None
+            await self.close_turn(status=status, closing_kind=closing_kind, end_node_id=end_node_id)
+            for changes in self._pending_convergences:
+                self._install_convergence(changes)
+            self._pending_convergences.clear()
+            return not revoked
+
+    async def _apply_pending_diagnoses(self, agent_name: str) -> None:
+        backend = self._persistence
+        if not isinstance(backend, SqliteBackend):
+            return
+        async with backend.transaction() as db:
+            async with db.execute(
+                "SELECT * FROM turns WHERE agent_name=? AND "
+                "(status IN ('open','waiting_hitl') OR "
+                "json_type(metadata,'$.crash_diagnosis')='object') ORDER BY opened_at",
+                (agent_name,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row in rows:
+                metadata = json.loads(row["metadata"])
+                marker = metadata.pop("crash_diagnosis", None)
+                scene = await recovery.load_scene(db, row)
+                phase = (
+                    marker["phase"]
+                    if marker
+                    else ("waiting_hitl" if scene.pending_hitl else "unknown")
+                )
+                changes = await recovery.plan_convergence(
+                    db, row, scene, reason="crash", phase=phase, crash_marker=marker
+                )
+                if changes is not None:
+                    await backend.apply_changes_in_transaction(db, changes)
+                metadata.update(recovery.diagnosis_metadata(changes))
+                await db.execute(
+                    "UPDATE turns SET metadata=? WHERE turn_id=?",
+                    (json.dumps(metadata), row["turn_id"]),
+                )
+            await turn.normalize_open_turns(
+                db, agent_name=agent_name, now=datetime.now(UTC).isoformat()
+            )
 
     def ensure_rollback_idle(self, turn_id: str) -> None:
         """运行中立即返回忙碌，避免回滚请求等到审批结束才执行。"""
@@ -508,12 +790,14 @@ class ContextManager:
         deadline_at: str | None,
     ) -> hitl.HITLWriteResult:
         """登记待审批请求。持久化不可用时继续内存审批。"""
+        self.check_turn_revoked()
         active = self._active_turn
         if active is None or not isinstance(self._persistence, SqliteBackend):
             logger.warning("No durable active turn for HITL request %s", promise_id)
             return hitl.HITLWriteResult()
         try:
             async with self._persistence.transaction() as db:
+                await turn.require_active(db, active.turn_id)
                 now = datetime.now(UTC).isoformat()
                 row = await hitl.insert_pending(
                     db,
@@ -539,6 +823,8 @@ class ContextManager:
                         delivery_id=row["delivery_id"],
                     )
             logger.warning("Turn %s is unavailable for HITL request %s", active.turn_id, promise_id)
+        except turn.TurnRevokedError:
+            raise
         except Exception:
             logger.warning("Failed to persist HITL request %s", promise_id, exc_info=True)
         return hitl.HITLWriteResult()
@@ -1057,6 +1343,9 @@ class ContextManager:
         """
         if self._in_iteration:
             raise RuntimeError("Iteration already in progress")
+        self.check_turn_revoked()
+        self._iteration_turn_id = self.active_turn_id
+        self.execution_phase = "iteration"
         self._state_manager.begin_transaction()
         self._pending_messages = []
         self._in_iteration = True
@@ -1124,6 +1413,8 @@ class ContextManager:
         if not self._in_iteration:
             raise RuntimeError("No iteration in progress")
 
+        self.check_turn_revoked()
+
         effective_names: list[str]
         effective_result: Any | None
 
@@ -1186,7 +1477,8 @@ class ContextManager:
         llm_metadata: dict[str, Any] | None = None,
     ) -> ContextNode:
         """原子作用域内先持久提交再推进内存；旧调用保留原提交方式。"""
-        committer = get_iteration_committer(self)
+        self.check_turn_revoked()
+        committer = self._turn_committer()
         options = {
             "ability_names": ability_names,
             "action_results": action_results,
@@ -1202,6 +1494,30 @@ class ContextManager:
         candidate = self._commit_candidate()
         node = candidate.commit_iteration(**options)
         return await self._commit_durable_candidate(candidate, node, committer)
+
+    def _turn_committer(self, *, idle_compact: bool = False) -> IterationCommitter | None:
+        committer = get_iteration_committer(self)
+        backend = self._persistence
+        active = self._active_turn
+        if (
+            committer is not None
+            or not isinstance(backend, SqliteBackend)
+            or not backend.connected
+            or (active is None and not idle_compact)
+        ):
+            return committer
+
+        async def commit(changes: ContextChanges) -> None:
+            async with backend.transaction() as db:
+                if active is not None:
+                    await turn.require_active(db, active.turn_id)
+                elif await turn.has_active_turn(db, self._agent_name):
+                    raise turn.CompactClaimedError("A turn was claimed during idle compaction")
+                await backend.apply_changes_in_transaction(db, changes)
+                if active is not None:
+                    await turn.backfill_start(db, changes.nodes[0])
+
+        return commit
 
     def _commit_candidate(self) -> ContextManager:
         """复制本次提交会修改的内存聚合，暂不推进权威 Head。"""
@@ -1561,6 +1877,7 @@ class ContextManager:
         Raises:
             RuntimeError: 迭代进行中（compact 回合必须不在迭代事务内）
         """
+        self.check_turn_revoked()
         if self._in_iteration:
             raise RuntimeError("Cannot commit compact node during an iteration")
 
@@ -1587,15 +1904,22 @@ class ContextManager:
         return node
 
     async def commit_compact_node_async(
-        self, snapshot_messages: list[Any], metadata: dict[str, Any] | None = None
+        self,
+        snapshot_messages: list[Any],
+        metadata: dict[str, Any] | None = None,
+        *,
+        idle: bool = False,
     ) -> ContextNode:
         """原子接收内持久提交压缩节点，压缩本身不消费新的输入消息。"""
-        committer = get_iteration_committer(self)
+        self.check_turn_revoked()
+        expected_turn_id = self.active_turn_id
+        committer = self._turn_committer(idle_compact=idle)
         if committer is None:
             return self.commit_compact_node(snapshot_messages, metadata)
         if self._in_iteration:
             raise RuntimeError("Cannot commit compact node during an iteration")
         await self.wait_for_persist()
+        self.require_turn(expected_turn_id)
         candidate = self._commit_candidate()
         node = candidate.commit_compact_node(snapshot_messages, metadata)
         return await self._commit_durable_candidate(candidate, node, committer)
@@ -1909,6 +2233,7 @@ class ContextManager:
         if self._persistence is None:
             raise RuntimeError("No persistence backend configured")
 
+        await self._apply_pending_diagnoses(agent_name)
         checkpoint = await self._persistence.load_checkpoint(
             agent_name, snapshot_payloads="boundaries"
         )
@@ -1936,6 +2261,12 @@ class ContextManager:
         self._restore_active_context()
         self._in_iteration = False
         self._active_turn = None
+        self._turn_abort_event = None
+        self._iteration_turn_id = None
+        self._revoked_turns.clear()
+        self._pending_convergences.clear()
+        self.consume_compact_request()
+        self.execution_phase = "unknown"
         await self.normalize_turns()
 
         logger.debug(

@@ -1036,6 +1036,18 @@ class SupervisorActor:
         handle = await self.get_agent_handle(agent_name)
         await handle.delete_session(session_id)
 
+    async def abort_turn(
+        self,
+        agent_name: str,
+        *,
+        turn_id: str | None = None,
+        session_id: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """请求运行中的 Agent 中止指定轮次。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.abort_turn(turn_id=turn_id, session_id=session_id, reason=reason)
+
     async def rollback_turn(
         self, agent_name: str, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
     ) -> dict[str, Any]:

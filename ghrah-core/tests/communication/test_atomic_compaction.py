@@ -133,7 +133,7 @@ async def test_atomic_compaction_preserves_pending_input_and_then_completes(tmp_
 async def test_compact_write_failure_keeps_old_head_and_retry_has_one_input(tmp_path):
     path = tmp_path / "core.sqlite"
     llm = CompactLLM()
-    llm._replies = ["first summary", "retry summary", "done"]
+    llm._replies = ["first summary", "done"]
     async with SqliteBackend(path) as backend:
         agent = await seeded_agent(backend, llm)
         cm = agent._context_manager
@@ -160,7 +160,7 @@ async def test_compact_write_failure_keeps_old_head_and_retry_has_one_input(tmp_
             assert delivery.state == DeliveryState.FAILED
             assert delivery.consumed_node_id is None
             assert cm.active_head.id == old_head
-            assert cm.compact_requested
+            assert not cm.compact_requested
             assert agent._message_queue.empty()
             async with aiosqlite.connect(path) as db:
                 assert (

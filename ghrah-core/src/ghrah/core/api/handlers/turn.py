@@ -12,6 +12,7 @@ from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.core import (
     HitlRequestListView,
     HitlRequestView,
+    TurnAbortView,
     TurnListView,
     TurnRollbackPreviewView,
     TurnRollbackView,
@@ -23,6 +24,7 @@ from ghrah.core.api.handlers.session_write import resolve_agent_name
 from ghrah.core.api.interfaces import (
     HitlGetRequest,
     HitlListRequest,
+    TurnAbortRequest,
     TurnGetRequest,
     TurnListRequest,
     TurnRollbackPreviewRequest,
@@ -81,6 +83,33 @@ def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[st
             )
         return dict(result["data"])
 
+    async def abort(request: TurnAbortRequest) -> TurnAbortView:
+        capability = "turns.abort"
+        try:
+            name = await resolve_agent_name(agents, request.agent_id)
+        except CoreApiError as exc:
+            if exc.problem.code != ProblemCode.NOT_FOUND:
+                raise
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.FAILED_PRECONDITION,
+                    capability=capability,
+                    detail="agent_not_online",
+                )
+            ) from exc
+        result = await agents.handle_command(
+            command="turn_abort", payload={**request.model_dump(), "agent_name": name}
+        )
+        if not result.get("success"):
+            detail = str(result.get("error") or "rejected")
+            code = (
+                ProblemCode.NOT_FOUND
+                if detail == "turn_not_found"
+                else ProblemCode.FAILED_PRECONDITION
+            )
+            raise CoreApiError(Problem.make(code, capability=capability, detail=detail))
+        return TurnAbortView.model_validate(result["data"])
+
     async def rollback(request: TurnRollbackRequest) -> TurnRollbackView:
         data = await call_rollback(request, capability="turns.rollback", dry_run=False)
         return TurnRollbackView.model_validate(data)
@@ -90,6 +119,7 @@ def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[st
         return TurnRollbackPreviewView.model_validate(data)
 
     return {
+        "turns.abort": abort,
         "turns.get": get,
         "turns.list": list_turns,
         "turns.rollback": rollback,

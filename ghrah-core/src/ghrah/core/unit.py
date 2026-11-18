@@ -272,6 +272,7 @@ class _UnitMeta:
 # Core 管理命令：CommandType 的 .value 字符串
 # 私有能力命令仅供 Core Registry 调用。Subject 路由使用 _COMMANDS。
 _TURN_ROLLBACK_COMMAND = "turn_rollback"
+_TURN_ABORT_COMMAND = "turn_abort"
 
 _COMMANDS: frozenset[str] = frozenset(
     {
@@ -562,6 +563,7 @@ class CoreUnit:
             CommandType.SESSION_LIST.value: self._handle_session_list,
             CommandType.SESSION_ARCHIVE.value: self._handle_session_archive,
             CommandType.SESSION_DELETE.value: self._handle_session_delete,
+            _TURN_ABORT_COMMAND: self._handle_turn_abort,
             _TURN_ROLLBACK_COMMAND: self._handle_turn_rollback,
             CommandType.BRANCH_CREATE.value: self._handle_branch_create,
             CommandType.BRANCH_ACTIVATE.value: self._handle_branch_activate,
@@ -1607,6 +1609,25 @@ class CoreUnit:
         self._validate_agent(sp.agent_id, sp.agent_name)
         await supervisor.delete_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok({"session_id": sp.session_id, "deleted": True})
+
+    async def _handle_turn_abort(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        turn_id = payload.get("turn_id")
+        session_id = payload.get("session_id")
+        reason = payload.get("reason", "")
+        if (
+            not isinstance(payload.get("agent_id"), str)
+            or not isinstance(payload.get("agent_name"), str)
+            or (turn_id is not None and (not isinstance(turn_id, str) or not turn_id))
+            or (session_id is not None and (not isinstance(session_id, str) or not session_id))
+            or not isinstance(reason, str)
+        ):
+            return self._err("invalid_abort_request")
+        self._validate_agent(payload["agent_id"], payload["agent_name"])
+        supervisor = self._require_supervisor()
+        data = await supervisor.abort_turn(
+            payload["agent_name"], turn_id=turn_id, session_id=session_id, reason=reason
+        )
+        return self._ok(data)
 
     async def _handle_turn_rollback(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         turn_id = payload.get("turn_id")

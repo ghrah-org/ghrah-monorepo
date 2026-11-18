@@ -58,6 +58,7 @@ from ghrah.ability.surface.assembly import SurfaceAssemblyError
 from ghrah.agents.runner import AgentRunner
 from ghrah.chat.content import ContentBlock, TextBlock, block_to_dict, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
+from ghrah.context import recovery
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.iteration_commit import (
@@ -73,7 +74,12 @@ from ghrah.context.iteration_commit import (
 )
 from ghrah.context.iteration_state import IterationState
 from ghrah.context.manager import ContextManager, DeliverySessionUnavailableError
-from ghrah.context.turn import RollbackTarget, TurnCloseStatus
+from ghrah.context.turn import (
+    CompactClaimedError,
+    RollbackTarget,
+    TurnCloseStatus,
+    TurnRevokedError,
+)
 from ghrah.context.window import parse_vendor_window_tokens
 from ghrah.core.ability_protocol import AbilityProtocol, ExecutorProtocol
 from ghrah.core.event_publisher import (
@@ -715,7 +721,10 @@ class ActorAgent:
         active = cm.active_turn
         status: TurnCloseStatus = "interrupted"
         closing_kind = "cancelled"
+        revoked = False
+        convergence = None
         try:
+            cm.check_turn_revoked()
             if active is not None:
                 await self._publish_turn_event(
                     TurnOpenedEvent(
@@ -726,32 +735,71 @@ class ActorAgent:
                     )
                 )
             response = await self._execute_received_message(message)
+            cm.check_turn_revoked()
             if response.type == MessageType.ERROR:
                 status, closing_kind = "failed", "error"
+                convergence = await self._converge_failure(RuntimeError(response.content))
             else:
                 status, closing_kind = "closed", "completed"
             return response
+        except TurnRevokedError:
+            revoked = True
+            raise
         except DeliverySessionUnavailableError:
             raise
-        except Exception:
+        except Exception as exc:
             status, closing_kind = "failed", "error"
+            convergence = await self._converge_failure(exc)
             raise
         finally:
             if active is not None:
-                end_node_id = cm.active_head.id
-                await cm.close_turn(
-                    status=status, closing_kind=closing_kind, end_node_id=end_node_id
+                end_node_id = (
+                    convergence.row["end_node_id"] if convergence is not None else cm.active_head.id
                 )
-                await self._publish_turn_event(
-                    TurnClosedEvent(
-                        agent_name=self.config.name,
-                        turn_id=active.turn_id,
-                        session_id=active.session_id,
-                        status=status,
-                        closing_kind=closing_kind,
-                        end_node_id=end_node_id,
+                publish = await cm.finish_received_turn(
+                    status=status,
+                    closing_kind=closing_kind,
+                    end_node_id=end_node_id,
+                    revoked=revoked,
+                )
+                if publish:
+                    if convergence is not None:
+                        await self._publish_convergence_branches(convergence)
+                    await self._publish_turn_event(
+                        TurnClosedEvent(
+                            agent_name=self.config.name,
+                            turn_id=active.turn_id,
+                            session_id=active.session_id,
+                            status=status,
+                            closing_kind=closing_kind,
+                            end_node_id=end_node_id,
+                        )
                     )
-                )
+                else:
+                    for queued in self._drain_message_queue():
+                        if queued.metadata.get("turn_id") != active.turn_id:
+                            self._message_queue.put_nowait(queued)
+            else:
+                cm.consume_compact_request()
+
+    async def _converge_failure(self, error: Exception) -> recovery.ConvergenceOutcome | None:
+        cm = self._context_manager
+        if not cm.has_durable_turn or (active := cm.active_turn) is None:
+            return None
+        manager = getattr(self._supervisor, "message_manager", None)
+        try:
+            return await cm.converge_turn(
+                turn_id=active.turn_id,
+                error=error,
+                settle_deliveries=(
+                    manager.converge_turn_deliveries
+                    if manager is not None and active.owner == "mm"
+                    else None
+                ),
+            )
+        except Exception:
+            logger.exception("Could not converge failed turn %s", active.turn_id)
+            return None
 
     async def _execute_received_message(self, message: AgentMessage) -> AgentMessage:
         """处理 Runner 领取的消息并驱动一次执行循环。
@@ -783,6 +831,11 @@ class ActorAgent:
         try:
             # 确保LLM已初始化（但不再直接传递给 context）
             await self._ensure_llm()
+            cm = self._context_manager
+            cm.check_turn_revoked()
+            input_metadata = dict(message.metadata or {})
+            if cm.active_turn_id is not None:
+                input_metadata["turn_id"] = cm.active_turn_id
 
             # 将用户消息入队，供 _drive_loop 在迭代中消费
             # AgentMessage.metadata（如 Room 投递的 room_id）合入 ChatMessage
@@ -806,7 +859,7 @@ class ActorAgent:
                         if message.metadata.get("external_sender")
                         else classify_source(message.sender)
                     ),
-                    metadata=dict(message.metadata) if message.metadata else {},
+                    metadata=input_metadata,
                 )
             )
 
@@ -830,7 +883,7 @@ class ActorAgent:
 
             return await self._finish_response(message)
 
-        except AgentError:
+        except AgentError, TurnRevokedError:
             raise
         except Exception as e:
             logger.error(f"ActorAgent[{self.config.name}] error in drive loop: {e}")
@@ -935,25 +988,32 @@ class ActorAgent:
         return response
 
     async def request_compact(self) -> dict[str, Any]:
-        """手动触发链上 compact 回合（命令入口，双态）。
-
-        驱动循环活跃（receive 期间）：置手动标志，由下一轮触发门消费，
-        回 ``{"scheduled": True}``；标志已置位时回 ``{"scheduled": True,
-        "merged": True}``（连续请求合并，幂等）。
-
-        空闲：直接执行一轮 compact（同步等待摘要 LLM 完成），回执即
-        结果——``{"executed": True, "node_id": ...}`` 或窗外为空时
-        ``{"executed": False, "reason": "empty_window"}``。
-
-        Returns:
-            回执 dict（见上）
-        """
+        """空闲时执行压缩，已领取轮次的请求交给当前执行消费。"""
         cm = self._context_manager
-        if self._runner.busy or self._drive_active:
+        manager = getattr(self._supervisor, "message_manager", None)
+
+        def schedule() -> dict[str, Any]:
             merged = cm.compact_requested
             cm.request_compact()
             return {"scheduled": True, "merged": merged}
-        return await self._runner.run(lambda: self._run_compact_round("manual"))
+
+        async def claimed() -> bool:
+            return manager is not None and await manager.has_active_turn(
+                self.config.effective_agent_id
+            )
+
+        if self._runner.busy or self._drive_active or await claimed():
+            return schedule()
+
+        async def compact_if_idle() -> dict[str, Any]:
+            if await claimed():
+                return schedule()
+            try:
+                return await self._run_compact_round("manual", idle=True)
+            except CompactClaimedError:
+                return schedule()
+
+        return await self._runner.run(compact_if_idle)
 
     async def _drive_loop(
         self,
@@ -979,6 +1039,7 @@ class ActorAgent:
         emergency_halvings = 0
 
         while self._iteration_state.should_continue:
+            cm.check_turn_revoked()
             # 0. compact 触发——位于BEFORE_ACTION hook 之前：
             # compact 回合不执行任何 agent 级HookPoint。
             # 命中后执行 compact 例程替代本轮 _action：
@@ -1095,7 +1156,10 @@ class ActorAgent:
                     cumulative["cache_read_tokens"] += current_usage.get("cache_read_tokens", 0)
                     cumulative["cache_write_tokens"] += current_usage.get("cache_write_tokens", 0)
                     accumulated_data["cumulative_token_usage"] = cumulative
+            except TurnRevokedError, DeliverySessionUnavailableError:
+                raise
             except Exception as e:
+                cm.check_turn_revoked()
                 # ────── 发布 AgentError 事件 ──────
                 await self._event_publisher.publish(
                     AgentErrorEvent(
@@ -1104,15 +1168,6 @@ class ActorAgent:
                     )
                 )
                 # ────── 结束 ──────
-
-                if cm.in_iteration:
-                    cm.rollback_iteration(e)
-                    # 未提交输入重新排队；已持久提交后事件失败不能重新注入。
-                    for msg in iteration_drained_messages:
-                        if get_iteration_committer(cm) is None or not msg.metadata.get(
-                            "delivery_id"
-                        ):
-                            await self._message_queue.put(msg)
 
                 # 紧急压缩阶梯：厂商上下文超限（保守类别识别）且仍有减半
                 # 余量时，不重抛——进紧急 compact 回合（trigger_source=
@@ -1125,12 +1180,24 @@ class ActorAgent:
                 # 从「超限即抛错」变成「静默压缩 + 摘要 LLM 调用」，属未经
                 # 声明的行为变更。本阶梯仍只服务显式要求压缩的 Agent。
                 emergency_wm = cm.window_manager
-                if (
+                emergency = (
                     _is_context_limit_error(e)
                     and self.config.window is not None
                     and emergency_wm is not None
                     and emergency_halvings < _MAX_EMERGENCY_HALVINGS
-                ):
+                )
+                if cm.in_iteration:
+                    if emergency or not cm.has_durable_turn:
+                        cm.rollback_iteration(e)
+                        for msg in iteration_drained_messages:
+                            if get_iteration_committer(cm) is None or not msg.metadata.get(
+                                "delivery_id"
+                            ):
+                                await self._message_queue.put(msg)
+                    else:
+                        cm.ensure_iteration_closed()
+
+                if emergency and emergency_wm is not None:
                     vendor_window = parse_vendor_window_tokens(str(e))
                     if vendor_window is not None and vendor_window != emergency_wm.max_tokens:
                         emergency_wm.correct_budget_from_vendor(vendor_window)
@@ -1219,7 +1286,7 @@ class ActorAgent:
             self._iteration_state.advance()
 
     async def _run_compact_round(
-        self, trigger_source: str, budget_override: int | None = None
+        self, trigger_source: str, budget_override: int | None = None, *, idle: bool = False
     ) -> dict[str, Any]:
         """执行一轮链上 compact 回合（ghrah.builtin 综合方法）。
 
@@ -1256,6 +1323,10 @@ class ActorAgent:
         from ghrah.context.strategies.llm_summary import format_messages_for_summary
 
         cm = self._context_manager
+        expected_turn_id = cm.active_turn_id
+        cm.check_turn_revoked()
+        if expected_turn_id is not None:
+            cm.execution_phase = "compact"
         status = cm.get_window_status()
         keep_recent = status["compact_keep_recent"]
         estimator = cm.token_estimator
@@ -1327,6 +1398,8 @@ class ActorAgent:
                     }
             else:
                 degraded = True
+        except TurnRevokedError:
+            raise
         except Exception:
             logger.exception(
                 "ActorAgent[%s]: compact summary LLM failed — committing folded view",
@@ -1380,7 +1453,12 @@ class ActorAgent:
         if summary_usage is not None:
             metadata["usage"] = summary_usage
 
-        node = await cm.commit_compact_node_async(snapshot, metadata)
+        cm.require_turn(expected_turn_id)
+        node = (
+            await cm.commit_compact_node_async(snapshot, metadata, idle=True)
+            if idle
+            else await cm.commit_compact_node_async(snapshot, metadata)
+        )
         cm.consume_compact_request()
         active_branch = cm.get_active_session_branch()
         await self._event_publisher.publish(
@@ -1467,6 +1545,7 @@ class ActorAgent:
                 - "llm_metadata": dict — LLM 响应元数据（token_usage、response_metadata 等）
         """
         cm = self._context_manager
+        cm.execution_phase = "llm"
         llm = await self._ensure_llm()
         # 0. 工具面按当前获授事实重建（撤销/恢复下一轮生效）
         await self.refresh_tool_projection()
@@ -1573,6 +1652,7 @@ class ActorAgent:
                 accumulated_data.update(hook_result.modified_context)
 
         # 5. 解析 LLM 响应
+        cm.execution_phase = "tools"
         tool_calls = llm_response.tool_calls
         response_content = llm_response.text or ""
         if not tool_calls and not response_content.strip():
@@ -1721,6 +1801,8 @@ class ActorAgent:
                     data["response"] = replies[0].content
                 data.update(status="completed", mode=pending["mode"])
                 entry["action_result"] = ActionResult(outcome=ActionOutcome.SUCCESS, data=data)
+            except TurnRevokedError:
+                raise
             except Exception as exc:
                 entry["action_result"] = ActionResult(
                     outcome=ActionOutcome.FAILURE,
@@ -2130,6 +2212,39 @@ class ActorAgent:
             "created_at": branch.created_at.isoformat(),
             "metadata": branch.metadata,
         }
+
+    async def abort_turn(
+        self, *, turn_id: str | None = None, session_id: str | None = None, reason: str = ""
+    ) -> dict[str, Any]:
+        """从正在执行轮次的 Runner 外发起持久中止。"""
+        cm = self._context_manager
+        manager = getattr(self._supervisor, "message_manager", None)
+        outcome = await cm.abort_turn(
+            turn_id=turn_id,
+            session_id=session_id,
+            reason=reason,
+            settle_deliveries=manager.converge_turn_deliveries if manager is not None else None,
+        )
+        if outcome.changed:
+            await self._publish_convergence_branches(outcome)
+            row = outcome.row
+            await self._publish_turn_event(
+                TurnClosedEvent(
+                    agent_name=self.config.name,
+                    turn_id=row["turn_id"],
+                    session_id=row["session_id"],
+                    status=row["status"],
+                    closing_kind=row["closing_kind"],
+                    end_node_id=row["end_node_id"],
+                )
+            )
+        return outcome.as_payload()
+
+    async def _publish_convergence_branches(self, outcome: recovery.ConvergenceOutcome) -> None:
+        if outcome.changes is not None:
+            info = self._branch_info(outcome.changes.branches[-1])
+            for event in (BranchCreatedEvent, BranchActivatedEvent):
+                await self._publish_turn_event(event(agent_name=self.config.name, branch=info))
 
     async def rollback_turn(
         self, *, turn_id: str, target: RollbackTarget, node_id: str | None = None

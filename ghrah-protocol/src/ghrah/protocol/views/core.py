@@ -37,6 +37,7 @@ __all__ = [
     "MessageAcceptanceView",
     "DeliveryAcceptanceView",
     "TurnView",
+    "TurnAbortView",
     "TurnListView",
     "TurnRollbackView",
     "TurnRollbackPreviewView",
@@ -284,6 +285,9 @@ class TurnView(BaseModel):
     waiting_since: str | None = None
     closed_at: str | None = None
     injections: int = 0
+    abort_reason: str | None = None
+    incomplete_node_id: str | None = None
+    recovery_branch_id: str | None = None
 
 
 class TurnListView(BaseModel):
@@ -293,6 +297,24 @@ class TurnListView(BaseModel):
 
     agent_id: str
     items: list[TurnView] = Field(default_factory=list)
+
+
+class TurnAbortView(BaseModel):
+    """轮次中止的持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    status: str
+    closing_kind: str | None = None
+    aborted: bool = False
+    already_terminal: bool = False
+    result_pending: bool = False
+    cancelled_hitl: int = 0
+    released_deliveries: int = 0
+    incomplete_node_id: str | None = None
+    recovery_branch_id: str | None = None
+    opener_delivery_id: str | None = None
 
 
 class TurnRollbackView(BaseModel):

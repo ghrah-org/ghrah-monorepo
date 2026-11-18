@@ -70,6 +70,7 @@ from ghrah.protocol.views.core import (
     PublishedMessageView,
     SessionCatalogView,
     ToolListView,
+    TurnAbortView,
     TurnListView,
     TurnRollbackPreviewView,
     TurnRollbackView,
@@ -608,6 +609,17 @@ class TurnListRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class TurnAbortRequest(BaseModel):
+    """按 Agent、显式轮次或目标会话中止执行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str | None = Field(default=None, min_length=1)
+    session_id: str | None = Field(default=None, min_length=1)
+    reason: str = ""
+
+
 class TurnRollbackRequest(BaseModel):
     """从终态轮次的起点前或轮内节点新建分支。"""
 
@@ -654,6 +666,7 @@ class MessageAppendResponse(RootModel[MessageReplyView | MessageAcceptanceView])
 CORE_INTERFACES = InterfaceRegistry(
     (
         Interface("nodes.get", NodeGetRequest, NodeView),
+        Interface("turns.abort", TurnAbortRequest, TurnAbortView),
         Interface("turns.get", TurnGetRequest, TurnView),
         Interface("turns.list", TurnListRequest, TurnListView),
         Interface("turns.rollback", TurnRollbackRequest, TurnRollbackView),

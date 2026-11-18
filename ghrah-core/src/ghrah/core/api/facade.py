@@ -79,6 +79,7 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     ToolListView,
     ToolView,
+    TurnAbortView,
     TurnListView,
     TurnRollbackPreviewView,
     TurnRollbackView,
@@ -256,6 +257,25 @@ class _Turns:
                 session_id=session_id,
                 status=status,
                 limit=limit,
+            )
+        )
+
+    async def abort(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str | None = None,
+        session_id: SessionId | None = None,
+        reason: str = "",
+    ) -> TurnAbortView:
+        """中止显式指定或可唯一确定的活动轮次。"""
+        return TurnAbortView.model_validate(
+            await self._facade._call(
+                "turns.abort",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                session_id=session_id,
+                reason=reason,
             )
         )
 

@@ -25,7 +25,9 @@ def _hitl_view(row: aiosqlite.Row) -> HitlRequestView:
 
 def _turn_view(row: aiosqlite.Row) -> TurnView:
     data = dict(row)
-    del data["metadata"]
+    metadata = json.loads(data.pop("metadata"))
+    for key in ("abort_reason", "incomplete_node_id", "recovery_branch_id"):
+        data[key] = metadata.get(key)
     return TurnView.model_validate(data)
 
 
