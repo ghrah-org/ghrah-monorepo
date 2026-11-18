@@ -181,9 +181,15 @@ function onHead(): void {
         </span>
         <span class="ability-package-sub">
           <code v-if="fullName">{{ fullName }}</code>
-          <span v-if="fullName && primary?.version && primary.origin === 'installed'" class="ability-package-sep">·</span>
+          <span
+            v-if="fullName && primary?.version && primary.origin === 'installed'"
+            class="ability-package-sep"
+            >·</span
+          >
           <!-- 内核件随源码发布，没有版本概念：只在能力件上显示版本号。 -->
-          <span v-if="primary?.version && primary.origin === 'installed'">v{{ primary.version }}</span>
+          <span v-if="primary?.version && primary.origin === 'installed'"
+            >v{{ primary.version }}</span
+          >
         </span>
       </span>
       <span class="ability-package-meta">

@@ -237,9 +237,7 @@ describe("AbilityConfigPage", () => {
   it("shows the tool and skill split from the catalog payload", async () => {
     // 成员清单现在由目录接口直接给出，不再逐版本读画像。
     const view = groups();
-    view.groups[0]!.versions = [
-      { ...groupVersion(), operations: ["read"], skills: ["guide"] },
-    ];
+    view.groups[0]!.versions = [{ ...groupVersion(), operations: ["read"], skills: ["guide"] }];
     setAbilityControlClientFactory(
       () =>
         ({

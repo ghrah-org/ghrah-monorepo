@@ -170,10 +170,10 @@ def test_recovery_spec_must_not_be_resolved() -> None:
 
 
 class _ControlSource:
-    """伪来源：只声明一个控制成员，验证规格越界会被拒绝。"""
+    """伪来源：只声明一个控制成员，验证模板选中它能正常进装配结果。"""
 
-    def load_ability(self, member: str) -> Any:
-        del member
+    def load_ability(self, member: str, *, version: str | None = None) -> Any:
+        del member, version
         implementation = type("Impl", (), {"handler": "conversation"})()
         metadata = type("Meta", (), {"permissions": PermissionFlags()})()
         return type(
@@ -189,7 +189,8 @@ class _ControlSource:
         )()
 
 
-def test_control_member_is_rejected() -> None:
+def test_control_member_enters_the_assembly_result() -> None:
+    """控制成员不报错：它在启动核定里被分到 control 通道（不写授权账本）。"""
     spec = _spec([{"member": "ghrah.core.conversation"}])
-    with pytest.raises(AssemblyError, match="control member"):
-        resolve_assembly(spec, _ControlSource())  # type: ignore[arg-type]
+    resolved = resolve_assembly(spec, _ControlSource())  # type: ignore[arg-type]
+    assert [item.ability_name for item in resolved.abilities] == ["ghrah.core.conversation"]

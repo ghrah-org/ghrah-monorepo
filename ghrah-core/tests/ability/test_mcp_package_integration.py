@@ -6,6 +6,8 @@ from __future__ import annotations
 from ast import literal_eval
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import patch
+from uuid import UUID
 
 import pytest
 from _helpers import ToolScriptedLLM
@@ -20,7 +22,6 @@ from ghrah.ability.package.generate import build
 from ghrah.ability.package.installer import AbilityInstaller
 from ghrah.ability.package.provider import InstalledAbilityProvider
 from ghrah.chat.content import ToolCallBlock
-from ghrah.manifest.parser import parse_agent_manifest
 from ghrah.mcp.agentconf_source import AgentconfMcpSource
 from ghrah.mcp.spec import McpToolSpec
 
@@ -137,10 +138,6 @@ async def execute(call, services):
         ),
     )
 
-    class Store:
-        def load_agent(self, name):
-            return parse_agent_manifest(MANIFEST)
-
     class Model(ToolScriptedLLM):
         model_capabilities = {"max_context_length": 128000}
 
@@ -221,7 +218,7 @@ async def execute(call, services):
         mcp=McpDeploymentConfig((binding,), source=source) if wired else None,
     )
     registry = CoreClusterRegistry(
-        unit_factory=default_core_unit_factory(cfg, Store(), lambda _: model)
+        unit_factory=default_core_unit_factory(cfg, lambda _: model)
     )
     try:
         async with Context() as ctx:
@@ -231,12 +228,48 @@ async def execute(call, services):
                     "cluster", project_id="project", project_root_locator=str(tmp_path / "project")
                 )
                 unit = cluster._unit
-                spawned = await unit.handle_command(
-                    "spawn_agent",
+                # 装配输入 v3 的创建路径由 Core 生成 agent_id；这里固定 UUID，
+                # 让后面按 AGENT 构造的 MCP 绑定与运行实例对得上。
+                with patch("uuid.uuid4", return_value=UUID(AGENT)):
+                    spawned = await unit.handle_command(
+                    "create_agent_assembly",
                     {
-                        "project_id": "project",
-                        "config": {"name": "consumer", "agent_id": AGENT},
-                        "manifest_ref": "test.mcp",
+                        "spec": {
+                            "name": "consumer",
+                            "config": {
+                                "description": "",
+                                "model": {"endpoint_name": "default", "model_overrides": None},
+                                "prompt": {
+                                    "system_prompt": "Search and call the granted echo tool."
+                                },
+                                "limits": {
+                                    "max_iterations": 12,
+                                    "communication_timeout": 300.0,
+                                },
+                                "context": None,
+                                "surface": {
+                                    "mode": "progressive",
+                                    "static": [
+                                        "ghrah.fs.read_file",
+                                        "ghrah.core.load_skill",
+                                    ],
+                                    "max_static": None,
+                                },
+                                "mcp_refs": [],
+                                "permission": None,
+                            },
+                            "members": [
+                                {"member": "ghrah.core.conversation"},
+                                {"member": "ghrah.fs.read_file"},
+                                {"member": "ghrah.core.load_skill"},
+                                {
+                                    "member": "mcp.local.echo",
+                                    "type": "mcp",
+                                    "version": "0.0.1",
+                                    "permissions": {"net_access": True},
+                                },
+                            ],
+                        }
                     },
                     None,
                 )
