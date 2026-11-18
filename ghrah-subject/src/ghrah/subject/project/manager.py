@@ -823,7 +823,9 @@ class ProjectManager:
         事实留在 Core 的实例快照；此后改模板不影响该实例。
         """
         async with self.lifecycle_lock(project_id):
+            logger.warning("DIAG create_agent: lock acquired project=%s", project_id)
             project, error = await self._get_active_project(project_id)
+            logger.warning("DIAG create_agent: project loaded")
             if error is not None:
                 raise StableError("project_unavailable", str(error))
             if project is None:
@@ -840,6 +842,7 @@ class ProjectManager:
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
+            logger.warning("DIAG create_agent: cluster ready")
             try:
                 created = await create_agent(
                     CreateAgentRequest(
