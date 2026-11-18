@@ -51,6 +51,8 @@ interface PackageRow {
 interface PackageOption {
   fullName: string;
   version: string;
+  /** 包来源：内置或安装包。落库时原样带过去，解析端据此定位。 */
+  origin: "builtin" | "installed";
   label: string;
 }
 
@@ -141,6 +143,7 @@ async function loadOptions() {
         .map((version) => ({
           fullName,
           version: version.version as string,
+          origin: version.origin === "installed" ? ("installed" as const) : ("builtin" as const),
           label: `${fullName} v${version.version}${group.title ? ` · ${group.title}` : ""}`,
         }));
     });
@@ -247,12 +250,16 @@ function splitTags(): string[] {
  * 前端**不**展开成具体成员键：两侧目录可能不同步（实测 `ghrah.cluster` 在 Subject
  * 目录里有 `send`，Core 的包定义里没有），展开后的成员会在创建时解析失败。
  */
+function originOf(fullName: string): "builtin" | "installed" {
+  return packages.value.find((option) => option.fullName === fullName)?.origin ?? "builtin";
+}
+
 function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
   return form.rows
     .filter((row) => row.package !== "")
     .map((row) => ({
       package: row.package,
-      origin: "builtin" as const,
+      origin: originOf(row.package),
       whole_container: row.wholeContainer,
       operations: row.wholeContainer
         ? []

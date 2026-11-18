@@ -194,8 +194,14 @@ class BuiltinAbilitySource:
         ]
         if matched:
             return [AbilityManifest.model_validate(item.model_dump()) for item in matched]
-        if self.packages is not None and not full_name.startswith("ghrah."):
-            return self.packages.package_members(full_name)
+        # 内置没有该前缀时回退到安装包仓库。不能按 ``ghrah.`` 前缀排除：安装包里
+        # 也有 ``ghrah.*`` 名字（例如 ``ghrah.ability-builder``），按前缀排除会让
+        # 这类包永远解析不到。
+        if self.packages is not None:
+            try:
+                return self.packages.package_members(full_name)
+            except ManifestNotFoundError:
+                pass
         raise ManifestNotFoundError(f"Ability package not found: {full_name}")
 
     def list_abilities(self, namespace: str | None = None) -> list[str]:
