@@ -62,6 +62,35 @@ class BuiltinAbilitySource:
         }
         self.packages = InstalledAbilityProvider(install_root) if install_root is not None else None
         self._origins = self._build_origins()
+        # 包级解析缓存：``包 → 成员清单``（operation / skill / mcp）。
+        # ``_manifests`` 是历史"成员索引"视图，逐步退化为这张缓存的派生。
+        self._package_members: dict[str, list[AbilityManifest]] = {}
+
+    def _builtin_package_members(self, package: str) -> list[AbilityManifest]:
+        """内置包 → 全部成员（工具面 + 技能面）。
+
+        以**包**为单位取，而不是按全名前缀拼：一个包里可能同时有 operation 与
+        skill，后续还会有 mcp 成员，各自投影规则不同，不能在调用点各拼一次。
+        """
+        cached = self._package_members.get(package)
+        if cached is not None:
+            return cached
+        prefix = f"{package}."
+        members: list[AbilityManifest] = [
+            AbilityManifest.model_validate(manifest.model_dump())
+            for name, manifest in self._manifests.items()
+            if name.startswith(prefix)
+        ]
+        seen = {item.full_name for item in members}
+        for name, manifest in self._builtin_skill_manifests().items():
+            if name != package and not name.startswith(prefix):
+                continue
+            if manifest.full_name in seen:
+                continue
+            seen.add(manifest.full_name)
+            members.append(AbilityManifest.model_validate(manifest.model_dump()))
+        self._package_members[package] = members
+        return members
 
     def _build_origins(self) -> dict[str, AbilityOrigin]:
         """联合登记内置树与安装存储；同全名双源时明确失败。"""
@@ -167,6 +196,14 @@ class BuiltinAbilitySource:
         manifest = self._manifests.get(full_name)
         if manifest is not None:
             return AbilityManifest.model_validate(manifest.model_dump())
+        # 按**包**取成员：一个包里 operation / skill / mcp 的投影规则不同，
+        # 统一从包级缓存里查，不在调用点各拼一次。
+        for package in (full_name, full_name.rpartition(".")[0]):
+            if not package:
+                continue
+            for item in self._builtin_package_members(package):
+                if item.full_name == full_name:
+                    return AbilityManifest.model_validate(item.model_dump())
         # 内置技能成员不在 ``_manifests``（那张表是工具面）；技能包（例如
         # ``ghrah.ability-builder``）只有技能，必须单独投影，否则整包解析不到。
         skill_manifest = self._builtin_skill_manifests().get(full_name)
@@ -218,7 +255,10 @@ class BuiltinAbilitySource:
         return manifests
 
     def load_package_members(self, full_name: str) -> list[AbilityManifest]:
-        """把一个包的全部成员投影成可授予清单（内置按前缀，安装包走 provider）。
+        """把一个包的全部成员投影成可授予清单。
+
+        包是解析单位：包内 operation / skill / mcp 各自按自己的规则投影，
+        调用方只拿到"成员清单"，不需要知道某个成员属于哪一类。
 
         Args:
             full_name: 包全名（``namespace.name``）
@@ -229,28 +269,10 @@ class BuiltinAbilitySource:
         Raises:
             ManifestNotFoundError: 该名字不是包，或包内没有任何成员
         """
-        prefix = f"{full_name}."
-        matched = [
-            manifest for name, manifest in self._manifests.items() if name.startswith(prefix)
-        ]
-        # 技能成员与工具成员同在「整包」里：只有工具面的包（如 ``ghrah.cluster``）
-        # 走 prefix 命中，纯技能包（如 ``ghrah.ability-builder``）只能从这里取到。
-        # 同一技能在原始键与归一键下各登记一次，按 ``manifest.full_name`` 去重。
-        skills: list[AbilityManifest] = []
-        seen: set[str] = set()
-        for name, item in self._builtin_skill_manifests().items():
-            if name != full_name and not name.startswith(prefix):
-                continue
-            if item.full_name in seen:
-                continue
-            seen.add(item.full_name)
-            skills.append(AbilityManifest.model_validate(item.model_dump()))
-        if matched or skills:
-            return [
-                *[AbilityManifest.model_validate(item.model_dump()) for item in matched],
-                *skills,
-            ]
-        # 内置没有该前缀时回退到安装包仓库。不能按 ``ghrah.`` 前缀排除：安装包里
+        members = self._builtin_package_members(full_name)
+        if members:
+            return members
+        # 内置没有该包时回退到安装包仓库。不能按 ``ghrah.`` 前缀排除：安装包里
         # 也有 ``ghrah.*`` 名字（例如 ``ghrah.ability-builder``），按前缀排除会让
         # 这类包永远解析不到。
         if self.packages is not None:
@@ -266,11 +288,17 @@ class BuiltinAbilitySource:
         raise ManifestNotFoundError(f"Ability package not found: {full_name}")
 
     def list_abilities(self, namespace: str | None = None) -> list[str]:
-        """列出新增驱动的内置成员，忽略未选用的旧注册表。"""
-        names = sorted(self._manifests)
+        """列出内置成员全名（工具面 + 技能面），忽略未选用的旧注册表。
+
+        技能成员曾经不在名单里：列表能列出包、装配却解析不到成员。现在两者
+        同源（都来自包级投影），目录与解析结果保持一致。
+        """
+        names = set(self._manifests)
+        names.update(self._builtin_skill_manifests())
+        ordered = sorted(names)
         if namespace is not None:
-            names = [name for name in names if name.startswith(f"{namespace}.")]
-        return names
+            ordered = [name for name in ordered if name.startswith(f"{namespace}.")]
+        return ordered
 
     def load_agent(self, full_name: str) -> AgentManifest:
         """只委托给显式注入的 Agent 声明存储，不猜测文件位置。"""
