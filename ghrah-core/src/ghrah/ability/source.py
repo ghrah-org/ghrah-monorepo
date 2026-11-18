@@ -199,6 +199,11 @@ class BuiltinAbilitySource:
         # 这类包永远解析不到。
         if self.packages is not None:
             try:
+                # 「整包」没有指定版本：多版本时取已安装的最高版本。模板若显式钉了
+                # 版本，走 select_version 之后的解析（见 ``package_members`` 调用方）。
+                versions = tuple(self.packages.store.versions_of(full_name))
+                if len(versions) > 1:
+                    self.packages.select_version(full_name, versions[-1].version)
                 return self.packages.package_members(full_name)
             except ManifestNotFoundError:
                 pass
