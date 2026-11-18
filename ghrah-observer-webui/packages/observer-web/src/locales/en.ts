@@ -835,6 +835,8 @@ export default {
       noOperations: "This package exposes no operations, or its definition is unreadable.",
       packageNeedsOperations:
         "{package} has no selectable operations yet. Pick its operations individually, or reopen the dialog to reload the catalog.",
+      submitHint:
+        "To save: fill namespace and name, pick a model endpoint, and give each package either whole-package or at least one operation.",
       package: "Package",
       operations: "Operations",
       wholeContainer: "Whole package",

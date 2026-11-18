@@ -156,8 +156,11 @@ async function fetchMembers(fullName: string, version: string): Promise<string[]
   const key = `${fullName}@${version}`;
   const cached = abilityCache.get(key);
   if (cached !== undefined) return cached;
-  const [namespace, name] = fullName.split(".");
-  if (!namespace || !name) return [];
+  // 退化身份（只有 namespace，如 `research`）在服务端以 <namespace>/<namespace> 落盘。
+  const parts = fullName.split(".");
+  const namespace = parts[0];
+  const name = parts[1] ?? parts[0];
+  if (!namespace) return [];
   try {
     // 与「Ability 配置」页同一个版本详情接口：返回该版本可申请的操作键。
     const profile = AbilityPackageVersionProfileViewSchema.parse(
@@ -224,7 +227,10 @@ const canSubmit = computed(() => {
   if (form.endpointName.trim() === "") return false;
   return form.rows.every((row) => {
     if (row.package === "") return false;
-    return row.wholeContainer ? row.available.length > 0 : row.selected.length > 0;
+    // 「整包」不需要本地目录：成员由 Core 按自己的能力来源展开，
+    // 所以哪怕目录里暂时读不到操作也要允许保存。
+    if (row.wholeContainer) return true;
+    return row.selected.length > 0;
   });
 });
 
@@ -491,6 +497,9 @@ onMounted(loadOptions);
       </fieldset>
 
       <footer class="template-form-actions">
+        <p v-if="!canSubmit" class="template-form-hint template-form-need">
+          {{ t("config.template.submitHint") }}
+        </p>
         <UiButton type="button" variant="ghost" @click="requestClose">
           {{ t("common.cancel") }}
         </UiButton>
@@ -614,7 +623,13 @@ onMounted(loadOptions);
 
 .template-form-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.template-form-need {
+  margin-right: auto;
 }
 </style>

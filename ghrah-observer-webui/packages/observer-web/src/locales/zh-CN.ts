@@ -796,6 +796,8 @@ export default {
       noOperations: "该包没有暴露操作，或定义无法读取。",
       packageNeedsOperations:
         "{package} 还没有可选的操作。请单独勾选操作，或重新打开对话框以重新读取目录。",
+      submitHint:
+        "保存条件：填好命名空间与名称、选择模型端点，且每个能力包要么勾「整包」，要么至少勾一个操作。",
       package: "能力包",
       operations: "操作",
       wholeContainer: "整包",
