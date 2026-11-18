@@ -59,15 +59,22 @@ interface PackageRow {
 }
 
 interface PackageOption {
-  /** 下拉值：包的某个具体版本。 */
+  /** 下拉值：内核件是包名，能力件是 `<包>@<最新版本>`。 */
   value: string;
   fullName: string;
-  version: string;
-  /** 包来源：内置或安装包。落库时原样带过去，解析端据此定位。 */
+  /** 能力件的最新版本；内核件为 null。 */
+  version: string | null;
+  /** 包来源：内核件（内置）或带版本的能力件。 */
   origin: "builtin" | "installed";
   label: string;
-  /** 服务端判定的该包最新版本。 */
+  /** 是否服务端判定的最新版本（仅能力件）。 */
   latest: boolean;
+  /** 读画像用的具体版本号：内核件也有内部版本，仅用于兜底请求。 */
+  fetchVersion: string;
+  /** 该包可选版本的 operation 键，来自同一个查询接口。 */
+  operations: string[];
+  /** 该包可选版本的 skill 键。 */
+  skills: string[];
 }
 
 const mode = computed(() => (props.template === null ? "create" : "edit"));
@@ -155,27 +162,27 @@ async function loadOptions() {
     const groups = AbilityPackageGroupsViewSchema.parse(
       await client.get("/api/v1/ability-package-groups"),
     );
-    packages.value = groups.groups.flatMap((group) => {
+    // 与「Ability 配置」页同一个接口：一个包一条选项。
+    // 内核件（kernel）没有版本概念 → 选项值只用包名；能力件（external）用服务端
+    // 判定的最新版本。成员清单也由这个接口给出，不再单独读版本画像。
+    packages.value = groups.groups.map((group) => {
       const fullName = group.full_name ?? `${group.namespace ?? ""}.${group.name ?? ""}`;
+      const kernel = group.ability_type === "kernel";
       const latest = group.latest_version ?? null;
-      // 每个版本一条选项；内核件随源码发布、没有版本概念，不显示版本号，
-      // 也不参与「最新版本」的选择。最新版排在同包首位作为默认。
-      return group.versions
-        .filter((version) => version.version !== null)
-        .map((version) => {
-          const kernel = version.origin !== "installed";
-          return {
-            value: kernel ? fullName : `${fullName}@${version.version ?? ""}`,
-            fullName,
-            version: version.version as string,
-            origin: kernel ? ("builtin" as const) : ("installed" as const),
-            latest: !kernel && latest !== null && version.version === latest,
-            label: kernel
-              ? `${fullName}${group.title ? ` · ${group.title}` : ""}`
-              : `${fullName} v${version.version}${group.title ? ` · ${group.title}` : ""}`,
-          };
-        })
-        .sort((left, right) => Number(right.latest) - Number(left.latest));
+      const selectable =
+        group.versions.find((item) => item.version === latest) ?? group.versions.at(-1);
+      const titleSuffix = group.title ? ` · ${group.title}` : "";
+      return {
+        value: kernel ? fullName : `${fullName}@${latest ?? ""}`,
+        fullName,
+        version: kernel ? null : latest,
+        origin: kernel ? ("builtin" as const) : ("installed" as const),
+        latest: !kernel,
+        fetchVersion: selectable?.version ?? "",
+        operations: group.operations,
+        skills: group.skills,
+        label: kernel ? `${fullName}${titleSuffix}` : `${fullName} v${latest ?? ""}${titleSuffix}`,
+      };
     });
   } catch {
     packages.value = [];
@@ -183,15 +190,10 @@ async function loadOptions() {
     loadingOptions.value = false;
   }
   for (const row of form.rows) {
-    // 内核件不带版本：选项值只用包名，和下拉里的条目对齐；读画像用目录里的版本。
-    const kernel = row.version === null;
-    const option = packages.value.find(
-      (item) =>
-        item.fullName === row.package &&
-        (kernel ? item.origin === "builtin" : item.version === row.version),
-    );
-    row.optionValue = kernel ? row.package : `${row.package}@${row.version}`;
-    row.fetchVersion = row.version ?? option?.version ?? "";
+    // 内核件不带版本：选项值只用包名，和下拉里的条目对齐。
+    row.optionValue = row.version === null ? row.package : `${row.package}@${row.version}`;
+    const option = packages.value.find((item) => item.value === row.optionValue);
+    row.fetchVersion = option?.fetchVersion ?? "";
     await ensureMembers(row);
   }
 }
@@ -225,10 +227,14 @@ async function fetchMembers(
 }
 
 async function ensureMembers(row: PackageRow) {
-  if (row.package === "" || row.fetchVersion === "") return;
-  // 按行选定的具体版本取成员：同包多版本并存时不能靠包名猜版本；
-  // 内核件没有版本概念（落库 null），但读画像仍需要一个具体版本号。
-  const members = await fetchMembers(row.package, row.fetchVersion);
+  if (row.package === "") return;
+  // 成员清单优先来自同一个查询接口（能力包组），只有接口没给成员时才回退到
+  // 版本画像——内核件同样不需要先有版本。
+  const option = packages.value.find((item) => item.value === row.optionValue);
+  const members =
+    option !== undefined && (option.operations.length > 0 || option.skills.length > 0)
+      ? { operations: option.operations, skills: option.skills }
+      : await fetchMembers(row.package, row.fetchVersion);
   row.available = members.operations;
   row.availableSkills = members.skills;
   if (row.wholeContainer) {
@@ -246,7 +252,7 @@ function applyOption(row: PackageRow, value: string) {
   const option = packages.value.find((item) => item.value === value);
   row.optionValue = value;
   row.package = option?.fullName ?? "";
-  row.fetchVersion = option?.version ?? "";
+  row.fetchVersion = option?.fetchVersion ?? "";
   // 内核件没有版本层：留 null，别把内部版本号写进模板。
   row.version = option === undefined || option.origin === "builtin" ? null : option.version;
 }

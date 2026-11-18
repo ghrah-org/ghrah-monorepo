@@ -277,6 +277,10 @@ class AbilityPackageVersionRow(TreeModel):
     lock_state: str
     problem: str | None = None
     shadowed_builtin: bool = False
+    operations: list[str] = Field(default_factory=list)
+    """该版本可申请的 operation 键（按名字排序）。"""
+    skills: list[str] = Field(default_factory=list)
+    """该版本可申请的 skill 键（按名字排序）。"""
 
 
 class AbilityPackageCatalogView(TreeModel):
@@ -631,11 +635,18 @@ class AbilityPackageGroupVersionView(TreeModel):
 
     version: str | None = None
     origin: Literal["builtin", "installed"] | None = None
+    ability_type: Literal["kernel", "external"] = "external"
+    """``kernel`` = 内置内核件（随源码发布、没有版本概念）；
+    ``external`` = 外部安装的能力件（有版本、以 ``latest_version`` 为准）。"""
     lock_state: str | None = None
     problem: str | None = None
     shadowed_builtin: bool = False
     is_latest: bool = False
     """是否该包的最新版本；由服务端按版本号数值排序判定。"""
+    operations: list[str] = Field(default_factory=list)
+    """该版本可申请的 operation 键。"""
+    skills: list[str] = Field(default_factory=list)
+    """该版本可申请的 skill 键。"""
     member_count: int | None = Field(default=None, ge=0)
     project: AbilityPackageGroupProjectView | None = None
     agent: AbilityPackageGroupAgentView | None = None
@@ -648,9 +659,15 @@ class AbilityPackageGroupView(TreeModel):
     name: str | None = None
     full_name: str | None = None
     title: str | None = None
+    ability_type: Literal["kernel", "external"] = "kernel"
+    """包的种类：内核件（无版本）或外部安装的能力件（有版本）。"""
     versions: list[AbilityPackageGroupVersionView] = Field(default_factory=list)
     latest_version: str | None = None
-    """服务端判定的最新版本号；前端选包时默认用它。"""
+    """服务端判定的最新版本号；内核件恒为 ``None``。"""
+    operations: list[str] = Field(default_factory=list)
+    """可选版本的 operation 键：能力件取最新版本，内核件取其唯一版本。"""
+    skills: list[str] = Field(default_factory=list)
+    """可选版本的 skill 键；口径同上。"""
 
 
 class AbilityPackageGroupsView(TreeModel):

@@ -103,6 +103,8 @@ def _builtin_rows() -> dict[tuple[str, str], AbilityPackageVersionRow]:
             version=identity.version,
             member_count=_member_count(definition),
             lock_state="builtin",
+            operations=sorted(definition.operations),
+            skills=sorted(definition.skills),
         )
     return rows
 
@@ -175,6 +177,8 @@ def _installed_rows(
                 member_count=count,
                 lock_state=record.lock_state,
                 problem=problem,
+                operations=sorted(definition.operations) if definition is not None else [],
+                skills=sorted(definition.skills) if definition is not None else [],
             )
     return True, rows
 
@@ -486,6 +490,8 @@ class _GroupDraft:
     problem: str | None = None
     shadowed_builtin: bool = False
     member_count: int | None = None
+    operations: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
     digest: str | None = None
     instance_id: str | None = None
     instance_revision: int | None = None
@@ -529,6 +535,8 @@ def _draft_from_catalog(row: AbilityPackageVersionRow) -> _GroupDraft:
         problem=row.problem,
         shadowed_builtin=row.shadowed_builtin,
         member_count=row.member_count,
+        operations=tuple(row.operations),
+        skills=tuple(row.skills),
     )
 
 
@@ -706,13 +714,17 @@ def _version_view(
         alias = aliases.get(draft.instance_id or "")
         granted = bool(draft.selected and draft.instance_id and alias)
         agent = AbilityPackageGroupAgentView(granted=granted, alias=alias if granted else None)
+    ability_type = "external" if draft.origin == "installed" else "kernel"
     return AbilityPackageGroupVersionView(
         version=draft.version,
         origin=draft.origin,
+        ability_type=ability_type,
         lock_state=draft.lock_state,
         problem=draft.problem,
         shadowed_builtin=draft.shadowed_builtin,
         is_latest=latest,
+        operations=list(draft.operations),
+        skills=list(draft.skills),
         member_count=draft.member_count,
         project=project,
         agent=agent,
@@ -737,9 +749,12 @@ def _group_view(
         ),
         None,
     )
+    # 可选版本：能力件取最新版本，内核件取其唯一版本（本来就没有版本选择）。
+    selectable = next(
+        (draft for draft in reversed(versions) if draft.version == latest), None
+    ) or versions[-1]
     rows = []
     for draft in versions:
-        # TreeModel 是 frozen 的：is_latest 必须在构造时给，不能事后赋值。
         rows.append(
             _version_view(
                 draft,
@@ -748,13 +763,17 @@ def _group_view(
                 latest=bool(draft.version) and draft.version == latest,
             )
         )
+    kernel = all(draft.origin != "installed" for draft in drafts)
     return AbilityPackageGroupView(
         namespace=named.namespace,
         name=named.name,
         full_name=named.full_name,
         title=title,
+        ability_type="kernel" if kernel else "external",
         versions=rows,
         latest_version=latest,
+        operations=list(selectable.operations),
+        skills=list(selectable.skills),
     )
 
 

@@ -36,9 +36,13 @@ function groupVersion(version = "1.0.0", origin: "builtin" | "installed" = "buil
   return {
     version,
     origin,
+    ability_type: origin === "installed" ? ("external" as const) : ("kernel" as const),
     lock_state: origin === "builtin" ? "builtin" : "ok",
     problem: null,
     shadowed_builtin: false,
+    is_latest: false,
+    operations: [] as string[],
+    skills: [] as string[],
     member_count: 2,
     project: null,
     agent: null,
@@ -230,49 +234,17 @@ describe("AbilityConfigPage", () => {
     wrapper.unmount();
   });
 
-  it("shows the tool and skill split once a profile has been read", async () => {
-    const profile = AbilityPackageVersionProfileViewSchema.parse({
-      ...versionProfile(),
-      operations: [
-        {
-          key: "read",
-          title: "Read",
-          description: "Read one file",
-          input_schema: { type: "object" },
-          output_schema: {},
-          effects: [],
-          tags: [],
-          resources: {},
-          permissions: {},
-          expose: false,
-          execution: {
-            mode: "request",
-            timeout_ms: 1000,
-            cancellation: "cooperative",
-            on_revoke: "drain",
-            retry: "never",
-          },
-        },
-      ],
-      skills: [
-        {
-          key: "guide",
-          title: "Guide",
-          description: "How to use the package",
-          tags: [],
-          body: { path: "skills/guide.md", media_type: "text/markdown", size: 1, digest: "x" },
-          assets: [],
-          references: [],
-          scripts: [],
-        },
-      ],
-    });
+  it("shows the tool and skill split from the catalog payload", async () => {
+    // 成员清单现在由目录接口直接给出，不再逐版本读画像。
+    const view = groups();
+    view.groups[0]!.versions = [
+      { ...groupVersion(), operations: ["read"], skills: ["guide"] },
+    ];
     setAbilityControlClientFactory(
       () =>
         ({
           status: async () => status("builtin", true, true),
-          packageGroups: async () => groups(),
-          packageVersion: async () => profile,
+          packageGroups: async () => view,
         }) as never,
     );
     const wrapper = mount(AbilityConfigPage);
