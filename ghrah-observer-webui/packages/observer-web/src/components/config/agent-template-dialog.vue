@@ -177,7 +177,12 @@ async function ensureMembers(row: PackageRow) {
   if (option === undefined) return;
   const members = await fetchMembers(option.fullName, option.version);
   row.available = members;
-  row.selected = row.selected.filter((key) => members.includes(key));
+  if (row.wholeContainer) {
+    // 整包 = 全选：保存时按具体成员键落库，所以这里直接把目录里的成员都选上。
+    row.selected = [...members];
+  } else {
+    row.selected = row.selected.filter((key) => members.includes(key));
+  }
 }
 
 function addPackage() {
@@ -217,9 +222,10 @@ const canSubmit = computed(() => {
     return false;
   }
   if (form.endpointName.trim() === "") return false;
-  return form.rows.every(
-    (row) => row.package !== "" && (row.wholeContainer || row.selected.length > 0),
-  );
+  return form.rows.every((row) => {
+    if (row.package === "") return false;
+    return row.wholeContainer ? row.available.length > 0 : row.selected.length > 0;
+  });
 });
 
 function splitTags(): string[] {
@@ -229,29 +235,46 @@ function splitTags(): string[] {
     .filter(Boolean);
 }
 
-function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
-  return form.rows
-    .filter((row) => row.package !== "")
-    .map((row) => ({
+/**
+ * 「整包」只是**选择全部**的快捷方式：保存时展开成具体成员键。
+ *
+ * 契约里的 `whole_container` 需要包目录才能展开，而创建链路上没有目录，
+ * 落库里存 `whole_container=true` + 空 operations 会让 Agent 零能力上线。
+ */
+async function buildPackages(): Promise<
+  NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"]
+> {
+  const built: NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] = [];
+  for (const row of form.rows) {
+    if (row.package === "") continue;
+    let keys = row.wholeContainer ? row.available : row.selected;
+    if (row.wholeContainer && keys.length === 0) {
+      await ensureMembers(row);
+      keys = row.available;
+    }
+    if (keys.length === 0) {
+      throw new Error(t("config.template.packageNeedsOperations", { package: row.package }));
+    }
+    built.push({
       package: row.package,
       origin: "builtin" as const,
-      whole_container: row.wholeContainer,
-      operations: row.wholeContainer
-        ? []
-        : row.selected.map((key) => ({ key, visible: true, available: true })),
+      whole_container: false,
+      operations: keys.map((key) => ({ key, visible: true, available: true })),
       skills: [],
-    }));
+    });
+  }
+  return built;
 }
 
-function buildAbilityRequest(): AgentTemplateCreateRequest["ability_request"] {
+async function buildAbilityRequest(): Promise<AgentTemplateCreateRequest["ability_request"]> {
   return {
     surface: { mode: "auto", static: [], max_static: null },
-    packages: buildPackages(),
+    packages: await buildPackages(),
     mcp_refs: [],
   };
 }
 
-function buildCreatePayload(): AgentTemplateCreateRequest {
+async function buildCreatePayload(): Promise<AgentTemplateCreateRequest> {
   return {
     metadata: {
       namespace: form.namespace.trim(),
@@ -270,13 +293,13 @@ function buildCreatePayload(): AgentTemplateCreateRequest {
       window: null,
       overrides: null,
     },
-    ability_request: buildAbilityRequest(),
+    ability_request: await buildAbilityRequest(),
     permission_request: null,
     path_request: [],
   };
 }
 
-function buildUpdatePayload(): AgentTemplateUpdateRequest {
+async function buildUpdatePayload(): Promise<AgentTemplateUpdateRequest> {
   return {
     expected_revision: props.template!.revision,
     title: form.title,
@@ -292,7 +315,7 @@ function buildUpdatePayload(): AgentTemplateUpdateRequest {
       window: null,
       overrides: null,
     },
-    ability_request: buildAbilityRequest(),
+    ability_request: await buildAbilityRequest(),
     permission_request: null,
     path_request: null,
   };
@@ -305,8 +328,8 @@ async function submit() {
   try {
     const detail =
       mode.value === "create"
-        ? await api().create(buildCreatePayload())
-        : await api().update(props.template!.template_id, buildUpdatePayload());
+        ? await api().create(await buildCreatePayload())
+        : await api().update(props.template!.template_id, await buildUpdatePayload());
     emit("dirtyChange", false);
     emit("saved", detail);
   } catch (cause) {

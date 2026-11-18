@@ -833,6 +833,8 @@ export default {
         "No ability packages are installed. Install one under Ability Config, then reopen this dialog.",
       choosePackage: "Choose a package",
       noOperations: "This package exposes no operations, or its definition is unreadable.",
+      packageNeedsOperations:
+        "{package} has no selectable operations yet. Pick its operations individually, or reopen the dialog to reload the catalog.",
       package: "Package",
       operations: "Operations",
       wholeContainer: "Whole package",

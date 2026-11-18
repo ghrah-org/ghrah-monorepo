@@ -221,3 +221,22 @@ def test_skills_and_scripts_go_to_axes_only() -> None:
     assert all("skill" not in item.member for item in rendered.spec.members)
     assert rendered.grants[0].skills == ("style",)
     assert rendered.grants[0].scripts == {"style": ("lint",)}
+
+
+def test_whole_container_without_catalog_fails_closed() -> None:
+    """没有授权视图时「整包」无法展开成员，必须报错而不是静默装配成零能力。"""
+    template = _template(
+        ability_request={
+            "packages": [
+                {
+                    "package": "ghrah.fs",
+                    "origin": "builtin",
+                    "whole_container": True,
+                    "operations": [],
+                }
+            ]
+        }
+    )
+    with pytest.raises(RenderError) as error:
+        render_assembly(template, agent_name="weekly", workspaces=_WORKSPACES, granted=None)
+    assert error.value.code == "whole_container_unresolved"
