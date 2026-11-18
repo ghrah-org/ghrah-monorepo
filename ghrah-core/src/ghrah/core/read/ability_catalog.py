@@ -687,7 +687,7 @@ def _attach_instances(groups: dict[str, list[_GroupDraft]], instances: list[_Ins
 
 
 def _version_view(
-    draft: _GroupDraft, scope: str, aliases: dict[str, str]
+    draft: _GroupDraft, scope: str, aliases: dict[str, str], *, latest: bool = False
 ) -> AbilityPackageGroupVersionView:
     project = None
     agent = None
@@ -709,6 +709,7 @@ def _version_view(
         lock_state=draft.lock_state,
         problem=draft.problem,
         shadowed_builtin=draft.shadowed_builtin,
+        is_latest=latest,
         member_count=draft.member_count,
         project=project,
         agent=agent,
@@ -729,9 +730,15 @@ def _group_view(
     )
     rows = []
     for draft in versions:
-        view = _version_view(draft, scope, aliases)
-        view.is_latest = bool(draft.version) and draft.version == latest
-        rows.append(view)
+        # TreeModel 是 frozen 的：is_latest 必须在构造时给，不能事后赋值。
+        rows.append(
+            _version_view(
+                draft,
+                scope,
+                aliases,
+                latest=bool(draft.version) and draft.version == latest,
+            )
+        )
     return AbilityPackageGroupView(
         namespace=named.namespace,
         name=named.name,

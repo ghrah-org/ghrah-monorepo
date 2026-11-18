@@ -323,16 +323,17 @@ class ReconciliationService:
                         }
                     )
                     continue
-                # 实例 manifest 校验（当前仅 os.path.exists，缺失 warning 不渲染）
-                if agent.instance_manifest_path:
-                    if not os.path.exists(agent.instance_manifest_path):
-                        logger.warning(
-                            "reconcile: instance manifest missing for agent %s "
-                            "(project %s): %s — TODO manifest-instance render",
-                            agent.name,
-                            project.project_id,
-                            agent.instance_manifest_path,
-                        )
+                # 实例 manifest 校验（当前仅 os.path.exists，缺失 warning 不渲染）。
+                # 记录模型已不再携带该字段：有值才校验，别把恢复循环打成异常。
+                manifest_path = getattr(agent, "instance_manifest_path", "") or ""
+                if manifest_path and not os.path.exists(manifest_path):
+                    logger.warning(
+                        "reconcile: instance manifest missing for agent %s "
+                        "(project %s): %s — TODO manifest-instance render",
+                        agent.name,
+                        project.project_id,
+                        manifest_path,
+                    )
                 if (agent.agent_id and agent.agent_id in existing_ids) or (
                     not agent.agent_id and agent.name in existing_names
                 ):
