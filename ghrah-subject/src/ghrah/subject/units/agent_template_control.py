@@ -37,7 +37,6 @@ from ghrah.protocol.agent_control import (
     AgentTemplateSummaryView,
     AgentTemplateUpdateRequest,
 )
-from ghrah.protocol.views.core import AGENT_CONTROL_MEMBER_KEYS
 from pydantic import BaseModel, ValidationError
 
 from ghrah.subject.config import SubjectConfig
@@ -204,16 +203,6 @@ def build_agent_template_control_router(
             full_name = str(package.get("package") or "")
             if not full_name:
                 continue
-            # 控制成员由装配边界自己加：无论整包展开还是用户逐个勾选，都不落库
-            # （显式传给 Core 会被拒绝，留着只会制造无效条目）。
-            if full_name == "ghrah.core":
-                kept = [
-                    item
-                    for item in package.get("operations") or []
-                    if str(item.get("key") or "") not in AGENT_CONTROL_MEMBER_KEYS
-                ]
-                if len(kept) != len(package.get("operations") or []):
-                    package["operations"] = kept
             namespace, _, name = full_name.partition(".")
             origin = package.get("origin")
             expand = bool(package.get("whole_container"))
@@ -234,9 +223,6 @@ def build_agent_template_control_router(
             package["operations"] = [
                 {"key": item.key, "visible": bool(item.expose), "available": True}
                 for item in profile.operations
-                if not (
-                    full_name == "ghrah.core" and item.key in AGENT_CONTROL_MEMBER_KEYS
-                )
             ]
             package["skills"] = [
                 {

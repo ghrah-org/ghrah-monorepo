@@ -40,7 +40,8 @@ class _Source:
             _manifest("ghrah.core", "end_task", "end_task"),
         ]
 
-    def load_ability(self, full_name: str) -> AbilityManifest:
+    def load_ability(self, full_name: str, *, version: str | None = None) -> AbilityManifest:
+        del version
         for member in self._members:
             if member.full_name == full_name:
                 return member

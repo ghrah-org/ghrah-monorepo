@@ -12,8 +12,8 @@
   不写进 ``PermissionFlags``，让 ``model_fields_set`` 保留下来，交给
   ``resolve_effective_permission`` 沿用包声明上限；写成默认值等于把「未申请」
   误判成「显式收紧」。
-- **控制成员不由规格传递**：``conversation`` / ``end_task`` 这类由 Core 隐式补齐，
-  出现在 ``members`` 里说明装配方算错了成员集合，直接拒绝。
+- **控制成员静默跳过**：``conversation`` / ``end_task`` 由 Agent 原控制机制提供，
+  模板里选中它们（整包或逐个勾选）都不算错，装配时跳过即可——沿用旧行为。
 """
 
 from __future__ import annotations
@@ -125,20 +125,25 @@ def _resolve_member(
     request: AgentMemberPermissions | None,
     *,
     version: str | None = None,
-) -> ResolvedAbility:
+) -> ResolvedAbility | None:
     """加载一个成员并把 L2 申请合并到包声明上。
+
+    控制成员（``conversation`` / ``end_task``）由 Agent 原控制机制提供，装配期
+    静默跳过——模板里选中它们（整包或逐个勾选）都按这个口径处理，不算错误。
 
     Args:
         member: 成员全名（``<package>.<key>``）。
         version: 能力件版本；内核件为 ``None``。多版本并存时由它决定读哪一层目录。
+
+    Returns:
+        解析后的能力；控制成员返回 ``None``（由调用方跳过）。
     """
     try:
         manifest = source.load_ability(member, version=version)
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
         raise AssemblyError(f"member not resolvable: {member}: {error}") from error
-    handler = getattr(manifest.implementation, "handler", None)
-    if handler in CONTROL_HANDLERS and manifest.full_name.startswith("ghrah.core."):
-        raise AssemblyError(f"control member must not be passed explicitly: {manifest.full_name}")
+    if _is_control_member(manifest):
+        return None
     declared = manifest.metadata.permissions
     requested = _permissions(request)
     return ResolvedAbility(
@@ -206,17 +211,19 @@ def resolve_members(
         raw = item.get("permissions")
         request = AgentMemberPermissions.model_validate(raw) if raw is not None else None
         if bool(item.get("whole_container")):
-            # 「整包」：按包名展开成全部成员；控制成员仍由装配边界自己加，这里跳过。
+            # 「整包」：按包名展开成全部成员；控制成员仍由 Agent 原控制机制提供。
             try:
                 manifests = source.load_package_members(member)
             except Exception as error:  # noqa: BLE001 — 统一折成装配错误
                 raise AssemblyError(f"package not resolvable: {member}: {error}") from error
             for manifest in manifests:
-                if _is_control_member(manifest):
-                    continue
-                resolved.append(_resolve_member(source, manifest.full_name, request))
+                ability = _resolve_member(source, manifest.full_name, request)
+                if ability is not None:
+                    resolved.append(ability)
             continue
-        resolved.append(_resolve_member(source, member, request))
+        ability = _resolve_member(source, member, request)
+        if ability is not None:
+            resolved.append(ability)
     return resolved
 
 
