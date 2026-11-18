@@ -193,10 +193,15 @@ class AgentTemplateSkill(_TemplateModel):
 
 
 class AgentTemplatePackage(_TemplateModel):
-    """包级申请：整包与成员二选一，成员按 key 排序。"""
+    """包级申请：成员按 key 排序；``version`` 只对能力件有意义。
+
+    内核件随源码发布、没有版本层，``version`` 为 ``None``；能力件在安装根下按
+    ``<ns>/<name>/<version>/`` 存放，同一包多版本并存，必须记住版本。
+    """
 
     package: str = Field(min_length=1)
     origin: Literal["builtin", "installed", "mcp"]
+    version: str | None = None
     whole_container: bool = False
     operations: list[AgentTemplateOperation] = Field(default_factory=list)
     skills: list[AgentTemplateSkill] = Field(default_factory=list)
