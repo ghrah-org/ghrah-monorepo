@@ -363,6 +363,21 @@ class TemplateStore:
                 await db.commit()
             return _row_to_record(await self._require_row(db, template_id, expected_revision))
 
+    async def decrement_reference(self, template_id: str, revision: int) -> None:
+        """把 ``(template_id, revision)`` 这一行的 ``reference_count`` 减一。
+
+        与 :meth:`increment_reference` 配对：删除 Agent 时调用，避免计数只增不减。
+        下界由 SQL 兜住（``reference_count > 0``），不产生负数。
+        """
+        async with self._lock:
+            db = self._require_db()
+            await db.execute(
+                "UPDATE agent_templates SET reference_count = reference_count - 1 "
+                "WHERE template_id = ? AND revision = ? AND reference_count > 0",
+                (template_id, revision),
+            )
+            await db.commit()
+
     async def increment_reference(self, template_id: str, revision: int) -> None:
         """把``(template_id, revision)`` 这一行的 ``reference_count`` 加一。
 

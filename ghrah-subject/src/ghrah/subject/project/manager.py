@@ -1113,6 +1113,14 @@ class ProjectManager:
                 return _err_code("agent_terminate_failed", terminate_error)
 
         updated = await self._store.update(p.project_id, expected, mutator)
+        # 引用计数与创建时的 increment_reference 配对；失败不影响删除结果。
+        try:
+            templates = self._template_store() if self._template_store is not None else None
+            if templates is not None and target.origin is not None:
+                origin = target.origin
+                await templates.decrement_reference(origin.template_id, origin.revision)
+        except Exception as exc:  # noqa: BLE001 — 计数漂移不该阻塞删除
+            logger.warning("remove_agent: decrement template reference failed: %s", exc)
         await self._emit_agent("project_agent_removed", updated, target)
         return _ok(
             {
