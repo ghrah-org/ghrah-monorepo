@@ -1,6 +1,6 @@
 """最新版本判定：版本号必须按数值比较，而不是字符串。"""
 
-from ghrah.core.read.ability_catalog import _GroupDraft, _group_view, _version_sort_key
+from ghrah.core.read.ability_catalog import _group_view, _GroupDraft, _version_sort_key
 
 
 def _draft(version: str) -> _GroupDraft:
