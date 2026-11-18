@@ -89,6 +89,34 @@ logger = logging.getLogger(__name__)
 # 会把 request_id/session_id 信封字段注入 payload 副本；ProjectCreatePayload /
 # ProjectUpdatePayload 为 extra="forbid" strict 模型，验证前需剥离。
 _ENVELOPE_KEYS = frozenset({"request_id", "session_id"})
+
+
+class ProjectLock:
+    """按任务可重入的异步锁：同一任务可嵌套进入，不同任务仍互斥。"""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[Any] | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> ProjectLock:
+        task = asyncio.current_task()
+        if self._owner is task and task is not None:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        self._depth -= 1
+        if self._depth <= 0:
+            self._depth = 0
+            self._owner = None
+            self._lock.release()
+
+
 _LOCKED_PROJECT_MUTATIONS = frozenset(
     {
         "project_update",
@@ -219,7 +247,7 @@ class ProjectManager:
         # SubjectConfig / 能力管理 REST 同源，避免同一部署读两份库。
         self.agentconf_db_path = agentconf_db_path
         self._create_lock = asyncio.Lock()
-        self._lifecycle_locks: dict[str, asyncio.Lock] = {}
+        self._lifecycle_locks: dict[str, ProjectLock] = {}
         self._scoped_resources: list[Any] = []
         self._room_store: Any | None = None
         self.agents = AgentEntityManager(self)
@@ -346,11 +374,17 @@ class ProjectManager:
         if room_store:
             self._room_store = resource
 
-    def lifecycle_lock(self, project_id: str) -> asyncio.Lock:
-        """串行化项目目录写入与归档、恢复、删除。"""
+    def lifecycle_lock(self, project_id: str) -> ProjectLock:
+        """串行化项目目录写入与归档、恢复、删除。
+
+        锁**按任务可重入**：命令层（``handle_command`` 的
+        ``_LOCKED_PROJECT_MUTATIONS``）与服务层（``create_agent`` 等）都会进同一道
+        项目锁，而 ``asyncio.Lock`` 不可重入——两层各取一次就会永久互等（真实实例上
+        任何"按模板创建 Agent"都会挂死）。重入计数按任务归属，跨任务仍然互斥。
+        """
         lock = self._lifecycle_locks.get(project_id)
         if lock is None:
-            lock = asyncio.Lock()
+            lock = ProjectLock()
             self._lifecycle_locks[project_id] = lock
         return lock
 
@@ -823,9 +857,7 @@ class ProjectManager:
         事实留在 Core 的实例快照；此后改模板不影响该实例。
         """
         async with self.lifecycle_lock(project_id):
-            logger.warning("DIAG create_agent: lock acquired project=%s", project_id)
             project, error = await self._get_active_project(project_id)
-            logger.warning("DIAG create_agent: project loaded")
             if error is not None:
                 raise StableError("project_unavailable", str(error))
             if project is None:
@@ -842,7 +874,6 @@ class ProjectManager:
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
-            logger.warning("DIAG create_agent: cluster ready")
             try:
                 created = await create_agent(
                     CreateAgentRequest(
