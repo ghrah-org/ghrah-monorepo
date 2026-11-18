@@ -15,11 +15,12 @@ from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.loading.ability_schema import AbilityDefinition
 from ghrah.ability.package.provider import InstalledAbilityProvider
 from ghrah.ability.versions import AbilityVersion, capture_ability_version
-from ghrah.manifest.ability import AbilityManifest
+from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.agent import AgentManifest
 from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import ManifestStoreProtocol
 from ghrah.manifest.resolver import ManifestResolver
+from ghrah.manifest.types import ImplementationDef, PermissionFlags
 
 __all__ = ["AbilityOrigin", "BuiltinAbilitySource"]
 
@@ -166,6 +167,11 @@ class BuiltinAbilitySource:
         manifest = self._manifests.get(full_name)
         if manifest is not None:
             return AbilityManifest.model_validate(manifest.model_dump())
+        # 内置技能成员不在 ``_manifests``（那张表是工具面）；技能包（例如
+        # ``ghrah.ability-builder``）只有技能，必须单独投影，否则整包解析不到。
+        skill_manifest = self._builtin_skill_manifests().get(full_name)
+        if skill_manifest is not None:
+            return AbilityManifest.model_validate(skill_manifest.model_dump())
         if self.packages is not None:
             package, _, _member = full_name.rpartition(".")
             origin = self._origins.get(package)
@@ -175,6 +181,32 @@ class BuiltinAbilitySource:
             if origin is None and not package.startswith("ghrah."):
                 return self.packages.manifest(full_name)
         raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
+
+    def _builtin_skill_manifests(self) -> dict[str, AbilityManifest]:
+        """内置技能成员 → 能力清单投影（惰性一次，成员键做名字归一）。"""
+        cached = getattr(self, "_skill_manifests", None)
+        if cached is not None:
+            return cached
+        manifests: dict[str, AbilityManifest] = {}
+        for skill in ability_catalog.scan_ability_definitions().skills:
+            member = skill.full_name
+            package, _, key = member.rpartition(".")
+            manifests[member] = AbilityManifest(
+                manifest="ability",
+                version="1",
+                metadata=AbilityMetadata(
+                    namespace=package or member,
+                    name=key.replace("-", "_") or member,
+                    title=skill.title,
+                    description=skill.description,
+                    tags=list(skill.tags),
+                    permissions=PermissionFlags(),
+                ),
+                tool=None,
+                implementation=ImplementationDef(type="skill", handler=skill.key),
+            )
+        self._skill_manifests = manifests
+        return manifests
 
     def load_package_members(self, full_name: str) -> list[AbilityManifest]:
         """把一个包的全部成员投影成可授予清单（内置按前缀，安装包走 provider）。
@@ -192,8 +224,18 @@ class BuiltinAbilitySource:
         matched = [
             manifest for name, manifest in self._manifests.items() if name.startswith(prefix)
         ]
-        if matched:
-            return [AbilityManifest.model_validate(item.model_dump()) for item in matched]
+        # 技能成员与工具成员同在「整包」里：只有工具面的包（如 ``ghrah.cluster``）
+        # 走 prefix 命中，纯技能包（如 ``ghrah.ability-builder``）只能从这里取到。
+        skills = [
+            AbilityManifest.model_validate(item.model_dump())
+            for name, item in self._builtin_skill_manifests().items()
+            if name == full_name or name.startswith(prefix)
+        ]
+        if matched or skills:
+            return [
+                *[AbilityManifest.model_validate(item.model_dump()) for item in matched],
+                *skills,
+            ]
         # 内置没有该前缀时回退到安装包仓库。不能按 ``ghrah.`` 前缀排除：安装包里
         # 也有 ``ghrah.*`` 名字（例如 ``ghrah.ability-builder``），按前缀排除会让
         # 这类包永远解析不到。
