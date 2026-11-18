@@ -376,6 +376,7 @@ class AgentTemplateSummaryView(TreeModel):
     format: Literal["ghrah.agent-templates.summary.v1"] = "ghrah.agent-templates.summary.v1"
     template_id: str
     revision: int = Field(ge=1)
+    is_latest: bool = True
     metadata: AgentTemplateMetadataView
     created_at: str
     updated_at: str
@@ -396,6 +397,7 @@ class AgentTemplateDetailView(TreeModel):
     format: Literal["ghrah.agent-templates.v1"] = "ghrah.agent-templates.v1"
     template_id: str
     revision: int = Field(ge=1)
+    is_latest: bool = True
     metadata: AgentTemplateMetadataView
     model: AgentTemplateModelView
     prompt: AgentTemplatePromptView

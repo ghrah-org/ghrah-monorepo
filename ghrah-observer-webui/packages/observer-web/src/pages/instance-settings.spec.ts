@@ -42,7 +42,7 @@ describe("InstanceSettings", () => {
     expect(wrapper.find('[data-page="general"]').exists()).toBe(true);
     const agents = wrapper
       .findAll(".sidebar-row")
-      .find((button) => button.text().includes("Agent Config"));
+      .find((button) => button.text().includes("Agent Templates"));
     await agents!.trigger("click");
     expect(wrapper.find('[data-page="agents"]').exists()).toBe(true);
   });

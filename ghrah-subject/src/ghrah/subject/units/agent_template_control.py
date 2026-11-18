@@ -71,11 +71,12 @@ def _summary(record: AgentTemplateRecord) -> AgentTemplateSummaryView:
     return AgentTemplateSummaryView(
         template_id=record.template_id,
         revision=record.revision,
+        is_latest=record.latest,
         metadata=_metadata(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
-        reference_count=0,
+        reference_count=record.reference_count,
     )
 
 
@@ -84,6 +85,7 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
     return AgentTemplateDetailView(
         template_id=record.template_id,
         revision=record.revision,
+        is_latest=record.latest,
         metadata=_metadata(record),
         model=AgentTemplateModelView.model_validate(record.model.model_dump(mode="json")),
         prompt=AgentTemplatePromptView.model_validate(record.prompt.model_dump(mode="json")),
@@ -103,7 +105,7 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
-        reference_count=0,
+        reference_count=record.reference_count,
     )
 
 
