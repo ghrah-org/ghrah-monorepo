@@ -123,10 +123,17 @@ def _resolve_member(
     source: BuiltinAbilitySource,
     member: str,
     request: AgentMemberPermissions | None,
+    *,
+    version: str | None = None,
 ) -> ResolvedAbility:
-    """加载一个成员并把 L2 申请合并到包声明上。"""
+    """加载一个成员并把 L2 申请合并到包声明上。
+
+    Args:
+        member: 成员全名（``<package>.<key>``）。
+        version: 能力件版本；内核件为 ``None``。多版本并存时由它决定读哪一层目录。
+    """
     try:
-        manifest = source.load_ability(member)
+        manifest = source.load_ability(member, version=version)
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
         raise AssemblyError(f"member not resolvable: {member}: {error}") from error
     handler = getattr(manifest.implementation, "handler", None)

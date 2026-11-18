@@ -46,6 +46,10 @@ interface PackageRow {
   available: string[];
   /** 已勾选的成员。 */
   selected: string[];
+  /** 该包可申请的技能键。 */
+  availableSkills: string[];
+  /** 已勾选的技能键。 */
+  selectedSkills: string[];
 }
 
 interface PackageOption {
@@ -88,10 +92,12 @@ const form = reactive({
     wholeContainer: item.whole_container,
     available: item.operations.map((op) => op.key),
     selected: item.operations.map((op) => op.key),
+    availableSkills: item.skills.map((skill) => skill.key),
+    selectedSkills: item.skills.map((skill) => skill.key),
   })) as PackageRow[],
 });
 
-const abilityCache = new Map<string, string[]>();
+const abilityCache = new Map<string, { operations: string[]; skills: string[] }>();
 
 function http() {
   return new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
@@ -155,7 +161,10 @@ async function loadOptions() {
   for (const row of form.rows) await ensureMembers(row);
 }
 
-async function fetchMembers(fullName: string, version: string): Promise<string[]> {
+async function fetchMembers(
+  fullName: string,
+  version: string,
+): Promise<{ operations: string[]; skills: string[] }> {
   const key = `${fullName}@${version}`;
   const cached = abilityCache.get(key);
   if (cached !== undefined) return cached;
@@ -163,17 +172,20 @@ async function fetchMembers(fullName: string, version: string): Promise<string[]
   const parts = fullName.split(".");
   const namespace = parts[0];
   const name = parts[1] ?? parts[0];
-  if (!namespace) return [];
+  if (!namespace) return { operations: [], skills: [] };
   try {
-    // 与「Ability 配置」页同一个版本详情接口：返回该版本可申请的操作键。
+    // 与「Ability 配置」页同一个版本详情接口：返回该版本可申请的操作键与技能键。
     const profile = AbilityPackageVersionProfileViewSchema.parse(
       await http().get(`/api/v1/ability-packages/${namespace}/${name}/versions/${version}`),
     );
-    const members = profile.operations.map((item) => item.key);
+    const members = {
+      operations: profile.operations.map((item) => item.key),
+      skills: profile.skills.map((item) => item.key),
+    };
     abilityCache.set(key, members);
     return members;
   } catch {
-    return [];
+    return { operations: [], skills: [] };
   }
 }
 
@@ -182,12 +194,15 @@ async function ensureMembers(row: PackageRow) {
   const option = packages.value.find((item) => item.fullName === row.package);
   if (option === undefined) return;
   const members = await fetchMembers(option.fullName, option.version);
-  row.available = members;
+  row.available = members.operations;
+  row.availableSkills = members.skills;
   if (row.wholeContainer) {
     // 整包 = 全选：保存时按具体成员键落库，所以这里直接把目录里的成员都选上。
-    row.selected = [...members];
+    row.selected = [...members.operations];
+    row.selectedSkills = [...members.skills];
   } else {
-    row.selected = row.selected.filter((key) => members.includes(key));
+    row.selected = row.selected.filter((key) => members.operations.includes(key));
+    row.selectedSkills = row.selectedSkills.filter((key) => members.skills.includes(key));
   }
 }
 
@@ -198,6 +213,8 @@ function addPackage() {
     wholeContainer: false,
     available: [],
     selected: [],
+    availableSkills: [],
+    selectedSkills: [],
   });
   if (first && form.rows[form.rows.length - 1]!.package === "") {
     form.rows[form.rows.length - 1]!.package = first.fullName;
@@ -207,7 +224,9 @@ function addPackage() {
 
 async function onPackageChange(row: PackageRow) {
   row.selected = [];
+  row.selectedSkills = [];
   row.available = [];
+  row.availableSkills = [];
   await ensureMembers(row);
 }
 
@@ -223,6 +242,14 @@ function toggleOperation(row: PackageRow, key: string, checked: boolean) {
   }
 }
 
+function toggleSkill(row: PackageRow, key: string, checked: boolean) {
+  if (checked) {
+    if (!row.selectedSkills.includes(key)) row.selectedSkills.push(key);
+  } else {
+    row.selectedSkills = row.selectedSkills.filter((item) => item !== key);
+  }
+}
+
 const canSubmit = computed(() => {
   if (mode.value === "create" && (form.namespace.trim() === "" || form.name.trim() === "")) {
     return false;
@@ -233,7 +260,7 @@ const canSubmit = computed(() => {
     // 「整包」不需要本地目录：成员由 Core 按自己的能力来源展开，
     // 所以哪怕目录里暂时读不到操作也要允许保存。
     if (row.wholeContainer) return true;
-    return row.selected.length > 0;
+    return row.selected.length > 0 || row.selectedSkills.length > 0;
   });
 });
 
@@ -254,17 +281,31 @@ function originOf(fullName: string): "builtin" | "installed" {
   return packages.value.find((option) => option.fullName === fullName)?.origin ?? "builtin";
 }
 
+function versionOf(fullName: string): string | null {
+  // 内核件随源码发布、没有版本层；能力件钉住目录里的当前版本。
+  if (originOf(fullName) === "builtin") return null;
+  return packages.value.find((option) => option.fullName === fullName)?.version ?? null;
+}
+
 function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
   return form.rows
     .filter((row) => row.package !== "")
     .map((row) => ({
       package: row.package,
       origin: originOf(row.package),
-      whole_container: row.wholeContainer,
-      operations: row.wholeContainer
-        ? []
-        : row.selected.map((key) => ({ key, visible: true, available: true })),
-      skills: [],
+      // 存储层不留整包：即便勾了整包也按成员落库（后端还会再展开一次兜底）。
+      whole_container: false,
+      version: versionOf(row.package),
+      operations: (row.wholeContainer ? row.available : row.selected).map((key) => ({
+        key,
+        visible: true,
+        available: true,
+      })),
+      skills: (row.wholeContainer ? row.availableSkills : row.selectedSkills).map((key) => ({
+        key,
+        visible: true,
+        scripts: [],
+      })),
     }));
 }
 
@@ -483,6 +524,21 @@ onMounted(loadOptions);
                 type="checkbox"
                 :checked="row.selected.includes(key)"
                 @change="toggleOperation(row, key, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ key }}
+            </label>
+          </div>
+
+          <div v-if="!row.wholeContainer" class="template-form-ops">
+            <span class="template-form-ops-title">{{ t("config.template.skills") }}</span>
+            <p v-if="row.availableSkills.length === 0" class="template-form-hint">
+              {{ t("config.template.noSkills") }}
+            </p>
+            <label v-for="key in row.availableSkills" :key="key" class="template-form-check">
+              <input
+                type="checkbox"
+                :checked="row.selectedSkills.includes(key)"
+                @change="toggleSkill(row, key, ($event.target as HTMLInputElement).checked)"
               />
               {{ key }}
             </label>

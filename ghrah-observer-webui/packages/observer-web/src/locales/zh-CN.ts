@@ -794,6 +794,8 @@ export default {
       noPackagesAvailable: "还没有已安装的能力包。请先到「Ability 配置」安装，再回到这里。",
       choosePackage: "选择一个能力包",
       noOperations: "该包没有暴露操作，或定义无法读取。",
+      skills: "技能",
+      noSkills: "该包没有技能。",
       packageNeedsOperations:
         "{package} 还没有可选的操作。请单独勾选操作，或重新打开对话框以重新读取目录。",
       submitHint:

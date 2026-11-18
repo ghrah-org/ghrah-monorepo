@@ -191,8 +191,14 @@ class BuiltinAbilitySource:
             raise ManifestValidationError(f"Unknown builtin ability type: {ability_type!r}")
         return AbilityManifest.model_validate(matches[0].model_dump())
 
-    def load_ability(self, full_name: str) -> AbilityManifest:
-        """按完整成员名读取能力，返回隔离的兼容投影。"""
+    def load_ability(self, full_name: str, *, version: str | None = None) -> AbilityManifest:
+        """按完整成员名读取能力，返回隔离的兼容投影。
+
+        Args:
+            full_name: 成员全名（``<package>.<key>``）。
+            version: 能力件版本（安装根下 ``<ns>/<name>/<version>/``）；内核件没有
+                版本层，传 ``None``。同一包多版本并存时必须显式指定，否则会取错。
+        """
         manifest = self._manifests.get(full_name)
         if manifest is not None:
             return AbilityManifest.model_validate(manifest.model_dump())
@@ -211,6 +217,8 @@ class BuiltinAbilitySource:
             return AbilityManifest.model_validate(skill_manifest.model_dump())
         if self.packages is not None:
             package, _, _member = full_name.rpartition(".")
+            if version:
+                self._select_package_version(package, version)
             origin = self._origins.get(package)
             if origin is not None and origin.kind == "installed":
                 return self.packages.manifest(full_name)
@@ -218,6 +226,19 @@ class BuiltinAbilitySource:
             if origin is None and not package.startswith("ghrah."):
                 return self.packages.manifest(full_name)
         raise ManifestNotFoundError(f"Ability manifest not found: {full_name}")
+
+    def _select_package_version(self, package: str, version: str) -> None:
+        """按成员声明的版本选定安装包版本（幂等；同版本不重复校验）。"""
+        if not package or self.packages is None:
+            return
+        done = getattr(self, "_selected_versions", None)
+        if done is None:
+            done = self._selected_versions = set()
+        key = (package, version)
+        if key in done:
+            return
+        self.packages.select_version(package, version)
+        done.add(key)
 
     def _builtin_skill_manifests(self) -> dict[str, AbilityManifest]:
         """内置技能成员 → 能力清单投影（惰性一次，成员键做名字归一）。"""

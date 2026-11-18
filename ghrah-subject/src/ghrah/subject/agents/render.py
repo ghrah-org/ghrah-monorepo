@@ -8,14 +8,12 @@
 
 三条口径来自现有代码，不靠猜：
 
-1. **成员全名 = ``<package>.<operation_key>``**。依据是 Core 的启动核定
-   ``_resolved_operation``（``ability/access/startup.py:1118-1127``）把
-   ``package`` 与 ``member`` 拼成 ``load_ability`` 的入参；因此
-   ``members[]`` 只承载**操作成员**。
-2. **技能与脚本不进 ``members[]``**：它们由授权行的 ``axes`` 表达，地址写法是
-   ``skill/<key>`` / ``skill/<key>/scripts/<key>``（``MemberAxes`` 与
-   ``facts.py``）。把它们塞进 ``members[]`` 会让 Core 去 ``load_ability``
-   一个加载不到的名字。
+1. **成员全名 = ``<package>.<key>``**，内核件也逐个列成员，不按包整体。每个成员带
+   ``type``（operation / skill / mcp）、``version``（能力件才有）与 ``ability_type``
+   （kernel / external，仅来源标记，装载逻辑不分叉）。
+2. **技能与操作一样进 ``members[]``**：模板里选了哪个技能就下发哪个，Core 侧据此
+   按成员授予。技能在授权账本里的地址仍是 ``skill/<key>``（由 Core 折算），
+   但装配输入只认成员全名，不再用 ``axes`` 地址代替成员。
 3. **未授予的申请不静默丢弃**：留在报告的 ``not_granted`` / ``missing_packages``
    里，供检查面展示；这正是「模板申请 vs 当前授权」的差异。
 """
@@ -267,14 +265,23 @@ def render_assembly(
     not_granted: list[str] = []
 
     for request in template.ability_request.packages:
+        # 来源标记：内核件随源码发布、没有版本层；能力件装在 <ns>/<name>/<version>/。
+        # 这里只做标记，装载逻辑对两者是同一套（版本另取）。
+        ability_type = "kernel" if request.origin == "builtin" else "external"
+        version = None if request.origin == "builtin" else request.version
+        # MCP 快照包（mcp.<server>）的成员是远端工具，装载走 MCP 通路。
+        member_type = "mcp" if request.origin == "mcp" else "operation"
         if granted is None:
             # 无授权视图：按模板申请原样装配。
             # 「整包」需要包目录才能展开成员，Subject 侧没有目录，因此把**包名**
             # 原样交给 Core（``whole_container=True``），由 Core 按自己的能力来源展开。
-            if request.whole_container and not request.operations:
+            if request.whole_container and not request.operations and not request.skills:
                 members.append(
                     AgentAssemblyMember(
                         member=request.package,
+                        type=member_type,
+                        version=version,
+                        ability_type=ability_type,
                         whole_container=True,
                         permissions=_member_permissions(resolved_paths, package=request.package),
                     )
@@ -319,11 +326,27 @@ def render_assembly(
             members.append(
                 AgentAssemblyMember(
                     member=f"{request.package}.{key}",
+                    type=member_type,
+                    version=version,
+                    ability_type=ability_type,
                     permissions=permissions,
                     axes=AgentMemberAxes(
                         visible=axes.get(f"operations/{key}", (True, True))[0],
                         available=axes.get(f"operations/{key}", (True, True))[1],
                     ),
+                )
+            )
+        # 技能按成员级下发：用户选了哪个技能，模板存了哪个，这里就传哪个。
+        # 技能没有"可见但不可用"（Core 会拒绝），所以只带 visible。
+        for item in request.skills:
+            members.append(
+                AgentAssemblyMember(
+                    member=f"{request.package}.{item.key}",
+                    type="skill",
+                    version=version,
+                    ability_type=ability_type,
+                    permissions=permissions,
+                    axes=AgentMemberAxes(visible=item.visible, available=True),
                 )
             )
         # 无授权视图时不产出授权计划：Subject 不写授权行（由 Core 启动核定器落实），

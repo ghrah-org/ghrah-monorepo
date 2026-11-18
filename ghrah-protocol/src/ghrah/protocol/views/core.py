@@ -437,19 +437,24 @@ class AgentMemberAxes(BaseModel):
 
 
 class AgentAssemblyMember(BaseModel):
-    """一个已授予成员及其 L2 申请；未授予成员不进这里。
+    """一个成员申请：操作 / 技能 / MCP，按 ``type`` 决定装载方式。
 
-    ``whole_container`` 为真时 ``member`` 是**包名**（``namespace.name``），由 Core
-    按自己的能力来源展开成该包的全部成员——「整包」需要包目录，而 Subject 侧没有目录，
-    只能在 Core 侧展开。
+    ``member`` 是成员全名 ``<package>.<key>``（内核件同样逐个列成员，不按包整体）。
+    ``version`` 只对外部安装的能力件有意义（安装根下 ``<ns>/<name>/<version>/``）；
+    内核件随源码发布、没有版本层，取 ``None``。``ability_type`` 只是来源标记
+    （内核树 / 安装根），装载逻辑不分叉。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     member: str = Field(min_length=1)
-    whole_container: bool = False
+    type: Literal["operation", "skill", "mcp"] = "operation"
+    version: str | None = None
+    ability_type: Literal["kernel", "external"] = "kernel"
     permissions: AgentMemberPermissions | None = None
     axes: AgentMemberAxes | None = None
+    whole_container: bool = False
+    """兼容字段：整包选择。装配前应展开成成员级，落库的成员不再带它。"""
 
 
 class AgentAssemblySpec(BaseModel):

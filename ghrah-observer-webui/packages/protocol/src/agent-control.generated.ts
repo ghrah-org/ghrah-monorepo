@@ -50,7 +50,7 @@ export const AgentTemplateScriptViewSchema = z.object({"key":z.string(),"visible
 export type AgentTemplateScriptView = z.infer<typeof AgentTemplateScriptViewSchema>;
 export const AgentTemplateSkillViewSchema = z.object({"key":z.string(),"visible":z.boolean().default(true),"scripts":z.array(AgentTemplateScriptViewSchema).default([])}).strict();
 export type AgentTemplateSkillView = z.infer<typeof AgentTemplateSkillViewSchema>;
-export const AgentTemplatePackageViewSchema = z.object({"package":z.string(),"origin":z.enum(["builtin", "installed", "mcp"]),"whole_container":z.boolean().default(false),"operations":z.array(AgentTemplateOperationViewSchema).default([]),"skills":z.array(AgentTemplateSkillViewSchema).default([])}).strict().refine(v=>!(v.whole_container&&(v.operations.length>0||v.skills.length>0)));
+export const AgentTemplatePackageViewSchema = z.object({"package":z.string(),"origin":z.enum(["builtin", "installed", "mcp"]),"version":z.union([z.string(),z.null()]).default(null),"whole_container":z.boolean().default(false),"operations":z.array(AgentTemplateOperationViewSchema).default([]),"skills":z.array(AgentTemplateSkillViewSchema).default([])}).strict().refine(v=>!(v.whole_container&&(v.operations.length>0||v.skills.length>0)));
 export type AgentTemplatePackageView = z.infer<typeof AgentTemplatePackageViewSchema>;
 export const AgentTemplateAbilityRequestViewSchema = z.object({"surface":AgentTemplateSurfaceViewSchema.default({"mode": "auto", "static": [], "max_static": null}),"packages":z.array(AgentTemplatePackageViewSchema).default([]),"mcp_refs":z.array(z.string()).default([])}).strict();
 export type AgentTemplateAbilityRequestView = z.infer<typeof AgentTemplateAbilityRequestViewSchema>;

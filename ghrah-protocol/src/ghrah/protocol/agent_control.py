@@ -300,10 +300,16 @@ class AgentTemplateSkillView(TreeModel):
 
 
 class AgentTemplatePackageView(TreeModel):
-    """包级申请；整包与成员二选一。"""
+    """包级申请；整包与成员二选一。
+
+    ``version`` 只对外部安装的能力件有意义（安装根下 ``<ns>/<name>/<version>/``）；
+    内核件随源码发布，取 ``None``。模板必须记住用户选的是哪个版本：同一包多版本
+    并存时，不记版本会找不到成员或找错版本。
+    """
 
     package: str = Field(min_length=1)
     origin: Literal["builtin", "installed", "mcp"]
+    version: str | None = None
     whole_container: bool = False
     operations: list[AgentTemplateOperationView] = Field(default_factory=list)
     skills: list[AgentTemplateSkillView] = Field(default_factory=list)
