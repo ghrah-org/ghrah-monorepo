@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
+from ghrah.chat.message import ChatMessage
 from ghrah.context.persistence.changes import ContextChanges
 from ghrah.core.message import AgentMessage
 
@@ -19,8 +20,17 @@ if TYPE_CHECKING:
 
 IterationCommitter = Callable[[ContextChanges], Awaitable[None]]
 DeliveryFinisher = Callable[[AgentMessage], Awaitable[None]]
+TurnInputLoader = Callable[[str], Awaitable[tuple[ChatMessage, ...]]]
+ConsumedInputRegistrar = Callable[[str], None]
 _SCOPE: ContextVar[
-    tuple[ContextManager, IterationCommitter, Callable[[], None] | None, DeliveryFinisher | None]
+    tuple[
+        ContextManager,
+        IterationCommitter,
+        Callable[[], None] | None,
+        DeliveryFinisher | None,
+        TurnInputLoader | None,
+        ConsumedInputRegistrar | None,
+    ]
     | None
 ] = ContextVar("ghrah_iteration_commit", default=None)
 
@@ -31,9 +41,11 @@ def durable_iteration_scope(
     committer: IterationCommitter,
     rollback: Callable[[], None] | None = None,
     finish: DeliveryFinisher | None = None,
+    input_loader: TurnInputLoader | None = None,
+    register_consumed: ConsumedInputRegistrar | None = None,
 ) -> Iterator[None]:
     """为一个接收请求安装持久提交器，退出时恢复原作用域。"""
-    token = _SCOPE.set((manager, committer, rollback, finish))
+    token = _SCOPE.set((manager, committer, rollback, finish, input_loader, register_consumed))
     try:
         yield
     finally:
@@ -57,6 +69,18 @@ def get_delivery_finisher(manager: ContextManager) -> DeliveryFinisher | None:
     """返回匹配上下文的最终结果持久收尾入口。"""
     scope = _SCOPE.get()
     return scope[3] if scope is not None and scope[0] is manager else None
+
+
+def get_iteration_input_loader(manager: ContextManager) -> TurnInputLoader | None:
+    """返回本上下文的持久输入读取器。"""
+    scope = _SCOPE.get()
+    return scope[4] if scope is not None and scope[0] is manager else None
+
+
+def get_consumed_input_registrar(manager: ContextManager) -> ConsumedInputRegistrar | None:
+    """返回本节点消费登记器。"""
+    scope = _SCOPE.get()
+    return scope[5] if scope is not None and scope[0] is manager else None
 
 
 def clear_durable_iteration_scope() -> None:

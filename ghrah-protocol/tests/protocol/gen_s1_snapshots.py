@@ -47,6 +47,13 @@ from ghrah.protocol.types import (
     TaskVerificationGapsPayload,
     TaskVerifyPayload,
 )
+from ghrah.protocol.views.core import (
+    DeliveryAcceptanceView,
+    DeliveryQueueEntryView,
+    DeliveryQueueView,
+    DeliveryView,
+    MessageAcceptanceView,
+)
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -58,6 +65,25 @@ SNAPSHOTS_DIR = (
 )
 
 SAMPLES: dict[str, object] = {
+    "DeliveryView": DeliveryView(
+        delivery_id="delivery", display_state="queued", cancelable=True, queue_position=1
+    ),
+    "DeliveryAcceptanceView": DeliveryAcceptanceView(
+        delivery_id="delivery",
+        policy="inject",
+        policy_applied=False,
+        display_state="queued",
+        queue_position=1,
+    ),
+    "MessageAcceptanceView": MessageAcceptanceView(message_id="message", accepted_at=1.0),
+    "DeliveryQueueEntryView": DeliveryQueueEntryView(
+        delivery_id="delivery",
+        message_id="message",
+        display_state="queued",
+        position=1,
+        cancelable=True,
+    ),
+    "DeliveryQueueView": DeliveryQueueView(agent_id="agent", session_id="session"),
     "TurnOpenedPayload": TurnOpenedPayload(
         agent_name="beta", turn_id="turn", session_id="session", opener_delivery_id="delivery"
     ),

@@ -330,11 +330,12 @@ class AgentEntityManager:
                 return await self._context(project, agent, op)
             if kind in {"mailbox.list_inbox", "mailbox.list_outbox", "mailbox.get_message"}:
                 return await self._mailbox(project, agent, op)
-            if kind in {"mailbox.retry", "mailbox.resume"}:
-                if project.status != ProjectStatus.ACTIVE or agent.desired_state != "running":
-                    raise StableError("agent_not_running")
-                if (await self._runtime(project, agent))["availability"] != "online":
-                    raise StableError("agent_offline")
+            if kind in {"mailbox.retry", "mailbox.resume", "mailbox.cancel"}:
+                if kind != "mailbox.cancel":
+                    if project.status != ProjectStatus.ACTIVE or agent.desired_state != "running":
+                        raise StableError("agent_not_running")
+                    if (await self._runtime(project, agent))["availability"] != "online":
+                        raise StableError("agent_offline")
                 # 消息管理器按项目取端口实例，归属恒等，不再做项目一致性校验。
                 mm = self._projects._cluster_transport.get_message_manager(project.project_id)
                 from ghrah.protocol.errors import ApiError
@@ -347,6 +348,14 @@ class AgentEntityManager:
                     raise StableError("delivery_not_found")
                 if kind == "mailbox.retry":
                     await mm.retry(op["delivery_id"], agent_id=agent.agent_id)
+                elif kind == "mailbox.cancel":
+                    try:
+                        await mm.cancel(op["delivery_id"], agent_id=agent.agent_id)
+                    except ApiError as exc:
+                        reason = (exc.problem.details or {}).get("reason")
+                        if reason == "delivery_not_cancelable":
+                            raise StableError(reason) from exc
+                        raise
                 else:
                     await mm.resume(op["delivery_id"], agent_id=agent.agent_id)
                 final = await mm.get_progress(op["delivery_id"], agent_id=agent.agent_id)

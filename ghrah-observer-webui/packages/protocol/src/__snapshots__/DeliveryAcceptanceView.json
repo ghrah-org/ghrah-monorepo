@@ -1,0 +1,8 @@
+{
+  "delivery_id": "delivery",
+  "policy": "inject",
+  "policy_applied": false,
+  "turn_id": null,
+  "display_state": "queued",
+  "queue_position": 1
+}

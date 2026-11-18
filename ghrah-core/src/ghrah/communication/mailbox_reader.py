@@ -13,21 +13,8 @@ from typing import Any
 import aiosqlite
 from ghrah.protocol.payloads.entity import AgentIdentity
 
-
-def _display_state(item: dict[str, Any]) -> str:
-    """由底层 state 与派生列得出展示状态。"""
-    state = item["state"]
-    if item.get("blocked_reason"):
-        return "blocked"
-    if state == "failed" and item.get("parked"):
-        return "parked"
-    if state == "pending":
-        if item.get("consumed_node_id"):
-            return "consumed"
-        if item.get("turn_id"):
-            return "injected"
-        return "queued"
-    return state
+from ghrah.communication.delivery_queue import display_state as _display_state  # noqa: F401
+from ghrah.communication.delivery_queue import has_turns, project_delivery
 
 
 class MailboxReader:
@@ -110,7 +97,9 @@ class MailboxReader:
             raise ValueError("message_not_found")
         deliveries = await (
             await self._db.execute(
-                "SELECT d.* FROM mm_deliveries d WHERE d.message_id=? AND (? OR d.recipient_id=?) "
+                "SELECT d.*, r.delivery_id IS NOT NULL AS result_ready FROM mm_deliveries d "
+                "LEFT JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
+                "WHERE d.message_id=? AND (? OR d.recipient_id=?) "
                 "ORDER BY d.seq",
                 (message_id, row["sender_id"] == self._identity.agent_id, self._identity.agent_id),
             )
@@ -121,10 +110,7 @@ class MailboxReader:
         message["external_sender"] = bool(message["external_sender"])
         projected = []
         for delivery in deliveries:
-            item = dict(delivery)
-            if item.get("blocked_reason"):
-                item["state"] = "blocked"
-            item["display_state"] = _display_state(item)
+            item = await project_delivery(self._db, delivery)
             projected.append(item)
         return {"message": message, "deliveries": projected}
 
@@ -136,7 +122,9 @@ class MailboxReader:
         assert self._db is not None
         row = await (
             await self._db.execute(
-                "SELECT d.*, m.sender_id AS _sender FROM mm_deliveries d "
+                "SELECT d.*, m.sender_id AS _sender, r.delivery_id IS NOT NULL AS result_ready "
+                "FROM mm_deliveries d LEFT JOIN mm_delivery_results r "
+                "ON r.delivery_id=d.delivery_id "
                 "JOIN mm_messages m ON m.message_id=d.message_id "
                 "WHERE d.delivery_id=? AND (d.recipient_id=? OR m.sender_id=?)",
                 (delivery_id, self._identity.agent_id, self._identity.agent_id),
@@ -144,12 +132,51 @@ class MailboxReader:
         ).fetchone()
         if row is None:
             raise ValueError("delivery_not_found")
-        item = dict(row)
-        item.pop("_sender", None)
-        if item.get("blocked_reason"):
-            item["state"] = "blocked"
-        item["display_state"] = _display_state(item)
-        return item
+        return await project_delivery(self._db, row)
+
+    async def queue(self, session_id: str | None) -> dict[str, Any]:
+        """返回会话中尚未完成的投递与首个活动轮次。"""
+        assert self._db is not None
+        rows = await (
+            await self._db.execute(
+                "SELECT d.*, r.delivery_id IS NOT NULL AS result_ready FROM mm_deliveries d "
+                "LEFT JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
+                "WHERE d.recipient_id=? AND d.target_session_id IS ? "
+                "AND (d.state IN ('pending','processing') OR "
+                "(r.delivery_id IS NOT NULL AND d.state!='completed')) ORDER BY d.seq",
+                (self._identity.agent_id, session_id),
+            )
+        ).fetchall()
+        entries = []
+        for row in rows:
+            item = await project_delivery(self._db, row)
+            entries.append(
+                {
+                    "delivery_id": item["delivery_id"],
+                    "message_id": item["message_id"],
+                    "display_state": item["display_state"],
+                    "position": item["queue_position"],
+                    "queue_reason": item["queue_reason"],
+                    "blocked_by_delivery_id": item["blocked_by_delivery_id"],
+                    "turn_id": item["turn_id"],
+                    "cancelable": item["cancelable"],
+                }
+            )
+        active = None
+        if await has_turns(self._db):
+            active = await (
+                await self._db.execute(
+                    "SELECT turn_id FROM turns WHERE agent_name=? AND session_id IS ? "
+                    "AND status IN ('open','waiting_hitl')",
+                    (self._identity.agent_id, session_id),
+                )
+            ).fetchone()
+        return {
+            "agent_id": self._identity.agent_id,
+            "session_id": session_id,
+            "entries": entries,
+            "open_turn_id": active[0] if active else None,
+        }
 
     async def list_messages(
         self, *, inbox: bool, limit: int, before_seq: int | None

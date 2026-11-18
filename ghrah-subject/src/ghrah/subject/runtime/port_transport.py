@@ -77,6 +77,10 @@ class PortMailbox:
             delivery_id=delivery_id,
         )
 
+    async def cancel(self, delivery_id: str, *, agent_id: str) -> None:
+        """经 Core 端口取消本实体的排队投递。"""
+        await self._port.deliveries.cancel(agent_id=agent_id, delivery_id=delivery_id)
+
     async def resume(self, delivery_id: str, *, agent_id: str) -> None:
         """恢复一条投递。"""
         await self._port.deliveries.resume(

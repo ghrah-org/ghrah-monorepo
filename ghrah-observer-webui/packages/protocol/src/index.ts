@@ -411,3 +411,16 @@ export {
   type TurnClosedPayload,
   TurnClosedPayloadSchema,
 } from "./payloads/turn.js";
+
+export {
+  DeliveryViewSchema,
+  type DeliveryView,
+  DeliveryAcceptanceViewSchema,
+  MessageAcceptanceViewSchema,
+  DeliveryQueueEntryViewSchema,
+  DeliveryQueueViewSchema,
+  type DeliveryAcceptanceView,
+  type MessageAcceptanceView,
+  type DeliveryQueueEntryView,
+  type DeliveryQueueView,
+} from "./payloads/delivery.js";

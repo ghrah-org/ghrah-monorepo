@@ -15,3 +15,4 @@ export * from "./payloads/task.js";
 export * from "./payloads/turn.js";
 export * from "./payloads/workspace.js";
 export * from "./payloads/entity.js";
+export * from "./payloads/delivery.js";

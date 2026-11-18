@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
-from ghrah.protocol.views.core import BroadcastRepliesView, MessageReplyView
+from ghrah.protocol.views.core import BroadcastRepliesView, MessageAcceptanceView, MessageReplyView
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import _ok_or_raise, resolve_agent_name
@@ -35,7 +35,7 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
         能力名到处理器的映射
     """
 
-    async def append(request: MessagesAppendRequest) -> MessageReplyView:
+    async def append(request: MessagesAppendRequest) -> MessageReplyView | MessageAcceptanceView:
         """将请求投递给指定 Agent，保留调用者身份。"""
         result = await registry.handle_command(
             command="send_message",
@@ -43,6 +43,7 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                 "agent_id": request.agent_id,
                 "sender": request.sender,
                 "timeout": request.timeout,
+                "delivery_policy": request.delivery_policy,
                 "target": request.target,
                 "content": request.content,
                 "metadata": request.metadata,
@@ -65,7 +66,10 @@ def make_message_handlers(registry: RuntimeRegistry) -> dict[str, Handler]:
                     details={"reason": "source_ability_missing", "data": result.get("data")},
                 )
             )
-        return MessageReplyView.model_validate(_ok_or_raise(result, "messages.append"))
+        data = _ok_or_raise(result, "messages.append")
+        if request.delivery_policy == "inject":
+            return MessageAcceptanceView.model_validate(data)
+        return MessageReplyView.model_validate(data)
 
     async def broadcast(request: MessagesBroadcastRequest) -> BroadcastRepliesView:
         """向作用域内全部 Agent 广播。"""

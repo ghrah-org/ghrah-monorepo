@@ -8,7 +8,7 @@ Agent 生命周期/能力/订阅/HITL/集群命令与事件、上下文占用与
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -78,6 +78,7 @@ class SendMessagePayload(BaseModel):
     content_blocks: list[InputContentBlock] | None = None
     sender: str = "user"
     timeout: float | None = None
+    delivery_policy: Literal["inject", "queue"] = "queue"
     metadata: dict[str, Any] | None = None
     """扩展元数据（透传至 AgentMessage.metadata；如 Room 投递写入 room_id）。
 

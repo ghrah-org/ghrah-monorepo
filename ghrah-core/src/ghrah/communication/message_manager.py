@@ -19,16 +19,27 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from contextlib import asynccontextmanager
 from contextvars import Context, ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 import aiosqlite
 
 from ghrah.agents.runner import detached_runner_context
+from ghrah.chat.content import TextBlock, blocks_from_dicts
+from ghrah.chat.message import ChatMessage
+from ghrah.communication.delivery_queue import (
+    blocker_joins,
+    blocker_reason_sql,
+    find_blocker,
+    has_turns,
+    project_delivery,
+    settle_terminal_turns,
+    settle_turn_deliveries,
+)
 from ghrah.context import turn
 from ghrah.context.iteration_commit import clear_durable_iteration_scope
 from ghrah.context.manager import DeliverySessionUnavailableError
@@ -82,6 +93,7 @@ class MessageRecord:
     sender_session_id: str | None = None
     metadata: dict = field(default_factory=dict)
     external_sender: bool = False
+    deliveries: tuple[DeliveryRecord, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,10 @@ class DeliveryRecord:
     delivery_policy: str = "queue"
     parked: bool = False
     parked_reason: str | None = None
+    queue_block_reason: str | None = field(default=None, compare=False)
+    display_state: str = field(default="", compare=False)
+    queue_position: int = field(default=0, compare=False)
+    policy_applied: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -146,6 +162,7 @@ class _AtomicDelivery:
     committing: bool = False
     last_node_id: str | None = None
     inline_updates: dict[str, bool] = field(default_factory=dict)
+    consumed_deliveries: set[str] = field(default_factory=set)
 
 
 _ATOMIC: ContextVar[_AtomicDelivery | None] = ContextVar("ghrah_atomic_delivery", default=None)
@@ -416,6 +433,7 @@ class MessageManager:
                 )
                 if await self._has_turn_schema(db):
                     await turn.normalize_open_turns(db, now=datetime.now(UTC).isoformat())
+                await settle_terminal_turns(db)
             await self.refresh_agent_ids()
             await self.recover_completions()
             if start_dispatcher:
@@ -535,6 +553,7 @@ class MessageManager:
                 def rollback() -> None:
                     scope.drafts.clear()
                     scope.inline_updates.clear()
+                    scope.consumed_deliveries.clear()
 
                 if resume_from is not None:
                     result = await agent.resume_atomic(
@@ -545,6 +564,8 @@ class MessageManager:
                         session_id=message.metadata["resume_session_id"],
                         branch_id=message.metadata["resume_branch_id"],
                         last_node_id=resume_from,
+                        input_loader=self.load_turn_inputs,
+                        register_consumed=scope.consumed_deliveries.add,
                     )
                 else:
                     result = await agent.receive_atomic(
@@ -553,6 +574,8 @@ class MessageManager:
                         rollback,
                         finish,
                         message.metadata.get("target_session_id"),
+                        self.load_turn_inputs,
+                        scope.consumed_deliveries.add,
                     )
                 if result.type != MessageType.ERROR and not scope.consumed:
                     raise RuntimeError("Atomic receive finished without consuming the input")
@@ -565,6 +588,71 @@ class MessageManager:
                 _ATOMIC.reset(token)
 
         self.bind(agent_id, receive, _session_aware=True)
+
+    async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
+        """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""
+        async with self._lock:
+            db = self._require_db()
+            rows = await (
+                await db.execute(
+                    "SELECT d.delivery_id FROM mm_deliveries d JOIN turns t ON t.turn_id=d.turn_id "
+                    "WHERE d.turn_id=? AND t.status IN ('open','waiting_hitl') "
+                    "AND d.state='pending' AND d.consumed_node_id IS NULL "
+                    "AND d.delivery_policy='inject' AND d.blocked_reason IS NULL AND d.parked=0 "
+                    "ORDER BY d.seq",
+                    (turn_id,),
+                )
+            ).fetchall()
+            inputs = []
+            for row in rows:
+                delivery = await (
+                    await db.execute("SELECT * FROM mm_deliveries WHERE delivery_id=?", (row[0],))
+                ).fetchone()
+                record = await self._read_message(db, delivery["message_id"])
+                blocks = record.metadata.get("content_blocks")
+                content = blocks_from_dicts(blocks) if blocks else record.content
+                if (
+                    blocks
+                    and record.content
+                    and not any(
+                        isinstance(block, TextBlock) and block.text == record.content
+                        for block in content
+                    )
+                ):
+                    content.insert(0, TextBlock(text=record.content))
+                inputs.append(
+                    ChatMessage.user(
+                        content,
+                        source=record.sender_id.removeprefix("human:")
+                        if record.external_sender
+                        else f"agent:{record.sender_id}",
+                        metadata={
+                            **record.metadata,
+                            "message_id": record.message_id,
+                            "delivery_id": row[0],
+                            "turn_id": turn_id,
+                            "delivery_policy": "inject",
+                            "message_type": record.metadata.get("message_type", "chat"),
+                            "target_session_id": delivery["target_session_id"],
+                        },
+                    )
+                )
+        return tuple(inputs)
+
+    async def cancel(self, delivery_id: str) -> None:
+        """取消尚未领取的排队投递，保留显式重试入口。"""
+        async with self._transaction() as db:
+            cursor = await db.execute(
+                "UPDATE mm_deliveries SET state='interrupted', error='cancelled_by_user', "
+                "blocked_reason=NULL WHERE delivery_id=? AND state='pending' AND turn_id IS NULL "
+                "AND consumed_node_id IS NULL AND NOT EXISTS "
+                "(SELECT 1 FROM mm_delivery_results r "
+                "WHERE r.delivery_id=mm_deliveries.delivery_id)",
+                (delivery_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("delivery_not_cancelable")
+        self._wake.set()
 
     async def prepare_send(
         self,
@@ -683,8 +771,12 @@ class MessageManager:
         target_sessions: Mapping[str, str] | None = None,
         metadata: Mapping[str, object] | None = None,
         _external_sender: bool = False,
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
     ) -> MessageRecord:
         """原子受理一对一或一对多消息；同键同载荷返回原消息。"""
+        if delivery_policy not in ("inject", "queue") or not isinstance(await_reply, bool):
+            raise ValueError("Invalid delivery policy or reply expectation")
         if not _external_sender:
             self._check_identity(sender_id)
         if _ATOMIC.get() is not None:
@@ -732,11 +824,22 @@ class MessageManager:
                         session = (target_sessions or {}).get(
                             target
                         ) or await self._default_session(db, target)
-                        await self._validate_session(db, target, session)
+                        await self._validate_session(
+                            db,
+                            target,
+                            session,
+                            allow_unavailable=delivery_policy == "inject" and not await_reply,
+                        )
                         routes[target] = session
             else:
                 source_session, routes = await self._resolve_sessions(
-                    db, sender_id, targets, idempotency_key, sender_session_id, target_sessions
+                    db,
+                    sender_id,
+                    targets,
+                    idempotency_key,
+                    sender_session_id,
+                    target_sessions,
+                    allow_unavailable=delivery_policy == "inject" and not await_reply,
                 )
             message_id = await self._insert_message(
                 db,
@@ -750,9 +853,45 @@ class MessageManager:
                 target_sessions=routes,
                 metadata=metadata,
                 external_sender=_external_sender,
+                delivery_policy=delivery_policy,
+                await_reply=await_reply,
             )
+            accepted = await self._read_message(db, message_id)
+            rows = await (
+                await db.execute(
+                    "SELECT d.*, r.delivery_id AS result_id, r.result_node_id, "
+                    "r.delivery_id IS NOT NULL AS result_ready "
+                    "FROM mm_deliveries d LEFT JOIN mm_delivery_results r "
+                    "ON r.delivery_id=d.delivery_id WHERE d.message_id=? ORDER BY d.seq",
+                    (message_id,),
+                )
+            ).fetchall()
+            snapshots = []
+            for row in rows:
+                projection = await project_delivery(db, row)
+                bound = None
+                if row["turn_id"] and await has_turns(db):
+                    bound = await (
+                        await db.execute(
+                            "SELECT opener_delivery_id FROM turns WHERE turn_id=?",
+                            (row["turn_id"],),
+                        )
+                    ).fetchone()
+                snapshots.append(
+                    replace(
+                        self._delivery_record(row),
+                        display_state=projection["display_state"],
+                        queue_position=projection["queue_position"],
+                        policy_applied=bool(
+                            row["delivery_policy"] == "inject"
+                            and bound is not None
+                            and bound["opener_delivery_id"] != row["delivery_id"]
+                        ),
+                    )
+                )
+            accepted = replace(accepted, deliveries=tuple(snapshots))
         self._wake.set()
-        return await self.get_message(message_id)
+        return accepted
 
     async def send_external(
         self,
@@ -762,6 +901,8 @@ class MessageManager:
         content: str,
         idempotency_key: str,
         metadata: Mapping[str, object] | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
     ) -> MessageRecord:
         """由受信宿主受理外部输入；保留来源，固定目标会话，无需伪造 agent 身份。"""
         if not sender.strip():
@@ -774,6 +915,8 @@ class MessageManager:
             idempotency_key=idempotency_key,
             metadata=metadata,
             _external_sender=True,
+            delivery_policy=delivery_policy,
+            await_reply=await_reply,
         )
 
     async def wait_replies(
@@ -784,6 +927,19 @@ class MessageManager:
         async def wait() -> tuple[MessageRecord, ...]:
             while True:
                 deliveries = await self.get_deliveries(message_id)
+                if any(d.delivery_policy == "inject" and d.turn_id for d in deliveries):
+                    async with self._lock:
+                        db = self._require_db()
+                        injected = await (
+                            await db.execute(
+                                "SELECT 1 FROM mm_deliveries d JOIN turns t ON t.turn_id=d.turn_id "
+                                "WHERE d.message_id=? AND d.delivery_policy='inject' "
+                                "AND d.delivery_id IS NOT t.opener_delivery_id LIMIT 1",
+                                (message_id,),
+                            )
+                        ).fetchone()
+                    if injected is not None:
+                        raise ValueError("injected delivery has no independent reply")
                 terminal = {
                     DeliveryState.COMPLETED,
                     DeliveryState.FAILED,
@@ -820,7 +976,8 @@ class MessageManager:
                                 f"session={delivery.target_session_id}, "
                                 f"blocking_delivery={blocker.delivery_id}, "
                                 f"state={blocker.state}, "
-                                f"reason={blocker.error or blocker.blocked_reason}. "
+                                f"reason={blocker.queue_block_reason or blocker.error}, "
+                                f"blocked_reason={blocker.blocked_reason}. "
                                 "Wait for the blocking delivery to finish, or fix its session; "
                                 "the pending request is retained."
                             )
@@ -905,23 +1062,9 @@ class MessageManager:
         return tuple(self._delivery_record(row) for row in rows)
 
     async def get_queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
-        """查询阻塞待收消息的同会话前序投递，限底层状态为 pending 或 processing。"""
+        """查询同会话尚未收敛的前序投递，并报告轮次或结果收尾的阻塞原因。"""
         async with self._lock:
-            row = await (
-                await self._require_db().execute(
-                    "SELECT prior.*, r.delivery_id AS result_id, r.result_node_id "
-                    "FROM mm_deliveries current JOIN mm_deliveries prior "
-                    "ON prior.recipient_id=current.recipient_id "
-                    "AND prior.target_session_id IS current.target_session_id "
-                    "AND prior.seq<current.seq "
-                    "LEFT JOIN mm_delivery_results r ON r.delivery_id=prior.delivery_id "
-                    "WHERE current.delivery_id=? AND current.state='pending' "
-                    "AND prior.state IN ('pending', 'processing') "
-                    "AND COALESCE(prior.parked, 0)=0 "
-                    "ORDER BY prior.seq LIMIT 1",
-                    (delivery_id,),
-                )
-            ).fetchone()
+            row = await find_blocker(self._require_db(), delivery_id)
         return self._delivery_record(row) if row is not None else None
 
     @staticmethod
@@ -945,6 +1088,7 @@ class MessageManager:
             row["delivery_policy"],
             bool(row["parked"]),
             row["parked_reason"],
+            row["queue_block_reason"] if "queue_block_reason" in row.keys() else None,
         )
 
     async def get_replies(self, message_id: str) -> tuple[MessageRecord, ...]:
@@ -1258,6 +1402,8 @@ class MessageManager:
         target_sessions: Mapping[str, str] | None = None,
         metadata: Mapping[str, object] | None = None,
         external_sender: bool = False,
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
     ) -> str:
         routes = dict(target_sessions or {})
         parts = [list(recipients), content, kind.value, reply_to]
@@ -1265,6 +1411,8 @@ class MessageManager:
             parts.extend([sender_session_id, sorted(routes.items())])
         if metadata or external_sender:
             parts.extend([dict(metadata or {}), external_sender])
+        if delivery_policy != "queue" or not await_reply:
+            parts.append({"delivery_policy": delivery_policy, "await_reply": await_reply})
         payload = json.dumps(parts, ensure_ascii=False)
         row = await (
             await db.execute(
@@ -1304,12 +1452,34 @@ class MessageManager:
             blocked = None
             if session is not None and await self._session_status(db, target, session) != "open":
                 blocked = "target_session_unavailable"
+            delivery_id = uuid4().hex
             await db.execute(
                 "INSERT INTO mm_deliveries "
-                "(delivery_id, message_id, recipient_id, state, target_session_id, blocked_reason) "
-                "VALUES (?, ?, ?, 'pending', ?, ?)",
-                (uuid4().hex, message_id, target, session, blocked),
+                "(delivery_id, message_id, recipient_id, state, target_session_id, blocked_reason, "
+                "delivery_policy) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+                (delivery_id, message_id, target, session, blocked, delivery_policy),
             )
+            if (
+                delivery_policy == "inject"
+                and not await_reply
+                and kind == MessageKind.REQUEST
+                and reply_to is None
+                and (metadata or {}).get("message_type")
+                not in ("tool_result", "result", "error", "broadcast")
+                and not (metadata or {}).get("inline_reply")
+                and not (metadata or {}).get("return_reply")
+                and not (metadata or {}).get("execute_ability")
+                and blocked is None
+                and session is not None
+                and await has_turns(db)
+            ):
+                await db.execute(
+                    "UPDATE mm_deliveries SET turn_id=(SELECT turn_id FROM turns "
+                    "WHERE agent_name=? AND session_id=? AND status IN ('open','waiting_hitl')) "
+                    "WHERE delivery_id=? AND state='pending' AND turn_id IS NULL "
+                    "AND consumed_node_id IS NULL AND blocked_reason IS NULL AND parked=0",
+                    (target, session, delivery_id),
+                )
         if (metadata or {}).get("room_projection"):
             await db.execute(
                 "INSERT OR IGNORE INTO mm_room_projections(message_id) VALUES (?)", (message_id,)
@@ -1360,9 +1530,15 @@ class MessageManager:
         return row[0] if row else None
 
     async def _validate_session(
-        self, db: aiosqlite.Connection, agent_id: str, session_id: str | None
+        self,
+        db: aiosqlite.Connection,
+        agent_id: str,
+        session_id: str | None,
+        *,
+        allow_unavailable: bool = False,
     ) -> None:
-        if session_id is None or await self._session_status(db, agent_id, session_id) != "open":
+        status = await self._session_status(db, agent_id, session_id) if session_id else None
+        if status is None or (status != "open" and not allow_unavailable):
             raise ValueError(f"Session is missing, not open or owned by another agent: {agent_id}")
 
     async def _default_session(self, db: aiosqlite.Connection, agent_id: str) -> str:
@@ -1390,6 +1566,8 @@ class MessageManager:
         key: str,
         sender_session: str | None,
         target_sessions: Mapping[str, str] | None,
+        *,
+        allow_unavailable: bool = False,
     ) -> tuple[str | None, dict[str, str]]:
         supplied = dict(target_sessions or {})
         if set(supplied) - set(targets):
@@ -1421,23 +1599,25 @@ class MessageManager:
         routes = {}
         for target in targets:
             session = supplied.get(target) or await self._default_session(db, target)
-            await self._validate_session(db, target, session)
+            await self._validate_session(db, target, session, allow_unavailable=allow_unavailable)
             routes[target] = session
         return source, routes
 
     @staticmethod
-    def _next_delivery_sql() -> str:
+    def _next_delivery_sql(with_turns: bool = True) -> str:
+        reason = blocker_reason_sql(with_turns)
         return (
             "SELECT d.* FROM mm_deliveries d WHERE d.recipient_id=? "
-            "AND d.state='pending' AND d.blocked_reason IS NULL AND d.parked=0 "
+            "AND d.state='pending' AND d.turn_id IS NULL AND d.consumed_node_id IS NULL "
+            "AND d.blocked_reason IS NULL AND d.parked=0 "
             "AND NOT EXISTS (SELECT 1 FROM mm_messages reply JOIN mm_inline_waits w "
             "ON w.message_id=reply.reply_to WHERE reply.message_id=d.message_id "
             "AND w.state='waiting') "
             "AND NOT EXISTS (SELECT 1 FROM mm_deliveries prior "
-            "WHERE prior.recipient_id=d.recipient_id AND prior.seq<d.seq "
-            "AND prior.state IN ('pending', 'processing') "
-            "AND prior.target_session_id IS d.target_session_id) "
-            "ORDER BY d.seq LIMIT 1"
+            + blocker_joins(with_turns)
+            + "WHERE prior.recipient_id=d.recipient_id AND prior.seq<d.seq "
+            "AND prior.target_session_id IS d.target_session_id AND prior.parked=0 "
+            f"AND ({reason}) IS NOT NULL) ORDER BY d.seq LIMIT 1"
         )
 
     async def _commit_atomic(self, scope: _AtomicDelivery, changes: ContextChanges) -> None:
@@ -1488,6 +1668,46 @@ class MessageManager:
                 raise ValueError(
                     "Compact commit must not consume input or publish outbound messages"
                 )
+            if delivery["turn_id"]:
+                active_turn = await (
+                    await db.execute(
+                        "SELECT status FROM turns WHERE turn_id=?", (delivery["turn_id"],)
+                    )
+                ).fetchone()
+                if active_turn is None or active_turn["status"] not in ("open", "waiting_hitl"):
+                    raise RuntimeError("Delivery turn is no longer active")
+            if compact and scope.consumed_deliveries:
+                raise ValueError("Compact commit must not consume injected input")
+            input_ids = {message.metadata.get("delivery_id") for message in node.messages_delta}
+            for incoming_id in scope.consumed_deliveries:
+                incoming = await (
+                    await db.execute(
+                        "SELECT * FROM mm_deliveries WHERE delivery_id=?", (incoming_id,)
+                    )
+                ).fetchone()
+                if (
+                    incoming is None
+                    or not delivery["turn_id"]
+                    or incoming["turn_id"] != delivery["turn_id"]
+                    or incoming["recipient_id"] != scope.agent_id
+                    or incoming["target_session_id"] != node.session_id
+                    or incoming["state"] != "pending"
+                    or incoming["consumed_node_id"] is not None
+                    or incoming["delivery_policy"] != "inject"
+                    or incoming["blocked_reason"]
+                    or incoming["parked"]
+                    or incoming_id not in input_ids
+                ):
+                    raise RuntimeError("Injected input is no longer consumable")
+                cursor = await db.execute(
+                    "UPDATE mm_deliveries SET consumed_node_id=?, "
+                    "consumed_session_id=?, last_node_id=? "
+                    "WHERE delivery_id=? AND state='pending' "
+                    "AND consumed_node_id IS NULL AND turn_id=?",
+                    (node.id, node.session_id, node.id, incoming_id, delivery["turn_id"]),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("Injected input changed before commit")
             if delivery["turn_id"] and node.turn_id != delivery["turn_id"]:
                 raise RuntimeError("Atomic node does not match the delivery turn")
             await scope.backend.apply_changes_in_transaction(db, changes)
@@ -1543,6 +1763,7 @@ class MessageManager:
             )
         scope.drafts.clear()
         scope.inline_updates.clear()
+        scope.consumed_deliveries.clear()
         scope.consumed = delivery["consumed_node_id"] is not None or not compact
         scope.last_node_id = node.id
         self._wake.set()
@@ -1569,6 +1790,8 @@ class MessageManager:
     async def _scan(self) -> None:
         async with self._scan_lock:
             await self.recover_completions()
+            async with self._transaction() as db:
+                await settle_terminal_turns(db)
             await self.recover_room_projections()
             for agent_id, receiver in tuple(self._receivers.items()):
                 if agent_id in self._paused_agents:
@@ -1578,7 +1801,7 @@ class MessageManager:
                 async with self._lock:
                     row = await (
                         await self._require_db().execute(
-                            self._next_delivery_sql(),
+                            self._next_delivery_sql(await has_turns(self._require_db())),
                             (agent_id,),
                         )
                     ).fetchone()
@@ -1597,11 +1820,16 @@ class MessageManager:
             async with self._transaction() as db:
                 row = await (
                     await db.execute(
-                        self._next_delivery_sql(),
+                        self._next_delivery_sql(await has_turns(db)),
                         (agent_id,),
                     )
                 ).fetchone()
-                if row is None or row["state"] != DeliveryState.PENDING.value:
+                if (
+                    row is None
+                    or row["state"] != DeliveryState.PENDING.value
+                    or row["turn_id"] is not None
+                    or row["consumed_node_id"] is not None
+                ):
                     return
                 delivery_id = row["delivery_id"]
                 record = await self._read_message(db, row["message_id"])
@@ -1777,6 +2005,12 @@ class MessageManager:
                             end_node_id=delivery["last_node_id"],
                             closed_at=datetime.now(UTC).isoformat(),
                         )
+                        await settle_turn_deliveries(
+                            db,
+                            turn_id=delivery["turn_id"],
+                            opener_delivery_id=delivery_id,
+                            terminal_state="failed" if failed else "interrupted",
+                        )
                     await db.commit()
                 except BaseException:
                     await db.rollback()
@@ -1846,6 +2080,12 @@ class MessageManager:
                     closing_kind="completed",
                     end_node_id=result_node_id or delivery["last_node_id"],
                     closed_at=datetime.now(UTC).isoformat(),
+                )
+                await settle_turn_deliveries(
+                    db,
+                    turn_id=delivery["turn_id"],
+                    opener_delivery_id=delivery_id,
+                    terminal_state="completed",
                 )
         await self._finish_result(delivery_id)
 

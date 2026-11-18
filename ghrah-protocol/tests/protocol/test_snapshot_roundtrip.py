@@ -47,6 +47,13 @@ from ghrah.protocol.types import (
     TaskVerificationGapsPayload,
     TaskVerifyPayload,
 )
+from ghrah.protocol.views.core import (
+    DeliveryAcceptanceView,
+    DeliveryQueueEntryView,
+    DeliveryQueueView,
+    DeliveryView,
+    MessageAcceptanceView,
+)
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -61,6 +68,11 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 # 本批新增快照：名称 → Pydantic 模型（与 TS PAYLOAD_SCHEMA_MAP 同步维护）
 S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
+    "DeliveryView": DeliveryView,
+    "DeliveryAcceptanceView": DeliveryAcceptanceView,
+    "DeliveryQueueEntryView": DeliveryQueueEntryView,
+    "DeliveryQueueView": DeliveryQueueView,
+    "MessageAcceptanceView": MessageAcceptanceView,
     "TurnOpenedPayload": TurnOpenedPayload,
     "TurnWaitingHitlPayload": TurnWaitingHitlPayload,
     "TurnClosedPayload": TurnClosedPayload,

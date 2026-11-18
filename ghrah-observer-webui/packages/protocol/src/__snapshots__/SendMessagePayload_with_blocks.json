@@ -20,5 +20,6 @@
   "timeout": null,
   "metadata": {
     "room_id": "room-001"
-  }
+  },
+  "delivery_policy": "queue"
 }

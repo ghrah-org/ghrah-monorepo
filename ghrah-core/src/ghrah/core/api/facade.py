@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -65,11 +65,13 @@ from ghrah.protocol.views.core import (
     BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
+    DeliveryQueueView,
     DeliveryView,
     HistoryView,
     HitlRequestListView,
     HitlRequestView,
     MailboxSummaryView,
+    MessageAcceptanceView,
     MessageReplyView,
     MessageView,
     NodeView,
@@ -555,6 +557,20 @@ class _Deliveries:
         )
         return DeliveryView.model_validate(raw)
 
+    async def queue(self, *, agent_id: AgentId, session_id: str | None) -> DeliveryQueueView:
+        """读取会话队列及活动轮次。"""
+        return DeliveryQueueView.model_validate(
+            await self._facade._call(
+                "deliveries.queue",
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        )
+
+    async def cancel(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
+        """取消未领取的排队投递。"""
+        await self._facade._call("deliveries.cancel", agent_id=agent_id, delivery_id=delivery_id)
+
     async def retry(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
         """重试一条失败投递。"""
         await self._facade._call(
@@ -609,9 +625,10 @@ class _Messages:
         content: str,
         sender: str = "user",
         timeout: float | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> MessageReplyView:
+    ) -> MessageReplyView | MessageAcceptanceView:
         """发送一条消息。"""
         raw = await self._facade._call(
             "messages.append",
@@ -620,9 +637,12 @@ class _Messages:
             content=content,
             sender=sender,
             timeout=timeout,
+            delivery_policy=delivery_policy,
             metadata=metadata,
             content_blocks=content_blocks,
         )
+        if delivery_policy == "inject":
+            return MessageAcceptanceView.model_validate(raw)
         return MessageReplyView.model_validate(raw)
 
     async def broadcast(self, *, content: str, sender: str = "user") -> BroadcastRepliesView:

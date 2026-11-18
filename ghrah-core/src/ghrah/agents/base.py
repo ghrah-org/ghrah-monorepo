@@ -61,11 +61,15 @@ from ghrah.chat.message import ChatMessage
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.iteration_commit import (
+    ConsumedInputRegistrar,
     DeliveryFinisher,
     IterationCommitter,
+    TurnInputLoader,
     durable_iteration_scope,
+    get_consumed_input_registrar,
     get_delivery_finisher,
     get_iteration_committer,
+    get_iteration_input_loader,
 )
 from ghrah.context.iteration_state import IterationState
 from ghrah.context.manager import ContextManager, DeliverySessionUnavailableError
@@ -414,6 +418,7 @@ class ActorAgent:
             生产投递由 MessageManager 负责。本方法仅供本地和测试模式使用，
             后续版本移除。新代码请使用 MessageManager。
         """
+        logger.warning("inject_message is deprecated; use MessageManager for durable delivery")
         await self._message_queue.put(message)
         logger.info(
             f"ActorAgent[{self.config.name}] message injected: "
@@ -593,6 +598,8 @@ class ActorAgent:
         rollback: Callable[[], None] | None = None,
         finish: DeliveryFinisher | None = None,
         target_session_id: str | None = None,
+        input_loader: TurnInputLoader | None = None,
+        register_consumed: ConsumedInputRegistrar | None = None,
     ) -> AgentMessage:
         """经 Runner 执行显式原子接收，每轮节点由调用方提交器保存。"""
 
@@ -601,7 +608,12 @@ class ActorAgent:
             if target_session_id and not self._message_queue.empty():
                 raise RuntimeError("Session-routed receive cannot consume unscoped queued messages")
             selection = cm.use_session(target_session_id) if target_session_id else nullcontext()
-            with selection, durable_iteration_scope(cm, committer, rollback, finish):
+            with (
+                selection,
+                durable_iteration_scope(
+                    cm, committer, rollback, finish, input_loader, register_consumed
+                ),
+            ):
                 if finish is not None and target_session_id and message.metadata.get("turn_id"):
                     cm.attach_turn(
                         turn_id=message.metadata["turn_id"],
@@ -631,6 +643,8 @@ class ActorAgent:
         session_id: str,
         branch_id: str,
         last_node_id: str,
+        input_loader: TurnInputLoader | None = None,
+        register_consumed: ConsumedInputRegistrar | None = None,
     ) -> AgentMessage:
         """从指定持久 Head 的下一轮继续，不重注入输入，不重放已提交工具。"""
 
@@ -640,7 +654,9 @@ class ActorAgent:
                 raise RuntimeError("Cannot resume with unscoped queued messages")
             with (
                 cm.use_session(session_id),
-                durable_iteration_scope(cm, committer, rollback, finish),
+                durable_iteration_scope(
+                    cm, committer, rollback, finish, input_loader, register_consumed
+                ),
             ):
                 if (
                     cm.active_head.id != last_node_id
@@ -953,9 +969,9 @@ class ActorAgent:
             特殊触发：ON_ERROR、ON_MAX_ITERATIONS
 
         每次迭代通过 ContextManager 的 begin/commit/rollback 管理事务。
-        每轮迭代开始时从 _message_queue 排空新消息并注入到 ContextManager，
-        支持迭代中注入新消息（如 HITL 回复、WebSocket 追加提示等）。
-        迭代失败回滚时，排空的消息会重新注入队列，防止消息丢失。
+        普通迭代开始时读取本地队列及当前轮次的持久注入。
+        本地消息在回滚后重新入队，持久输入的消费凭证随节点事务提交。
+        compact 回合及 HITL 等待期间保持持久注入未消费。
         """
         cm = self._context_manager
         accumulated_data: dict[str, Any] = {}
@@ -1002,6 +1018,13 @@ class ActorAgent:
                 cm.add_messages(new_messages)
 
             try:
+                loader = get_iteration_input_loader(cm)
+                registrar = get_consumed_input_registrar(cm)
+                if loader is not None and registrar is not None and cm.active_turn_id:
+                    inputs = await loader(cm.active_turn_id)
+                    cm.add_messages(list(inputs))
+                    for incoming in inputs:
+                        registrar(incoming.metadata["delivery_id"])
                 # 3. 执行 _action（包含 LLM 调用 + tool 执行）
                 action_output = await self._action(accumulated_data)
                 action_results = action_output["results"]

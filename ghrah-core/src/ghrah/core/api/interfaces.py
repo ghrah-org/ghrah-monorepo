@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -57,11 +57,13 @@ from ghrah.protocol.views.core import (
     BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
+    DeliveryQueueView,
     DeliveryView,
     HistoryView,
     HitlRequestListView,
     HitlRequestView,
     MailboxSummaryView,
+    MessageAcceptanceView,
     MessageReplyView,
     MessageView,
     NodeView,
@@ -71,7 +73,7 @@ from ghrah.protocol.views.core import (
     TurnListView,
     TurnView,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 __all__ = [
     "CORE_CATALOG_INTERFACES",
@@ -408,6 +410,7 @@ class MessagesAppendRequest(BaseModel):
     content: str
     sender: str = "user"
     timeout: float | None = None
+    delivery_policy: Literal["inject", "queue"] = "queue"
     metadata: dict[str, Any] | None = None
     content_blocks: list[InputContentBlock] | None = None
 
@@ -497,6 +500,24 @@ class AbilitiesPackageGroupsGlobalRequest(BaseModel):
     """``abilities.package_groups`` 的目录侧请求信封（全局视图，无作用域）。"""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class DeliveriesQueueRequest(BaseModel):
+    """查询指定会话的投递队列。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None
+
+
+class DeliveriesCancelRequest(BaseModel):
+    """取消一条尚未领取的排队投递。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    delivery_id: str
 
 
 class DeliveriesRetryRequest(BaseModel):
@@ -603,6 +624,10 @@ class HitlListRequest(BaseModel):
     session_id: str | None = None
 
 
+class MessageAppendResponse(RootModel[MessageReplyView | MessageAcceptanceView]):
+    """同步回复或异步受理回执，按实际载荷校验。"""
+
+
 CORE_INTERFACES = InterfaceRegistry(
     (
         Interface("nodes.get", NodeGetRequest, NodeView),
@@ -630,6 +655,8 @@ CORE_INTERFACES = InterfaceRegistry(
             AckView,
         ),
         Interface("deliveries.get", DeliveriesGetRequest, DeliveryView),
+        Interface("deliveries.queue", DeliveriesQueueRequest, DeliveryQueueView),
+        Interface("deliveries.cancel", DeliveriesCancelRequest, AckView),
         Interface("deliveries.retry", DeliveriesRetryRequest, AckView),
         Interface("deliveries.resume", DeliveriesResumeRequest, AckView),
         Interface("rooms.recover", RoomsRecoverRequest, AckView),
@@ -666,7 +693,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("branches.activate", BranchesActivateRequest, AckView),
         Interface("branches.archive", BranchesArchiveRequest, AckView),
         Interface("branches.delete", BranchesDeleteRequest, AckView),
-        Interface("messages.append", MessagesAppendRequest, MessageReplyView),
+        Interface("messages.append", MessagesAppendRequest, MessageAppendResponse),
         Interface("messages.broadcast", MessagesBroadcastRequest, BroadcastRepliesView),
         Interface("messages.delegate", MessagesDelegateRequest, MessageReplyView),
     )

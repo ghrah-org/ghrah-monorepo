@@ -106,7 +106,7 @@ class EntityMessageOperation(EntityModel):
 class EntityDeliveryOperation(EntityModel):
     """只允许恢复投递给当前实体的记录。"""
 
-    type: Literal["mailbox.retry", "mailbox.resume"]
+    type: Literal["mailbox.retry", "mailbox.resume", "mailbox.cancel"]
     delivery_id: Identifier
 
 

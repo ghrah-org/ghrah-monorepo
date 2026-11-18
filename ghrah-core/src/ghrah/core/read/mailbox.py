@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ghrah.protocol.payloads.entity import AgentIdentity
 from ghrah.protocol.views.core import (
+    DeliveryQueueView,
     DeliveryView,
     MailboxSummaryView,
     MessageView,
@@ -140,6 +141,16 @@ class MailboxReadStore:
         except ValueError as exc:
             raise _map_reader_error(exc) from exc
         return DeliveryView.model_validate(raw)
+
+    async def queue(self, *, agent_id: str, session_id: str | None) -> DeliveryQueueView:
+        """读取指定会话的当前排队与轮内投递。"""
+        reader = await self._reader(agent_id)
+        try:
+            async with reader:
+                raw = await reader.queue(session_id)
+        except ValueError as exc:
+            raise _map_reader_error(exc) from exc
+        return DeliveryQueueView.model_validate(raw)
 
     async def list_messages(
         self,

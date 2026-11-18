@@ -1104,6 +1104,33 @@ class CoreUnit:
             if sp.content_blocks
             else None
         )
+        if sp.delivery_policy == "inject":
+            from ghrah.protocol.views.core import DeliveryAcceptanceView, MessageAcceptanceView
+
+            accepted = await supervisor.accept(
+                target=sp.target,
+                content=sp.content,
+                sender=sp.sender,
+                metadata=sp.metadata,
+                content_blocks=content_blocks,
+                delivery_policy="inject",
+            )
+            receipt = MessageAcceptanceView(
+                message_id=accepted.message_id,
+                accepted_at=accepted.accepted_at,
+                deliveries=[
+                    DeliveryAcceptanceView(
+                        delivery_id=d.delivery_id,
+                        policy=d.delivery_policy,
+                        policy_applied=d.policy_applied,
+                        turn_id=d.turn_id,
+                        display_state=d.display_state,
+                        queue_position=d.queue_position,
+                    )
+                    for d in accepted.deliveries
+                ],
+            )
+            return self._ok(receipt.model_dump(mode="json"))
         result = await supervisor.send(
             target=sp.target,
             content=sp.content,

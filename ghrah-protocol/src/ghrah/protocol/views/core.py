@@ -32,6 +32,10 @@ __all__ = [
     "ChainMetaView",
     "ContentReadResult",
     "DeliveryView",
+    "DeliveryQueueView",
+    "DeliveryQueueEntryView",
+    "MessageAcceptanceView",
+    "DeliveryAcceptanceView",
     "TurnView",
     "TurnListView",
     "HitlRequestView",
@@ -202,6 +206,60 @@ class DeliveryView(BaseModel):
     parked: bool = False
     parked_reason: str | None = None
     display_state: str = ""
+    result_ready: bool = False
+    queue_position: int = 0
+    queue_reason: str | None = None
+    blocked_by_delivery_id: str | None = None
+    cancelable: bool = False
+
+
+class DeliveryQueueEntryView(BaseModel):
+    """队列中一条投递的实时投影。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_id: str
+    message_id: str
+    display_state: str
+    position: int = 0
+    queue_reason: str | None = None
+    blocked_by_delivery_id: str | None = None
+    turn_id: str | None = None
+    cancelable: bool = False
+
+
+class DeliveryQueueView(BaseModel):
+    """同一 Agent、会话的未收敛投递，按受理顺序排列。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None
+    entries: list[DeliveryQueueEntryView] = Field(default_factory=list)
+    open_turn_id: str | None = None
+
+
+class DeliveryAcceptanceView(BaseModel):
+    """本次受理返回时已确定的投递方式和位置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_id: str
+    policy: Literal["inject", "queue"]
+    policy_applied: bool
+    turn_id: str | None = None
+    display_state: str
+    queue_position: int = 0
+
+
+class MessageAcceptanceView(BaseModel):
+    """消息持久受理的回执。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str
+    accepted_at: float
+    deliveries: list[DeliveryAcceptanceView] = Field(default_factory=list)
 
 
 class TurnView(BaseModel):

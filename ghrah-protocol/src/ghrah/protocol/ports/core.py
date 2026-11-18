@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -48,11 +48,13 @@ from ghrah.protocol.views.core import (
     BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
+    DeliveryQueueView,
     DeliveryView,
     HistoryView,
     HitlRequestListView,
     HitlRequestView,
     MailboxSummaryView,
+    MessageAcceptanceView,
     MessageReplyView,
     MessageView,
     NodeView,
@@ -263,6 +265,14 @@ class DeliveriesOperations(Protocol):
         """读取本实体可见的单条投递；不可见时抛 ``NOT_FOUND``。"""
         ...
 
+    async def queue(self, *, agent_id: AgentId, session_id: str | None) -> DeliveryQueueView:
+        """读取会话中未收敛的投递。"""
+        ...
+
+    async def cancel(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
+        """取消尚未领取的排队投递。"""
+        ...
+
     async def retry(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
         """重试一条失败投递；不可见时抛 ``NOT_FOUND``。"""
         ...
@@ -400,9 +410,10 @@ class MessageOperations(Protocol):
         content: str,
         sender: str = "user",
         timeout: float | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> MessageReplyView:
+    ) -> MessageReplyView | MessageAcceptanceView:
         """向指定 Agent 发送消息并等待回复。"""
         ...
 

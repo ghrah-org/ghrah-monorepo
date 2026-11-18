@@ -56,6 +56,7 @@ export const SendMessagePayloadSchema = z.object({
   content_blocks: z.array(InputContentBlockSchema).nullable().optional(),
   sender: z.string().optional().default("user"),
   timeout: z.number().nullable().optional(),
+  delivery_policy: z.enum(["inject", "queue"]).optional().default("queue"),
   metadata: z.record(z.unknown()).nullable().optional(),
 });
 
