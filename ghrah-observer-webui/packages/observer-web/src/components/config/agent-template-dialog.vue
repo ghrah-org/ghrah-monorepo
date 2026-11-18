@@ -236,45 +236,34 @@ function splitTags(): string[] {
 }
 
 /**
- * 「整包」只是**选择全部**的快捷方式：保存时展开成具体成员键。
+ * 「整包」以 `whole_container` 原样交给后端：成员由 Core 按自己的能力来源展开。
  *
- * 契约里的 `whole_container` 需要包目录才能展开，而创建链路上没有目录，
- * 落库里存 `whole_container=true` + 空 operations 会让 Agent 零能力上线。
+ * 前端**不**展开成具体成员键：两侧目录可能不同步（实测 `ghrah.cluster` 在 Subject
+ * 目录里有 `send`，Core 的包定义里没有），展开后的成员会在创建时解析失败。
  */
-async function buildPackages(): Promise<
-  NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"]
-> {
-  const built: NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] = [];
-  for (const row of form.rows) {
-    if (row.package === "") continue;
-    let keys = row.wholeContainer ? row.available : row.selected;
-    if (row.wholeContainer && keys.length === 0) {
-      await ensureMembers(row);
-      keys = row.available;
-    }
-    if (keys.length === 0) {
-      throw new Error(t("config.template.packageNeedsOperations", { package: row.package }));
-    }
-    built.push({
+function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
+  return form.rows
+    .filter((row) => row.package !== "")
+    .map((row) => ({
       package: row.package,
       origin: "builtin" as const,
-      whole_container: false,
-      operations: keys.map((key) => ({ key, visible: true, available: true })),
+      whole_container: row.wholeContainer,
+      operations: row.wholeContainer
+        ? []
+        : row.selected.map((key) => ({ key, visible: true, available: true })),
       skills: [],
-    });
-  }
-  return built;
+    }));
 }
 
-async function buildAbilityRequest(): Promise<AgentTemplateCreateRequest["ability_request"]> {
+function buildAbilityRequest(): AgentTemplateCreateRequest["ability_request"] {
   return {
     surface: { mode: "auto", static: [], max_static: null },
-    packages: await buildPackages(),
+    packages: buildPackages(),
     mcp_refs: [],
   };
 }
 
-async function buildCreatePayload(): Promise<AgentTemplateCreateRequest> {
+function buildCreatePayload(): AgentTemplateCreateRequest {
   return {
     metadata: {
       namespace: form.namespace.trim(),
@@ -293,13 +282,13 @@ async function buildCreatePayload(): Promise<AgentTemplateCreateRequest> {
       window: null,
       overrides: null,
     },
-    ability_request: await buildAbilityRequest(),
+    ability_request: buildAbilityRequest(),
     permission_request: null,
     path_request: [],
   };
 }
 
-async function buildUpdatePayload(): Promise<AgentTemplateUpdateRequest> {
+function buildUpdatePayload(): AgentTemplateUpdateRequest {
   return {
     expected_revision: props.template!.revision,
     title: form.title,
@@ -315,7 +304,7 @@ async function buildUpdatePayload(): Promise<AgentTemplateUpdateRequest> {
       window: null,
       overrides: null,
     },
-    ability_request: await buildAbilityRequest(),
+    ability_request: buildAbilityRequest(),
     permission_request: null,
     path_request: null,
   };
@@ -328,8 +317,8 @@ async function submit() {
   try {
     const detail =
       mode.value === "create"
-        ? await api().create(await buildCreatePayload())
-        : await api().update(props.template!.template_id, await buildUpdatePayload());
+        ? await api().create(buildCreatePayload())
+        : await api().update(props.template!.template_id, buildUpdatePayload());
     emit("dirtyChange", false);
     emit("saved", detail);
   } catch (cause) {

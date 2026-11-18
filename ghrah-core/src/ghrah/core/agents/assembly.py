@@ -113,6 +113,12 @@ def _build_config(spec: AgentAssemblySpec, workspace_root: str | None) -> AgentC
     )
 
 
+def _is_control_member(manifest: Any) -> bool:
+    """控制成员（conversation / end_task 这类）由装配边界自己加，不接受显式请求。"""
+    handler = getattr(manifest.implementation, "handler", None)
+    return handler in CONTROL_HANDLERS and str(manifest.full_name).startswith("ghrah.core.")
+
+
 def _resolve_member(
     source: BuiltinAbilitySource,
     member: str,
@@ -192,6 +198,17 @@ def resolve_members(
             raise AssemblyError("member entry without a name in snapshot")
         raw = item.get("permissions")
         request = AgentMemberPermissions.model_validate(raw) if raw is not None else None
+        if bool(item.get("whole_container")):
+            # 「整包」：按包名展开成全部成员；控制成员仍由装配边界自己加，这里跳过。
+            try:
+                manifests = source.load_package_members(member)
+            except Exception as error:  # noqa: BLE001 — 统一折成装配错误
+                raise AssemblyError(f"package not resolvable: {member}: {error}") from error
+            for manifest in manifests:
+                if _is_control_member(manifest):
+                    continue
+                resolved.append(_resolve_member(source, manifest.full_name, request))
+            continue
         resolved.append(_resolve_member(source, member, request))
     return resolved
 

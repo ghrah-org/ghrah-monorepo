@@ -269,14 +269,17 @@ def render_assembly(
     for request in template.ability_request.packages:
         if granted is None:
             # 无授权视图：按模板申请原样装配。
+            # 「整包」需要包目录才能展开成员，Subject 侧没有目录，因此把**包名**
+            # 原样交给 Core（``whole_container=True``），由 Core 按自己的能力来源展开。
             if request.whole_container and not request.operations:
-                # 「整包」只有拿到目录才能展开成员。没有目录时静默展开成空集会让
-                # Agent 带着零能力上线（用户勾了整包却什么也没申请到），必须 fail closed。
-                raise RenderError(
-                    "whole_container_unresolved",
-                    f"{request.package}: whole container needs a package catalog; "
-                    "list the operations explicitly",
+                members.append(
+                    AgentAssemblyMember(
+                        member=request.package,
+                        whole_container=True,
+                        permissions=_member_permissions(resolved_paths, package=request.package),
+                    )
                 )
+                continue
             selected_ops = (
                 [] if request.whole_container else [item.key for item in request.operations]
             )

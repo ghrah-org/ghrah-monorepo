@@ -437,11 +437,17 @@ class AgentMemberAxes(BaseModel):
 
 
 class AgentAssemblyMember(BaseModel):
-    """一个已授予成员及其 L2 申请；未授予成员不进这里。"""
+    """一个已授予成员及其 L2 申请；未授予成员不进这里。
+
+    ``whole_container`` 为真时 ``member`` 是**包名**（``namespace.name``），由 Core
+    按自己的能力来源展开成该包的全部成员——「整包」需要包目录，而 Subject 侧没有目录，
+    只能在 Core 侧展开。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     member: str = Field(min_length=1)
+    whole_container: bool = False
     permissions: AgentMemberPermissions | None = None
     axes: AgentMemberAxes | None = None
 

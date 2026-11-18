@@ -223,8 +223,8 @@ def test_skills_and_scripts_go_to_axes_only() -> None:
     assert rendered.grants[0].scripts == {"style": ("lint",)}
 
 
-def test_whole_container_without_catalog_fails_closed() -> None:
-    """没有授权视图时「整包」无法展开成员，必须报错而不是静默装配成零能力。"""
+def test_whole_container_is_passed_through_to_core() -> None:
+    """没有授权视图时，「整包」以包名透传给 Core（成员由 Core 的能力来源展开）。"""
     template = _template(
         ability_request={
             "packages": [
@@ -237,6 +237,8 @@ def test_whole_container_without_catalog_fails_closed() -> None:
             ]
         }
     )
-    with pytest.raises(RenderError) as error:
-        render_assembly(template, agent_name="weekly", workspaces=_WORKSPACES, granted=None)
-    assert error.value.code == "whole_container_unresolved"
+    rendered = render_assembly(template, agent_name="weekly", workspaces=_WORKSPACES, granted=None)
+
+    assert [(item.member, item.whole_container) for item in rendered.spec.members] == [
+        ("ghrah.fs", True)
+    ]
