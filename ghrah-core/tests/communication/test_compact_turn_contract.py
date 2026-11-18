@@ -216,3 +216,40 @@ async def test_crash_after_only_compact_uses_member_as_end(rollback_runtime):
     assert row["start_node_id"] == row["end_node_id"] == compact.id
     assert restored.active_head.id == compact.id
     assert len(restored.list_branches(restored.active_session_id)) == len(branches)
+
+
+@pytest.mark.parametrize("entry", ["receive", "resume"])
+async def test_atomic_entry_early_failure_clears_compact_request(
+    rollback_runtime, monkeypatch, entry
+):
+    """未进入驱动循环的原子接收/续跑失败也要丢弃压缩请求，避免泄漏到下一轮。"""
+    agent, _, _, _ = rollback_runtime
+    cm = agent._context_manager
+    message = AgentMessage(sender="user", recipient="agent", content="go", metadata={})
+
+    async def committer(changes):
+        raise AssertionError("must not commit")
+
+    def rollback():
+        pass
+
+    async def finish(result):
+        return None
+
+    cm.request_compact()
+    if entry == "receive":
+        with pytest.raises(ValueError):
+            await agent.receive_atomic(message, committer, target_session_id="missing-session")
+    else:
+        monkeypatch.setattr(agent.config, "max_iterations", 0)
+        with pytest.raises(RuntimeError):
+            await agent.resume_atomic(
+                message,
+                committer,
+                rollback,
+                finish,
+                session_id=cm.active_session_id,
+                branch_id=cm.get_active_session_branch().branch_id,
+                last_node_id=cm.active_head.id,
+            )
+    assert not cm.compact_requested

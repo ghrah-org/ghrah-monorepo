@@ -332,3 +332,27 @@ async def test_failure_converges_from_last_committed_member(rollback_runtime, mo
         assert view.incomplete_node_id is view.recovery_branch_id is None
         assert len(after["branches"]) == len(before["branches"])
         assert cm.active_head.id == view.end_node_id
+
+
+async def test_routed_ability_revocation_leaves_no_retry_branch(rollback_runtime, monkeypatch):
+    """中止是控制流：路由 ability 被吊销时不得创建 retry-* 分支或写链。"""
+    agent, backend, _, _ = rollback_runtime
+    cm = agent._context_manager
+    turn_id = await cm.open_turn()
+    session_id = cm.active_session_id
+    branches_before = len(cm.list_branches(session_id))
+    db_before = snapshot(backend.db_path)["branches"]
+
+    async def revoked_ability(*args, **kwargs):
+        cm.request_turn_abort(turn_id)
+        raise turn.TurnRevokedError("revoked during routed ability")
+
+    monkeypatch.setitem(agent._abilities, "end_task", SimpleNamespace(name="end_task"))
+    monkeypatch.setattr(agent, "_build_ability_call", lambda *args, **kwargs: (object(), object()))
+    monkeypatch.setattr(agent._ability_executor, "execute_ability", revoked_ability)
+
+    with pytest.raises(turn.TurnRevokedError):
+        await agent._execute_routed_ability({}, "end_task")
+
+    assert len(cm.list_branches(session_id)) == branches_before
+    assert snapshot(backend.db_path)["branches"] == db_before

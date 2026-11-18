@@ -543,6 +543,10 @@ class LocalAbilityExecutor(AbilityExecutor):
                 ],
                 return_exceptions=True,
             )
+            for r in raw_results:
+                if isinstance(r, TurnRevokedError):
+                    # 中止是控制流：不得折算为工具失败，否则旧循环会继续跑到提交边界。
+                    raise r
             for i, r in enumerate(raw_results):
                 if isinstance(r, BaseException) and not isinstance(r, Exception):
                     # 取消等控制流信号不是动作结果：原样重抛，交上层取消

@@ -611,31 +611,40 @@ class ActorAgent:
 
         async def operation() -> AgentMessage:
             cm = self._context_manager
-            if target_session_id and not self._message_queue.empty():
-                raise RuntimeError("Session-routed receive cannot consume unscoped queued messages")
-            selection = cm.use_session(target_session_id) if target_session_id else nullcontext()
-            with (
-                selection,
-                durable_iteration_scope(
-                    cm, committer, rollback, finish, input_loader, register_consumed
-                ),
-            ):
-                if finish is not None and target_session_id and message.metadata.get("turn_id"):
-                    cm.attach_turn(
-                        turn_id=message.metadata["turn_id"],
-                        session_id=target_session_id,
-                        opener_delivery_id=message.metadata["delivery_id"],
+            try:
+                if target_session_id and not self._message_queue.empty():
+                    raise RuntimeError(
+                        "Session-routed receive cannot consume unscoped queued messages"
                     )
-                try:
-                    return await self._receive_once(message)
-                finally:
-                    # 压缩失败可能发生在排空队列之前；持久 mailbox 是该输入的恢复来源。
-                    for queued in self._drain_message_queue():
-                        if (
-                            message.metadata.get("delivery_id") is None
-                            or queued.metadata.get("delivery_id") != message.metadata["delivery_id"]
-                        ):
-                            self._message_queue.put_nowait(queued)
+                selection = (
+                    cm.use_session(target_session_id) if target_session_id else nullcontext()
+                )
+                with (
+                    selection,
+                    durable_iteration_scope(
+                        cm, committer, rollback, finish, input_loader, register_consumed
+                    ),
+                ):
+                    if finish is not None and target_session_id and message.metadata.get("turn_id"):
+                        cm.attach_turn(
+                            turn_id=message.metadata["turn_id"],
+                            session_id=target_session_id,
+                            opener_delivery_id=message.metadata["delivery_id"],
+                        )
+                    try:
+                        return await self._receive_once(message)
+                    finally:
+                        # 压缩失败可能发生在排空队列之前；持久 mailbox 是该输入的恢复来源。
+                        for queued in self._drain_message_queue():
+                            if (
+                                message.metadata.get("delivery_id") is None
+                                or queued.metadata.get("delivery_id")
+                                != message.metadata["delivery_id"]
+                            ):
+                                self._message_queue.put_nowait(queued)
+            finally:
+                # 未走到驱动循环就结束的执行同样丢弃本轮压缩请求，避免泄漏到下一轮。
+                cm.consume_compact_request()
 
         return await self._runner.run(operation)
 
@@ -656,50 +665,54 @@ class ActorAgent:
 
         async def operation() -> AgentMessage:
             cm = self._context_manager
-            if not self._message_queue.empty():
-                raise RuntimeError("Cannot resume with unscoped queued messages")
-            with (
-                cm.use_session(session_id),
-                durable_iteration_scope(
-                    cm, committer, rollback, finish, input_loader, register_consumed
-                ),
-            ):
-                if (
-                    cm.active_head.id != last_node_id
-                    or cm.get_active_session_branch().branch_id != branch_id
+            try:
+                if not self._message_queue.empty():
+                    raise RuntimeError("Cannot resume with unscoped queued messages")
+                with (
+                    cm.use_session(session_id),
+                    durable_iteration_scope(
+                        cm, committer, rollback, finish, input_loader, register_consumed
+                    ),
                 ):
-                    raise RuntimeError("In-memory session head changed before resume")
-                if message.metadata.get("execute_ability"):
+                    if (
+                        cm.active_head.id != last_node_id
+                        or cm.get_active_session_branch().branch_id != branch_id
+                    ):
+                        raise RuntimeError("In-memory session head changed before resume")
+                    if message.metadata.get("execute_ability"):
+                        await self._restore_pending_tools()
+                        return await self._finish_command_result(
+                            message, cm.active_head.action_results[-1]["action_result"]
+                        )
+                    if self.config.max_iterations == 0:
+                        raise RuntimeError("Resume requires a non-zero iteration budget")
+                    await self._ensure_llm()
                     await self._restore_pending_tools()
-                    return await self._finish_command_result(
-                        message, cm.active_head.action_results[-1]["action_result"]
-                    )
-                if self.config.max_iterations == 0:
-                    raise RuntimeError("Resume requires a non-zero iteration budget")
-                await self._ensure_llm()
-                await self._restore_pending_tools()
-                self._iteration_state.max_iterations = self.config.max_iterations
-                self._iteration_state.reset()
-                if cm.active_head.action_results:
-                    self._iteration_state.last_action_result = cm.active_head.action_results[
-                        -1
-                    ].get("action_result")
-                self._drive_active = True
-                try:
-                    await self._drive_loop(
-                        delivery_context={
-                            **{
-                                key: message.metadata[key]
-                                for key in ("room_id", "message_manager")
-                                if message.metadata.get(key)
-                            },
-                            "project_id": message.metadata["project_id"],
-                            "agent_id": self.config.effective_agent_id,
-                        }
-                    )
-                finally:
-                    self._drive_active = False
-                return await self._finish_response(message)
+                    self._iteration_state.max_iterations = self.config.max_iterations
+                    self._iteration_state.reset()
+                    if cm.active_head.action_results:
+                        self._iteration_state.last_action_result = cm.active_head.action_results[
+                            -1
+                        ].get("action_result")
+                    self._drive_active = True
+                    try:
+                        await self._drive_loop(
+                            delivery_context={
+                                **{
+                                    key: message.metadata[key]
+                                    for key in ("room_id", "message_manager")
+                                    if message.metadata.get(key)
+                                },
+                                "project_id": message.metadata["project_id"],
+                                "agent_id": self.config.effective_agent_id,
+                            }
+                        )
+                    finally:
+                        self._drive_active = False
+                    return await self._finish_response(message)
+            finally:
+                # 续跑失败也要丢弃本轮压缩请求，避免下一轮意外压缩。
+                cm.consume_compact_request()
 
         return await self._runner.run(operation)
 
@@ -1914,6 +1927,9 @@ class ActorAgent:
                     {"delivery_context": dict(delivery_context)} if delivery_context else None
                 ),
             )
+        except TurnRevokedError:
+            # 中止是控制流，不是路由失败：不得创建 retry-* 分支或写链。
+            raise
         except Exception as e:
             if cm.in_iteration:
                 cm.rollback_iteration(e)
