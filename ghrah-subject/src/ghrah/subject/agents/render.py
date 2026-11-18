@@ -342,7 +342,12 @@ def render_assembly(
             )
         # 技能按成员级下发：用户选了哪个技能，模板存了哪个，这里就传哪个。
         # 技能没有"可见但不可用"（Core 会拒绝），所以只带 visible。
+        # 有授权视图时按授予事实过滤，和 operation 同一口径。
+        granted_skills = None if granted is None else set(fact.skills)  # type: ignore[union-attr]
         for item in request.skills:
+            if granted_skills is not None and item.key not in granted_skills:
+                not_granted.append(f"{request.package}.{item.key}")
+                continue
             members.append(
                 AgentAssemblyMember(
                     member=f"{request.package}.{item.key}",

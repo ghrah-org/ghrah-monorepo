@@ -76,7 +76,7 @@ def test_only_granted_members_enter_the_spec() -> None:
     )
 
     names = [item.member for item in rendered.spec.members]
-    assert names == ["ghrah.fs.read_file"]
+    assert names == ["ghrah.fs.read_file", "ghrah.fs.style"]
     assert rendered.report.not_granted == ("ghrah.fs.write_file",)
 
 
@@ -210,7 +210,7 @@ def test_whole_container_selects_all_granted_operations() -> None:
     assert rendered.report.not_granted == ()
 
 
-def test_skills_and_scripts_go_to_axes_only() -> None:
+def test_skills_enter_members_and_keep_axes() -> None:
     rendered = render_assembly(
         _template(), agent_name="weekly", workspaces=_WORKSPACES, granted=[_granted()]
     )
@@ -218,7 +218,9 @@ def test_skills_and_scripts_go_to_axes_only() -> None:
     axes = rendered.grants[0].axes
     assert axes["skill/style"] == (True, True)
     assert axes["skill/style/scripts/lint"] == (True, False)
-    assert all("skill" not in item.member for item in rendered.spec.members)
+    # 技能现在与 operation 一样是成员：模板选了就下发，不再只写进 axes。
+    skills = [item for item in rendered.spec.members if item.type == "skill"]
+    assert [item.member for item in skills] == ["ghrah.fs.style"]
     assert rendered.grants[0].skills == ("style",)
     assert rendered.grants[0].scripts == {"style": ("lint",)}
 

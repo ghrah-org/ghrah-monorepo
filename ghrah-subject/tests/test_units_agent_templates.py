@@ -22,12 +22,14 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from ghrah.core.wiring import build_core_catalog
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
 from starlette.requests import Request
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
+from ghrah.subject.runtime.service_keys import CORE_CATALOG_SERVICE
 from ghrah.subject.template_store import AgentTemplateRecord, AgentTemplateService, TemplateStore
 from ghrah.subject.units.ability_control import (
     _authorized,
@@ -165,6 +167,8 @@ async def test_unit_mounts_templates_router_on_observer_app(tmp_path: Path) -> N
         db_path=str(tmp_path / "subject.db"),
     )
     async with Context() as ctx:
+        # 模板单元依赖目录端口：整包在保存时展开成成员，需要读包目录。
+        ctx.provide(CORE_CATALOG_SERVICE.name, build_core_catalog())
         endpoint = WebSocketObserverEndpointUnit(config)
         fiber = ctx.plugin(mount_unit(endpoint))
         await wait_active(fiber)
