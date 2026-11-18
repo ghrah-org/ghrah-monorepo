@@ -406,7 +406,7 @@ onMounted(loadOptions);
           <UiTextField
             v-model="form.systemPrompt"
             multiline
-            rows="5"
+            rows="13"
             :placeholder="t('config.template.systemPromptExample')"
           />
         </label>
@@ -554,6 +554,7 @@ onMounted(loadOptions);
 }
 
 .template-form-field textarea {
+  min-height: 16rem;
   resize: vertical;
 }
 
