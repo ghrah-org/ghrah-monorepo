@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -234,3 +235,24 @@ async def test_desired_state_is_recorded_as_is() -> None:
         now=_NOW,
     )
     assert result.record.desired_state == "stopped"
+
+
+async def test_hung_core_call_becomes_a_timeout_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Core 的 spawn 卡住时必须折成超时错误，不能无限挂住 HTTP 请求。"""
+    from ghrah.subject.agents import creation
+
+    monkeypatch.setattr(creation, "CREATE_TIMEOUT_SECONDS", 0.05)
+
+    async def never(spec):  # noqa: ANN001, ARG001
+        await asyncio.sleep(10)
+        return None
+
+    with pytest.raises(CreationError) as error:
+        await create_agent(
+            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
+            templates=_Templates(_SNAPSHOT),
+            workspaces=_WORKSPACES,
+            available=_GRANTED,
+            create=never,
+        )
+    assert error.value.code == "agent_create_timeout"

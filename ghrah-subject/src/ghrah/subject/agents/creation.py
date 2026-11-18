@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,9 +38,31 @@ __all__ = [
     "CreateAgentRequest",
     "CreatedAgent",
     "CreationError",
+    "CREATE_TIMEOUT_SECONDS",
     "TemplateSource",
     "create_agent",
 ]
+
+logger = logging.getLogger(__name__)
+
+# 创建必须**有界**：Core 的 spawn 一旦卡住，未设期限会让 HTTP 请求无限挂起，
+# 还会连带 `distro stop` 收不回来。超时后把仍在跑的协程栈打出来，便于定位卡点。
+CREATE_TIMEOUT_SECONDS = 45.0
+
+
+def _dump_pending_tasks() -> None:
+    """超时点打印所有存活协程栈（异步侧没有别的可观测入口）。"""
+    tasks = [task for task in asyncio.all_tasks() if not task.done()]
+    logger.error("create_agent 超时：仍有 %d 个协程在跑", len(tasks))
+    for task in tasks:
+        logger.error("-- task %s", task.get_name())
+        for frame in task.get_stack():
+            logger.error(
+                "   %s:%s in %s",
+                frame.f_code.co_filename,
+                frame.f_lineno,
+                frame.f_code.co_name,
+            )
 
 
 class TemplateSource(Protocol):
@@ -165,7 +189,13 @@ async def create_agent(
         )
 
     try:
-        view = await create(rendered.spec)
+        view = await asyncio.wait_for(create(rendered.spec), timeout=CREATE_TIMEOUT_SECONDS)
+    except TimeoutError as error:
+        _dump_pending_tasks()
+        raise CreationError(
+            "agent_create_timeout",
+            f"agent assembly did not finish in {CREATE_TIMEOUT_SECONDS:.0f}s",
+        ) from error
     except Exception as error:  # noqa: BLE001 — 统一折成创建失败，保留原始文案
         raise CreationError("agent_create_failed", str(error)) from error
 
