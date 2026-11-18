@@ -277,6 +277,22 @@ class _UnitMeta:
 
 
 # Core 管理命令：CommandType 的 .value 字符串
+# Supervisor 的恢复口径（memory/initialized/restored）与 wire 契约
+# （``AgentStartView.recovery_mode`` 只认 created/resumed）不是同一套词表。
+_WIRE_RECOVERY_MODES = {
+    "memory": "created",
+    "initialized": "created",
+    "restored": "resumed",
+    "created": "created",
+    "resumed": "resumed",
+}
+
+
+def _wire_recovery_mode(mode: str) -> str:
+    """把运行时的恢复方式折成 wire 词表；未知值按"新建"返回，保持视图 always-valid。"""
+    return _WIRE_RECOVERY_MODES.get(mode, "created")
+
+
 _COMMANDS: frozenset[str] = frozenset(
     {
         CommandType.SPAWN_AGENT.value,
@@ -1025,7 +1041,7 @@ class CoreUnit:
             )
         except RegistryError as e:
             return self._err(str(e))
-        recovery_mode = supervisor.recovery_mode(agent_name)
+        recovery_mode = _wire_recovery_mode(supervisor.recovery_mode(agent_name))
         incarnation_id = supervisor.incarnation_id(agent_name)
         self._apply_hitl_timeout(agent_name)
         self._emit_event(
