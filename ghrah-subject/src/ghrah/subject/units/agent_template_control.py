@@ -37,6 +37,7 @@ from ghrah.protocol.agent_control import (
     AgentTemplateSummaryView,
     AgentTemplateUpdateRequest,
 )
+from ghrah.protocol.views.core import AGENT_CONTROL_MEMBER_KEYS
 from pydantic import BaseModel, ValidationError
 
 from ghrah.subject.config import SubjectConfig
@@ -223,6 +224,9 @@ def build_agent_template_control_router(
             package["operations"] = [
                 {"key": item.key, "visible": bool(item.expose), "available": True}
                 for item in profile.operations
+                if not (
+                    full_name == "ghrah.core" and item.key in AGENT_CONTROL_MEMBER_KEYS
+                )
             ]
             package["skills"] = [
                 {

@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ghrah.protocol.views.core import (
+    AGENT_CONTROL_MEMBER_KEYS,
     AgentAssemblyConfig,
     AgentAssemblyContext,
     AgentAssemblyLimits,
@@ -323,6 +324,9 @@ def render_assembly(
         allowed_roots = tuple(dict.fromkeys(root for item, root in applicable if not item.deny))
         permissions = _member_permissions(resolved_paths, package=request.package)
         for key in selected_ops:
+            # 控制成员由装配边界自己加，显式传会被 Core 拒绝；模板里残留也要过滤。
+            if request.package == "ghrah.core" and key in AGENT_CONTROL_MEMBER_KEYS:
+                continue
             members.append(
                 AgentAssemblyMember(
                     member=f"{request.package}.{key}",

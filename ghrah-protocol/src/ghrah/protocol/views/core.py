@@ -15,7 +15,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+AGENT_CONTROL_MEMBER_KEYS: frozenset[str] = frozenset({"conversation", "end_task"})
+"""控制成员键：装配边界自己加的成员，模板与装配输入都不应显式列它们。"""
+
 __all__ = [
+    "AGENT_CONTROL_MEMBER_KEYS",
     "AgentRuntimeView",
     "AgentStatus",
     "AgentAbilityRequest",
