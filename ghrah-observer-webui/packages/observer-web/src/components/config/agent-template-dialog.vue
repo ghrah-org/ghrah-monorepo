@@ -43,8 +43,10 @@ interface PackageRow {
   /** 下拉选中的条目（`<fullName>@<version>`），保证同包多版本可选。 */
   optionValue: string;
   package: string;
-  /** 选中的包版本；内核件为 null。 */
+  /** 落库的包版本；内核件为 null（没有版本概念）。 */
   version: string | null;
+  /** 读目录用的具体版本：内核件也要有个版本才能读画像，仅用于请求。 */
+  fetchVersion: string;
   wholeContainer: boolean;
   /** 该包可申请的成员（来自能力包版本详情）。 */
   available: string[];
@@ -96,9 +98,10 @@ const form = reactive({
   maxIterations: props.template?.context_policy.max_iterations ?? -1,
   communicationTimeout: props.template?.context_policy.communication_timeout ?? 300,
   rows: (props.template?.ability_request.packages ?? []).map((item) => ({
-    optionValue: `${item.package}@${item.version ?? ""}`,
+    optionValue: item.version === null ? item.package : `${item.package}@${item.version}`,
     package: item.package,
     version: item.version ?? null,
+    fetchVersion: item.version ?? "",
     wholeContainer: item.whole_container,
     available: item.operations.map((op) => op.key),
     selected: item.operations.map((op) => op.key),
@@ -180,8 +183,15 @@ async function loadOptions() {
     loadingOptions.value = false;
   }
   for (const row of form.rows) {
-    // 内核件不带版本：选项值只用包名，和下拉里的条目对齐。
-    row.optionValue = row.version === null ? row.package : `${row.package}@${row.version}`;
+    // 内核件不带版本：选项值只用包名，和下拉里的条目对齐；读画像用目录里的版本。
+    const kernel = row.version === null;
+    const option = packages.value.find(
+      (item) =>
+        item.fullName === row.package &&
+        (kernel ? item.origin === "builtin" : item.version === row.version),
+    );
+    row.optionValue = kernel ? row.package : `${row.package}@${row.version}`;
+    row.fetchVersion = row.version ?? option?.version ?? "";
     await ensureMembers(row);
   }
 }
@@ -215,9 +225,10 @@ async function fetchMembers(
 }
 
 async function ensureMembers(row: PackageRow) {
-  if (row.package === "") return;
-  // 按行选定的具体版本取成员：同包多版本并存时不能靠包名猜版本。
-  const members = await fetchMembers(row.package, row.version ?? "");
+  if (row.package === "" || row.fetchVersion === "") return;
+  // 按行选定的具体版本取成员：同包多版本并存时不能靠包名猜版本；
+  // 内核件没有版本概念（落库 null），但读画像仍需要一个具体版本号。
+  const members = await fetchMembers(row.package, row.fetchVersion);
   row.available = members.operations;
   row.availableSkills = members.skills;
   if (row.wholeContainer) {
@@ -235,6 +246,7 @@ function applyOption(row: PackageRow, value: string) {
   const option = packages.value.find((item) => item.value === value);
   row.optionValue = value;
   row.package = option?.fullName ?? "";
+  row.fetchVersion = option?.version ?? "";
   // 内核件没有版本层：留 null，别把内部版本号写进模板。
   row.version = option === undefined || option.origin === "builtin" ? null : option.version;
 }
@@ -244,6 +256,7 @@ function emptyRow(): PackageRow {
     optionValue: "",
     package: "",
     version: null,
+    fetchVersion: "",
     wholeContainer: false,
     available: [],
     selected: [],

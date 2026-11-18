@@ -827,20 +827,20 @@ export default {
       communicationTimeoutHint: "How long one model call may take before it is aborted.",
       abilities: "Ability packages",
       abilitiesHint:
-        "Choose the packages this agent may use. Tick the operations it needs, or tick whole package to request every member. Control members such as conversation and end_task are always present and need not be listed.",
+        "Choose the packages this agent may use. Tick the operation and skill members it needs, or tick whole package to request every member. Control members such as conversation and end_task are always present and need not be listed.",
       loadingOptions: "Loading endpoints and packages…",
       noPackagesAvailable:
         "No ability packages are installed. Install one under Ability Config, then reopen this dialog.",
       choosePackage: "Choose a package",
-      noOperations: "This package exposes no operations, or its definition is unreadable.",
-      skills: "Skills",
-      noSkills: "This package has no skills.",
+      noOperations: "This package exposes no operation, or its definition is unreadable.",
+      skills: "skill",
+      noSkills: "This package has no skill.",
       packageNeedsOperations:
-        "{package} has no selectable operations yet. Pick its operations individually, or reopen the dialog to reload the catalog.",
+        "{package} has no selectable operation yet. Pick its members individually, or reopen the dialog to reload the catalog.",
       submitHint:
-        "To save: fill namespace and name, pick a model endpoint, and give each package either whole-package or at least one operation.",
+        "To save: fill namespace and name, pick a model endpoint, and give each package either whole-package or at least one operation or skill.",
       package: "Package",
-      operations: "Operations",
+      operations: "operation",
       wholeContainer: "Whole package",
       addPackage: "Add package",
       removePackage: "Remove",
