@@ -88,6 +88,9 @@ const endpointChoice = ref(props.template?.model.endpoint_name ?? "");
 const customEndpoint = ref(false);
 const CUSTOM_ENDPOINT = "__custom__";
 
+/** 控制成员：装配边界自己加，模板里不勾选（与 Core 的 CONTROL_HANDLERS 一致）。 */
+const CONTROL_MEMBER_KEYS = ["conversation", "end_task"];
+
 function onEndpointChoiceChange(value: string) {
   customEndpoint.value = value === CUSTOM_ENDPOINT;
   if (!customEndpoint.value) form.endpointName = value;
@@ -179,7 +182,11 @@ async function loadOptions() {
         origin: kernel ? ("builtin" as const) : ("installed" as const),
         latest: !kernel,
         fetchVersion: selectable?.version ?? "",
-        operations: group.operations,
+        // 控制成员由装配边界自己加，不在这里勾选（勾了也不会落库）。
+        operations:
+          fullName === "ghrah.core"
+            ? group.operations.filter((key) => !CONTROL_MEMBER_KEYS.includes(key))
+            : group.operations,
         skills: group.skills,
         label: kernel ? `${fullName}${titleSuffix}` : `${fullName} v${latest ?? ""}${titleSuffix}`,
       };
