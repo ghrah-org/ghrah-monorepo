@@ -314,7 +314,6 @@ async def test_rollback_to_node_on_alternate_branch_in_inactive_session(rollback
         ("rootless", "turn_base_missing", ProblemCode.FAILED_PRECONDITION),
         ("other_turn", "rollback_target_not_found", ProblemCode.NOT_FOUND),
         ("other_session", "rollback_target_not_found", ProblemCode.NOT_FOUND),
-        ("compact", "rollback_target_not_usable", ProblemCode.FAILED_PRECONDITION),
         ("incomplete", "rollback_target_not_usable", ProblemCode.FAILED_PRECONDITION),
         ("deleted_branch", "target_branch_deleted", ProblemCode.FAILED_PRECONDITION),
     ],
@@ -325,7 +324,7 @@ async def test_rejected_rollback_and_preview_leave_database_unchanged(
     agent, backend, _, port = rollback_runtime
     cm = agent._context_manager
     row = closed_turn
-    if change in ("compact", "incomplete"):
+    if change == "incomplete":
         turn_id = await cm.open_turn()
         append_node(cm, "usable target")
         end = append_node(cm, "non-selectable target")
@@ -350,7 +349,7 @@ async def test_rejected_rollback_and_preview_leave_database_unchanged(
             await db.execute("UPDATE turns SET start_node_id=NULL")
         elif change == "rootless":
             await db.execute("UPDATE turns SET base_node_id=NULL")
-        elif change in ("compact", "incomplete"):
+        elif change == "incomplete":
             await db.execute(
                 "UPDATE nodes SET metadata=json_set(metadata,'$.node_kind',?) WHERE id=?",
                 (change, row["end_node_id"]),
@@ -372,15 +371,12 @@ async def test_rejected_rollback_and_preview_leave_database_unchanged(
     if change == "live_iteration":
         cm.begin_iteration()
     before = snapshot(backend.db_path)
-    if change == "compact":
-        preview = await port.turns.rollback_preview(**{**kwargs, "target": "base", "node_id": None})
-        assert preview.crosses_compact
     for operation in (port.turns.rollback_preview, port.turns.rollback):
         with pytest.raises(CoreApiError) as rejected:
             await operation(**kwargs)
         assert rejected.value.problem.code == code
         assert rejected.value.problem.detail == reason
-        if change in ("compact", "incomplete"):
+        if change == "incomplete":
             assert rejected.value.problem.details["suggested_node_ids"] == [row["start_node_id"]]
     assert snapshot(backend.db_path) == before
 
@@ -543,3 +539,36 @@ async def test_rollback_recovers_when_execution_stops_before_events(
             ids["released-second"],
         ]
         assert replay.as_payload()["already_applied"]
+
+
+@pytest.mark.parametrize("target", ["base", "node"])
+async def test_rollback_accepts_compact_as_member_or_base(rollback_runtime, target):
+    agent, backend, _, port = rollback_runtime
+    cm = agent._context_manager
+    base = cm.active_head
+    if target == "base":
+        base = cm.commit_compact_node([])
+    turn_id = await cm.open_turn()
+    point = cm.commit_compact_node([]) if target == "node" else base
+    await cm.persist()
+    view = await port.turns.get(agent_id="agent", turn_id=turn_id)
+    assert view.base_node_id == (base.id if target == "node" else None)
+    end = point if target == "node" else append_node(cm, "input")
+    await cm.persist()
+    await cm.close_turn(status="interrupted", closing_kind="cancelled", end_node_id=end.id)
+    view = await port.turns.get(agent_id="agent", turn_id=turn_id)
+    assert view.base_node_id == base.id
+    assert view.start_node_id == view.end_node_id == end.id
+
+    kwargs = {"agent_id": "agent", "turn_id": turn_id, "target": target}
+    if target == "node":
+        kwargs["node_id"] = point.id
+        base_preview = await port.turns.rollback_preview(agent_id="agent", turn_id=turn_id)
+        assert base_preview.crosses_compact
+    preview = await port.turns.rollback_preview(**kwargs)
+    assert preview.target_node_id == point.id
+    assert preview.target_is_compact
+    assert not preview.crosses_compact
+    result = await port.turns.rollback(**kwargs)
+    assert result.target_node_id == cm.active_head.id == point.id
+    assert (await backend.load_turn("agent", turn_id))["end_node_id"] == end.id

@@ -328,6 +328,7 @@ class TurnRollbackPreviewView(BaseModel):
     end_node_id: str | None = None
     truncated_node_count: int = 0
     crosses_compact: bool = False
+    target_is_compact: bool = False
     head_unchanged: bool = False
     released_delivery_ids: list[str] = Field(default_factory=list)
 

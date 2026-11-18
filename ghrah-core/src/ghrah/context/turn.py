@@ -27,6 +27,8 @@ TERMINAL_STATUSES: tuple[TurnTerminalStatus, ...] = (
 _ROLLBACK_STATUSES = tuple(status for status in TERMINAL_STATUSES if status != "rolled_back")
 _ROLLBACK_PLACEHOLDERS = ",".join("?" for _ in _ROLLBACK_STATUSES)
 RollbackTarget = Literal["base", "node"]
+INCOMPLETE_KIND = "incomplete"
+NOT_INCOMPLETE_SQL = f"COALESCE(json_extract(metadata, '$.node_kind'), '') <> '{INCOMPLETE_KIND}'"
 _ACTIVE = "status IN ('open', 'waiting_hitl')"
 
 
@@ -60,8 +62,8 @@ async def insert_turn_placeholder(
 
 
 async def backfill_start(db: aiosqlite.Connection, node: ContextNode) -> None:
-    """从首个普通节点回填起点，并跳过轮内 compact 祖先。"""
-    if node.metadata.get("node_kind") == "compact":
+    """从首个有效成员节点回填轮次起点及首个轮外祖先。"""
+    if node.metadata.get("node_kind") == INCOMPLETE_KIND:
         return
     await db.execute(
         """
@@ -209,6 +211,7 @@ class RollbackPoint:
     branch_id: str
     previous_branch_id: str
     previous_head_id: str
+    target_is_compact: bool
 
 
 @dataclass(frozen=True)
@@ -314,12 +317,14 @@ async def resolve_rollback_point(
     if node is None:
         raise RollbackError("rollback_target_not_found")
     resolved_node_id, branch_id, node_kind, lifecycle = node
-    if node_kind in ("compact", "incomplete"):
+    if node_kind == INCOMPLETE_KIND:
         suggestions = await suggest_rollback_targets(db, row)
         raise RollbackError("rollback_target_not_usable", suggested_node_ids=suggestions)
     if lifecycle is None or lifecycle == "deleted":
         raise RollbackError("target_branch_deleted")
-    return RollbackPoint(resolved_node_id, branch_id, previous_branch_id, previous_head_id)
+    return RollbackPoint(
+        resolved_node_id, branch_id, previous_branch_id, previous_head_id, node_kind == "compact"
+    )
 
 
 async def suggest_rollback_targets(
@@ -327,12 +332,11 @@ async def suggest_rollback_targets(
 ) -> list[str]:
     """列出该轮仍可选作回滚点的节点。"""
     async with db.execute(
-        """
+        f"""
         SELECT n.id FROM nodes n JOIN branches b
             ON b.branch_id=n.created_on_branch_id AND b.session_id=n.session_id
         WHERE n.turn_id=? AND n.agent_name=? AND n.session_id=? AND b.lifecycle!='deleted'
-            AND COALESCE(json_extract(n.metadata, '$.node_kind'), '')
-                NOT IN ('compact', 'incomplete')
+            AND {NOT_INCOMPLETE_SQL.replace("metadata", "n.metadata")}
         ORDER BY n.rowid LIMIT ?
         """,
         (row["turn_id"], row["agent_name"], row["session_id"], limit),

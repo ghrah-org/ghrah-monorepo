@@ -12,7 +12,7 @@ from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.session_runtime import SessionRuntime
 
 
-async def test_first_ordinary_node_has_base_outside_compacted_turn(tmp_path):
+async def test_first_compact_member_anchors_turn(tmp_path):
     runtime = SessionRuntime.create(agent_name="agent")
     base = runtime.session.root_node_id
     branch = runtime.session.active_branch_id
@@ -31,7 +31,7 @@ async def test_first_ordinary_node_has_base_outside_compacted_turn(tmp_path):
             )
         )
         row = await backend.load_turn("agent", active.turn_id)
-        assert row["start_node_id"] is None
+        assert row["start_node_id"] == compact.id
         ordinary = runtime.commit_node(turn_id=active.turn_id)
         await backend.apply_changes(
             ContextChanges(
@@ -60,7 +60,7 @@ async def test_first_ordinary_node_has_base_outside_compacted_turn(tmp_path):
             )
         assert (row["base_node_id"], row["start_node_id"], row["end_node_id"]) == (
             base,
-            ordinary.id,
+            compact.id,
             ordinary.id,
         )
         assert row["branch_id"] == row["end_branch_id"] == branch

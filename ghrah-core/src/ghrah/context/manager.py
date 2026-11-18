@@ -474,6 +474,7 @@ class ContextManager:
             "target": target,
             "target_node_id": point.node_id,
             "target_branch_id": point.branch_id,
+            "target_is_compact": point.target_is_compact,
             "base_node_id": row["base_node_id"],
             "start_node_id": row["start_node_id"],
             "end_node_id": row["end_node_id"],
