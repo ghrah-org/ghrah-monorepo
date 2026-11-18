@@ -338,6 +338,12 @@ class AbilityPackageVersionDetail(TreeModel):
     problem: str | None = None
     verify: AbilityVerifyView | None = None
     shadowed_builtin: bool = False
+    is_latest: bool = False
+    """是否该包可用的最新版本。
+
+    版本只能从安装根下的版本目录名判断，所以「最新」由服务端按数值排序算出，
+    前端不要自己比较字符串（``1.10.0`` 会被排到 ``1.9.0`` 前面）。
+    """
 
 
 class AbilityPackageDetailView(TreeModel):
@@ -348,6 +354,8 @@ class AbilityPackageDetailView(TreeModel):
     name: str
     full_name: str
     versions: list[AbilityPackageVersionDetail] = Field(default_factory=list)
+    latest_version: str | None = None
+    """服务端判定的最新版本号；前端建模板时默认选它。"""
 
 
 class AbilityContentResourceView(TreeModel):
@@ -626,6 +634,8 @@ class AbilityPackageGroupVersionView(TreeModel):
     lock_state: str | None = None
     problem: str | None = None
     shadowed_builtin: bool = False
+    is_latest: bool = False
+    """是否该包的最新版本；由服务端按版本号数值排序判定。"""
     member_count: int | None = Field(default=None, ge=0)
     project: AbilityPackageGroupProjectView | None = None
     agent: AbilityPackageGroupAgentView | None = None
@@ -639,6 +649,8 @@ class AbilityPackageGroupView(TreeModel):
     full_name: str | None = None
     title: str | None = None
     versions: list[AbilityPackageGroupVersionView] = Field(default_factory=list)
+    latest_version: str | None = None
+    """服务端判定的最新版本号；前端选包时默认用它。"""
 
 
 class AbilityPackageGroupsView(TreeModel):

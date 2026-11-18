@@ -213,6 +213,23 @@ def _verify_view(installer: AbilityInstaller, full_name: str, version: str) -> A
     )
 
 
+def _version_sort_key(version: str) -> tuple[int, ...]:
+    """版本排序键：按段做数值比较（``1.10.0`` 排在 ``1.9.0`` 之后）。
+
+    版本目录名是唯一可用的事实来源，所以这里必须数值化，不能按字符串排序。
+    段数不足补 0；非数字段（非法版本）退化到 0，保证排序不抛异常。
+    """
+    parts: list[int] = []
+    for item in version.split("."):
+        try:
+            parts.append(int(item))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
 def _detail_from_definition(
     definition: AbilityDefinition,
     *,
@@ -221,6 +238,7 @@ def _detail_from_definition(
     problem: str | None,
     verify: AbilityVerifyView | None,
     shadowed: bool,
+    latest: bool = False,
 ) -> AbilityPackageVersionDetail:
     return AbilityPackageVersionDetail(
         version=definition.identity.version,
@@ -233,6 +251,7 @@ def _detail_from_definition(
         problem=problem,
         verify=verify,
         shadowed_builtin=shadowed,
+        is_latest=latest,
     )
 
 
@@ -280,10 +299,14 @@ def build_package_detail(
                     lock_state if isinstance(lock_state, str) else "missing",
                 )
 
-    version_names = sorted(set(builtin_versions) | set(installed_versions))
+    version_names = sorted(
+        set(builtin_versions) | set(installed_versions), key=_version_sort_key
+    )
     if not version_names:
         raise CatalogError("not_found", f"未找到能力包：{full_name}")
+    latest_version = version_names[-1]
     for version in version_names:
+        latest = version == latest_version
         installed = installed_versions.get(version)
         builtin = builtin_versions.get(version)
         if installed is not None:
@@ -302,6 +325,7 @@ def build_package_detail(
                         lock_state=lock_state,
                         problem=problem,
                         shadowed_builtin=builtin is not None,
+                        is_latest=latest,
                     )
                 )
                 continue
@@ -313,6 +337,7 @@ def build_package_detail(
                     problem=problem,
                     verify=verify,
                     shadowed=builtin is not None,
+                    latest=latest,
                 )
             )
             continue
@@ -325,10 +350,15 @@ def build_package_detail(
                 problem=None,
                 verify=None,
                 shadowed=False,
+                latest=latest,
             )
         )
     return AbilityPackageDetailView(
-        namespace=namespace, name=name, full_name=full_name, versions=versions
+        namespace=namespace,
+        name=name,
+        full_name=full_name,
+        versions=versions,
+        latest_version=latest_version,
     )
 
 
@@ -690,13 +720,25 @@ def _group_view(
 ) -> AbilityPackageGroupView:
     named = next((draft for draft in drafts if draft.namespace), drafts[0])
     title = next((draft.title for draft in drafts if draft.title), None)
-    versions = sorted(drafts, key=lambda draft: (draft.version or "", draft.digest or ""))
+    # 版本目录名是唯一事实来源：按数值排序，「最新」取最大者（1.10.0 > 1.9.0）。
+    versions = sorted(
+        drafts, key=lambda draft: (_version_sort_key(draft.version or ""), draft.digest or "")
+    )
+    latest = next(
+        (draft.version for draft in reversed(versions) if draft.version), None
+    )
+    rows = []
+    for draft in versions:
+        view = _version_view(draft, scope, aliases)
+        view.is_latest = bool(draft.version) and draft.version == latest
+        rows.append(view)
     return AbilityPackageGroupView(
         namespace=named.namespace,
         name=named.name,
         full_name=named.full_name,
         title=title,
-        versions=[_version_view(draft, scope, aliases) for draft in versions],
+        versions=rows,
+        latest_version=latest,
     )
 
 

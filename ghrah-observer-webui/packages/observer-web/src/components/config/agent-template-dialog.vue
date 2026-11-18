@@ -40,7 +40,11 @@ const { t } = useI18n();
 const connection = useConnectionStore();
 
 interface PackageRow {
+  /** 下拉选中的条目（`<fullName>@<version>`），保证同包多版本可选。 */
+  optionValue: string;
   package: string;
+  /** 选中的包版本；内核件为 null。 */
+  version: string | null;
   wholeContainer: boolean;
   /** 该包可申请的成员（来自能力包版本详情）。 */
   available: string[];
@@ -53,11 +57,15 @@ interface PackageRow {
 }
 
 interface PackageOption {
+  /** 下拉值：包的某个具体版本。 */
+  value: string;
   fullName: string;
   version: string;
   /** 包来源：内置或安装包。落库时原样带过去，解析端据此定位。 */
   origin: "builtin" | "installed";
   label: string;
+  /** 服务端判定的该包最新版本。 */
+  latest: boolean;
 }
 
 const mode = computed(() => (props.template === null ? "create" : "edit"));
@@ -88,7 +96,9 @@ const form = reactive({
   maxIterations: props.template?.context_policy.max_iterations ?? -1,
   communicationTimeout: props.template?.context_policy.communication_timeout ?? 300,
   rows: (props.template?.ability_request.packages ?? []).map((item) => ({
+    optionValue: `${item.package}@${item.version ?? ""}`,
     package: item.package,
+    version: item.version ?? null,
     wholeContainer: item.whole_container,
     available: item.operations.map((op) => op.key),
     selected: item.operations.map((op) => op.key),
@@ -144,14 +154,19 @@ async function loadOptions() {
     );
     packages.value = groups.groups.flatMap((group) => {
       const fullName = group.full_name ?? `${group.namespace ?? ""}.${group.name ?? ""}`;
+      const latest = group.latest_version ?? null;
+      // 每个版本一条选项，最新版排在同一包的首位，作为默认选择。
       return group.versions
         .filter((version) => version.version !== null)
         .map((version) => ({
+          value: `${fullName}@${version.version ?? ""}`,
           fullName,
           version: version.version as string,
           origin: version.origin === "installed" ? ("installed" as const) : ("builtin" as const),
+          latest: latest !== null && version.version === latest,
           label: `${fullName} v${version.version}${group.title ? ` · ${group.title}` : ""}`,
-        }));
+        }))
+        .sort((left, right) => Number(right.latest) - Number(left.latest));
     });
   } catch {
     packages.value = [];
@@ -191,9 +206,8 @@ async function fetchMembers(
 
 async function ensureMembers(row: PackageRow) {
   if (row.package === "") return;
-  const option = packages.value.find((item) => item.fullName === row.package);
-  if (option === undefined) return;
-  const members = await fetchMembers(option.fullName, option.version);
+  // 按行选定的具体版本取成员：同包多版本并存时不能靠包名猜版本。
+  const members = await fetchMembers(row.package, row.version ?? "");
   row.available = members.operations;
   row.availableSkills = members.skills;
   if (row.wholeContainer) {
@@ -206,23 +220,39 @@ async function ensureMembers(row: PackageRow) {
   }
 }
 
-function addPackage() {
-  const first = packages.value[0];
-  form.rows.push({
+/** 把下拉值 `<fullName>@<version>` 落到行上（package + version）。 */
+function applyOption(row: PackageRow, value: string) {
+  const option = packages.value.find((item) => item.value === value);
+  row.optionValue = value;
+  row.package = option?.fullName ?? "";
+  row.version = option?.version ?? null;
+}
+
+function emptyRow(): PackageRow {
+  return {
+    optionValue: "",
     package: "",
+    version: null,
     wholeContainer: false,
     available: [],
     selected: [],
     availableSkills: [],
     selectedSkills: [],
-  });
-  if (first && form.rows[form.rows.length - 1]!.package === "") {
-    form.rows[form.rows.length - 1]!.package = first.fullName;
-    void ensureMembers(form.rows[form.rows.length - 1]!);
+  };
+}
+
+function addPackage() {
+  const first = packages.value[0];
+  const row = emptyRow();
+  form.rows.push(row);
+  if (first !== undefined) {
+    applyOption(row, first.value);
+    void ensureMembers(row);
   }
 }
 
-async function onPackageChange(row: PackageRow) {
+async function onOptionChange(row: PackageRow, value: string) {
+  applyOption(row, value);
   row.selected = [];
   row.selectedSkills = [];
   row.available = [];
@@ -281,12 +311,6 @@ function originOf(fullName: string): "builtin" | "installed" {
   return packages.value.find((option) => option.fullName === fullName)?.origin ?? "builtin";
 }
 
-function versionOf(fullName: string): string | null {
-  // 内核件随源码发布、没有版本层；能力件钉住目录里的当前版本。
-  if (originOf(fullName) === "builtin") return null;
-  return packages.value.find((option) => option.fullName === fullName)?.version ?? null;
-}
-
 function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
   return form.rows
     .filter((row) => row.package !== "")
@@ -295,7 +319,8 @@ function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_reques
       origin: originOf(row.package),
       // 存储层不留整包：即便勾了整包也按成员落库（后端还会再展开一次兜底）。
       whole_container: false,
-      version: versionOf(row.package),
+      // 内核件随源码发布、没有版本层；能力件钉住用户选的那个版本。
+      version: originOf(row.package) === "builtin" ? null : row.version,
       operations: (row.wholeContainer ? row.available : row.selected).map((key) => ({
         key,
         visible: true,
@@ -501,9 +526,12 @@ onMounted(loadOptions);
         <div v-for="(row, index) in form.rows" :key="index" class="template-form-package">
           <label class="template-form-field">
             <span>{{ t("config.template.package") }}</span>
-            <select v-model="row.package" @change="onPackageChange(row)">
+            <select
+              v-model="row.optionValue"
+              @change="onOptionChange(row, ($event.target as HTMLSelectElement).value)"
+            >
               <option value="">{{ t("config.template.choosePackage") }}</option>
-              <option v-for="option in packages" :key="option.label" :value="option.fullName">
+              <option v-for="option in packages" :key="option.value" :value="option.value">
                 {{ option.label }}
               </option>
             </select>

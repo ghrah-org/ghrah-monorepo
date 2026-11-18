@@ -25,6 +25,7 @@ function version(extra: Partial<CountedVersion> = {}): CountedVersion {
     lock_state: "builtin",
     problem: null,
     shadowed_builtin: false,
+    is_latest: false,
     member_count: 9,
     project: null,
     agent: null,
