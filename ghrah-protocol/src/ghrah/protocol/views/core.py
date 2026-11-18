@@ -38,6 +38,8 @@ __all__ = [
     "DeliveryAcceptanceView",
     "TurnView",
     "TurnListView",
+    "TurnRollbackView",
+    "TurnRollbackPreviewView",
     "HitlRequestView",
     "HitlRequestListView",
     "HistoryView",
@@ -291,6 +293,43 @@ class TurnListView(BaseModel):
 
     agent_id: str
     items: list[TurnView] = Field(default_factory=list)
+
+
+class TurnRollbackView(BaseModel):
+    """轮次回滚的持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    session_id: str
+    status: str
+    closing_kind: str
+    target: Literal["base", "node"]
+    target_node_id: str
+    branch_id: str
+    parent_branch_id: str | None = None
+    released_delivery_ids: list[str] = Field(default_factory=list)
+    already_applied: bool = False
+    rolled_back_at: str
+
+
+class TurnRollbackPreviewView(BaseModel):
+    """回滚目标及其对当前上下文和排队输入的影响。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    session_id: str
+    target: Literal["base", "node"]
+    target_node_id: str
+    target_branch_id: str
+    base_node_id: str | None = None
+    start_node_id: str | None = None
+    end_node_id: str | None = None
+    truncated_node_count: int = 0
+    crosses_compact: bool = False
+    head_unchanged: bool = False
+    released_delivery_ids: list[str] = Field(default_factory=list)
 
 
 class HitlRequestView(BaseModel):

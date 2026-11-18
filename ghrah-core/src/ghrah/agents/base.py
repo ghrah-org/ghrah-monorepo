@@ -73,7 +73,7 @@ from ghrah.context.iteration_commit import (
 )
 from ghrah.context.iteration_state import IterationState
 from ghrah.context.manager import ContextManager, DeliverySessionUnavailableError
-from ghrah.context.turn import TurnTerminalStatus
+from ghrah.context.turn import RollbackTarget, TurnCloseStatus
 from ghrah.context.window import parse_vendor_window_tokens
 from ghrah.core.ability_protocol import AbilityProtocol, ExecutorProtocol
 from ghrah.core.event_publisher import (
@@ -713,7 +713,7 @@ class ActorAgent:
         ):
             await cm.open_turn(opener_delivery_id=message.metadata.get("delivery_id"))
         active = cm.active_turn
-        status: TurnTerminalStatus = "interrupted"
+        status: TurnCloseStatus = "interrupted"
         closing_kind = "cancelled"
         try:
             if active is not None:
@@ -2130,6 +2130,57 @@ class ActorAgent:
             "created_at": branch.created_at.isoformat(),
             "metadata": branch.metadata,
         }
+
+    async def rollback_turn(
+        self, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中回滚轮次。"""
+        self._context_manager.ensure_rollback_idle(turn_id)
+
+        async def operation() -> dict[str, Any]:
+            manager = getattr(self._supervisor, "message_manager", None)
+            outcome = await self._context_manager.rollback_turn(
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+                release_inputs=manager.release_turn_inputs if manager is not None else None,
+            )
+            if outcome.branch is not None:
+                info = self._branch_info(outcome.branch)
+                for event_type in (BranchCreatedEvent, BranchActivatedEvent):
+                    await self._publish_turn_event(
+                        event_type(agent_name=self.config.name, branch=info)
+                    )
+                await self._publish_turn_event(
+                    TurnClosedEvent(
+                        agent_name=self.config.name,
+                        turn_id=turn_id,
+                        session_id=outcome.row["session_id"],
+                        status="rolled_back",
+                        closing_kind="rolled_back",
+                        end_node_id=outcome.row["end_node_id"],
+                    )
+                )
+            return outcome.as_payload()
+
+        return await self._runner.run(operation)
+
+    async def preview_rollback(
+        self, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中计算只读回滚预览。"""
+        self._context_manager.ensure_rollback_idle(turn_id)
+
+        async def operation() -> dict[str, Any]:
+            manager = getattr(self._supervisor, "message_manager", None)
+            return await self._context_manager.preview_rollback(
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+                pending_inputs=manager.pending_turn_input_ids if manager is not None else None,
+            )
+
+        return await self._runner.run(operation)
 
     async def create_branch(
         self,

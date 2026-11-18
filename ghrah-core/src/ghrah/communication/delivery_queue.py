@@ -9,6 +9,13 @@ from typing import Any
 
 import aiosqlite
 
+from ghrah.context.turn import TERMINAL_STATUSES
+
+_TURN_INPUT_WHERE = """
+turn_id=? AND delivery_id IS NOT ? AND state='pending' AND consumed_node_id IS NULL
+AND NOT EXISTS(SELECT 1 FROM mm_delivery_results r WHERE r.delivery_id=mm_deliveries.delivery_id)
+"""
+
 
 async def has_turns(db: aiosqlite.Connection) -> bool:
     """兼容仅有消息表的回调模式。"""
@@ -124,6 +131,30 @@ async def project_delivery(db: aiosqlite.Connection, row: aiosqlite.Row) -> dict
     return item
 
 
+async def pending_turn_input_ids(
+    db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+) -> list[str]:
+    """按原顺序读取可释放的输入。"""
+    async with db.execute(
+        f"SELECT delivery_id FROM mm_deliveries WHERE {_TURN_INPUT_WHERE} ORDER BY seq",
+        (turn_id, opener_delivery_id),
+    ) as cursor:
+        return [row[0] for row in await cursor.fetchall()]
+
+
+async def release_turn_inputs(
+    db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+) -> list[str]:
+    """在宿主事务内解绑未消费输入，排除 opener 与已持久化结果。"""
+    async with db.execute(
+        f"UPDATE mm_deliveries SET turn_id=NULL, delivery_policy='queue', error=NULL "
+        f"WHERE {_TURN_INPUT_WHERE} RETURNING delivery_id, seq",
+        (turn_id, opener_delivery_id),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [row[0] for row in sorted(rows, key=lambda row: row[1])]
+
+
 async def settle_turn_deliveries(
     db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None, terminal_state: str
 ) -> None:
@@ -135,24 +166,22 @@ async def settle_turn_deliveries(
         "WHERE r.delivery_id=mm_deliveries.delivery_id)",
         (terminal_state, turn_id, opener_delivery_id),
     )
-    await db.execute(
-        "UPDATE mm_deliveries SET turn_id=NULL, delivery_policy='queue' "
-        "WHERE turn_id=? AND delivery_id IS NOT ? AND state='pending' "
-        "AND consumed_node_id IS NULL AND NOT EXISTS(SELECT 1 FROM mm_delivery_results r "
-        "WHERE r.delivery_id=mm_deliveries.delivery_id)",
-        (turn_id, opener_delivery_id),
-    )
+    await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
 
 
 async def settle_terminal_turns(db: aiosqlite.Connection) -> None:
     """幂等修复终态轮次上的残留输入。"""
     if not await has_turns(db):
         return
+    # 兼容旧库中 schema 已接受的 aborted 行。
+    statuses = (*TERMINAL_STATUSES, "aborted")
+    placeholders = ",".join("?" for _ in statuses)
     rows = await (
         await db.execute(
             "SELECT DISTINCT t.turn_id, t.opener_delivery_id, t.status FROM turns t "
             "JOIN mm_deliveries d ON d.turn_id=t.turn_id "
-            "WHERE t.status NOT IN ('open','waiting_hitl') AND d.state='pending'"
+            f"WHERE t.status IN ({placeholders}) AND d.state='pending'",
+            statuses,
         )
     ).fetchall()
     for row in rows:

@@ -36,7 +36,9 @@ from ghrah.communication.delivery_queue import (
     blocker_reason_sql,
     find_blocker,
     has_turns,
+    pending_turn_input_ids,
     project_delivery,
+    release_turn_inputs,
     settle_terminal_turns,
     settle_turn_deliveries,
 )
@@ -588,6 +590,22 @@ class MessageManager:
                 _ATOMIC.reset(token)
 
         self.bind(agent_id, receive, _session_aware=True)
+
+    @staticmethod
+    async def release_turn_inputs(
+        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+    ) -> list[str]:
+        """使用 ContextManager 持有的事务，无需获取消息服务锁。"""
+        return await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
+
+    @staticmethod
+    async def pending_turn_input_ids(
+        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+    ) -> list[str]:
+        """从预览的只读连接查询将解绑的投递。"""
+        return await pending_turn_input_ids(
+            db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
+        )
 
     async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
         """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""

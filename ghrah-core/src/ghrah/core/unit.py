@@ -79,6 +79,7 @@ from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.turn import RollbackError
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
 from ghrah.core.events import (
@@ -269,6 +270,9 @@ class _UnitMeta:
 
 
 # Core 管理命令：CommandType 的 .value 字符串
+# 私有能力命令仅供 Core Registry 调用。Subject 路由使用 _COMMANDS。
+_TURN_ROLLBACK_COMMAND = "turn_rollback"
+
 _COMMANDS: frozenset[str] = frozenset(
     {
         CommandType.SPAWN_AGENT.value,
@@ -558,6 +562,7 @@ class CoreUnit:
             CommandType.SESSION_LIST.value: self._handle_session_list,
             CommandType.SESSION_ARCHIVE.value: self._handle_session_archive,
             CommandType.SESSION_DELETE.value: self._handle_session_delete,
+            _TURN_ROLLBACK_COMMAND: self._handle_turn_rollback,
             CommandType.BRANCH_CREATE.value: self._handle_branch_create,
             CommandType.BRANCH_ACTIVATE.value: self._handle_branch_activate,
             CommandType.BRANCH_LIST.value: self._handle_branch_list,
@@ -1602,6 +1607,32 @@ class CoreUnit:
         self._validate_agent(sp.agent_id, sp.agent_name)
         await supervisor.delete_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok({"session_id": sp.session_id, "deleted": True})
+
+    async def _handle_turn_rollback(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        turn_id = payload.get("turn_id")
+        target = payload.get("target")
+        node_id = payload.get("node_id")
+        dry_run = payload.get("dry_run")
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or target not in ("base", "node")
+            or (node_id is not None and not isinstance(node_id, str))
+            or not isinstance(dry_run, bool)
+        ):
+            return self._err("invalid_rollback_target")
+
+        self._validate_agent(payload["agent_id"], payload["agent_name"])
+        supervisor = self._require_supervisor()
+        operation = supervisor.preview_rollback if dry_run else supervisor.rollback_turn
+        try:
+            return self._ok(
+                await operation(
+                    payload["agent_name"], turn_id=turn_id, target=target, node_id=node_id
+                )
+            )
+        except RollbackError as exc:
+            return {**self._err(str(exc)), "details": exc.details}
 
     async def _handle_branch_create(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()

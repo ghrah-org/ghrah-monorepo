@@ -30,6 +30,7 @@ from ghrah.communication.message_manager import MessageKind, MessageManager
 from ghrah.communication.registry import AgentRegistry
 from ghrah.communication.router import MessageRouter
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.turn import RollbackTarget
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.exceptions import CommunicationTimeoutError
 from ghrah.core.message import AgentMessage, MessageType
@@ -1034,6 +1035,20 @@ class SupervisorActor:
         """
         handle = await self.get_agent_handle(agent_name)
         await handle.delete_session(session_id)
+
+    async def rollback_turn(
+        self, agent_name: str, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中回滚轮次。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.rollback_turn(turn_id=turn_id, target=target, node_id=node_id)
+
+    async def preview_rollback(
+        self, agent_name: str, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中计算只读回滚预览。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.preview_rollback(turn_id=turn_id, target=target, node_id=node_id)
 
     async def create_branch(
         self,

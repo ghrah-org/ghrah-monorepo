@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -71,9 +71,11 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     ToolListView,
     TurnListView,
+    TurnRollbackPreviewView,
+    TurnRollbackView,
     TurnView,
 )
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 __all__ = [
     "CORE_CATALOG_INTERFACES",
@@ -606,6 +608,27 @@ class TurnListRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class TurnRollbackRequest(BaseModel):
+    """从终态轮次的起点前或轮内节点新建分支。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str = Field(min_length=1)
+    target: Literal["base", "node"] = "base"
+    node_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def check_target(self) -> Self:
+        if (self.target == "node") != (self.node_id is not None):
+            raise ValueError("node_id is required exactly when target is node")
+        return self
+
+
+class TurnRollbackPreviewRequest(TurnRollbackRequest):
+    """使用同一目标契约请求只读预览。"""
+
+
 class HitlGetRequest(BaseModel):
     """读取某条审批记录。"""
 
@@ -633,6 +656,8 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("nodes.get", NodeGetRequest, NodeView),
         Interface("turns.get", TurnGetRequest, TurnView),
         Interface("turns.list", TurnListRequest, TurnListView),
+        Interface("turns.rollback", TurnRollbackRequest, TurnRollbackView),
+        Interface("turns.rollback_preview", TurnRollbackPreviewRequest, TurnRollbackPreviewView),
         Interface("hitl.get", HitlGetRequest, HitlRequestView),
         Interface("hitl.list_pending", HitlListRequest, HitlRequestListView),
         Interface("sessions.catalog", SessionsCatalogRequest, SessionCatalogView),

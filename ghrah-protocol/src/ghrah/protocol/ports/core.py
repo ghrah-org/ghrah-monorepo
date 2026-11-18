@@ -62,6 +62,8 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     ToolView,
     TurnListView,
+    TurnRollbackPreviewView,
+    TurnRollbackView,
     TurnView,
 )
 
@@ -450,7 +452,7 @@ class ManifestOperations(Protocol):
 
 
 class TurnOperations(Protocol):
-    """轮次的只读访问。"""
+    """查询、预览和回滚轮次。"""
 
     async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
         """读取单个轮次。"""
@@ -465,6 +467,28 @@ class TurnOperations(Protocol):
         limit: int = 50,
     ) -> TurnListView:
         """列出轮次。"""
+        ...
+
+    async def rollback(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackView:
+        """从指定轮次节点创建并激活回滚分支。"""
+        ...
+
+    async def rollback_preview(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackPreviewView:
+        """只读计算回滚目标及其影响。"""
         ...
 
 

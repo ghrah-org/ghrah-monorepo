@@ -53,7 +53,7 @@ def build_handlers(
     """
     return {
         **make_node_handlers(store),
-        **make_turn_handlers(turns),
+        **make_turn_handlers(turns, agents),
         **make_hitl_handlers(turns),
         **make_session_handlers(store),
         **make_branch_handlers(store),

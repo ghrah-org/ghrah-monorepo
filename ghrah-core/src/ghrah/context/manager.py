@@ -29,6 +29,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+import aiosqlite
+
 from ghrah.context import hitl, turn
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
@@ -297,7 +299,7 @@ class ContextManager:
         return active.turn_id
 
     async def close_turn(
-        self, *, status: turn.TurnTerminalStatus, closing_kind: str, end_node_id: str | None = None
+        self, *, status: turn.TurnCloseStatus, closing_kind: str, end_node_id: str | None = None
     ) -> None:
         """清除当前轮次引用，直收轮次同时保存终态。"""
         active = self._active_turn
@@ -321,6 +323,165 @@ class ContextManager:
                 )
         except Exception:
             logger.warning("Failed to close turn %s", active.turn_id, exc_info=True)
+
+    def ensure_rollback_idle(self, turn_id: str) -> None:
+        """运行中立即返回忙碌，避免回滚请求等到审批结束才执行。"""
+        if self.active_turn_id == turn_id:
+            raise turn.RollbackError("turn_active")
+        if self._in_iteration or self._active_turn is not None:
+            raise turn.RollbackError("turn_busy")
+
+    def _rollback_backend(
+        self, turn_id: str, target: turn.RollbackTarget, node_id: str | None
+    ) -> SqliteBackend:
+        if (
+            target not in ("base", "node")
+            or (target == "node") != (node_id is not None)
+            or node_id == ""
+        ):
+            raise turn.RollbackError("invalid_rollback_target")
+        self.ensure_rollback_idle(turn_id)
+        if not isinstance(self._persistence, SqliteBackend) or not self._persistence.connected:
+            raise turn.RollbackError("persistence_unavailable")
+        return self._persistence
+
+    async def rollback_turn(
+        self,
+        *,
+        turn_id: str,
+        target: turn.RollbackTarget,
+        node_id: str | None = None,
+        release_inputs: turn.TurnInputs | None = None,
+    ) -> turn.RollbackOutcome:
+        """从已关闭轮次分叉，在同一事务内更新分支、轮次和待处理输入。"""
+        backend = self._rollback_backend(turn_id, target, node_id)
+        await self.wait_for_persist()
+
+        async def apply() -> turn.RollbackOutcome:
+            async with backend.transaction() as db:
+                row = await turn.load_turn_for_rollback(
+                    db, turn_id=turn_id, agent_name=self._agent_name
+                )
+                if row["status"] == "rolled_back":
+                    return turn.replay_rollback(row, target, node_id)
+                point = await turn.resolve_rollback_point(db, row, target, node_id)
+                session_id = row["session_id"]
+                try:
+                    runtime = self._get_runtime(session_id, error_type=KeyError)
+                except KeyError as exc:
+                    raise turn.RollbackError("turn_session_missing") from exc
+                candidate = copy.copy(runtime)
+                candidate.branches = runtime.branches.copy()
+                branch = candidate.create_branch(
+                    name=f"rollback-{turn_id[:8]}",
+                    parent_branch_id=point.branch_id,
+                    fork_point_node_id=point.node_id,
+                    metadata={
+                        "is_rollback": True,
+                        "rollback_from_branch_id": point.previous_branch_id,
+                        "rollback_from_node_id": point.previous_head_id,
+                        "rollback_to_node_id": point.node_id,
+                        "turn_id": turn_id,
+                    },
+                )
+                candidate.activate_branch(branch.branch_id)
+                await turn.rollback_turn(
+                    db,
+                    turn_id=turn_id,
+                    agent_name=self._agent_name,
+                    target=target,
+                    point=point,
+                    new_branch_id=branch.branch_id,
+                    rolled_back_at=datetime.now(UTC).isoformat(),
+                )
+                await backend.apply_changes_in_transaction(
+                    db,
+                    ContextChanges(
+                        agent_name=self._agent_name,
+                        sessions=(candidate.session,),
+                        branches=(branch,),
+                    ),
+                )
+                released = (
+                    await release_inputs(
+                        db, turn_id=turn_id, opener_delivery_id=row["opener_delivery_id"]
+                    )
+                    if release_inputs is not None
+                    else []
+                )
+                row = await turn.record_released_inputs(
+                    db, turn_id=turn_id, released_delivery_ids=released
+                )
+
+            try:
+                self._session_runtimes[session_id] = candidate
+                if session_id == self._active_session_id:
+                    self._restore_active_context()
+            except Exception as exc:
+                logger.exception("Failed to load committed rollback for turn %s", turn_id)
+                raise RuntimeError(
+                    "rollback applied but runtime reload failed; restart required"
+                ) from exc
+            return turn.RollbackOutcome(row, branch)
+
+        # 等事务提交并同步内存后，才允许取消释放 Runner。
+        task = asyncio.create_task(apply())
+        cancelled = False
+        while True:
+            try:
+                outcome = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return outcome
+
+    async def preview_rollback(
+        self,
+        *,
+        turn_id: str,
+        target: turn.RollbackTarget,
+        node_id: str | None = None,
+        pending_inputs: turn.TurnInputs | None = None,
+    ) -> dict[str, Any]:
+        """从已提交的数据计算回滚目标和影响。"""
+        backend = self._rollback_backend(turn_id, target, node_id)
+        await self.wait_for_persist()
+        async with aiosqlite.connect(
+            backend.db_path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+        ) as db:
+            db.row_factory = aiosqlite.Row
+            row = await turn.load_turn_for_rollback(
+                db, turn_id=turn_id, agent_name=self._agent_name
+            )
+            point = await turn.resolve_rollback_point(db, row, target, node_id)
+            truncated, crosses_compact = await turn.count_truncated_nodes(
+                db, row, target_node_id=point.node_id
+            )
+            released = (
+                await pending_inputs(
+                    db, turn_id=turn_id, opener_delivery_id=row["opener_delivery_id"]
+                )
+                if pending_inputs is not None
+                else []
+            )
+        return {
+            "turn_id": turn_id,
+            "session_id": row["session_id"],
+            "target": target,
+            "target_node_id": point.node_id,
+            "target_branch_id": point.branch_id,
+            "base_node_id": row["base_node_id"],
+            "start_node_id": row["start_node_id"],
+            "end_node_id": row["end_node_id"],
+            "truncated_node_count": truncated,
+            "crosses_compact": crosses_compact,
+            "head_unchanged": point.previous_head_id == point.node_id,
+            "released_delivery_ids": released,
+        }
 
     async def normalize_turns(self) -> None:
         """恢复上下文时归一属于该 Agent 的遗留轮次。"""

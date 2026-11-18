@@ -80,6 +80,8 @@ from ghrah.protocol.views.core import (
     ToolListView,
     ToolView,
     TurnListView,
+    TurnRollbackPreviewView,
+    TurnRollbackView,
     TurnView,
 )
 
@@ -254,6 +256,42 @@ class _Turns:
                 session_id=session_id,
                 status=status,
                 limit=limit,
+            )
+        )
+
+    async def rollback(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackView:
+        return TurnRollbackView.model_validate(
+            await self._facade._call(
+                "turns.rollback",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+            )
+        )
+
+    async def rollback_preview(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackPreviewView:
+        return TurnRollbackPreviewView.model_validate(
+            await self._facade._call(
+                "turns.rollback_preview",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
             )
         )
 
