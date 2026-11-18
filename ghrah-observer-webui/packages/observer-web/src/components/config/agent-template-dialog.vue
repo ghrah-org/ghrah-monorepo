@@ -155,17 +155,23 @@ async function loadOptions() {
     packages.value = groups.groups.flatMap((group) => {
       const fullName = group.full_name ?? `${group.namespace ?? ""}.${group.name ?? ""}`;
       const latest = group.latest_version ?? null;
-      // 每个版本一条选项，最新版排在同一包的首位，作为默认选择。
+      // 每个版本一条选项；内核件随源码发布、没有版本概念，不显示版本号，
+      // 也不参与「最新版本」的选择。最新版排在同包首位作为默认。
       return group.versions
         .filter((version) => version.version !== null)
-        .map((version) => ({
-          value: `${fullName}@${version.version ?? ""}`,
-          fullName,
-          version: version.version as string,
-          origin: version.origin === "installed" ? ("installed" as const) : ("builtin" as const),
-          latest: latest !== null && version.version === latest,
-          label: `${fullName} v${version.version}${group.title ? ` · ${group.title}` : ""}`,
-        }))
+        .map((version) => {
+          const kernel = version.origin !== "installed";
+          return {
+            value: kernel ? fullName : `${fullName}@${version.version ?? ""}`,
+            fullName,
+            version: version.version as string,
+            origin: kernel ? ("builtin" as const) : ("installed" as const),
+            latest: !kernel && latest !== null && version.version === latest,
+            label: kernel
+              ? `${fullName}${group.title ? ` · ${group.title}` : ""}`
+              : `${fullName} v${version.version}${group.title ? ` · ${group.title}` : ""}`,
+          };
+        })
         .sort((left, right) => Number(right.latest) - Number(left.latest));
     });
   } catch {
@@ -173,7 +179,11 @@ async function loadOptions() {
   } finally {
     loadingOptions.value = false;
   }
-  for (const row of form.rows) await ensureMembers(row);
+  for (const row of form.rows) {
+    // 内核件不带版本：选项值只用包名，和下拉里的条目对齐。
+    row.optionValue = row.version === null ? row.package : `${row.package}@${row.version}`;
+    await ensureMembers(row);
+  }
 }
 
 async function fetchMembers(
@@ -225,7 +235,8 @@ function applyOption(row: PackageRow, value: string) {
   const option = packages.value.find((item) => item.value === value);
   row.optionValue = value;
   row.package = option?.fullName ?? "";
-  row.version = option?.version ?? null;
+  // 内核件没有版本层：留 null，别把内部版本号写进模板。
+  row.version = option === undefined || option.origin === "builtin" ? null : option.version;
 }
 
 function emptyRow(): PackageRow {

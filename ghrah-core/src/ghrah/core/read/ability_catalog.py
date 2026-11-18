@@ -304,9 +304,12 @@ def build_package_detail(
     )
     if not version_names:
         raise CatalogError("not_found", f"未找到能力包：{full_name}")
-    latest_version = version_names[-1]
+    # 内核件随源码发布、没有版本概念：只有已安装的能力件才参与「最新版本」。
+    latest_version = next(
+        (name for name in reversed(version_names) if name in installed_versions), None
+    )
     for version in version_names:
-        latest = version == latest_version
+        latest = latest_version is not None and version == latest_version
         installed = installed_versions.get(version)
         builtin = builtin_versions.get(version)
         if installed is not None:
@@ -721,12 +724,18 @@ def _group_view(
 ) -> AbilityPackageGroupView:
     named = next((draft for draft in drafts if draft.namespace), drafts[0])
     title = next((draft.title for draft in drafts if draft.title), None)
-    # 版本目录名是唯一事实来源：按数值排序，「最新」取最大者（1.10.0 > 1.9.0）。
+    # 版本目录名是唯一事实来源：按数值排序，「最新」取最大的**已安装**版本
+    # （内核件随源码发布，没有版本概念，不参与判定）。
     versions = sorted(
         drafts, key=lambda draft: (_version_sort_key(draft.version or ""), draft.digest or "")
     )
     latest = next(
-        (draft.version for draft in reversed(versions) if draft.version), None
+        (
+            draft.version
+            for draft in reversed(versions)
+            if draft.version and draft.origin == "installed"
+        ),
+        None,
     )
     rows = []
     for draft in versions:
