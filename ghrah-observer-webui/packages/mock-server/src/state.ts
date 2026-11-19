@@ -170,6 +170,15 @@ const MockSendAbilitySchema = z.object({
 });
 
 /**
+ * mock 的内置 Agent 模板：真实产品里能力来自模板成员，由 Core 在创建时授予。
+ * mock 没有模板库，用这份固定成员代替——`send_message` 供互发消息的剧本使用。
+ */
+const MOCK_TEMPLATE_ABILITIES: ReadonlyArray<AbilityDefinitionPayload> = [
+  { ability_type: "send_message", params: {} },
+  { ability_type: "read_file", params: {} },
+];
+
+/**
  * 模拟 Subject 状态机。命令/事件面严格对齐「Room Unit 形态契约」：
  * 同 payload schema、同事件名、同 seq 分配语义（room 内 seq 单点分配、单调递增）。
  */
@@ -2009,7 +2018,9 @@ export class MockState {
       agentId,
       name: config.name,
       config: normalizedConfig,
-      abilities: [],
+      // 模板「填充一次」：Agent 的能力来自模板成员，不从请求体读。
+      // mock 只有一份内置模板，它授予 send_message（互发消息检查用）与 read_file。
+      abilities: MOCK_TEMPLATE_ABILITIES.map((ability) => ({ ...ability })),
       runtimeState: input.start ? "running" : "stopped",
       incarnationId: input.start ? uuid() : null,
     };
