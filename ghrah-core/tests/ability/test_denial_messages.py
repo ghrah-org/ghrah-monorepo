@@ -115,7 +115,7 @@ async def test_revoked_grant_denial_names_invalidation(store, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "note.txt"
-    target.write_text("x", encoding="utf-8")
+    target.write_text("x", encoding="utf-8", newline="\n")
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, workspace).materialize(
         agent=AGENT, resolved=resolved
@@ -137,7 +137,7 @@ async def test_out_of_scope_argument_denial_names_roots(store, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
-    outside.write_text("x", encoding="utf-8")
+    outside.write_text("x", encoding="utf-8", newline="\n")
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, workspace).materialize(
         agent=AGENT, resolved=resolved
@@ -157,7 +157,7 @@ async def test_stale_version_denial_names_restart(store, tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "note.txt"
-    target.write_text("x", encoding="utf-8")
+    target.write_text("x", encoding="utf-8", newline="\n")
     assembly, resolved = _resolved(AGENT_YAML)
     result = await _materializer(store, assembly, workspace).materialize(
         agent=AGENT, resolved=resolved

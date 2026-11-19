@@ -176,7 +176,7 @@ def _save_baseline(violations: dict[str, int]) -> None:
         "violations": dict(sorted(violations.items())),
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-    BASELINE.write_text(text + "\n", encoding="utf-8")
+    BASELINE.write_text(text + "\n", encoding="utf-8", newline="\n")
 
 
 def test_no_new_core_imports() -> None:

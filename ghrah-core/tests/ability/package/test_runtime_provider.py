@@ -130,7 +130,7 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
 ):
     installer, source = _install(tmp_path)
     shutil.rmtree(source)
-    (tmp_path / "memo.txt").write_text("real installed result", encoding="utf-8")
+    (tmp_path / "memo.txt").write_text("real installed result", encoding="utf-8", newline="\n")
     assembly, materializer, result, tool = await _materialize(store, tmp_path, installer)
     assert tool.member_reference.version_digest.startswith("sha256:")
     instance = await store.instance("acme-reports")
@@ -264,7 +264,9 @@ def test_missing_lock_or_tampered_code_is_refused(tmp_path, damage):
     if damage == "lock":
         item.lock_path.unlink()
     else:
-        (item.root / "operations" / "render.py").write_text("raise RuntimeError('tampered')")
+        (item.root / "operations" / "render.py").write_text(
+            "raise RuntimeError('tampered')", newline="\n"
+        )
     with pytest.raises(ManifestValidationError, match="校验失败"):
         InstalledAbilityProvider(installer.root).capture("acme.reports")
 
@@ -321,7 +323,7 @@ async def test_nested_input_schema_is_preserved_in_authorized_tool(store, tmp_pa
         '    file_path: str = "memo.txt"\n    options: Options | None = None',
     )
     installer, _ = _install(tmp_path, module)
-    (tmp_path / "memo.txt").write_text("nested", encoding="utf-8")
+    (tmp_path / "memo.txt").write_text("nested", encoding="utf-8", newline="\n")
     _, _, _, tool = await _materialize(store, tmp_path, installer)
     assert "Options" in tool.bind_tool()["function"]["parameters"]["$defs"]
     result = await tool.execute(

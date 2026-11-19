@@ -30,6 +30,7 @@ def _write_distro(distro_dir: Path, *, version: str = "0.1.0") -> None:
         f'  {{ name = "ghrah.project_agent_manage", version = "{version}" }},\n'
         "]\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 

@@ -70,7 +70,7 @@ def _package(tmp_path: Path) -> Path:
     """落一个含 1 个 operation、2 个 skill 的 v1 包。"""
     root = tmp_path / "demo"
     (root / "operations").mkdir(parents=True)
-    (root / "operations" / "ping.py").write_text("print(1)\n", encoding="utf-8")
+    (root / "operations" / "ping.py").write_text("print(1)\n", encoding="utf-8", newline="\n")
     for key in ("alpha", "beta"):
         body = root / "skills" / key / "SKILL.md"
         body.parent.mkdir(parents=True, exist_ok=True)

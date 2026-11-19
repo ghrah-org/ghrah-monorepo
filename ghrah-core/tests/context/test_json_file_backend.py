@@ -108,7 +108,7 @@ async def test_legacy_layout_fails_fast(tmp_path: Path) -> None:
     backend = JsonFileBackend(root_dir=tmp_path, run_id="run")
     agent_dir = backend._agent_dir("agent")
     agent_dir.mkdir(parents=True)
-    (agent_dir / "nodes.json").write_text("{}", encoding="utf-8")
+    (agent_dir / "nodes.json").write_text("{}", encoding="utf-8", newline="\n")
 
     with pytest.raises(RuntimeError, match="Legacy context checkpoint"):
         await backend.load_checkpoint("agent")
@@ -122,7 +122,7 @@ async def test_list_agents_warns_on_invisible_pre_v3_data(
     backend = JsonFileBackend(root_dir=tmp_path, run_id="run")
     legacy_dir = backend._agent_dir("legacy-agent")
     legacy_dir.mkdir(parents=True)
-    (legacy_dir / "nodes.json").write_text("{}", encoding="utf-8")
+    (legacy_dir / "nodes.json").write_text("{}", encoding="utf-8", newline="\n")
 
     with caplog.at_level(logging.WARNING, logger="ghrah.context.persistence.json_file"):
         agents = await backend.list_agents()
