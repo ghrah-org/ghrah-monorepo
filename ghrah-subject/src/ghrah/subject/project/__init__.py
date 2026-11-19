@@ -15,13 +15,14 @@ from ghrah.subject.project.isolation import (
     IsolationContext,
     apply_isolation,
     resolve_project_roots,
-    validate_path_grants_non_overlapping,
     validate_workspace_locators_non_nested,
 )
 from ghrah.subject.project.manager import ProjectManager
 from ghrah.subject.project.models import (
     PROJECT_TRANSITIONS,
-    AgentSpec,
+    AgentOrigin,
+    AgentPresentation,
+    AgentRecord,
     IsolationSpec,
     PathGrant,
     ProjectRecord,
@@ -43,7 +44,9 @@ from ghrah.subject.project.store import (
 __all__ = [
     "AGENT_TRANSITIONS_NOTE",
     "PROJECT_TRANSITIONS",
-    "AgentSpec",
+    "AgentOrigin",
+    "AgentPresentation",
+    "AgentRecord",
     "ConcurrentModificationError",
     "IsolationContext",
     "IsolationSpec",
@@ -62,6 +65,5 @@ __all__ = [
     "make_project_record",
     "normalize_status",
     "resolve_project_roots",
-    "validate_path_grants_non_overlapping",
     "validate_workspace_locators_non_nested",
 ]

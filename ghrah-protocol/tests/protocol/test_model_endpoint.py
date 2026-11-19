@@ -7,14 +7,14 @@ import pytest
 from pydantic import ValidationError
 
 from ghrah.protocol.payloads.agent import AgentConfigPayload, SpawnAgentPayload
-from ghrah.protocol.payloads.project import AgentSpecSchema
+from ghrah.protocol.payloads.project import AgentRecordSchema
 
 
 @pytest.mark.parametrize(
     "model,data",
     [
         (AgentConfigPayload, {"name": "worker"}),
-        (AgentSpecSchema, {"name": "worker", "cluster_id": "c"}),
+        (AgentRecordSchema, {"name": "worker"}),
     ],
 )
 def test_old_reference_is_never_ignored(model, data):

@@ -1,5 +1,4 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
 
 import {
   AbilityAdminViewSchema,
@@ -561,16 +560,11 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
       specification: {
         agent_id: aid,
         name: spec.name,
-        endpoint_name: spec.endpoint_name ?? null,
-        system_prompt: spec.system_prompt,
-        prompt: {
-          digest: `sha256:${createHash("sha256").update(spec.system_prompt).digest("hex")}`,
-          size_bytes: Buffer.byteLength(spec.system_prompt),
-        },
+        presentation: spec.presentation,
+        origin: spec.origin,
         desired_state: spec.desired_state,
-        manifest_ref: spec.manifest_ref,
         runtime_status: spec.runtime_status,
-        runtime_error: spec.runtime_error,
+        last_error: spec.last_error,
         project_version: snapshot.specification_revision,
       },
       runtime: snapshot.runtime,
@@ -580,7 +574,8 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
         requires_respawn: record.requiresRespawn,
       },
       effective,
-      spec_overrides_template: Boolean(spec.manifest_ref) && effective === "next_start",
+      // 记录不再承载配置：模板是唯一来源，「覆盖模板」这个概念随之消失。
+      spec_overrides_template: false,
     });
   }
 
@@ -806,11 +801,9 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
               project_id: pid,
               agents: project.agents.map((agent) => {
                 const view = agentView(pid, agent.agent_id!);
-                const { system_prompt: systemPrompt, ...summary } = view.specification;
-                void systemPrompt;
                 return {
                   project_id: pid,
-                  specification: summary,
+                  specification: view.specification,
                   runtime: view.runtime,
                   ability: view.ability,
                   ability_unavailable: view.ability_unavailable,
@@ -825,24 +818,19 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
       let targetId = aid;
       if (method === "POST" && !aid) {
         const parsed = AgentCreateRequestSchema.safeParse(body);
-        if (
-          parsed.success &&
-          (!parsed.data.endpoint_name || parsed.data.endpoint_name === "mock-model")
-        ) {
+        if (parsed.success) {
           const change = parsed.data;
           outcome = state.handleCommand(CommandType.PROJECT_ADD_AGENT, {
             project_id: pid,
             expected_version: change.expected_revision,
             agent: {
               name: change.name,
-              endpoint_name: change.endpoint_name,
-              system_prompt: change.system_prompt,
+              template_id: change.template_id,
+              revision: change.revision,
               desired_state: change.desired_state,
             },
           });
           if (outcome.success) targetId = (outcome.data as { agent_id: string }).agent_id;
-        } else if (parsed.success) {
-          outcome = { success: false, error: "model_configuration_invalid" };
         }
       } else if (method === "PATCH" && aid && !action) {
         outcome = isRecord(body)

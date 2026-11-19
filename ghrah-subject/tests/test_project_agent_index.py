@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ghrah.subject.project.models import AgentSpec, make_project_record
+from ghrah.subject.project.models import AgentRecord, make_project_record
 from ghrah.subject.project.store import ProjectStore
 
 
-def _with_agents(name: str, agents: list[AgentSpec]):
+def _with_agents(name: str, agents: list[AgentRecord]):
     record = make_project_record(name=name)
     return record.model_copy(update={"agents": agents})
 
@@ -20,8 +20,8 @@ async def test_project_id_for_agent_resolves_owner(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "subject.db")
     await store.start()
     try:
-        p1 = _with_agents("p1", [AgentSpec(name="a1", agent_id="a" * 32)])
-        p2 = _with_agents("p2", [AgentSpec(name="b1", agent_id="b" * 32)])
+        p1 = _with_agents("p1", [AgentRecord(name="a1", agent_id="a" * 32)])
+        p2 = _with_agents("p2", [AgentRecord(name="b1", agent_id="b" * 32)])
         await store.upsert(p1)
         await store.upsert(p2)
 
@@ -37,7 +37,7 @@ async def test_project_id_for_agent_ignores_soft_deleted_project(tmp_path: Path)
     store = ProjectStore(tmp_path / "subject.db")
     await store.start()
     try:
-        record = _with_agents("p1", [AgentSpec(name="a1", agent_id="a" * 32)])
+        record = _with_agents("p1", [AgentRecord(name="a1", agent_id="a" * 32)])
         await store.upsert(record)
         assert await store.project_id_for_agent("a" * 32) == record.project_id
 

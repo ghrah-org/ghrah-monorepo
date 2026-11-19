@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { z } from "zod";
-import { AgentSpecSchema } from "./project.js";
+import { AgentRecordSchema } from "./project.js";
 
 const identifier = z.string().min(1);
 export const AgentIdentitySchema = z
@@ -20,7 +20,7 @@ export const AgentRuntimeSnapshotSchema = z
 export const AgentSnapshotSchema = z
   .object({
     identity: AgentIdentitySchema,
-    specification: AgentSpecSchema,
+    specification: AgentRecordSchema,
     specification_revision: z.number().int(),
     runtime: AgentRuntimeSnapshotSchema,
     context: z.record(z.unknown()),
@@ -92,11 +92,8 @@ export const AgentEntityCreatePayloadSchema = z
     project_id: identifier,
     name: identifier,
     start: z.boolean(),
-    endpoint_name: identifier.nullable().optional().default(null),
-    model_overrides: z.record(z.unknown()).nullable().optional().default(null),
-    manifest_ref: z.string().optional().default(""),
-    system_prompt: z.string().optional().default(""),
-    ability_types: z.array(identifier).min(1).nullable().optional().default(null),
+    template_id: identifier,
+    revision: z.number().int().min(1),
   })
   .strict();
 export const AgentEntityListPayloadSchema = z.object({ project_id: identifier }).strict();

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from ghrah.protocol.ability_control import (
     AbilityApiFeatures,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
@@ -432,6 +434,30 @@ class AbilityReadStore:
         return await self._write(
             store, operator, agent_id, lambda: store.write_revoke(operator, agent_id, change)
         )
+
+    async def write_grant(
+        self, *, agent_id: str, change: GrantAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只写授权事实（装配期），不读运行实例、不产出工具表投影。
+
+        与 :meth:`grant` 的分工：创建 Agent 时授权必须先于注册落库，此时没有
+        受信 run 可读，因此不能走带投影的路径。写入来源记为 ``assembly``。
+        """
+        store = await self.store()
+        revision = await store.write_grant(self._assembly_operator(), agent_id, change)
+        return AbilityGrantWriteView(agent_id=agent_id, revision=revision)
+
+    async def write_revoke(
+        self, *, agent_id: str, change: RevokeAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只撤销授权事实，用于创建失败时的补偿回滚；不产出投影。"""
+        store = await self.store()
+        revision = await store.write_revoke(self._assembly_operator(), agent_id, change)
+        return AbilityGrantWriteView(agent_id=agent_id, revision=revision)
+
+    def _assembly_operator(self) -> AccessIdentity:
+        """装配期写入身份：来源记为 ``assembly``，与管理员写入在审计上区分。"""
+        return replace(self._operator(), source="assembly")
 
     async def enable_tool(
         self, *, agent_id: str, change: BindToolRequest

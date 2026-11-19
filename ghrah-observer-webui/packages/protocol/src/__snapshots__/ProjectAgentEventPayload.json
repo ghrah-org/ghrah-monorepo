@@ -15,30 +15,19 @@
     "agents": [
       {
         "agent_id": "",
+        "project_id": "",
         "name": "architect",
-        "manifest_ref": "ghrah/architect",
-        "instance_manifest_path": ".ghrah/agents/architect.yaml",
-        "system_prompt": "You are the architect.",
-        "abilities": ["conversation", "write_file"],
-        "path_grants": [
-          {
-            "workspace_id": "ws-001",
-            "subpath": "docs"
-          }
-        ],
+        "desired_state": "running",
         "runtime_status": "pending",
-        "runtime_error": ""
+        "last_error": ""
       },
       {
         "agent_id": "",
+        "project_id": "",
         "name": "frontend-dev",
-        "manifest_ref": "ghrah/frontend",
-        "instance_manifest_path": ".ghrah/agents/frontend-dev.yaml",
-        "system_prompt": "You are the frontend developer.",
-        "abilities": ["conversation"],
-        "path_grants": [],
+        "desired_state": "running",
         "runtime_status": "pending",
-        "runtime_error": ""
+        "last_error": ""
       }
     ],
     "task_ids": ["task-001"],

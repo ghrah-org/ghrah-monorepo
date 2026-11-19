@@ -16,7 +16,6 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from ghrah.subject.project.models import (
-    AgentSpec,
     IsolationSpec,
     PathGrant,
     ProjectRecord,
@@ -31,7 +30,6 @@ __all__ = [
     "IsolationContext",
     "apply_isolation",
     "resolve_project_roots",
-    "validate_path_grants_non_overlapping",
     "validate_workspace_locators_non_nested",
 ]
 
@@ -124,54 +122,6 @@ async def apply_isolation(
         agent_path_grants=dict(project.isolation.agent_path_grants),
         isolation=project.isolation,
     )
-
-
-def validate_path_grants_non_overlapping(
-    agent: AgentSpec, workspaces: list[WorkspaceMount]
-) -> None:
-    """校验 agent.path_grants 的 workspace_id 均在 project 内且 subpath 不重叠。
-
-    - grant.workspace_id 必须在 workspaces 内（否则 ValueError）。
-    - subpath ``"."`` 与任何其他 subpath 冲突（整个根 vs 子路径）。
-    - 两 subpath 一方为另一方前缀则冲突（规范化后比较，去尾斜杠）。
-
-    Raises:
-        ValueError: workspace_id 不在 project 内，或 subpath 重叠。
-    """
-    ws_ids = {m.workspace_id for m in workspaces}
-    for grant in agent.path_grants:
-        if grant.workspace_id not in ws_ids:
-            raise ValueError(
-                f"Agent {agent.name!r} path_grant references unknown "
-                f"workspace_id {grant.workspace_id!r}"
-            )
-
-    # 按 workspace_id 分组后组内判重叠
-    by_ws: dict[str, list[str]] = {}
-    for grant in agent.path_grants:
-        norm = _normalize_subpath(grant.subpath)
-        by_ws.setdefault(grant.workspace_id, []).append(norm)
-
-    for ws_id, subpaths in by_ws.items():
-        # "." 与任意非 "." 冲突
-        if "." in subpaths:
-            others = [s for s in subpaths if s != "."]
-            if others:
-                raise ValueError(
-                    f"Agent {agent.name!r} subpath '.' overlaps with {others} "
-                    f"in workspace {ws_id!r}"
-                )
-            continue
-        # 两两前缀判嵌套
-        sorted_paths = sorted(subpaths)
-        for i in range(len(sorted_paths)):
-            for j in range(i + 1, len(sorted_paths)):
-                a, b = sorted_paths[i], sorted_paths[j]
-                if b == a or b.startswith(a + "/"):
-                    raise ValueError(
-                        f"Agent {agent.name!r} subpaths overlap in workspace "
-                        f"{ws_id!r}: {a!r} vs {b!r}"
-                    )
 
 
 def validate_workspace_locators_non_nested(locators: list[str]) -> None:

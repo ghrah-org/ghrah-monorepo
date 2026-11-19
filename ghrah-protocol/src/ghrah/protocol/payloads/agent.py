@@ -43,6 +43,22 @@ class SpawnAgentPayload(EndpointReferenceModel):
     manifest_ref: str | None = None
 
 
+class CreateAgentAssemblyPayload(EndpointReferenceModel):
+    """``create_agent_assembly`` 命令载荷：装配输入 v3。
+
+    ``spec`` 是 :class:`ghrah.protocol.views.core.AgentAssemblySpec` 的 wire；
+    放在信封里而不是摊平，是为了让 Core 侧二次校验时拿到完整对象。
+    """
+
+    spec: dict[str, Any]
+
+
+class GetAgentConfigPayload(BaseModel):
+    """``get_agent_config`` 命令载荷：按 ``agent_id`` 读 Core 的配置快照。"""
+
+    agent_id: str
+
+
 class TerminateAgentPayload(BaseModel):
     """terminate_agent 命令载荷。"""
 

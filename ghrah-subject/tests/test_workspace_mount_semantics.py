@@ -312,7 +312,6 @@ class TestBootstrapDefaultProject:
                     workspace_mgr=manager,
                     task_mgr=object(),
                     cluster_registry=_NoopTransport(),
-                    manifest_store=object(),
                     bootstrap_workspace_locator=bootstrap_dir,
                     default_root_locator_template=str(tmp_path / "roots/{project_id}"),
                 )

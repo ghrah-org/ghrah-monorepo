@@ -72,18 +72,8 @@ const workspaces = computed(() => {
   const project = projects.projects.get(props.projectId);
   const mounted = project?.workspaces ?? [];
   if (mounted.length > 0) return mounted;
-  // 兼容：Project 未挂载 workspaces 时，从 Agent 的 path_grants 反推可用工作区 id。
-  const ids = new Set<string>();
-  for (const agent of project?.agents ?? []) {
-    for (const grant of agent.path_grants ?? []) {
-      if (grant.workspace_id) ids.add(grant.workspace_id);
-    }
-  }
-  return [...ids].map((workspaceId) => ({
-    workspace_id: workspaceId,
-    role: null,
-    default_for_agents: false,
-  }));
+  // 记录不再承载 path_grants：没有挂载 workspace 时就不报可用工作区。
+  return [];
 });
 const workspaceId = ref("");
 const path = ref("");

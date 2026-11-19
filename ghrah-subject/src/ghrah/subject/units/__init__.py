@@ -30,10 +30,10 @@ async def mount_builtin_units(
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
     均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
-    + taskstore + task/desired_state）；full = 20（coexistence 7 +
+    + taskstore + task/desired_state）；full = 21（coexistence 7 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
-    project/project_control/ability_control/agent_control/agentconf_control/
-    media_control/artifact_control/
+    project/project_control/ability_control/agent_template_control/
+    agent_control/agentconf_control/media_control/artifact_control/
     room/recovery + room_filter）。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
@@ -57,7 +57,6 @@ async def mount_builtin_units(
 
     from ghrah.subject.runtime.ouroboros_bridge import mount_unit, wait_active
     from ghrah.subject.units.ledger import LedgerUnit
-    from ghrah.subject.units.manifest_store import ManifestStoreUnit
     from ghrah.subject.units.recovery import DesiredStateUnit
     from ghrah.subject.units.sandbox import SandboxUnit
     from ghrah.subject.units.task import TaskUnit
@@ -66,7 +65,6 @@ async def mount_builtin_units(
 
     units: list[SubjectUnit] = [
         SandboxUnit(config),
-        ManifestStoreUnit(config),
         LedgerUnit(config),
         WorkspaceUnit(config),
     ]
@@ -84,6 +82,7 @@ async def mount_builtin_units(
     if profile == "full":
         from ghrah.subject.units.ability_control import AbilityControlUnit
         from ghrah.subject.units.agent_control import AgentControlUnit
+        from ghrah.subject.units.agent_template_control import AgentTemplateControlUnit
         from ghrah.subject.units.agentconf_control import AgentconfControlUnit
         from ghrah.subject.units.artifact_control import ArtifactControlUnit
         from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
@@ -114,6 +113,9 @@ async def mount_builtin_units(
                 # 能力管理面：requires PROJECT_STORE（ProjectUnit 之后）与
                 # CORE_CLUSTER_REGISTRY/ABILITY_ACCESS（registry 之后）。
                 AbilityControlUnit(config),
+                # 模板管理面：实例级资源，REST 错误映射由 AbilityControlUnit 提供，
+                # 必须排在它之后挂载。
+                AgentTemplateControlUnit(config),
                 AgentControlUnit(config),
                 AgentconfControlUnit(config),
                 # 项目级附件库：requires PROJECT_MANAGER（ProjectUnit 之后）；

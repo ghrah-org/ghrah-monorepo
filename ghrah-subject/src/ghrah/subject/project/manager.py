@@ -31,7 +31,7 @@ from ghrah.protocol.payloads.entity import (
     AgentEntityPayload,
 )
 from ghrah.protocol.types import (
-    AgentConfigPayload,
+    AgentCreateSpecSchema,
     ProjectAddAgentPayload,
     ProjectCreatePayload,
     ProjectDeletePayload,
@@ -45,19 +45,15 @@ from ghrah.protocol.types import (
     ProjectUnlinkTaskPayload,
     ProjectUpdatePayload,
     RecoveryAction,
-    SpawnAgentPayload,
 )
 from pydantic import ValidationError
 
+from ghrah.subject.agents.creation import CreateAgentRequest, CreationError, create_agent
 from ghrah.subject.errors import StableError
 from ghrah.subject.project.entities import AgentEntityManager
-from ghrah.subject.project.isolation import (
-    validate_path_grants_non_overlapping,
-    validate_workspace_locators_non_nested,
-)
+from ghrah.subject.project.isolation import validate_workspace_locators_non_nested
 from ghrah.subject.project.models import (
-    AgentSpec,
-    PathGrant,
+    AgentRecord,
     ProjectRecord,
     ProjectStatus,
     RecoverySpec,
@@ -75,10 +71,10 @@ from ghrah.subject.project.store import (
     ProjectNotFoundError,
     ProjectStore,
 )
+from ghrah.subject.template_store.store import TemplateStore
 from ghrah.subject.workspace.locator import locator_to_path, path_to_locator
 
 if TYPE_CHECKING:
-    from ghrah.subject.manifest_store.store import ManifestStore
     from ghrah.subject.runtime.service_keys import (
         CoreClusterRegistryService as ClusterRegistryProtocol,
     )
@@ -93,6 +89,34 @@ logger = logging.getLogger(__name__)
 # 会把 request_id/session_id 信封字段注入 payload 副本；ProjectCreatePayload /
 # ProjectUpdatePayload 为 extra="forbid" strict 模型，验证前需剥离。
 _ENVELOPE_KEYS = frozenset({"request_id", "session_id"})
+
+
+class ProjectLock:
+    """按任务可重入的异步锁：同一任务可嵌套进入，不同任务仍互斥。"""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[Any] | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> ProjectLock:
+        task = asyncio.current_task()
+        if self._owner is task and task is not None:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        self._depth -= 1
+        if self._depth <= 0:
+            self._depth = 0
+            self._owner = None
+            self._lock.release()
+
+
 _LOCKED_PROJECT_MUTATIONS = frozenset(
     {
         "project_update",
@@ -109,6 +133,21 @@ _LOCKED_PROJECT_MUTATIONS = frozenset(
 
 # terminate 回执中的"运行侧已无该 agent"错误码（remove 语义 = 已终止，继续删定义）。
 _TERMINATE_ABSENT_ERRORS = frozenset({"agent_identity_mismatch", "agent_not_found"})
+
+
+def _is_terminate_absent(error_text: str) -> bool:
+    """判断 terminate 失败是否表示「运行侧已经没有该 Agent」。
+
+    旧 CoreUnit 命令面回稳定码（``agent_identity_mismatch`` / ``agent_not_found``）；
+    C3 端口化后 ``agents.delete`` 的失败经 ``ApiError`` 转成
+    ``NOT_FOUND: agent '<id>' is not online``（文本回执，不再是稳定码）。
+    两种形态都表示无需再终止，remove 可以继续删定义。
+    """
+    text = error_text.strip()
+    if text in _TERMINATE_ABSENT_ERRORS:
+        return True
+    lowered = text.lower()
+    return "not online" in lowered or lowered.startswith("not_found")
 
 
 def _strip_envelope(payload: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +208,7 @@ class ProjectManager:
         workspace_mgr: WorkspaceManager（register/list_records/get_record）。
         task_mgr: TaskManagerService（经 task_get 命令校验 task 属本 project）。
         cluster_registry: CoreClusterRegistryService（ensure_cluster + get_handle）。
-        manifest_store: ManifestStore（实例 manifest 渲染协调，MVP 跳过）。
+        cluster_registry: ClusterRegistryProtocol（ensure_cluster / handle 取用）。
         on_event: 事件回调（unit 注入）。
         bootstrap_workspace_locator: 首启 bootstrap 用的 workspace locator
             （派生自 config.project.bootstrap_workspace_locator）。
@@ -183,26 +222,32 @@ class ProjectManager:
         workspace_mgr: WorkspaceManager,
         task_mgr: TaskManagerService,
         cluster_registry: ClusterRegistryProtocol,
-        manifest_store: ManifestStore,
+        template_store: Callable[[], Any] | None = None,
         *,
         on_event: OnEvent | None = None,
         bootstrap_workspace_locator: str = "",
         default_root_locator_template: str = "~/.ghrah/projects/{project_id}",
         shell_allowed_roots: tuple[str, ...] = (),
+        agentconf_db_path: str | None = None,
     ) -> None:
         self._store = store
         self._workspace_mgr = workspace_mgr
         self._task_mgr = task_mgr
         self._cluster_transport = cluster_registry
-        self._manifest_store = manifest_store
+        # 模板库在 ProjectUnit 之后挂载的单元里 provide，故按调用期解析（同
+        # PROJECT_STORE 的惰性读取范式），不在构造期固化实例。
+        self._template_store = template_store
         self._on_event = on_event
         self._bootstrap_workspace_locator = bootstrap_workspace_locator
         self._default_root_locator_template = default_root_locator_template
         self._shell_allowed_roots = tuple(
             str(Path(root).expanduser().resolve()) for root in shell_allowed_roots if root
         )
+        # AgentConf 库路径（None = AgentsConfig 缺省库）；实体模型目录/校验与
+        # SubjectConfig / 能力管理 REST 同源，避免同一部署读两份库。
+        self.agentconf_db_path = agentconf_db_path
         self._create_lock = asyncio.Lock()
-        self._lifecycle_locks: dict[str, asyncio.Lock] = {}
+        self._lifecycle_locks: dict[str, ProjectLock] = {}
         self._scoped_resources: list[Any] = []
         self._room_store: Any | None = None
         self.agents = AgentEntityManager(self)
@@ -308,7 +353,7 @@ class ProjectManager:
             return
         await self._on_event(event_type, {"project": record.to_wire()})
 
-    async def _emit_agent(self, event_type: str, record: ProjectRecord, agent: AgentSpec) -> None:
+    async def _emit_agent(self, event_type: str, record: ProjectRecord, agent: AgentRecord) -> None:
         if self._on_event is None:
             return
         await self._on_event(
@@ -329,11 +374,17 @@ class ProjectManager:
         if room_store:
             self._room_store = resource
 
-    def lifecycle_lock(self, project_id: str) -> asyncio.Lock:
-        """串行化项目目录写入与归档、恢复、删除。"""
+    def lifecycle_lock(self, project_id: str) -> ProjectLock:
+        """串行化项目目录写入与归档、恢复、删除。
+
+        锁**按任务可重入**：命令层（``handle_command`` 的
+        ``_LOCKED_PROJECT_MUTATIONS``）与服务层（``create_agent`` 等）都会进同一道
+        项目锁，而 ``asyncio.Lock`` 不可重入——两层各取一次就会永久互等（真实实例上
+        任何"按模板创建 Agent"都会挂死）。重入计数按任务归属，跨任务仍然互斥。
+        """
         lock = self._lifecycle_locks.get(project_id)
         if lock is None:
-            lock = asyncio.Lock()
+            lock = ProjectLock()
             self._lifecycle_locks[project_id] = lock
         return lock
 
@@ -424,11 +475,16 @@ class ProjectManager:
         value = requested or self._default_root_locator_template.format(project_id=project_id)
         return canonical_file_locator(value)
 
-    def _validate_agent(self, agent: AgentSpec, project: ProjectRecord) -> None:
-        """agent_id/name 在 Project 内唯一 + 授权校验。"""
+    def _validate_agent(self, agent: AgentRecord, project: ProjectRecord) -> None:
+        """agent_id / name 在 Project 内唯一。
+
+        路径授权不再存记录：申请在创建时由模板翻译成 Core 的授权行（L3），
+        Subject 侧不再做 path_grants 的非重叠校验。
+        """
         from ghrah.ability.access.identity import validate_agent_id
 
-        validate_agent_id(agent.agent_id)
+        if agent.agent_id:
+            validate_agent_id(agent.agent_id)
         for existing in project.agents:
             if agent.agent_id and existing.agent_id == agent.agent_id:
                 raise StableError(
@@ -440,19 +496,6 @@ class ProjectManager:
                     "agent_name_exists",
                     f"agent {agent.name!r} already exists in project",
                 )
-        validate_path_grants_non_overlapping(agent, project.workspaces)
-
-    def _agent_start_error(self, agent: AgentSpec) -> StableError | None:
-        """检查新版装配入口要求的持久启动字段。"""
-        if not agent.agent_id:
-            return StableError(
-                "stable_agent_id_required", "Update the persisted Project spec before restore"
-            )
-        if not agent.manifest_ref:
-            return StableError(
-                "agent_manifest_required", "Specify a version 2 Agent template in manifest_ref"
-            )
-        return None
 
     # ─── 命令 handlers ───
 
@@ -786,82 +829,113 @@ class ProjectManager:
     async def _handle_add_agent(
         self, payload: dict[str, Any], *, validate_model: bool = False
     ) -> dict[str, Any]:
+        """``project_add_agent``：按模板创建（旧 manifest 路径已删除）。"""
+        del validate_model
         agent_payload = dict(payload.get("agent") or {})
-        # 集群概念已退役：旧客户端仍可能带上 cluster_id，入站直接忽略。
         agent_payload.pop("cluster_id", None)
-        p = ProjectAddAgentPayload.model_validate({**payload, "agent": agent_payload})
-        existing, error = await self._get_active_project(p.project_id)
-        if error is not None:
-            return error
-        assert existing is not None
-        expected = p.expected_version if p.expected_version is not None else existing.version
-        agent = AgentSpec(
-            name=p.agent.name,
-            # 集群概念已退役：忽略客户端传来的 cluster_id，统一归一到项目自身的。
-            agent_id=p.agent.agent_id or uuid4().hex,
-            manifest_ref=p.agent.manifest_ref,
-            instance_manifest_path=(
-                p.agent.instance_manifest_path
-                or str(
-                    ProjectPaths.from_locator(existing.project_root_locator).agent_manifest_dir
-                    / f"{p.agent.name}.yaml"
+        try:
+            p = ProjectAddAgentPayload.model_validate({**payload, "agent": agent_payload})
+        except ValidationError as error:
+            return _err(f"invalid_request: {error}")
+        try:
+            return await self.create_agent(
+                p.project_id, p.agent, expected_version=p.expected_version
+            )
+        except StableError as error:
+            return _err_code(error.code, error.detail)
+
+    async def create_agent(
+        self,
+        project_id: str,
+        spec: AgentCreateSpecSchema,
+        *,
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
+        """按模板创建 Agent：渲染 → Core 创建 → 写记录。
+
+        这是「模板只填一次」的唯一入口：成功后记录里只有身份/展示/来源，配置
+        事实留在 Core 的实例快照；此后改模板不影响该实例。
+        """
+        async with self.lifecycle_lock(project_id):
+            project, error = await self._get_active_project(project_id)
+            if error is not None:
+                raise StableError("project_unavailable", str(error))
+            if project is None:
+                raise StableError("project_unavailable", project_id)
+            if any(a.name == spec.name for a in project.agents):
+                raise StableError("agent_name_exists", spec.name)
+            templates = self._template_store() if self._template_store is not None else None
+            if templates is None:
+                raise StableError(
+                    "template_store_unavailable", "agent template store is not mounted"
                 )
-            ),
-            endpoint_name=p.agent.endpoint_name,
-            model_overrides=p.agent.model_overrides,
-            system_prompt=p.agent.system_prompt,
-            abilities=p.agent.abilities,
-            desired_state=p.agent.desired_state,
-            runtime_status="stopped" if p.agent.desired_state == "stopped" else "pending",
-            path_grants=[
-                PathGrant(workspace_id=g.workspace_id, subpath=g.subpath)
-                for g in p.agent.path_grants
-            ],
-        )
-        self._validate_agent(agent, existing)
-        if agent.abilities:
-            raise StableError(
-                "abilities_managed_by_access_store",
-                "Specify an Agent template and use ability grants and tool selection",
+            handle = await self._cluster_transport.ensure_cluster(
+                project_id,
+                project_id=project_id,
+                project_root_locator=project.project_root_locator,
             )
-        if agent.desired_state == "running":
-            start_error = self._agent_start_error(agent)
-            if start_error is not None:
-                raise start_error
-
-        def mutator(r: ProjectRecord) -> ProjectRecord:
-            return r.model_copy(update={"agents": [*r.agents, agent]})
-
-        updated = await self._store.update(p.project_id, expected, mutator)
-        # active 且 cluster 缺该 agent 则 spawn
-        runtime_error: str | None = None
-        if updated.status == ProjectStatus.ACTIVE and agent.desired_state == "running":
-            runtime_error = await self._ensure_agent_spawned(
-                agent,
-                updated.project_id,
-                updated.project_root_locator,
-                validate_model=validate_model,
+            try:
+                created = await create_agent(
+                    CreateAgentRequest(
+                        template_id=spec.template_id,
+                        revision=spec.revision,
+                        name=spec.name,
+                        desired_state=spec.desired_state,
+                    ),
+                    templates=templates,
+                    workspaces=self._workspace_roots(project),
+                    available=None,
+                    create=handle.create_assembly,
+                )
+            except CreationError as error:
+                raise StableError(error.code, error.detail) from error
+            record = created.record.model_copy(
+                update={"project_id": project.project_id, "agent_id": created.agent_id}
             )
-        # 运行诊断持久化（pending→running/error）：失败不改变命令结果，
-        # 只影响重启后的可诊断性，best-effort。
-        if updated.status == ProjectStatus.ACTIVE and agent.desired_state == "running":
-            await self.mark_agent_runtime(updated.project_id, agent.agent_id, runtime_error)
-        refreshed = await self._store.get(updated.project_id) or updated
-        await self._emit_agent("project_agent_added", refreshed, agent)
-        return _ok(
-            {
-                "project": refreshed.to_wire(),
-                "agent_name": agent.name,
-                "agent_id": agent.agent_id,
-                "runtime_pending": runtime_error is not None,
-                "runtime_error": runtime_error,
-            }
-        )
+            expected = expected_version if expected_version is not None else project.version
+            updated = await self._store.update(
+                project_id,
+                expected,
+                lambda r: r.model_copy(update={"agents": [*r.agents, record]}),
+            )
+            # 模板引用计数：记录已落库后才 +1，保证「记录存在 ⇒ 计数已计」；
+            # 失败只可能少计（热度指标，不做补偿）。
+            if isinstance(templates, TemplateStore):
+                await templates.increment_reference(spec.template_id, spec.revision)
+            if spec.desired_state == "stopped":
+                await handle.stop_assembly(created.agent_id)
+                await self.mark_agent_runtime(project_id, created.agent_id, None, status="stopped")
+            await self._emit_agent("project_agent_added", updated, record)
+            return _ok(
+                {
+                    "project": updated.to_wire(),
+                    "agent_name": record.name,
+                    "agent_id": record.agent_id,
+                    "runtime_pending": False,
+                    "runtime_error": "",
+                }
+            )
+
+    def _workspace_roots(self, project: ProjectRecord) -> dict[str, str]:
+        """``workspace_role`` → 绝对根；角色缺省时按 default / workspace_id 归一。"""
+        roots: dict[str, str] = {}
+        for mount in project.workspaces:
+            workspace = self._workspace_mgr.get_record(mount.workspace_id)
+            if workspace is None:
+                continue
+            role = mount.role or ("default" if mount.default_for_agents else mount.workspace_id)
+            roots[role] = locator_to_path(workspace.locator)
+        return roots
 
     async def mark_agent_runtime(
-        self, project_id: str, agent_id: str, runtime_error: str | None
+        self,
+        project_id: str,
+        agent_id: str,
+        runtime_error: str | None,
+        *,
+        status: str | None = None,
     ) -> None:
-        """持久化 agent 运行诊断（running / error）。
+        """持久化实例运行诊断（running / stopped / failed）。
 
         命令路径（lifecycle lock 内）与 reconcile 后台路径共用；不持锁，
         以最新 version 写入，冲突时重试一次，仍失败仅告警（诊断字段允许
@@ -869,15 +943,15 @@ class ProjectManager:
         """
         if not agent_id:
             return
-        status = "running" if runtime_error is None else "error"
+        resolved_status = status or ("running" if runtime_error is None else "failed")
 
         def mutator(r: ProjectRecord) -> ProjectRecord:
             agents = [
                 (
                     a.model_copy(
                         update={
-                            "runtime_status": status,
-                            "runtime_error": runtime_error or "",
+                            "runtime_status": resolved_status,
+                            "last_error": runtime_error or "",
                         }
                     )
                     if a.agent_id == agent_id
@@ -901,7 +975,7 @@ class ProjectManager:
                         "project=%s agent=%s status=%s",
                         project_id,
                         agent_id,
-                        status,
+                        resolved_status,
                     )
         return
 
@@ -924,8 +998,6 @@ class ProjectManager:
             )
             if agent is None or agent.desired_state != "running":
                 return "skipped", None
-            if not agent.agent_id and (start_error := self._agent_start_error(agent)):
-                return None, str(start_error)
             handle = await self._cluster_transport.ensure_cluster(
                 project_id,
                 project_id=project_id,
@@ -938,19 +1010,35 @@ class ProjectManager:
                 for a in existing
             ):
                 return "skipped", None
-            mode, spawn_error = await self._spawn_agent_spec(handle, agent, project_id)
+            mode, spawn_error = await self._resume_agent(handle, agent)
             await self.mark_agent_runtime(project_id, agent.agent_id, spawn_error)
             return mode, spawn_error
 
+    async def _resume_agent(self, handle: Any, agent: AgentRecord) -> tuple[str | None, str | None]:
+        """按实例快照恢复：只给身份，配置与成员从 Core 的快照读。
+
+        创建时已把配置写进快照，恢复不再经过模板——这正是「模板只填一次」的
+        另一半：重启用快照，不再回读模板。
+        """
+        if not agent.agent_id:
+            return None, "stable_agent_id_required: persisted record has no agent_id"
+        try:
+            view = await handle.start_assembly(agent.agent_id)
+        except Exception as exc:  # noqa: BLE001 — 恢复失败只影响诊断，不推翻记录
+            logger.warning("resume agent %s failed: %s", agent.name, exc)
+            return None, str(exc)
+        return view.recovery_mode, None
+
     async def _ensure_agent_spawned(
         self,
-        agent: AgentSpec,
+        agent: AgentRecord,
         project_id: str,
         project_root_locator: str,
         *,
         validate_model: bool = False,
     ) -> str | None:
-        """启动 desired Agent；失败保留定义并返回可诊断 pending 原因。"""
+        """启动 desired Agent；失败保留记录并返回可诊断原因。"""
+        del validate_model
         try:
             handle = await self._cluster_transport.ensure_cluster(
                 project_id,
@@ -958,39 +1046,10 @@ class ProjectManager:
                 project_root_locator=project_root_locator,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("add_agent: ensure_cluster %s failed: %s", project_id, exc)
+            logger.warning("ensure_cluster %s failed: %s", project_id, exc)
             return str(exc)
-        _, error = await self._spawn_agent_spec(
-            handle, agent, project_id, validate_model=validate_model
-        )
+        _, error = await self._resume_agent(handle, agent)
         return error
-
-    async def _spawn_agent_spec(
-        self, handle: Any, agent: AgentSpec, project_id: str, *, validate_model: bool = False
-    ) -> tuple[str | None, str | None]:
-        if start_error := self._agent_start_error(agent):
-            return None, str(start_error)
-        spawn_payload = SpawnAgentPayload(
-            validate_model=validate_model or bool(agent.endpoint_name),
-            project_id=project_id,
-            config=AgentConfigPayload(
-                name=agent.name,
-                agent_id=agent.agent_id,
-                endpoint_name=agent.endpoint_name,
-                model_overrides=agent.model_overrides,
-                system_prompt=agent.system_prompt or "",
-            ),
-            manifest_ref=agent.manifest_ref or None,
-        )
-        try:
-            result = await handle.spawn_agent(spawn_payload)
-            if not result.get("success"):
-                logger.warning("add_agent: spawn %s rejected: %s", agent.name, result.get("error"))
-                return None, str(result.get("error") or "spawn rejected")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("add_agent: spawn %s failed: %s", agent.name, exc)
-            return None, str(exc)
-        return str((result.get("data") or {}).get("recovery_mode") or "spawned"), None
 
     async def _handle_remove_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = ProjectRemoveAgentPayload.model_validate(payload)
@@ -1013,7 +1072,7 @@ class ProjectManager:
             return _err_code("agent_not_found", str(identity))
 
         def mutator(r: ProjectRecord) -> ProjectRecord:
-            def is_target(candidate: AgentSpec) -> bool:
+            def is_target(candidate: AgentRecord) -> bool:
                 if target.agent_id:
                     return candidate.agent_id == target.agent_id
                 return candidate.name == target.name
@@ -1035,13 +1094,16 @@ class ProjectManager:
         if handle is not None:
             terminate_error: str | None = None
             try:
-                result = await handle.terminate_agent(target.agent_id, target.name)
+                result = await handle.delete_assembly(target.agent_id)
                 if not result.get("success"):
                     error_text = str(result.get("error") or "")
-                    if error_text not in _TERMINATE_ABSENT_ERRORS:
+                    if not _is_terminate_absent(error_text):
                         terminate_error = error_text or "terminate rejected"
             except Exception as exc:  # noqa: BLE001
-                terminate_error = str(exc)
+                # 端口实现可能让 ApiError 直接抛出（``NOT_FOUND: ... is not
+                # online``），与回执失败同一语义，同样视作运行侧已无实例。
+                if not _is_terminate_absent(str(exc)):
+                    terminate_error = str(exc)
             if terminate_error is not None:
                 logger.warning(
                     "remove_agent: terminate %s failed: %s (definition kept)",
@@ -1051,6 +1113,14 @@ class ProjectManager:
                 return _err_code("agent_terminate_failed", terminate_error)
 
         updated = await self._store.update(p.project_id, expected, mutator)
+        # 引用计数与创建时的 increment_reference 配对；失败不影响删除结果。
+        try:
+            templates = self._template_store() if self._template_store is not None else None
+            if templates is not None and target.origin is not None:
+                origin = target.origin
+                await templates.decrement_reference(origin.template_id, origin.revision)
+        except Exception as exc:  # noqa: BLE001 — 计数漂移不该阻塞删除
+            logger.warning("remove_agent: decrement template reference failed: %s", exc)
         await self._emit_agent("project_agent_removed", updated, target)
         return _ok(
             {
@@ -1250,8 +1320,11 @@ class ProjectManager:
             logger.exception("bootstrap project_created event delivery failed")
         return record
 
-    async def adopt_existing_agents(self, project_id: str) -> list[AgentSpec]:
-        """经运行时句柄从 Core 取现有 agent，构造 AgentSpec 并加入 project。"""
+    async def adopt_existing_agents(self, project_id: str) -> list[AgentRecord]:
+        """经运行时句柄从 Core 取现有 agent，补登记为 ``AgentRecord``。
+
+        采纳只补身份与编排事实：Core 侧已有实例快照，配置不回填、来源未知。
+        """
         existing, error = await self._get_active_project(project_id)
         if error is not None:
             raise ValueError(str(error["error"]))
@@ -1267,16 +1340,16 @@ class ProjectManager:
         except Exception as exc:  # noqa: BLE001
             logger.warning("adopt_existing_agents: list_agents failed: %s", exc)
             return []
-        specs: list[AgentSpec] = []
+        specs: list[AgentRecord] = []
         for info in agents_info:
             name = info.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            spec = AgentSpec(
+            spec = AgentRecord(
                 name=name,
+                project_id=existing.project_id,
                 agent_id=(str(info.get("agent_id")) if info.get("agent_id") else uuid4().hex),
-                manifest_ref="",
-                instance_manifest_path="",
+                runtime_status="running",
             )
             specs.append(spec)
 

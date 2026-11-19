@@ -20,7 +20,6 @@ from ghrah.subject.config import (
     SubjectConfig,
     TransportKindConfig,
 )
-from ghrah.subject.manifest_store import ManifestStore
 from ghrah.subject.runtime.assembly import assemble_subject
 from ghrah.subject.runtime.service_keys import SubjectServiceKey
 from ghrah.subject.sandbox import (
@@ -53,7 +52,6 @@ __all__ = [
     # 子系统（单测用）
     "AgentWorkspace",
     "CommandResult",
-    "ManifestStore",
     "SandboxExecutor",
     "SandboxExecutorConfig",
     "SnapshotError",

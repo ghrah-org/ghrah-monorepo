@@ -21,9 +21,10 @@ from ghrah.protocol.payloads.entity import (
     AgentRuntimeSnapshot,
     AgentSnapshot,
 )
+from ghrah.protocol.payloads.project import AgentCreateSpecSchema
 
 from ghrah.subject.errors import StableError
-from ghrah.subject.project.models import AgentSpec, ProjectRecord, ProjectStatus
+from ghrah.subject.project.models import AgentRecord, ProjectRecord, ProjectStatus
 from ghrah.subject.project.paths import ProjectPaths
 
 if TYPE_CHECKING:
@@ -44,13 +45,20 @@ class AgentEntityManager:
         """返回允许通过旧类型接口配置的能力目录。"""
         return []
 
-    @staticmethod
-    def model_catalog() -> dict[str, Any]:
+    @property
+    def _agentconf_db_path(self) -> str | None:
+        """AgentConf 库路径（与 SubjectConfig / 能力管理 REST 同源）。
+
+        ProjectManager 未注入时为 None，``AgentsConfig`` 回落缺省库（旧行为）。
+        """
+        return getattr(self._projects, "agentconf_db_path", None)
+
+    def model_catalog(self) -> dict[str, Any]:
         """只返回既有模型配置名称，不向观察端传输凭据。"""
         from agentconf import AgentsConfig
 
         try:
-            with AgentsConfig() as config:
+            with AgentsConfig(self._agentconf_db_path) as config:
                 return {
                     "model_config_names": sorted(
                         a.name for a in config.list_model_endpoints() if a.model_type == "llm"
@@ -59,13 +67,12 @@ class AgentEntityManager:
         except Exception:
             return {"model_config_names": [], "model_catalog_error": "model_catalog_unavailable"}
 
-    @staticmethod
-    def validate_model_name(name: str) -> None:
+    def validate_model_name(self, name: str) -> None:
         """校验 agentconf 的完整配置引用；不发送模型请求。"""
         from agentconf import AgentsConfig
 
         try:
-            with AgentsConfig() as config:
+            with AgentsConfig(self._agentconf_db_path) as config:
                 config.resolve_model_endpoint(name)
         except Exception as exc:
             raise StableError(
@@ -73,28 +80,22 @@ class AgentEntityManager:
             ) from exc
 
     async def create(self, request: AgentEntityCreatePayload) -> AgentEntity:
-        """经原 ProjectManager 创建持久规格，显式选择初始启停状态。"""
-        async with self._projects.lifecycle_lock(request.project_id):
+        """按模板创建 Agent；配置不再经实体面传入（权威在 Core 快照）。"""
+        if request.start:
             project, error = await self._projects._get_active_project(request.project_id)
             if error or project is None:
                 raise StableError("project_unavailable", str(error))
-            if request.start and project.status != ProjectStatus.ACTIVE:
+            if project.status != ProjectStatus.ACTIVE:
                 raise StableError("project_not_active")
-            result = await self._projects._handle_add_agent(
-                {
-                    "project_id": request.project_id,
-                    "agent": {
-                        "name": request.name,
-                        "manifest_ref": request.manifest_ref,
-                        "endpoint_name": request.endpoint_name,
-                        "model_overrides": request.model_overrides,
-                        "system_prompt": request.system_prompt,
-                        "abilities": request.ability_types,
-                        "desired_state": "running" if request.start else "stopped",
-                    },
-                },
-                validate_model=True,
-            )
+        result = await self._projects.create_agent(
+            request.project_id,
+            AgentCreateSpecSchema(
+                name=request.name,
+                template_id=request.template_id,
+                revision=request.revision,
+                desired_state="running" if request.start else "stopped",
+            ),
+        )
         if not result.get("success"):
             raise StableError("agent_create_failed", str(result.get("error")))
         return self.get(request.project_id, result["data"]["agent_id"])
@@ -121,7 +122,7 @@ class AgentEntityManager:
             if agent.agent_id
         ]
 
-    async def _load(self, identity: AgentIdentity) -> tuple[ProjectRecord, AgentSpec]:
+    async def _load(self, identity: AgentIdentity) -> tuple[ProjectRecord, AgentRecord]:
         project, error = await self._projects._get_active_project(identity.project_id)
         if error or project is None:
             raise StableError("project_unavailable", str(error))
@@ -130,7 +131,7 @@ class AgentEntityManager:
             raise StableError("agent_not_found")
         return project, agent
 
-    def _handle(self, project: ProjectRecord, agent: AgentSpec) -> Any | None:
+    def _handle(self, project: ProjectRecord, agent: AgentRecord) -> Any | None:
         try:
             handle = self._projects._cluster_transport.get_handle(project.project_id)
         except KeyError:
@@ -139,7 +140,7 @@ class AgentEntityManager:
             raise StableError("agent_project_mismatch")
         return handle if handle.is_connected else None
 
-    async def _runtime(self, project: ProjectRecord, agent: AgentSpec) -> dict[str, Any]:
+    async def _runtime(self, project: ProjectRecord, agent: AgentRecord) -> dict[str, Any]:
         handle = self._handle(project, agent)
         if handle is None:
             return {
@@ -159,18 +160,17 @@ class AgentEntityManager:
                 "error": str(exc),
             }
 
-    def _abilities(self, agent: AgentSpec, runtime: dict[str, Any]) -> dict[str, Any]:
+    def _abilities(self, agent: AgentRecord, runtime: dict[str, Any]) -> dict[str, Any]:
         return {
             **self.model_catalog(),
-            "configured_types": agent.abilities,
             "available_types": self.available_ability_types(),
-            "manifest_ref": agent.manifest_ref,
+            "origin": agent.origin.model_dump(mode="json") if agent.origin else None,
             "loaded_names": runtime.get("loaded_abilities"),
             "runtime_availability": runtime["availability"],
         }
 
     async def _context(
-        self, project: ProjectRecord, agent: AgentSpec, operation: dict[str, Any]
+        self, project: ProjectRecord, agent: AgentRecord, operation: dict[str, Any]
     ) -> dict[str, Any]:
         runtime = await self._runtime(project, agent)
         if runtime["availability"] == "online":
@@ -212,7 +212,7 @@ class AgentEntityManager:
         }
 
     async def _mailbox(
-        self, project: ProjectRecord, agent: AgentSpec, operation: dict[str, Any]
+        self, project: ProjectRecord, agent: AgentRecord, operation: dict[str, Any]
     ) -> dict[str, Any]:
         identity = AgentIdentity(project_id=project.project_id, agent_id=agent.agent_id)
         path = ProjectPaths.from_locator(project.project_root_locator).action_chain_db_path
@@ -233,7 +233,7 @@ class AgentEntityManager:
                 before_seq=operation["before_seq"],
             )
 
-    async def _snapshot(self, project: ProjectRecord, agent: AgentSpec) -> dict[str, Any]:
+    async def _snapshot(self, project: ProjectRecord, agent: AgentRecord) -> dict[str, Any]:
         runtime = await self._runtime(project, agent)
         try:
             catalog = await self._context(project, agent, {"type": "context.list_sessions"})
@@ -263,8 +263,8 @@ class AgentEntityManager:
         ).model_dump(mode="json")
 
     async def _save(
-        self, project: ProjectRecord, agent: AgentSpec, changes: dict[str, Any]
-    ) -> tuple[ProjectRecord, AgentSpec]:
+        self, project: ProjectRecord, agent: AgentRecord, changes: dict[str, Any]
+    ) -> tuple[ProjectRecord, AgentRecord]:
         updated = agent.model_copy(update=changes)
         record = await self._projects._store.update(
             project.project_id,
@@ -284,12 +284,12 @@ class AgentEntityManager:
         agent_id: str,
         *,
         expected_revision: int,
-        endpoint_name: Any = ...,
-        system_prompt: Any = ...,
-    ) -> tuple[ProjectRecord, AgentSpec]:
-        """保存端点或提示词。不要求停机，也不改正在运行的进程。
+        presentation: dict[str, Any] | None = None,
+    ) -> tuple[ProjectRecord, AgentRecord]:
+        """保存记录的展示字段；端口/提示词等配置不再由 Subject 持有。
 
-        省略参数使用 ``...``。空字符串的端点视为清除。
+        模型与提示词的权威在 Core 的实例快照，改它们需要 Core 侧的能力，
+        这里如实拒绝而不是复制一份到 Subject。
         """
         async with self._projects.lifecycle_lock(project_id):
             project, agent = await self._load(
@@ -297,18 +297,11 @@ class AgentEntityManager:
             )
             if project.version != expected_revision:
                 raise StableError("agent_specification_conflict")
-            changes: dict[str, Any] = {}
-            if endpoint_name is not ...:
-                cleaned = endpoint_name or None
-                if isinstance(cleaned, str):
-                    self.validate_model_name(cleaned)
-                changes["endpoint_name"] = cleaned
-            if system_prompt is not ...:
-                if not isinstance(system_prompt, str):
-                    raise StableError("invalid_request", "system_prompt 必须是字符串")
-                changes["system_prompt"] = system_prompt
-            if not changes:
-                raise StableError("invalid_request", "没有可保存的规格字段")
+            if presentation is None:
+                raise StableError("agent_config_immutable", "配置由 Core 实例快照承载")
+            current = agent.presentation.model_dump()
+            merged = {**current, **presentation}
+            changes = {"presentation": agent.presentation.model_copy(update=merged)}
             return await self._save(project, agent, changes)
 
     async def execute(self, request: AgentEntityPayload) -> dict[str, Any]:
@@ -370,16 +363,25 @@ class AgentEntityManager:
             if incarnation is not None and incarnation != runtime.get("incarnation_id"):
                 raise StableError("agent_incarnation_conflict")
             if kind == "model.configure":
-                if agent.desired_state != "stopped" or runtime["availability"] != "offline":
-                    raise StableError("agent_must_be_stopped")
-                if agent.manifest_ref:
-                    raise StableError("model_managed_by_manifest")
-                self.validate_model_name(op["endpoint_name"])
-                changes: dict[str, Any] = {"endpoint_name": op["endpoint_name"]}
-                if op.get("model_overrides") is not None:
-                    changes["model_overrides"] = op["model_overrides"]
-                project, agent = await self._save(project, agent, changes)
-                return await self._snapshot(project, agent)
+                # 配置权威在 Core 的实例快照：这里只把「改模型」这件事交给 Core，
+                # 由它落库并按需重启；Subject 不再持有模型与提示词。
+                try:
+                    result = await self._handle(project, agent).update_model(
+                        agent.agent_id,
+                        op["endpoint_name"],
+                        op.get("model_overrides"),
+                    )
+                except Exception as exc:
+                    raise StableError("agent_config_update_failed", str(exc)) from exc
+                if not result.get("success"):
+                    raise StableError("agent_config_update_failed", str(result.get("error") or ""))
+                project, agent = await self._load(identity)
+                await self._save(
+                    project,
+                    agent,
+                    {"runtime_status": "running", "last_error": ""},
+                )
+                return await self._snapshot(*await self._load(identity))
             if kind == "abilities.configure":
                 raise StableError(
                     "abilities_managed_by_access_store",
@@ -388,10 +390,6 @@ class AgentEntityManager:
             if kind == "start":
                 if project.status != ProjectStatus.ACTIVE:
                     raise StableError("project_not_active")
-                if runtime["availability"] == "offline":
-                    error = self._projects._agent_start_error(agent)
-                    if error is not None:
-                        raise error
                 if agent.desired_state != "running":
                     project, agent = await self._save(project, agent, {"desired_state": "running"})
                 if runtime["availability"] == "offline":
@@ -409,15 +407,17 @@ class AgentEntityManager:
                     project, agent = await self._save(project, agent, {"desired_state": "stopped"})
                 if runtime["availability"] == "online":
                     try:
-                        result = await self._handle(project, agent).terminate_agent(
-                            agent.agent_id, agent.name
-                        )
+                        result = await self._handle(project, agent).stop_assembly(agent.agent_id)
                     except Exception as exc:
                         raise StableError("agent_stop_failed", str(exc)) from exc
                     if not result.get("success"):
                         raise StableError("agent_stop_failed", str(result.get("error")))
                 project, agent = await self._load(identity)
-                await self._save(project, agent, {"runtime_status": "stopped", "runtime_error": ""})
+                await self._save(
+                    project,
+                    agent,
+                    {"runtime_status": "stopped", "last_error": ""},
+                )
             else:
                 raise StableError("unsupported_entity_operation")
             return await self._snapshot(*await self._load(identity))

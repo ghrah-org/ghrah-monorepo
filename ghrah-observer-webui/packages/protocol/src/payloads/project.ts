@@ -28,20 +28,54 @@ export const WritableWorkspaceSpecSchema = z.object({
   default_for_agents: z.boolean().optional().default(false),
 });
 
-export const AgentSpecSchema = z
+export const AgentPresentationSchema = z
   .object({
-    endpoint_name: z.string().nullable().optional(),
-    model_overrides: z.record(z.unknown()).nullable().optional(),
-    agent_id: z.string().optional(),
+    title: z.string().optional().default(""),
+    description: z.string().optional().default(""),
+    tags: z.array(z.string()).optional().default([]),
+    icon: z.string().optional().default(""),
+    deprecated: z.boolean().optional().default(false),
+  })
+  .strict();
+
+export const AgentOriginSchema = z
+  .object({
+    template_id: z.string(),
+    revision: z.number().int().min(1),
+  })
+  .strict();
+
+/**
+ * 项目内一个 Agent 的记录：身份 + 展示 + 编排状态 + 来源。
+ *
+ * 不承载配置：模型/提示词/上下文/能力的权威在 Core 的实例快照，
+ * 模板只在创建时填一次。
+ */
+export const AgentRecordSchema = z
+  .object({
+    agent_id: z.string().optional().default(""),
+    project_id: z.string().optional().default(""),
     name: z.string(),
-    manifest_ref: z.string().optional().default(""),
-    instance_manifest_path: z.string().optional().default(""),
-    system_prompt: z.string().optional().default(""),
-    abilities: z.array(z.string()).nullable().optional(),
+    presentation: AgentPresentationSchema.optional().default({}),
+    origin: AgentOriginSchema.nullable().optional().default(null),
     desired_state: z.enum(["running", "stopped"]).optional().default("running"),
-    path_grants: z.array(PathGrantSchema).optional().default([]),
-    runtime_status: z.string().optional().default("pending"),
-    runtime_error: z.string().optional().default(""),
+    runtime_status: z
+      .enum(["pending", "running", "stopped", "failed", "lost"])
+      .optional()
+      .default("pending"),
+    last_error: z.string().optional().default(""),
+    created_at: z.string().optional().default(""),
+    updated_at: z.string().optional().default(""),
+  })
+  .strict();
+
+/** 按模板创建 Agent 的请求体（零配置）。 */
+export const AgentCreateSpecSchema = z
+  .object({
+    name: z.string().min(1),
+    template_id: z.string().min(1),
+    revision: z.number().int().min(1),
+    desired_state: z.enum(["running", "stopped"]).optional().default("running"),
   })
   .strict();
 
@@ -61,7 +95,7 @@ export const ProjectInfoPayloadSchema = z.object({
   shell_cwd: z.string().optional().default(""),
   manifest_ref: z.string().optional().default(""),
   workspaces: z.array(WorkspaceMountSchema).optional().default([]),
-  agents: z.array(AgentSpecSchema).optional().default([]),
+  agents: z.array(AgentRecordSchema).optional().default([]),
   task_ids: z.array(z.string()).optional().default([]),
   isolation: IsolationSpecPayloadSchema.optional().default({}),
   status: ProjectStatusSchema.optional().default("active"),
@@ -119,7 +153,7 @@ export const ProjectListPayloadSchema = z.object({
 
 export const ProjectAddAgentPayloadSchema = z.object({
   project_id: z.string(),
-  agent: AgentSpecSchema,
+  agent: AgentCreateSpecSchema,
   expected_version: z.number().int().nullable().optional(),
 });
 
@@ -210,7 +244,10 @@ export type RecoveryAction = z.infer<typeof RecoveryActionSchema>;
 export type PathGrant = z.infer<typeof PathGrantSchema>;
 export type WorkspaceMount = z.infer<typeof WorkspaceMountSchema>;
 export type WritableWorkspaceSpec = z.infer<typeof WritableWorkspaceSpecSchema>;
-export type AgentSpec = z.infer<typeof AgentSpecSchema>;
+export type AgentRecord = z.infer<typeof AgentRecordSchema>;
+export type AgentPresentation = z.infer<typeof AgentPresentationSchema>;
+export type AgentOrigin = z.infer<typeof AgentOriginSchema>;
+export type AgentCreateSpec = z.infer<typeof AgentCreateSpecSchema>;
 export type IsolationSpecPayload = z.infer<typeof IsolationSpecPayloadSchema>;
 export type ProjectInfoPayload = z.infer<typeof ProjectInfoPayloadSchema>;
 export type ProjectCreatePayload = z.infer<typeof ProjectCreatePayloadSchema>;

@@ -61,10 +61,16 @@ const counts = computed<{ tools: number; skills: number } | null>(() => {
   if (props.counts) return props.counts;
   const version = primary.value;
   if (!version) return null;
+  // 目录接口直接带成员键：优先用它，不再逐版本读画像（老载荷可能没有这两列）。
+  const operations = version.operations ?? [];
+  const skills = version.skills ?? [];
+  if (operations.length > 0 || skills.length > 0) {
+    return { tools: operations.length, skills: skills.length };
+  }
   const tools = readCount(version, "operation_count");
-  const skills = readCount(version, "skill_count");
-  if (tools === null || skills === null) return null;
-  return { tools, skills };
+  const skillsCount = readCount(version, "skill_count");
+  if (tools === null || skillsCount === null) return null;
+  return { tools, skills: skillsCount };
 });
 
 /** 单元包显示组合计数；多版本包显示版本数，避免把某一行的事实说成整包事实。 */
@@ -175,8 +181,15 @@ function onHead(): void {
         </span>
         <span class="ability-package-sub">
           <code v-if="fullName">{{ fullName }}</code>
-          <span v-if="fullName && primary?.version" class="ability-package-sep">·</span>
-          <span v-if="primary?.version">v{{ primary.version }}</span>
+          <span
+            v-if="fullName && primary?.version && primary.origin === 'installed'"
+            class="ability-package-sep"
+            >·</span
+          >
+          <!-- 内核件随源码发布，没有版本概念：只在能力件上显示版本号。 -->
+          <span v-if="primary?.version && primary.origin === 'installed'"
+            >v{{ primary.version }}</span
+          >
         </span>
       </span>
       <span class="ability-package-meta">
@@ -215,7 +228,9 @@ function onHead(): void {
             :aria-controls="versionBodyId(index)"
             @click="emitToggle(version)"
           >
-            <span class="ability-version-name">v{{ version.version }}</span>
+            <span v-if="version.origin === 'installed'" class="ability-version-name">
+              v{{ version.version }}
+            </span>
             <span class="ability-pill">{{ versionOriginLabel(version) }}</span>
             <span v-if="version.problem" class="ability-pill ability-pill-warn">
               {{ t("assembly.catalog.attention") }}

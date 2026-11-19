@@ -331,7 +331,7 @@ class TestAgentResetPersistence:
         spawn = await restarted.handle_command(
             "spawn_agent", _spawn_payload_with_id("writer", "a" * 32), None
         )
-        assert spawn["data"]["recovery_mode"] == "restored"
+        assert spawn["data"]["recovery_mode"] == "resumed"
 
         cm = _actor_of(restarted, "writer")._context_manager
         session = cm.get_active_session()

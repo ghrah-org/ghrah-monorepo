@@ -33,6 +33,7 @@ import {
   ProjectAddAgentPayloadSchema,
   ProjectRemoveAgentPayloadSchema,
   ProjectDeletePayloadSchema,
+  SpawnAgentPayloadSchema,
   ProjectIdPayloadSchema,
   type ProjectInfoPayload,
   ProjectLifecyclePayloadSchema,
@@ -58,7 +59,6 @@ import {
   SessionDeletePayloadSchema,
   type SessionInfoPayload,
   SessionListPayloadSchema,
-  SpawnAgentPayloadSchema,
   SendMessagePayloadSchema,
   TaskClaimListPayloadSchema,
   type TaskClaimPayload,
@@ -177,6 +177,15 @@ const MockSendAbilitySchema = z.object({
 });
 
 /**
+ * mock 的内置 Agent 模板：真实产品里能力来自模板成员，由 Core 在创建时授予。
+ * mock 没有模板库，用这份固定成员代替——`send_message` 供互发消息的剧本使用。
+ */
+const MOCK_TEMPLATE_ABILITIES: ReadonlyArray<AbilityDefinitionPayload> = [
+  { ability_type: "send_message", params: {} },
+  { ability_type: "read_file", params: {} },
+];
+
+/**
  * 模拟 Subject 状态机。命令/事件面严格对齐「Room Unit 形态契约」：
  * 同 payload schema、同事件名、同 seq 分配语义（room 内 seq 单点分配、单调递增）。
  */
@@ -238,19 +247,12 @@ export class MockState {
     switch (commandType) {
       case CommandType.AGENT_ENTITY_CREATE:
         return this._parse(AgentEntityCreatePayloadSchema, rawPayload, (payload) => {
-          if (payload.ability_types) return fail("abilities_managed_by_access_store");
-          if (payload.manifest_ref !== "mock.agent") return fail("manifest_not_found");
-          const result = this.spawnAgent(
-            payload.project_id,
-            AgentConfigPayloadSchema.parse({
-              name: payload.name,
-              endpoint_name: payload.endpoint_name,
-              model_overrides: payload.model_overrides,
-              system_prompt: payload.system_prompt,
-            }),
-            [{ ability_type: "send_message", params: {} }],
-            { start: payload.start, manifestRef: payload.manifest_ref },
-          );
+          const result = this.spawnAgent(payload.project_id, {
+            name: payload.name,
+            templateId: payload.template_id,
+            templateRevision: payload.revision,
+            start: payload.start,
+          });
           if (!result.success) return result;
           const data = result.data as { agent_id: string };
           return this._entity({
@@ -424,10 +426,15 @@ export class MockState {
 
       // Agent / Core
       case CommandType.SPAWN_AGENT:
+        // 真实 Core 已拒绝该命令；mock 保留为「按模板创建」的别名，供测试与 CLI
+        // 造数据。`manifest_ref` 被当作模板 id（修订固定 1）。
         return this._parse(SpawnAgentPayloadSchema, rawPayload, (p) =>
-          this.spawnAgent(p.project_id, p.config, p.abilities ?? [], {
+          this.spawnAgent(p.project_id, {
+            name: p.config.name,
+            agentId: p.config.agent_id ?? "",
+            templateId: p.manifest_ref || "mock.agent",
+            templateRevision: 1,
             start: true,
-            manifestRef: p.manifest_ref ?? "",
           }),
         );
       case CommandType.PROJECT_ADD_AGENT:
@@ -436,21 +443,12 @@ export class MockState {
           if (!project) return fail("project_unavailable");
           if (payload.expected_version != null && project.version !== payload.expected_version)
             return fail("agent_specification_conflict");
-          if (payload.agent.desired_state === "running" && !payload.agent.manifest_ref)
-            return fail("agent_manifest_required");
-          return this.spawnAgent(
-            payload.project_id,
-            AgentConfigPayloadSchema.parse({
-              name: payload.agent.name,
-              endpoint_name: payload.agent.endpoint_name,
-              system_prompt: payload.agent.system_prompt,
-            }),
-            [],
-            {
-              start: payload.agent.desired_state === "running",
-              manifestRef: payload.agent.manifest_ref,
-            },
-          );
+          return this.spawnAgent(payload.project_id, {
+            name: payload.agent.name,
+            templateId: payload.agent.template_id,
+            templateRevision: payload.agent.revision,
+            start: payload.agent.desired_state === "running",
+          });
         });
       case CommandType.PROJECT_REMOVE_AGENT:
         return this._parse(ProjectRemoveAgentPayloadSchema, rawPayload, (payload) => {
@@ -625,8 +623,8 @@ export class MockState {
       },
       mailbox: { availability: "available" },
       abilities: {
-        configured_types: project.agents.find((spec) => spec.agent_id === agent.agentId)?.abilities,
         available_types: [],
+        origin: project.agents.find((spec) => spec.agent_id === agent.agentId)?.origin ?? null,
         loaded_names:
           agent.runtimeState === "running"
             ? agent.abilities.map((ability) => ability.ability_type)
@@ -638,7 +636,7 @@ export class MockState {
     });
   }
 
-  /** 更新持久规格；当前运行实例在显式重启前保留原配置。 */
+  /** 更新记录的展示字段；配置由 Core 实例快照承载，不接受改写。 */
   patchAgentSpecification(
     projectId: string,
     agentId: string,
@@ -650,13 +648,8 @@ export class MockState {
       const spec = project.agents.find((item) => item.agent_id === agentId);
       if (!spec) return fail("agent_not_found");
       if (project.version !== change.expected_revision) return fail("agent_specification_conflict");
-      if (!("endpoint_name" in raw) && !("system_prompt" in raw)) return fail("invalid_request");
-      if ("endpoint_name" in raw && change.endpoint_name && change.endpoint_name !== "mock-model")
-        return fail("model_configuration_invalid");
-      if ("system_prompt" in raw && typeof change.system_prompt !== "string")
-        return fail("invalid_request");
-      if ("endpoint_name" in raw) spec.endpoint_name = change.endpoint_name || null;
-      if ("system_prompt" in raw) spec.system_prompt = change.system_prompt!;
+      if (change.presentation == null) return fail("invalid_request");
+      spec.presentation = { ...spec.presentation, ...change.presentation };
       project.version += 1;
       project.updated_at = isoNow();
       this.emit(EventType.PROJECT_UPDATED, { project });
@@ -787,24 +780,17 @@ export class MockState {
       return fail("agent_incarnation_conflict");
     if (op.type === "abilities.configure") return fail("abilities_managed_by_access_store");
     if (op.type === "model.configure") {
-      if (agent.runtimeState !== "stopped") return fail("agent_must_be_stopped");
-      if (spec.manifest_ref) return fail("model_managed_by_manifest");
-      if (op.endpoint_name !== "mock-model") return fail("model_configuration_invalid");
-      spec.endpoint_name = op.endpoint_name;
-      if (op.model_overrides !== null) spec.model_overrides = op.model_overrides;
+      // 配置由 Core 实例快照承载，Subject 侧不再接受改写。
+      return fail("agent_config_immutable");
     } else if (op.type === "start") {
       if (project.status !== "active") return fail("project_not_active");
       if (agent.runtimeState === "running") return ok(this._snapshot(project, agent));
-      if (!spec.manifest_ref) return fail("agent_manifest_required");
       agent.runtimeState = "running";
       agent.incarnationId = uuid();
-      agent.config = {
-        ...agent.config,
-        endpoint_name: spec.endpoint_name,
-        system_prompt: spec.system_prompt,
-      };
       if (!state.activeSessionId) {
-        const session = this._newSession(state, agent.name, { systemPrompt: spec.system_prompt });
+        const session = this._newSession(state, agent.name, {
+          systemPrompt: agent.config.system_prompt,
+        });
         state.activeSessionId = session.session_id;
       }
       spec.desired_state = "running";
@@ -2101,15 +2087,27 @@ export class MockState {
 
   spawnAgent(
     projectId: string,
-    config: AgentConfigPayload,
-    abilities: AbilityDefinitionPayload[] = [],
-    options: { start: boolean; manifestRef: string } = { start: true, manifestRef: "" },
+    input: {
+      name: string;
+      templateId: string;
+      templateRevision: number;
+      start: boolean;
+      agentId?: string;
+    },
   ): CommandOutcome {
+    // mock 内部仍需一份 config 来造 Session/快照；它由模板「填充一次」，
+    // 不再从请求体读，也不再写回项目 Agent 记录。
+    const config: AgentConfigPayload = AgentConfigPayloadSchema.parse({
+      name: input.name,
+      ...(input.agentId ? { agent_id: input.agentId } : {}),
+      endpoint_name: "mock-model",
+      system_prompt: "You are a mock Agent created from a template.",
+    });
     if (!config.name.trim()) return fail("invalid_request");
     const project = this.projects.get(projectId);
     if (!project) return fail(`project not found: ${projectId}`);
     if (project.archived_at != null) return fail("resource_archived");
-    if (options.start && project.status !== "active") return fail("project_not_active");
+    if (input.start && project.status !== "active") return fail("project_not_active");
     if (project.agents.some((agent) => agent.name === config.name)) {
       return fail("agent_name_exists");
     }
@@ -2122,9 +2120,11 @@ export class MockState {
       agentId,
       name: config.name,
       config: normalizedConfig,
-      abilities,
-      runtimeState: options.start ? "running" : "stopped",
-      incarnationId: options.start ? uuid() : null,
+      // 模板「填充一次」：Agent 的能力来自模板成员，不从请求体读。
+      // mock 只有一份内置模板，它授予 send_message（互发消息检查用）与 read_file。
+      abilities: MOCK_TEMPLATE_ABILITIES.map((ability) => ({ ...ability })),
+      runtimeState: input.start ? "running" : "stopped",
+      incarnationId: input.start ? uuid() : null,
     };
     this.agents.set(key, record);
     const actionState: AgentActionState = {
@@ -2135,7 +2135,7 @@ export class MockState {
       branches: new Map(),
       nodes: new Map(),
     };
-    if (options.start) {
+    if (input.start) {
       const session = this._newSession(actionState, config.name, {
         systemPrompt: config.system_prompt,
       });
@@ -2155,17 +2155,15 @@ export class MockState {
     this.actionStates.set(key, actionState);
     project.agents.push({
       agent_id: agentId,
+      project_id: projectId,
       name: config.name,
-      manifest_ref: options.manifestRef,
-      endpoint_name: config.endpoint_name,
-      model_overrides: config.model_overrides,
-      instance_manifest_path: "",
-      system_prompt: config.system_prompt,
-      abilities: null,
-      desired_state: options.start ? "running" : "stopped",
-      path_grants: [],
-      runtime_status: record.runtimeState,
-      runtime_error: "",
+      presentation: { title: config.name, description: "", tags: [], icon: "", deprecated: false },
+      origin: { template_id: input.templateId, revision: input.templateRevision },
+      desired_state: input.start ? "running" : "stopped",
+      runtime_status: record.runtimeState === "running" ? "running" : "stopped",
+      last_error: "",
+      created_at: isoNow(),
+      updated_at: isoNow(),
     });
     project.version += 1;
     project.updated_at = isoNow();
@@ -2174,8 +2172,8 @@ export class MockState {
       agent_name: config.name,
       agent_id: agentId,
     });
-    if (options.start) this.emit(EventType.AGENT_SPAWNED, this._agentEvent(record));
-    if (options.start && this._simulateChains) this._startChainSimulation(key);
+    if (input.start) this.emit(EventType.AGENT_SPAWNED, this._agentEvent(record));
+    if (input.start && this._simulateChains) this._startChainSimulation(key);
     return ok({ ...this._agentEvent(record), runtime_state: record.runtimeState });
   }
 
@@ -2372,7 +2370,7 @@ export class MockState {
     const spec = project.agents.find((agent) => agent.agent_id === agentId);
     if (!spec) return;
     spec.runtime_status = status;
-    spec.runtime_error = "";
+    spec.last_error = "";
   }
 
   private _agentEvent(agent: AgentRecord): Record<string, unknown> {

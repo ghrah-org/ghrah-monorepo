@@ -82,12 +82,37 @@ from ghrah.protocol.agent_control import (
     AgentDeletedView,
     AgentDesiredStateRequest,
     AgentListView,
+    AgentOriginView,
+    AgentPresentationView,
     AgentPromptSummary,
     AgentRuntimeView,
-    AgentSpecificationDetail,
     AgentSpecificationSummary,
     AgentSpecPatch,
     AgentSummaryView,
+    AgentTemplateAbilityRequestView,
+    AgentTemplateArchiveRequest,
+    AgentTemplateContextOverridesView,
+    AgentTemplateContextPolicyView,
+    AgentTemplateCreateRequest,
+    AgentTemplateDetailView,
+    AgentTemplateListView,
+    AgentTemplateMetadataView,
+    AgentTemplateModelView,
+    AgentTemplateOperationView,
+    AgentTemplatePackageView,
+    AgentTemplatePathRequestView,
+    AgentTemplatePermissionRequestView,
+    AgentTemplatePersistenceView,
+    AgentTemplatePromptView,
+    AgentTemplateReferencesView,
+    AgentTemplateReferenceView,
+    AgentTemplateRevisionSummaryView,
+    AgentTemplateRevisionsView,
+    AgentTemplateScriptView,
+    AgentTemplateSkillView,
+    AgentTemplateSummaryView,
+    AgentTemplateSurfaceView,
+    AgentTemplateUpdateRequest,
 )
 from ghrah.protocol.agentconf_control import (
     AgentconfCapabilityConflictView,
@@ -189,8 +214,9 @@ AGENT_MODELS = (
     AgentPromptSummary,
     AgentRuntimeView,
     AgentAbilitySummary,
+    AgentPresentationView,
+    AgentOriginView,
     AgentSpecificationSummary,
-    AgentSpecificationDetail,
     AgentSummaryView,
     AgentListView,
     AgentAdminView,
@@ -198,6 +224,31 @@ AGENT_MODELS = (
     AgentSpecPatch,
     AgentDesiredStateRequest,
     AgentDeletedView,
+    # agent-templates：按依赖顺序登记，生成物同 target（不新增生成 target）。
+    AgentTemplateMetadataView,
+    AgentTemplateModelView,
+    AgentTemplatePromptView,
+    AgentTemplatePersistenceView,
+    AgentTemplateContextOverridesView,
+    AgentTemplateContextPolicyView,
+    AgentTemplateSurfaceView,
+    AgentTemplateOperationView,
+    AgentTemplateScriptView,
+    AgentTemplateSkillView,
+    AgentTemplatePackageView,
+    AgentTemplateAbilityRequestView,
+    AgentTemplatePermissionRequestView,
+    AgentTemplatePathRequestView,
+    AgentTemplateSummaryView,
+    AgentTemplateListView,
+    AgentTemplateDetailView,
+    AgentTemplateRevisionSummaryView,
+    AgentTemplateRevisionsView,
+    AgentTemplateReferenceView,
+    AgentTemplateReferencesView,
+    AgentTemplateCreateRequest,
+    AgentTemplateUpdateRequest,
+    AgentTemplateArchiveRequest,
 )
 
 TREE_TARGET = "ghrah-observer-webui/packages/protocol/src/ability-tree.generated.ts"
@@ -279,6 +330,12 @@ def _schema_expression(
             fields.append(f"{json.dumps(key)}:{value}")
         return "z.object({" + ",".join(fields) + "}).strict()"
     if kind == "array":
+        if "prefixItems" in schema:
+            # 定长元组（如 safe_extra_sub_commands 的 [命令, [子命令...]]）。
+            parts = ",".join(
+                _schema_expression(item, emit, external, imported) for item in schema["prefixItems"]
+            )
+            return "z.tuple([" + parts + "])"
         value = "z.array(" + _schema_expression(schema["items"], emit, external, imported) + ")"
         for rule, method in (("minItems", "min"), ("maxItems", "max")):
             if rule in schema:
@@ -346,6 +403,14 @@ def _generate(
             value += ".refine(v=>(v.view===null)!==(v.error===null))"
         if name == "AbilityMcpProbeView":
             value += ".refine(v=>(v.error===null)===v.ok)"
+        # 模板契约的跨字段约束：JSON Schema 表达不了，按既有惯例手工补 refine，
+        # 保证 TS 侧与 Python `model_validator` 拒绝同一批请求。
+        if name == "AgentTemplatePackageView":
+            value += ".refine(v=>!(v.whole_container&&(v.operations.length>0||v.skills.length>0)))"
+        if name == "AgentTemplateOperationView":
+            value += ".refine(v=>v.visible||!v.available)"
+        if name == "AgentTemplatePathRequestView":
+            value += '.refine(v=>(v.scope==="package")===(v.package!==null))'
         lines.append(f"export const {name}Schema = {value};")
         lines.append(f"export type {name} = z.infer<typeof {name}Schema>;")
         emitted.add(name)

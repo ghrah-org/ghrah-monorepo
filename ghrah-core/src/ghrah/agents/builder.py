@@ -289,15 +289,36 @@ def _build_context_manager(
     )
 
 
-def _default_llm_factory(config: AgentConfig) -> LLMProtocol:
-    """默认 LLM 工厂 — 从 agentconf 创建 ChatFormat。"""
-    from agentconf import AgentsConfig
+def default_llm_factory(db_path: str | None = None) -> Callable[[AgentConfig], LLMProtocol]:
+    """构造绑定 AgentConf 库路径的默认 LLM 工厂。
 
-    if not config.endpoint_name or not config.endpoint_name.strip():
-        raise ValueError("endpoint_name is required; migrate legacy Agent configuration first")
-    with AgentsConfig() as config_client:
-        resolved = config_client.resolve_model_endpoint(config.endpoint_name)
-    return LLMFactory.create(resolved, config.model_overrides)
+    部署方把 AgentConf 库放进自定义位置（如 GHRAH_HOME 数据卷）时，spawn 校验、
+    LLM 创建与实体模型目录必须读同一份库；``_default_llm_factory`` 保持不绑定
+    路径的旧行为，本函数提供显式绑定入口。
+
+    Args:
+        db_path: AgentConf sqlite 路径；None = ``AgentsConfig`` 缺省
+            （``~/.agentconf/config.db``）。
+
+    Returns:
+        ``(AgentConfig) -> LLMProtocol`` 工厂。
+    """
+
+    def factory(config: AgentConfig) -> LLMProtocol:
+        from agentconf import AgentsConfig
+
+        if not config.endpoint_name or not config.endpoint_name.strip():
+            raise ValueError("endpoint_name is required; migrate legacy Agent configuration first")
+        with AgentsConfig(db_path) as config_client:
+            resolved = config_client.resolve_model_endpoint(config.endpoint_name)
+        return LLMFactory.create(resolved, config.model_overrides)
+
+    return factory
+
+
+def _default_llm_factory(config: AgentConfig) -> LLMProtocol:
+    """默认 LLM 工厂 — 从 agentconf 创建 ChatFormat（未绑定库路径的兼容入口）。"""
+    return default_llm_factory()(config)
 
 
 class AgentBuilder:

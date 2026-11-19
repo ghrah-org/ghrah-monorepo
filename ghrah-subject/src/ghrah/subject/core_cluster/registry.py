@@ -77,6 +77,15 @@ logger = logging.getLogger(__name__)
 _INTERNAL_CMD_CTX = CommandContext.internal()
 
 
+def _start_view(result: dict[str, Any]) -> Any:
+    """把命令回执折成 ``AgentStartView``；失败抛 ``StableError``。"""
+    from ghrah.protocol.views.core import AgentStartView
+
+    if not result.get("success"):
+        raise StableError("agent_start_failed", str(result.get("error") or "start rejected"))
+    return AgentStartView.model_validate(result.get("data") or {})
+
+
 class CoreUnitHandle:
     """单 cluster 的 Core 接入门面（ClusterHandle duck-type，进程内直达）。
 
@@ -173,6 +182,58 @@ class CoreUnitHandle:
             name=agent_name,
         ).model_dump(mode="json")
         return await self._dispatch("terminate_agent", payload)
+
+    async def create_assembly(self, spec: Any) -> Any:
+        """按装配输入创建/恢复 Agent；失败抛错（调用方负责折成创建失败码）。"""
+        result = await self._dispatch(
+            "create_agent_assembly", {"spec": spec.model_dump(mode="json")}
+        )
+        return _start_view(result)
+
+    async def start_assembly(self, agent_id: str) -> Any:
+        """按实例快照启动 Agent（幂等；配置不来自模板）。"""
+        if not self._alive:
+            raise RuntimeError(f"cluster '{self._cluster_id}' is shut down")
+        return _start_view(await self._dispatch("start_agent_assembly", {"agent_id": agent_id}))
+
+    async def stop_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止 Agent 进程并保留实例快照（幂等）。"""
+        if not self._alive:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        return await self._dispatch("stop_agent_assembly", {"agent_id": agent_id})
+
+    async def update_assembly(self, agent_id: str, spec: Any) -> dict[str, Any]:
+        """用新的装配输入覆盖实例快照并应用。"""
+        if not self._alive:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        return await self._dispatch(
+            "update_agent_assembly",
+            {"agent_id": agent_id, "spec": spec.model_dump(mode="json")},
+        )
+
+    async def update_model(
+        self,
+        agent_id: str,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """只改实例快照里的模型段；在线实例重启生效。"""
+        if not self._alive:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        return await self._dispatch(
+            "update_agent_model",
+            {
+                "agent_id": agent_id,
+                "endpoint_name": endpoint_name,
+                "model_overrides": model_overrides,
+            },
+        )
+
+    async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
+        """停止（若在线）并删除实例快照；两边都不存在时幂等成功。"""
+        if not self._alive:
+            return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
+        return await self._dispatch("delete_agent_assembly", {"agent_id": agent_id})
 
     async def send_message(self, payload: SendMessagePayload) -> dict[str, Any]:
         """把消息定向发给本 cluster 的 CoreUnit，避免全局命令路由串群。"""
@@ -443,7 +504,6 @@ class CoreClusterRegistry:
 
 def default_core_unit_factory(
     config: SubjectConfig,
-    manifest_store: Any = None,
     llm_factory: Callable[[Any], Any] | None = None,
     room_projector: Callable[[Any], Awaitable[None]] | None = None,
     ability_store_resolver: Callable[[str, str], Awaitable[Any]] | None = None,
@@ -574,6 +634,9 @@ def default_core_unit_factory(
             project_id=project_id,
             hitl_timeout=config.core.command_timeout,
             workspace_root=config.workspace_root,
+            # AgentConf 库路径与 REST 控制面同源：spawn 校验/默认 LLM 工厂读同一份库。
+            # 仅在非空时传入：旧版 ghrah-core 没有该字段，未配置路径的部署不应因此起不来。
+            **({"agentconf_db_path": config.agentconf_db_path} if config.agentconf_db_path else {}),
             auto_approve_abilities=tuple(config.hitl_policy.auto_approve_abilities),
             require_approval_by_default=config.hitl_policy.require_approval_by_default,
             safe_extra_commands=tuple(config.hitl_policy.safe_extra_commands),
@@ -585,11 +648,14 @@ def default_core_unit_factory(
             hitl_degraded_timeout=config.hitl_policy.hitl_degraded_timeout,
             environment_injection=config.hitl_policy.environment_injection,
             persistence_factory=persistence_factory,
+            # 实例配置快照：运行期配置权威落在项目 Root 内，与链库同目录。
+            agent_instances_path=str(
+                ProjectPaths.from_locator(project_root_locator).db_dir / "agents.sqlite3"
+            ),
             shell_cwd_provider=shell_cwd_provider if shell_cwd_lookup is not None else None,
             shell_allow_lookup=partial(shell_allow_lookup, project_id)
             if shell_allow_lookup is not None
             else None,
-            manifest_store=manifest_store,
             # 能力来源装配模式：同一模式决定声明目录、工具实例与 Skill 读取服务。
             ability_install_root=config.ability.install_root,
             ability_filesystem_roots=config.ability.filesystem_roots,

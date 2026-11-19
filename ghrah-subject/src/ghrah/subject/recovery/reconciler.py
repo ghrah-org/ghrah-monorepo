@@ -32,8 +32,7 @@ from ghrah.subject.recovery.desired_state import (
 )
 
 if TYPE_CHECKING:
-    from ghrah.subject.manifest_store.store import ManifestStore
-    from ghrah.subject.project.models import AgentSpec, ProjectRecord
+    from ghrah.subject.project.models import AgentRecord, ProjectRecord
     from ghrah.subject.runtime.service_keys import (
         CoreClusterRegistryService as ClusterRegistryProtocol,
     )
@@ -99,7 +98,6 @@ class ReconciliationService:
         workspace_mgr: WorkspaceManager（列已登记 workspace + 注册/重建 default ws）。
         task_store: TaskStore（reassign_project_id 迁移 sentinel task）。
         cluster_registry: CoreClusterRegistryService（ensure_cluster + get_handle）。
-        manifest_store: ManifestStore（实例 manifest 校验，MVP 仅 os.path.exists）。
         subject_id: 对账归属 subject 标识。
         on_event: 事件回调（unit 注入，转 internal event_bus）。
         config: RecoveryConfig（on_unknown_workspace / bootstrap_default_project）。
@@ -112,7 +110,6 @@ class ReconciliationService:
         workspace_mgr: WorkspaceManager,
         task_store: TaskStore,
         cluster_registry: ClusterRegistryProtocol,
-        manifest_store: ManifestStore,
         *,
         subject_id: str,
         on_event: OnEvent | None = None,
@@ -123,7 +120,6 @@ class ReconciliationService:
         self._workspace_mgr = workspace_mgr
         self._task_store = task_store
         self._cluster_transport = cluster_registry
-        self._manifest_store = manifest_store
         self._subject_id = subject_id
         self._on_event = on_event
         self._config = config
@@ -327,16 +323,17 @@ class ReconciliationService:
                         }
                     )
                     continue
-                # 实例 manifest 校验（当前仅 os.path.exists，缺失 warning 不渲染）
-                if agent.instance_manifest_path:
-                    if not os.path.exists(agent.instance_manifest_path):
-                        logger.warning(
-                            "reconcile: instance manifest missing for agent %s "
-                            "(project %s): %s — TODO manifest-instance render",
-                            agent.name,
-                            project.project_id,
-                            agent.instance_manifest_path,
-                        )
+                # 实例 manifest 校验（当前仅 os.path.exists，缺失 warning 不渲染）。
+                # 记录模型已不再携带该字段：有值才校验，别把恢复循环打成异常。
+                manifest_path = getattr(agent, "instance_manifest_path", "") or ""
+                if manifest_path and not os.path.exists(manifest_path):
+                    logger.warning(
+                        "reconcile: instance manifest missing for agent %s "
+                        "(project %s): %s — TODO manifest-instance render",
+                        agent.name,
+                        project.project_id,
+                        manifest_path,
+                    )
                 if (agent.agent_id and agent.agent_id in existing_ids) or (
                     not agent.agent_id and agent.name in existing_names
                 ):
@@ -376,7 +373,7 @@ class ReconciliationService:
                     )
 
     async def _spawn_agent(
-        self, project_id: str, agent: AgentSpec
+        self, project_id: str, agent: AgentRecord
     ) -> tuple[str | None, str | None]:
         """spawn 单个 agent；返回 ``(outcome, error)``。"""
         try:

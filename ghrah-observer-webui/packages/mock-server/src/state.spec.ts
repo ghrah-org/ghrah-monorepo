@@ -18,7 +18,8 @@ describe("stable mock entities", () => {
         state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
           project_id: project.project.project_id,
           name: "worker",
-          manifest_ref: "mock.agent",
+          template_id: "mock.agent",
+          revision: 1,
           start: true,
         }).data,
       );
@@ -62,8 +63,8 @@ describe("stable mock entities", () => {
         state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
           project_id: projectId,
           name,
-          manifest_ref: "mock.agent",
-          system_prompt: "Default prompt",
+          template_id: "mock.agent",
+          revision: 1,
           start: true,
         }).data,
       );
@@ -102,7 +103,8 @@ describe("stable mock entities", () => {
       ...source.identity,
       operation: { type: "context.create_session" },
     }).data as { session: { system_prompt: string } };
-    expect(session.session.system_prompt).toBe("Default prompt");
+    // 提示词来自模板填充（不再由创建请求传入），Session 继承的是模板内容。
+    expect(session.session.system_prompt).toContain("mock Agent");
     state.dispose();
   });
   it("preserves identity and history across stop/start, checks revisions and incarnations", () => {
@@ -118,7 +120,8 @@ describe("stable mock entities", () => {
     const result = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
       project_id: projectId,
       name: "worker",
-      manifest_ref: "mock.agent",
+      template_id: "mock.agent",
+      revision: 1,
       start: false,
     });
     expect(result.success).toBe(true);
@@ -360,7 +363,8 @@ describe("injection acceptance and queued cancellation", () => {
         state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
           project_id: created.project.project_id,
           name: "worker",
-          manifest_ref: "mock.agent",
+          template_id: "mock.agent",
+          revision: 1,
           start: true,
         }).data,
       );
@@ -405,7 +409,8 @@ describe("injection acceptance and queued cancellation", () => {
         state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
           project_id: created.project.project_id,
           name: "worker",
-          manifest_ref: "mock.agent",
+          template_id: "mock.agent",
+          revision: 1,
           start: true,
         }).data,
       );

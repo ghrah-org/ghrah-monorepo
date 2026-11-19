@@ -124,13 +124,13 @@ class StartupRegistration:
     committed: bool = False
 
 
-GrantSource = Literal["admin", "deployment", "agent-default", "migration"]
-"""关系库写入来源：管理员写入、启动核定、Agent 默认集、一次性迁移。"""
+GrantSource = Literal["admin", "deployment", "agent-default", "migration", "assembly"]
+"""关系库写入来源：管理员、启动核定、Agent 默认集、一次性迁移、装配期创建。"""
 
 MIGRATION_SOURCE = "migration"
 """一次性迁移的写入来源；也是“已迁移”的幂等标记。"""
 
-_GRANT_SOURCES = frozenset({"admin", "deployment", "agent-default", "migration"})
+_GRANT_SOURCES = frozenset({"admin", "deployment", "agent-default", "migration", "assembly"})
 
 
 @dataclass(frozen=True)

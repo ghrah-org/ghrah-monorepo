@@ -13,9 +13,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+AGENT_CONTROL_MEMBER_KEYS: frozenset[str] = frozenset({"conversation", "end_task"})
+"""控制成员键：装配边界自己加的成员，模板与装配输入都不应显式列它们。"""
 
 __all__ = [
+    "AGENT_CONTROL_MEMBER_KEYS",
     "AgentRuntimeView",
     "AgentStatus",
     "AgentAbilityRequest",
@@ -26,6 +30,31 @@ __all__ = [
     "AgentTemplatePrompt",
     "AgentTemplateSpec",
     "AgentSpawnSpec",
+    "AgentAssemblyConfig",
+    "AgentAssemblyContext",
+    "AgentAssemblyLimits",
+    "AgentAssemblyMember",
+    "AgentAssemblyModel",
+    "AgentAssemblyPermission",
+    "AgentAssemblyPrompt",
+    "AgentAssemblySpec",
+    "AgentConfigAbilityView",
+    "AgentConfigContextView",
+    "AgentConfigCoreOnlyView",
+    "AgentConfigGrantView",
+    "AgentConfigModelView",
+    "AgentConfigOperationView",
+    "AgentConfigPathView",
+    "AgentConfigPermissionView",
+    "AgentConfigPersistenceView",
+    "AgentConfigPromptView",
+    "AgentConfigScriptView",
+    "AgentConfigSkillView",
+    "AgentConfigView",
+    "AgentMemberAxes",
+    "AgentMemberPermissions",
+    "AgentStartView",
+    "AgentSurfaceSpec",
     "AgentView",
     "BranchListView",
     "BranchView",
@@ -425,15 +454,22 @@ class MailboxSummaryView(BaseModel):
 
 
 class AgentView(BaseModel):
-    """一个在线 Agent 的定义与状态（``agents.get``）。"""
+    """一个在线 Agent 的定义与状态（``agents.get``）。
+
+    ``available_ability_types`` / ``context_usage`` 与 CoreUnit
+    ``get_agent_info`` 的回执同源：C3 端口化把它们从回执里丢掉了，而观察端
+    仍依赖这两个字段（用量快照恢复、能力弹窗）。这里作为可选字段补齐；
+    ``context_usage`` 为 None 表示该单元暂无可恢复的用量快照。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
-    project_id: str = ""
     name: str = ""
     state: dict[str, Any] = Field(default_factory=dict)
     abilities: list[str] = Field(default_factory=list)
+    available_ability_types: list[str] = Field(default_factory=list)
+    context_usage: dict[str, Any] | None = None
 
 
 class AgentRuntimeView(BaseModel):
@@ -487,6 +523,317 @@ class AgentSpawnSpec(BaseModel):
     context: dict[str, Any] | None = None
     model_overrides: dict[str, Any] | None = None
     validate_model: bool = False
+
+
+class AgentSurfaceSpec(BaseModel):
+    """Agent 工具表面覆盖，对应 Core 的 ``SurfaceConfig``。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["auto", "static", "progressive"] = "auto"
+    static: list[str] = Field(default_factory=list)
+    max_static: int | None = None
+
+
+class AgentAssemblyModel(BaseModel):
+    """装配输入的模型选择：端点引用 + 请求参数覆盖。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_name: str = Field(min_length=1)
+    model_overrides: dict[str, Any] | None = None
+
+
+class AgentAssemblyPrompt(BaseModel):
+    """装配输入的提示词。新建时由 Subject 保证非空。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    system_prompt: str = Field(min_length=1)
+
+
+class AgentAssemblyLimits(BaseModel):
+    """装配输入的迭代与通信上限；``-1`` 表示不限制。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_iterations: int = Field(ge=-1)
+    communication_timeout: float = Field(ge=-1)
+
+
+class AgentAssemblyContext(BaseModel):
+    """装配输入的上下文窗口与持久化覆盖。
+
+    ``persistence`` 只承载模板三键（``type``/``compress``/``auto_persist``）；
+    ``root_dir`` / ``run_id`` 由 Subject 渲染时补齐。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window: dict[str, Any] | None = None
+    persistence: dict[str, Any] | None = None
+
+
+class AgentAssemblyPermission(BaseModel):
+    """该 Agent 的 HITL 覆盖；部署策略是底线，只能收紧。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_approve: list[str] = Field(default_factory=list)
+    require_approval_by_default: bool = True
+    safe_extra_commands: list[str] = Field(default_factory=list)
+    safe_extra_sub_commands: list[tuple[str, list[str]]] | None = None
+
+
+class AgentAssemblyConfig(BaseModel):
+    """装配输入的配置段：模型、提示词、上限、上下文、表面与审批覆盖。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = ""
+    model: AgentAssemblyModel
+    prompt: AgentAssemblyPrompt
+    limits: AgentAssemblyLimits
+    context: AgentAssemblyContext | None = None
+    surface: AgentSurfaceSpec | None = None
+    mcp_refs: list[str] = Field(default_factory=list)
+    permission: AgentAssemblyPermission | None = None
+
+
+class AgentMemberPermissions(BaseModel):
+    """成员级 L2 申请（只能收紧包声明）。
+
+    九个维度**全部可空**：``null`` 表示「本成员未就该维度提出申请」，Core 据此
+    沿用包声明上限；显式的 ``false`` 才是收紧。用 ``null`` 而不是默认值，是为了
+    让 ``PermissionFlags.model_fields_set`` 的语义能跨 wire 保留。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_paths: list[str] | None = None
+    denied_paths: list[str] | None = None
+    require_hitl: bool | None = None
+    fs_read_only: bool | None = None
+    fs_write: bool | None = None
+    shell_access: bool | None = None
+    net_access: bool | None = None
+    allowed_commands: list[str] | None = None
+    denied_commands: list[str] | None = None
+
+
+class AgentMemberAxes(BaseModel):
+    """成员的操作轴可见/可用开关。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    visible: bool = True
+    available: bool = True
+
+
+class AgentAssemblyMember(BaseModel):
+    """一个成员申请：操作 / 技能 / MCP，按 ``type`` 决定装载方式。
+
+    ``member`` 是成员全名 ``<package>.<key>``（内核件同样逐个列成员，不按包整体）。
+    ``version`` 只对外部安装的能力件有意义（安装根下 ``<ns>/<name>/<version>/``）；
+    内核件随源码发布、没有版本层，取 ``None``。``ability_type`` 只是来源标记
+    （内核树 / 安装根），装载逻辑不分叉。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    member: str = Field(min_length=1)
+    type: Literal["operation", "skill", "mcp"] = "operation"
+    version: str | None = None
+    ability_type: Literal["kernel", "external"] = "kernel"
+    permissions: AgentMemberPermissions | None = None
+    axes: AgentMemberAxes | None = None
+    whole_container: bool = False
+    """兼容字段：整包选择。装配前应展开成成员级，落库的成员不再带它。"""
+
+
+class AgentAssemblySpec(BaseModel):
+    """``agents.create`` 的装配输入（v3）。
+
+    ``agent_id`` 为空表示**新建**：``config`` 必填，``members`` 只含已授予成员。
+    ``agent_id`` 非空表示**恢复**：``config`` 与 ``members`` 必须为空，配置来自
+    Core 自己的实例快照，不从 Subject 重放模板。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    agent_id: str = ""
+    config: AgentAssemblyConfig | None = None
+    members: list[AgentAssemblyMember] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_mode_shape(self) -> AgentAssemblySpec:
+        """恢复模式不带配置；新建模式必须有配置。"""
+        if self.agent_id:
+            if self.config is not None:
+                raise ValueError("recovery mode must not carry config")
+            if self.members:
+                raise ValueError("recovery mode must not carry members")
+        elif self.config is None:
+            raise ValueError("create mode requires config")
+        return self
+
+
+class AgentStartView(BaseModel):
+    """``agents.create`` 的就绪回执。返回即代表实例已可用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    name: str = ""
+    recovery_mode: Literal["created", "resumed"] = "created"
+    incarnation_id: str | None = None
+
+
+class AgentConfigModelView(BaseModel):
+    """``AgentConfigView`` 的模型段（生效值）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_name: str | None = None
+    model_overrides: dict[str, Any] | None = None
+
+
+class AgentConfigPromptView(BaseModel):
+    """``AgentConfigView`` 的提示词段（生效值）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    system_prompt: str = ""
+
+
+class AgentConfigPersistenceView(BaseModel):
+    """持久化生效值；``root_dir`` / ``run_id`` 由渲染期补齐。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None = None
+    compress: bool | None = None
+    auto_persist: bool | None = None
+    root_dir: str | None = None
+    run_id: str | None = None
+
+
+class AgentConfigContextView(BaseModel):
+    """``AgentConfigView`` 的上下文段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_iterations: int = -1
+    communication_timeout: float = 300.0
+    window: dict[str, Any] | None = None
+    persistence: AgentConfigPersistenceView | None = None
+
+
+class AgentConfigOperationView(BaseModel):
+    """一个操作成员轴。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    visible: bool = True
+    available: bool = True
+
+
+class AgentConfigScriptView(BaseModel):
+    """一个技能脚本轴；``exec`` 表示是否允许执行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    visible: bool = True
+    exec: bool = False
+
+
+class AgentConfigSkillView(BaseModel):
+    """一个技能成员及其脚本轴。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    visible: bool = True
+    scripts: list[AgentConfigScriptView] = Field(default_factory=list)
+
+
+class AgentConfigGrantView(BaseModel):
+    """一组授权事实：按 alias 聚合的成员轴与硬沙盒根。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str = ""
+    package: str = ""
+    whole_container: bool = False
+    operations: list[AgentConfigOperationView] = Field(default_factory=list)
+    skills: list[AgentConfigSkillView] = Field(default_factory=list)
+    allowed_roots: list[str] = Field(default_factory=list)
+
+
+class AgentConfigAbilityView(BaseModel):
+    """``AgentConfigView`` 的能力段（授权事实，不是模板申请）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    surface: AgentSurfaceSpec | None = None
+    grants: list[AgentConfigGrantView] = Field(default_factory=list)
+    mcp_refs: list[str] = Field(default_factory=list)
+
+
+class AgentConfigPermissionView(BaseModel):
+    """部署策略与该 Agent 覆盖合并后的有效审批策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_approve: list[str] = Field(default_factory=list)
+    require_approval_by_default: bool = True
+    safe_extra_commands: list[str] = Field(default_factory=list)
+    safe_extra_sub_commands: list[tuple[str, list[str]]] | None = None
+
+
+class AgentConfigPathView(BaseModel):
+    """已解析的路径事实（绝对根）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: str
+    access: Literal["read", "write"] = "read"
+    deny: bool = False
+
+
+class AgentConfigCoreOnlyView(BaseModel):
+    """不由模板填充、只用于诊断的 Core 侧事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_root: str = ""
+    resources: dict[str, Any] = Field(default_factory=dict)
+    cluster_context_injection: bool = False
+    environment_context_injection: bool = False
+
+
+class AgentConfigView(BaseModel):
+    """``agents.config(agent_id)`` 返回的只读配置事实。
+
+    按 ``agent_id`` 取，**不含 ``project_id``**（Core 没有项目身份）；运行态仍走
+    ``agents.runtime``。``ability.grants`` 是授权事实，模板里的申请不在这里回放。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    name: str = ""
+    description: str = ""
+    model: AgentConfigModelView = Field(default_factory=AgentConfigModelView)
+    prompt: AgentConfigPromptView = Field(default_factory=AgentConfigPromptView)
+    context: AgentConfigContextView = Field(default_factory=AgentConfigContextView)
+    ability: AgentConfigAbilityView = Field(default_factory=AgentConfigAbilityView)
+    permission: AgentConfigPermissionView = Field(default_factory=AgentConfigPermissionView)
+    paths: list[AgentConfigPathView] = Field(default_factory=list)
+    core_only: AgentConfigCoreOnlyView | None = None
 
 
 class AgentTemplateModel(BaseModel):

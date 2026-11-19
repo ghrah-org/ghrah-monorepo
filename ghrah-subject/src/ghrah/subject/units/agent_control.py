@@ -23,9 +23,10 @@ from ghrah.protocol.agent_control import (
     AgentDeletedView,
     AgentDesiredStateRequest,
     AgentListView,
+    AgentOriginView,
+    AgentPresentationView,
     AgentPromptSummary,
     AgentRuntimeView,
-    AgentSpecificationDetail,
     AgentSpecificationSummary,
     AgentSpecPatch,
     AgentSummaryView,
@@ -35,7 +36,7 @@ from ghrah.protocol.payloads.entity import AgentEntityPayload
 from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.project.models import AgentSpec, ProjectRecord
+from ghrah.subject.project.models import AgentRecord, ProjectRecord
 from ghrah.subject.project.store import ConcurrentModificationError
 from ghrah.subject.runtime.service_keys import (
     CORE_PORT_SERVICE,
@@ -53,7 +54,6 @@ __all__ = ["AgentControlUnit", "build_agent_control_router"]
 _VERSION_GOT = re.compile(r"got (\d+)")
 
 _COMMAND_STATUS: dict[str, tuple[str, int]] = {
-    "agent_manifest_required": ("agent_manifest_required", 409),
     "agent_name_exists": ("agent_name_exists", 409),
     "agent_not_found": ("not_found", 404),
     "project_not_active": ("project_not_active", 409),
@@ -91,25 +91,22 @@ def _runtime(payload: dict[str, Any] | None) -> AgentRuntimeView:
     )
 
 
-def _summary_spec(project: ProjectRecord, agent: AgentSpec) -> AgentSpecificationSummary:
+def _summary_spec(project: ProjectRecord, agent: AgentRecord) -> AgentSpecificationSummary:
     return AgentSpecificationSummary(
         agent_id=agent.agent_id,
         name=agent.name,
-        endpoint_name=agent.endpoint_name,
-        prompt=_prompt(agent.system_prompt or ""),
+        presentation=AgentPresentationView.model_validate(
+            agent.presentation.model_dump(mode="json")
+        ),
+        origin=(
+            AgentOriginView(template_id=agent.origin.template_id, revision=agent.origin.revision)
+            if agent.origin is not None
+            else None
+        ),
         desired_state=agent.desired_state,
-        manifest_ref=agent.manifest_ref,
         runtime_status=agent.runtime_status,
-        runtime_error=agent.runtime_error,
+        last_error=agent.last_error,
         project_version=project.version,
-    )
-
-
-def _detail_spec(project: ProjectRecord, agent: AgentSpec) -> AgentSpecificationDetail:
-    summary = _summary_spec(project, agent)
-    return AgentSpecificationDetail(
-        **summary.model_dump(),
-        system_prompt=agent.system_prompt or "",
     )
 
 
@@ -199,7 +196,7 @@ def build_agent_control_router(
 
     async def _admin(
         project: ProjectRecord,
-        agent: AgentSpec,
+        agent: AgentRecord,
         runtime: dict[str, Any] | None,
         *,
         effective: str | None = None,
@@ -207,15 +204,15 @@ def build_agent_control_router(
         ability, unavailable = await _ability(project, agent.agent_id)
         return AgentAdminView(
             project_id=project.project_id,
-            specification=_detail_spec(project, agent),
+            specification=_summary_spec(project, agent),
             runtime=_runtime(runtime),
             ability=ability,
             ability_unavailable=unavailable,
             effective=effective,  # type: ignore[arg-type]
-            spec_overrides_template=bool(agent.manifest_ref) and effective == "next_start",
+            spec_overrides_template=False,
         )
 
-    async def _find(project: ProjectRecord, agent_id: str) -> AgentSpec:
+    async def _find(project: ProjectRecord, agent_id: str) -> AgentRecord:
         agent = next((item for item in project.agents if item.agent_id == agent_id), None)
         if agent is None:
             raise AbilityApiError("not_found", f"Agent 不存在：{agent_id}")
@@ -274,14 +271,12 @@ def build_agent_control_router(
             raise error
         wire, status = _COMMAND_STATUS.get(code, ("invalid_change", 400))
         detail: dict[str, Any] = {}
-        if wire == "conflict" or code == "agent_manifest_required":
+        if wire == "conflict":
             project = await project_store.get(project_id)
             if project is not None:
                 detail["project_version"] = project.version
                 agent = next((item for item in project.agents if item.agent_id == agent_id), None)
-                if code == "agent_manifest_required":
-                    detail["kept"] = agent is not None
-                elif wire == "conflict" and agent is not None:
+                if agent is not None:
                     runtimes = await _runtimes(project_id)
                     latest = await _admin(project, agent, runtimes.get(agent_id))
                     detail["view"] = latest.model_dump(mode="json")
@@ -350,11 +345,6 @@ def build_agent_control_router(
                 "创建请求不合法",
                 detail={"errors": error.errors(include_url=False)},
             ) from error
-        if change.endpoint_name:
-            try:
-                projects.agents.validate_model_name(change.endpoint_name)
-            except Exception as error:
-                await _raise_domain(error, project_id, "")
         result = await projects.handle_command(
             "project_add_agent",
             {
@@ -362,11 +352,9 @@ def build_agent_control_router(
                 "expected_version": change.expected_revision,
                 "agent": {
                     "name": change.name,
-                    "endpoint_name": change.endpoint_name,
-                    "system_prompt": change.system_prompt,
+                    "template_id": change.template_id,
+                    "revision": change.revision,
                     "desired_state": change.desired_state,
-                    "manifest_ref": change.manifest_ref,
-                    "abilities": None,
                 },
             },
         )
@@ -400,10 +388,8 @@ def build_agent_control_router(
                 detail={"errors": error.errors(include_url=False)},
             ) from error
         fields: dict[str, Any] = {}
-        if "endpoint_name" in change.model_fields_set:
-            fields["endpoint_name"] = change.endpoint_name or None
-        if "system_prompt" in change.model_fields_set:
-            fields["system_prompt"] = change.system_prompt
+        if change.presentation is not None:
+            fields["presentation"] = change.presentation.model_dump(exclude_unset=True)
         try:
             project, agent = await projects.agents.update_persisted_spec(
                 project_id,

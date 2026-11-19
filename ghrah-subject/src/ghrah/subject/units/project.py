@@ -30,11 +30,11 @@ from ghrah.subject.recovery.desired_state import DesiredStateRecord, DesiredStat
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
     DESIRED_STATE_STORE,
-    MANIFEST_STORE,
     PROJECT_MANAGER,
     PROJECT_STORE,
     TASK_MANAGER,
     TASK_STORE,
+    TEMPLATE_STORE,
     WORKSPACE_MANAGER,
 )
 from ghrah.subject.unit.base import CommandContext, RouteSpec, SubjectUnit, UnitMeta
@@ -158,7 +158,6 @@ class ProjectUnit(SubjectUnit):
                     TASK_MANAGER,
                     TASK_STORE,
                     CORE_CLUSTER_REGISTRY,
-                    MANIFEST_STORE,
                     DESIRED_STATE_STORE,
                 }
             ),
@@ -185,13 +184,12 @@ class ProjectUnit(SubjectUnit):
         self._task_store = ctx.get(TASK_STORE.name)
         cluster_transport = ctx.get(CORE_CLUSTER_REGISTRY.name)
         self._cluster_transport = cluster_transport
-        manifest_store = ctx.get(MANIFEST_STORE.name)
         self._manager = ProjectManager(
             self._store,
             workspace_mgr,
             task_mgr,
             cluster_transport,
-            manifest_store,
+            template_store=lambda: ctx.get(TEMPLATE_STORE.name),
             on_event=self._emit_event,
             bootstrap_workspace_locator=self._config.project.bootstrap_workspace_locator,
             default_root_locator_template=self._config.project.default_root_locator_template,
@@ -199,6 +197,7 @@ class ProjectUnit(SubjectUnit):
                 *self._config.ability.filesystem_roots,
                 self._config.sandbox.workspace_root,
             ),
+            agentconf_db_path=self._config.agentconf_db_path,
         )
         self._manager.register_scoped_resource(self._task_store)
         ctx.provide(PROJECT_MANAGER.name, self._manager)
