@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 import { ObserverClient } from "@ghrah/observer-core";
 import { AgentSnapshotSchema } from "@ghrah/protocol";
 
+// Agent 由模板创建：模板身份来自 Subject 模板库，mock 内置一份同 id 的模板。
+const MOCK_TEMPLATE_ID = "mock.template";
+const MOCK_TEMPLATE_REVISION = "1";
+
 test("mock: create entity, start, create Session, send message and read offline history", async ({
   page,
 }) => {
@@ -20,7 +24,10 @@ test("mock: create entity, start, create Session, send message and read offline 
     await page.getByRole("button", { name: "Create agent entity", exact: true }).click();
     const createDialog = page.getByRole("dialog", { name: "Create agent entity", exact: true });
     await createDialog.getByLabel("Name", { exact: true }).fill("browser-worker");
-    await createDialog.getByLabel("Agent manifest reference", { exact: true }).fill("mock.agent");
+    await createDialog.getByLabel("Agent template", { exact: true }).fill(MOCK_TEMPLATE_ID);
+    await createDialog
+      .getByLabel("Template revision", { exact: true })
+      .fill(MOCK_TEMPLATE_REVISION);
     await createDialog.getByRole("button", { name: "Create agent entity", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Agent entity · browser-worker", exact: true });
     await expect(dialog.locator(".entity-facts")).toContainText("Offline");
@@ -59,7 +66,8 @@ test("mock: create entity, start, create Session, send message and read offline 
     const peerResult = await client.createAgentEntity({
       project_id: projectId,
       name: "browser-peer",
-      manifest_ref: "mock.agent",
+      template_id: MOCK_TEMPLATE_ID,
+      revision: 1,
       start: true,
     });
     const peer = AgentSnapshotSchema.parse(peerResult.data);
