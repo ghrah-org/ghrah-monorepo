@@ -101,6 +101,9 @@ async function main() {
   );
   const demoProject = projects.projectList.find((project) => project.name === "demo-project");
   const demoProjectId = demoProject?.project_id;
+  // Agent 创建走模板：模板身份由 Subject 的模板库提供，mock 只校验载荷形状。
+  const MOCK_TEMPLATE_ID = "mock.template";
+  const MOCK_TEMPLATE_REVISION = 1;
   const demoArchitectId = "demo-architect";
   const demoFrontendId = "demo-frontend";
 
@@ -476,7 +479,8 @@ async function main() {
   const createdEntity = await client.createAgentEntity({
     project_id: demoProjectId,
     name: "smoke-entity",
-    manifest_ref: "mock.agent",
+    template_id: MOCK_TEMPLATE_ID,
+    revision: MOCK_TEMPLATE_REVISION,
     start: false,
   });
   check("create a stopped persistent Agent", createdEntity.success);
@@ -577,7 +581,8 @@ async function main() {
   const peerCreated = await client.createAgentEntity({
     project_id: demoProjectId,
     name: "smoke-peer",
-    manifest_ref: "mock.agent",
+    template_id: MOCK_TEMPLATE_ID,
+    revision: MOCK_TEMPLATE_REVISION,
     start: true,
   });
   const peer = AgentSnapshotSchema.parse(peerCreated.data);

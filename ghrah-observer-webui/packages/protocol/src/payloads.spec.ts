@@ -124,16 +124,16 @@ describe("Project payload schemas", () => {
         {
           agent_id: "agent-001",
           name: "architect",
-          runtime_status: "error",
-          runtime_error: "transport down",
+          runtime_status: "failed",
+          last_error: "transport down",
         },
       ],
     });
 
     expect(project.isolation.agent_private_dir).toBe(false);
     expect(project.isolation.agent_path_grants["agent-001"]?.[0]?.subpath).toBe("src");
-    expect(project.agents[0]?.runtime_status).toBe("error");
-    expect(project.agents[0]?.runtime_error).toBe("transport down");
+    expect(project.agents[0]?.runtime_status).toBe("failed");
+    expect(project.agents[0]?.last_error).toBe("transport down");
   });
 });
 

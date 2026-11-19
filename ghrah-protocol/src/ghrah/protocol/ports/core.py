@@ -19,6 +19,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
@@ -39,9 +40,12 @@ from ghrah.protocol.ability_tree import (
 from ghrah.protocol.shell_allow import ShellAllowValidationRequest, ShellBuiltinRulesView
 from ghrah.protocol.views.common import Page
 from ghrah.protocol.views.core import (
+    AgentAssemblySpec,
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     BranchView,
@@ -325,6 +329,23 @@ class AbilityOperations(Protocol):
         """撤销能力；返回写后的视图与修订号。"""
         ...
 
+    async def write_grant(
+        self, *, agent_id: AgentId, change: GrantAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只写授权事实，不做运行投影。
+
+        装配期专用（Agent 尚未注册时先落授权）：与 :meth:`grant` 的区别是
+        **不读运行实例、不产出工具表投影**，因此只回报关系修订。写入来源记为
+        ``assembly``，与管理员写入在审计上可区分。
+        """
+        ...
+
+    async def write_revoke(
+        self, *, agent_id: AgentId, change: RevokeAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只撤销授权事实，不做运行投影；用于创建失败时的补偿回滚。"""
+        ...
+
     async def enable_tool(
         self, *, agent_id: AgentId, change: BindToolRequest
     ) -> AbilityTreeChangeResult:
@@ -354,8 +375,69 @@ class AgentOperations(Protocol):
         """按模板创建 Agent；模板中尚未实现的策略抛 ``UNAVAILABLE``。"""
         ...
 
+    async def create_assembly(self, *, spec: AgentAssemblySpec) -> AgentStartView:
+        """按装配输入 v3 创建或恢复 Agent；返回即代表实例已可用。
+
+        ``spec.agent_id`` 为空时新建、非空时恢复（配置来自 Core 的实例快照）。
+        与 :meth:`create` 并存到 T3-b：后者仍吃 ``manifest_ref``，本方法在
+        创建成功后把配置写进 Core 自己的实例快照，此后不再回读模板。
+        """
+        ...
+
+    async def start_assembly(self, *, agent_id: AgentId) -> AgentStartView:
+        """从实例快照启动一个 Agent（幂等）。
+
+        配置完全来自 Core 的实例快照，不接收模板；已在线时直接返回当前 incarnation。
+        快照缺失抛 ``NOT_FOUND``。
+        """
+        ...
+
+    async def stop_assembly(self, *, agent_id: AgentId) -> None:
+        """停止一个 Agent 的进程，**保留**实例快照以便再次启动（幂等）。"""
+        ...
+
+    async def update_assembly(
+        self, *, agent_id: AgentId, spec: AgentAssemblySpec
+    ) -> AgentStartView:
+        """用新的装配输入覆盖实例快照并应用（在线重启、离线下次启动生效）。
+
+        ``spec`` 是新的配置事实；写入后快照即为权威，不再回读模板。
+        """
+        ...
+
+    async def update_model(
+        self,
+        *,
+        agent_id: AgentId,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> AgentStartView:
+        """只改实例快照里的模型段（端点引用 + 请求参数），其余配置保持现值。
+
+        在线实例重启生效；离线时只落库，下次启动生效。对应旧的
+        ``model.configure`` 操作。
+        """
+        ...
+
+    async def delete_assembly(self, *, agent_id: AgentId) -> None:
+        """停止（若在线）并删除实例快照；不存在时幂等成功。
+
+        与 :meth:`delete` 的区别：后者只要求在线、且不动快照。
+        """
+        ...
+
     async def get(self, *, agent_id: AgentId) -> AgentView:
         """读取在线 Agent 的定义与状态；不在线抛 ``NOT_FOUND``。"""
+        ...
+
+    async def config(self, *, agent_id: AgentId) -> AgentConfigView:
+        """读取 Agent 的配置事实（只读）。
+
+        与 :meth:`runtime` 分工：本方法返回配置事实（模型、提示词、上限、
+        上下文、能力表面、审批策略、路径），运行态仍由 :meth:`runtime` 返回；
+        **不含 ``project_id``**（Core 没有项目身份）。查无或实例快照缺失抛
+        ``NOT_FOUND``，由调用方决定是否标记为丢失。
+        """
         ...
 
     async def delete(self, *, agent_id: AgentId) -> None:

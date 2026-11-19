@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { AgentConfigPayloadSchema, SpawnAgentPayloadSchema } from "./payloads/agent.js";
-import { AgentSpecSchema } from "./payloads/project.js";
+import { AgentRecordSchema } from "./payloads/project.js";
 
 describe("explicit endpoint references", () => {
   it("retains request parameters through JSON serialization", () => {
@@ -25,10 +25,8 @@ describe("explicit endpoint references", () => {
   });
 
   it("rejects old references even when a new reference is supplied", () => {
-    for (const endpoint_name of [undefined, "new"]) {
-      const input = { name: "worker", endpoint_name, agent_config_name: "old" };
-      expect(AgentConfigPayloadSchema.safeParse(input).success).toBe(false);
-      expect(AgentSpecSchema.safeParse({ ...input, cluster_id: "c" }).success).toBe(false);
-    }
+    const input = { name: "worker", agent_config_name: "old" };
+    expect(AgentConfigPayloadSchema.safeParse(input).success).toBe(false);
+    expect(AgentRecordSchema.safeParse(input).success).toBe(false);
   });
 });

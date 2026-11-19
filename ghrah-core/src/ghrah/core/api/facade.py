@@ -16,6 +16,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityPackageGroupsView,
     AbilityTreeChangeResult,
@@ -53,9 +54,12 @@ from ghrah.protocol.views.common import (
     SessionIdView,
 )
 from ghrah.protocol.views.core import (
+    AgentAssemblySpec,
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     BranchListView,
@@ -608,6 +612,56 @@ class _Agents:
         )
         return AgentIdView.model_validate(raw).agent_id
 
+    async def create_assembly(self, *, spec: AgentAssemblySpec) -> AgentStartView:
+        """按装配输入 v3 创建或恢复 Agent。"""
+        raw = await self._facade._call("agents.create_assembly", spec=spec.model_dump(mode="json"))
+        return AgentStartView.model_validate(raw)
+
+    async def start_assembly(self, *, agent_id: AgentId) -> AgentStartView:
+        """从实例快照启动 Agent（幂等）。"""
+        raw = await self._facade._call("agents.start_assembly", agent_id=agent_id)
+        return AgentStartView.model_validate(raw)
+
+    async def stop_assembly(self, *, agent_id: AgentId) -> None:
+        """停止 Agent，保留实例快照（幂等）。"""
+        await self._facade._call("agents.stop_assembly", agent_id=agent_id)
+
+    async def update_assembly(
+        self, *, agent_id: AgentId, spec: AgentAssemblySpec
+    ) -> AgentStartView:
+        """用新的装配输入覆盖实例快照并应用。"""
+        raw = await self._facade._call(
+            "agents.update_assembly",
+            agent_id=agent_id,
+            spec=spec.model_dump(mode="json"),
+        )
+        return AgentStartView.model_validate(raw)
+
+    async def delete_assembly(self, *, agent_id: AgentId) -> None:
+        """停止（若在线）并删除实例快照；不存在时幂等成功。"""
+        await self._facade._call("agents.delete_assembly", agent_id=agent_id)
+
+    async def update_model(
+        self,
+        *,
+        agent_id: AgentId,
+        endpoint_name: str,
+        model_overrides: dict[str, Any] | None = None,
+    ) -> AgentStartView:
+        """只改实例快照里的模型段（端点引用 + 请求参数）。"""
+        raw = await self._facade._call(
+            "agents.update_model",
+            agent_id=agent_id,
+            endpoint_name=endpoint_name,
+            model_overrides=model_overrides,
+        )
+        return AgentStartView.model_validate(raw)
+
+    async def config(self, *, agent_id: AgentId) -> AgentConfigView:
+        """读取 Agent 的配置事实（不含项目身份）。"""
+        raw = await self._facade._call("agents.config", agent_id=agent_id)
+        return AgentConfigView.model_validate(raw)
+
     async def get(self, *, agent_id: AgentId) -> AgentView:
         """读取在线 Agent 的定义与状态。"""
         raw = await self._facade._call("agents.get", agent_id=agent_id)
@@ -713,6 +767,28 @@ class _Abilities:
             change=change.model_dump(mode="json"),
         )
         return AbilityTreeChangeResult.model_validate(raw)
+
+    async def write_grant(
+        self, *, agent_id: AgentId, change: GrantAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只写授权事实（装配期），不做运行投影。"""
+        raw = await self._facade._call(
+            "abilities.write_grant",
+            agent_id=agent_id,
+            change=change.model_dump(mode="json"),
+        )
+        return AbilityGrantWriteView.model_validate(raw)
+
+    async def write_revoke(
+        self, *, agent_id: AgentId, change: RevokeAbilityRequest
+    ) -> AbilityGrantWriteView:
+        """只撤销授权事实（补偿回滚），不做运行投影。"""
+        raw = await self._facade._call(
+            "abilities.write_revoke",
+            agent_id=agent_id,
+            change=change.model_dump(mode="json"),
+        )
+        return AbilityGrantWriteView.model_validate(raw)
 
     async def enable_tool(
         self, *, agent_id: AgentId, change: BindToolRequest

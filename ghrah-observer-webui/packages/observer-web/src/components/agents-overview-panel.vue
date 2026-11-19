@@ -89,7 +89,7 @@ const rows = computed(() =>
       agentId,
       name: runtime?.agentName ?? spec.name,
       status: displayRuntimeStatus(runtime?.runtimeStatus ?? spec.runtime_status ?? "stopped"),
-      runtimeError: runtime?.runtimeError ?? spec.runtime_error ?? "",
+      runtimeError: runtime?.runtimeError ?? spec.last_error ?? "",
       roomNames,
       chainTarget,
       // 窗口的「声明态」直接读 Agent 配置

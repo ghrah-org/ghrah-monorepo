@@ -208,12 +208,9 @@ function versionIdentity(key: string): { namespace: string; name: string; versio
 }
 
 /**
- * 行内的「工具 · 技能」拆分还没有契约字段，用已有的版本画像补出来。
- *
- * 只对当前可见的行预取，并且有上限：包一多就退回成员数，不为了一个角标打出上百个请求。
- * 契约将来带上 ``operation_count`` / ``skill_count`` 时，卡片会优先用那两个字段。
+ * 行内计数直接来自目录接口（``operations`` / ``skills``），不再预取版本画像。
+ * 展开某一行时仍按需读画像（详情面板需要正文与权限细节）。
  */
-const PREFETCH_LIMIT = 40;
 const profileInflight = new Set<string>();
 
 /** 三个入口（预取、展开、刷新）共用同一个去重集合，避免同一版本被排两次队。 */
@@ -228,25 +225,22 @@ function ensureProfile(namespace: string, name: string, version: string): void {
     .finally(() => profileInflight.delete(key));
 }
 
+/**
+ * 行内的「工具 · 技能」拆分现在由目录接口直接给出（``operations`` / ``skills``），
+ * 不再逐版本读画像——一次查询同时满足列表与模板下拉的需要。
+ */
 function profileCounts(group: AbilityPackageGroupView): { tools: number; skills: number } | null {
-  const name = groupName(group);
   const version = group.versions[0];
-  if (!group.namespace || !name || !version?.version) return null;
-  const profile = packages.versionProfile(group.namespace, name, version.version)?.profile;
-  if (!profile) return null;
-  return { tools: profile.operations.length, skills: profile.skills.length };
+  if (!version) return null;
+  const operations = version.operations ?? [];
+  const skills = version.skills ?? [];
+  if (operations.length === 0 && skills.length === 0) return null;
+  return { tools: operations.length, skills: skills.length };
 }
 
 function prefetchCounts(rows: AbilityPackageGroupView[]): void {
-  let budget = PREFETCH_LIMIT;
-  for (const group of rows) {
-    if (budget <= 0) break;
-    const name = groupName(group);
-    const version = group.versions[0];
-    if (!group.namespace || !name || !version?.version) continue;
-    ensureProfile(group.namespace, name, version.version);
-    budget -= 1;
-  }
+  // 计数已由目录接口提供，这里不再预取画像；保留空实现以免调用点散落判断。
+  void rows;
 }
 
 watch(visibleGroups, (rows) => prefetchCounts(rows), { immediate: true });

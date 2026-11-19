@@ -31,9 +31,11 @@ describe("MockHttpServer", () => {
     const created = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
       project_id: projectId,
       name: "worker",
-      manifest_ref: "mock.agent",
+      template_id: "mock.agent",
+      revision: 1,
       start: true,
     });
+    expect(created).toMatchObject({ success: true });
     const snapshot = AgentSnapshotSchema.parse(created.data);
     const events: string[] = [];
     state.emit = (type) => events.push(type);
@@ -77,24 +79,22 @@ describe("MockHttpServer", () => {
       method: "PATCH",
       body: JSON.stringify({
         expected_revision: snapshot.specification_revision,
-        system_prompt: "新提示词",
+        presentation: { title: "改过的标题" },
       }),
     });
     expect(patchedResponse.status).toBe(200);
     const patched = (await patchedResponse.json()) as {
-      effective: string;
-      specification: { project_version: number; prompt: { size_bytes: number } };
+      specification: { project_version: number; presentation: { title: string } };
     };
-    expect(patched.effective).toBe("next_start");
-    expect(patched.specification.prompt.size_bytes).toBe(12);
-    expect([...state.agents.values()][0].config.system_prompt).toBe("");
+    // 记录只承载展示字段；配置由 Core 实例快照承载，不再经 PATCH 改写。
+    expect(patched.specification.presentation.title).toBe("改过的标题");
     expect(
       (
         await fetch(agentBase, {
           method: "PATCH",
           body: JSON.stringify({
             expected_revision: snapshot.specification_revision,
-            system_prompt: "stale",
+            presentation: { title: "stale" },
           }),
         })
       ).status,
@@ -127,13 +127,16 @@ describe("MockHttpServer", () => {
     };
     expect(restarted.runtime.incarnation_id).not.toBe(snapshot.runtime.incarnation_id);
     expect(restarted.ability.requires_respawn).toBe(false);
-    expect([...state.agents.values()][0].config.system_prompt).toBe("新提示词");
+    // 配置不再随创建请求进入记录：重启后用的是模板填充的那一份。
+    expect([...state.agents.values()][0].config.system_prompt).toContain("mock Agent");
     const draftResponse = await fetch(`${base}/api/v1/projects/${projectId}/agents`, {
       method: "POST",
       body: JSON.stringify({
         expected_revision: restarted.specification.project_version,
         name: "draft",
-        endpoint_name: "mock-model",
+        template_id: "mock.agent",
+        revision: 1,
+        desired_state: "stopped",
       }),
     });
     expect(draftResponse.status).toBe(201);
@@ -154,13 +157,13 @@ describe("MockHttpServer", () => {
         state: "running",
       }),
     });
-    expect(draftStart.status).toBe(409);
-    expect(((await draftStart.json()) as { error: { code: string } }).error.code).toBe(
-      "agent_manifest_required",
-    );
+    // 记录不带配置也能启动：配置由模板在创建时填进 Core 快照。
+    expect(draftStart.status).toBe(200);
+    // 启动已经推进了 project.version，删除要用当前值而不是创建时的快照值。
+    const currentVersion = (state.projects.get(projectId) as { version: number }).version;
     expect(
       (
-        await fetch(`${draftBase}?expected_revision=${draft.specification.project_version}`, {
+        await fetch(`${draftBase}?expected_revision=${currentVersion}`, {
           method: "DELETE",
         })
       ).status,

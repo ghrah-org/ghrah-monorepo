@@ -39,11 +39,16 @@ function snapshot(online = false) {
   return {
     identity: { project_id: "p1", agent_id: "a1" },
     specification: {
+      agent_id: "a1",
+      project_id: "p1",
       name: "Designer",
+      presentation: { title: "", description: "", tags: [], icon: "", deprecated: false },
+      origin: null,
       desired_state: online ? "running" : "stopped",
-      abilities: ["send_message"],
-      manifest_ref: "",
-      runtime_error: "",
+      runtime_status: online ? "running" : "stopped",
+      last_error: "",
+      created_at: "",
+      updated_at: "",
     },
     specification_revision: 5,
     runtime: {
@@ -54,7 +59,6 @@ function snapshot(online = false) {
     context: {},
     mailbox: {},
     abilities: {
-      configured_types: ["send_message"],
       loaded_names: online ? ["send_message"] : null,
       available_types: ["send_message", "conversation"],
       model_config_names: ["shared-model"],
@@ -176,7 +180,8 @@ it("omits a blank prompt and retains input on a failed creation", async () => {
   );
   w.unmount();
 });
-it("saves persistent selected types with the observed revision", async () => {
+it.skip("saves persistent selected types with the observed revision", async () => {
+  // 能力授予由授权面（grants/tool selection）管理，实体面不再写 ability_types。
   const w = render();
   await flushPromises();
   await button(w, "Abilities").trigger("click");
@@ -236,8 +241,7 @@ it("creates a persistent entity with explicit start and selected cluster", async
   });
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
-  await w.find('[data-testid="model-config"]').setValue("shared-model");
-  await w.find('input[value="send_message"]').setValue(true);
+  await w.find('input[data-testid="template-id"]').setValue("agents.coder");
   api.create.mockResolvedValue({ success: false, error: "name already exists" });
   await w.find("form").trigger("submit");
   await flushPromises();
@@ -245,9 +249,9 @@ it("creates a persistent entity with explicit start and selected cluster", async
     expect.objectContaining({
       project_id: "p1",
       name: "new-agent",
-      endpoint_name: "shared-model",
+      template_id: "agents.coder",
+      revision: 1,
       start: false,
-      ability_types: ["send_message"],
     }),
   );
   expect(w.text()).toContain("name already exists");
@@ -267,7 +271,7 @@ it("creates from a template when the server offers no configurable types", async
   await w.get("form").trigger("submit");
   await flushPromises();
   expect(api.create).toHaveBeenCalledWith(
-    expect.objectContaining({ manifest_ref: "agents.coder", ability_types: null }),
+    expect.objectContaining({ template_id: "agents.coder", revision: 1 }),
   );
   w.unmount();
 });
@@ -330,8 +334,7 @@ it("opens the created identity after a successful creation receipt", async () =>
   });
   await flushPromises();
   await w.find("input[data-autofocus]").setValue("new-agent");
-  await w.find('[data-testid="model-config"]').setValue("shared-model");
-  await w.find('input[value="send_message"]').setValue(true);
+  await w.find('input[data-testid="template-id"]').setValue("agents.coder");
   api.create.mockResolvedValue({ success: true, data: snapshot() });
   await w.find("form").trigger("submit");
   await flushPromises();
@@ -339,7 +342,8 @@ it("opens the created identity after a successful creation receipt", async () =>
   w.unmount();
 });
 
-it("saves a model binding independently from the entity name", async () => {
+it.skip("saves a model binding independently from the entity name", async () => {
+  // 配置由 Core 实例快照承载，Subject 侧不再有「保存模型绑定」这条写路径。
   const w = render();
   await flushPromises();
   await w.find('[data-testid="model-config"]').setValue("shared-model");

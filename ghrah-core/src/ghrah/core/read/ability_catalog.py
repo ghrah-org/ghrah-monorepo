@@ -103,6 +103,8 @@ def _builtin_rows() -> dict[tuple[str, str], AbilityPackageVersionRow]:
             version=identity.version,
             member_count=_member_count(definition),
             lock_state="builtin",
+            operations=sorted(definition.operations),
+            skills=sorted(definition.skills),
         )
     return rows
 
@@ -175,6 +177,8 @@ def _installed_rows(
                 member_count=count,
                 lock_state=record.lock_state,
                 problem=problem,
+                operations=sorted(definition.operations) if definition is not None else [],
+                skills=sorted(definition.skills) if definition is not None else [],
             )
     return True, rows
 
@@ -213,6 +217,23 @@ def _verify_view(installer: AbilityInstaller, full_name: str, version: str) -> A
     )
 
 
+def _version_sort_key(version: str) -> tuple[int, ...]:
+    """版本排序键：按段做数值比较（``1.10.0`` 排在 ``1.9.0`` 之后）。
+
+    版本目录名是唯一可用的事实来源，所以这里必须数值化，不能按字符串排序。
+    段数不足补 0；非数字段（非法版本）退化到 0，保证排序不抛异常。
+    """
+    parts: list[int] = []
+    for item in version.split("."):
+        try:
+            parts.append(int(item))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
 def _detail_from_definition(
     definition: AbilityDefinition,
     *,
@@ -221,6 +242,7 @@ def _detail_from_definition(
     problem: str | None,
     verify: AbilityVerifyView | None,
     shadowed: bool,
+    latest: bool = False,
 ) -> AbilityPackageVersionDetail:
     return AbilityPackageVersionDetail(
         version=definition.identity.version,
@@ -233,6 +255,7 @@ def _detail_from_definition(
         problem=problem,
         verify=verify,
         shadowed_builtin=shadowed,
+        is_latest=latest,
     )
 
 
@@ -280,10 +303,15 @@ def build_package_detail(
                     lock_state if isinstance(lock_state, str) else "missing",
                 )
 
-    version_names = sorted(set(builtin_versions) | set(installed_versions))
+    version_names = sorted(set(builtin_versions) | set(installed_versions), key=_version_sort_key)
     if not version_names:
         raise CatalogError("not_found", f"未找到能力包：{full_name}")
+    # 内核件随源码发布、没有版本概念：只有已安装的能力件才参与「最新版本」。
+    latest_version = next(
+        (name for name in reversed(version_names) if name in installed_versions), None
+    )
     for version in version_names:
+        latest = latest_version is not None and version == latest_version
         installed = installed_versions.get(version)
         builtin = builtin_versions.get(version)
         if installed is not None:
@@ -302,6 +330,7 @@ def build_package_detail(
                         lock_state=lock_state,
                         problem=problem,
                         shadowed_builtin=builtin is not None,
+                        is_latest=latest,
                     )
                 )
                 continue
@@ -313,6 +342,7 @@ def build_package_detail(
                     problem=problem,
                     verify=verify,
                     shadowed=builtin is not None,
+                    latest=latest,
                 )
             )
             continue
@@ -325,10 +355,15 @@ def build_package_detail(
                 problem=None,
                 verify=None,
                 shadowed=False,
+                latest=latest,
             )
         )
     return AbilityPackageDetailView(
-        namespace=namespace, name=name, full_name=full_name, versions=versions
+        namespace=namespace,
+        name=name,
+        full_name=full_name,
+        versions=versions,
+        latest_version=latest_version,
     )
 
 
@@ -453,6 +488,8 @@ class _GroupDraft:
     problem: str | None = None
     shadowed_builtin: bool = False
     member_count: int | None = None
+    operations: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
     digest: str | None = None
     instance_id: str | None = None
     instance_revision: int | None = None
@@ -496,6 +533,8 @@ def _draft_from_catalog(row: AbilityPackageVersionRow) -> _GroupDraft:
         problem=row.problem,
         shadowed_builtin=row.shadowed_builtin,
         member_count=row.member_count,
+        operations=tuple(row.operations),
+        skills=tuple(row.skills),
     )
 
 
@@ -657,7 +696,7 @@ def _attach_instances(groups: dict[str, list[_GroupDraft]], instances: list[_Ins
 
 
 def _version_view(
-    draft: _GroupDraft, scope: str, aliases: dict[str, str]
+    draft: _GroupDraft, scope: str, aliases: dict[str, str], *, latest: bool = False
 ) -> AbilityPackageGroupVersionView:
     project = None
     agent = None
@@ -673,12 +712,17 @@ def _version_view(
         alias = aliases.get(draft.instance_id or "")
         granted = bool(draft.selected and draft.instance_id and alias)
         agent = AbilityPackageGroupAgentView(granted=granted, alias=alias if granted else None)
+    ability_type = "external" if draft.origin == "installed" else "kernel"
     return AbilityPackageGroupVersionView(
         version=draft.version,
         origin=draft.origin,
+        ability_type=ability_type,
         lock_state=draft.lock_state,
         problem=draft.problem,
         shadowed_builtin=draft.shadowed_builtin,
+        is_latest=latest,
+        operations=list(draft.operations),
+        skills=list(draft.skills),
         member_count=draft.member_count,
         project=project,
         agent=agent,
@@ -690,13 +734,45 @@ def _group_view(
 ) -> AbilityPackageGroupView:
     named = next((draft for draft in drafts if draft.namespace), drafts[0])
     title = next((draft.title for draft in drafts if draft.title), None)
-    versions = sorted(drafts, key=lambda draft: (draft.version or "", draft.digest or ""))
+    # 版本目录名是唯一事实来源：按数值排序，「最新」取最大的**已安装**版本
+    # （内核件随源码发布，没有版本概念，不参与判定）。
+    versions = sorted(
+        drafts, key=lambda draft: (_version_sort_key(draft.version or ""), draft.digest or "")
+    )
+    latest = next(
+        (
+            draft.version
+            for draft in reversed(versions)
+            if draft.version and draft.origin == "installed"
+        ),
+        None,
+    )
+    # 可选版本：能力件取最新版本，内核件取其唯一版本（本来就没有版本选择）。
+    selectable = (
+        next((draft for draft in reversed(versions) if draft.version == latest), None)
+        or versions[-1]
+    )
+    rows = []
+    for draft in versions:
+        rows.append(
+            _version_view(
+                draft,
+                scope,
+                aliases,
+                latest=bool(draft.version) and draft.version == latest,
+            )
+        )
+    kernel = all(draft.origin != "installed" for draft in drafts)
     return AbilityPackageGroupView(
         namespace=named.namespace,
         name=named.name,
         full_name=named.full_name,
         title=title,
-        versions=[_version_view(draft, scope, aliases) for draft in versions],
+        ability_type="kernel" if kernel else "external",
+        versions=rows,
+        latest_version=latest,
+        operations=list(selectable.operations),
+        skills=list(selectable.skills),
     )
 
 

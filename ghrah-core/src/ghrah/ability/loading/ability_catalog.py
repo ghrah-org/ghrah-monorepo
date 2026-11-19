@@ -439,6 +439,14 @@ def _project(
         ManifestValidationError: 实现脚本装载失败、实现类不唯一，或索引里的
             ``permissions`` 不是合法的 ``PermissionFlags``。
     """
+    if operation.mcp is not None:
+        # MCP 成员没有实现脚本：它由安装快照（``mcp.<name>`` 包）提供，执行走
+        # ``execute_mcp_member``。内置树声明 mcp 成员意味着来源错位，按名字报出来，
+        # 而不是让它落到"无法装载实现脚本"那种含糊错误上。
+        raise ManifestValidationError(
+            f"{definition.container_name}.{operation_key}: MCP 成员必须来自安装包"
+            f"（mcp 命名空间），不能在内置树声明"
+        )
     module = _operation_module(definition.container_name, operation_key)
     # 约定校验：一个脚本恰好定义一个有且只有一个 Ability 实现类。
     _operation_class(module)

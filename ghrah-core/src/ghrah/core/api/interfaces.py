@@ -15,6 +15,7 @@ from ghrah.protocol.ability_control import (
     AbilityAdminView,
     AbilityApiStatus,
     AbilityChangesPage,
+    AbilityGrantWriteView,
     AbilityInstancesView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
@@ -48,9 +49,12 @@ from ghrah.protocol.views.common import (
     SessionIdView,
 )
 from ghrah.protocol.views.core import (
+    AgentAssemblySpec,
+    AgentConfigView,
     AgentRuntimeView,
     AgentSpawnSpec,
     AgentSpecView,
+    AgentStartView,
     AgentTemplateSpec,
     AgentView,
     BranchListView,
@@ -279,6 +283,64 @@ class AgentCreateFromTemplateRequest(BaseModel):
 
     template: AgentTemplateSpec
     agent_id: str | None = None
+
+
+class AgentConfigRequest(BaseModel):
+    """``agents.config`` 的请求信封：按 ``agent_id`` 读配置事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+
+
+class AgentCreateAssemblyRequest(BaseModel):
+    """``agents.create_assembly`` 的请求信封：装配输入 v3。
+
+    与 ``agents.create``（旧 spawn 规格）并存到 T3-b；
+    新链路只用这一条，配置由 Core 落实例快照。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: AgentAssemblySpec
+
+
+class AgentAssemblyTargetRequest(BaseModel):
+    """``agents.start_assembly`` / ``stop_assembly`` / ``delete_assembly`` 的请求信封。
+
+    这些操作只认身份：配置一律来自 Core 的实例快照，不接收模板或装配输入。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+
+
+class AgentAssemblyUpdateRequest(BaseModel):
+    """``agents.update_assembly`` 的请求信封：用新的装配输入覆盖实例快照。
+
+    ``agent_id`` 必须指向已有快照；``spec.config`` / ``spec.members`` 是**新的事实**，
+    写入快照后应用到活实例（在线则重启，离线则只留下次启动生效）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    spec: AgentAssemblySpec
+
+
+class AgentModelUpdateRequest(BaseModel):
+    """``agents.update_model`` 的请求信封：只改实例快照里的模型段。
+
+    对应旧的 ``model.configure`` 操作：只携带端点引用与请求参数，其余配置
+    （提示词、上限、上下文、能力面、路径）保持快照现值不动。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    endpoint_name: str = Field(min_length=1)
+    model_overrides: dict[str, Any] | None = None
 
 
 class AgentGetRequest(BaseModel):
@@ -543,6 +605,28 @@ class AbilitiesRevokeRequest(BaseModel):
     change: RevokeAbilityRequest
 
 
+class AbilitiesWriteGrantRequest(BaseModel):
+    """``abilities.write_grant`` 的请求信封：只写事实，不做运行投影。
+
+    形状与 :class:`AbilitiesGrantRequest` 相同，分开定义是为了让「写事实 ≠ 在线
+    生效」这条语义出现在能力名与 docstring 上，而不是靠调用方记住布尔参数。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    change: GrantAbilityRequest
+
+
+class AbilitiesWriteRevokeRequest(BaseModel):
+    """``abilities.write_revoke`` 的请求信封：只撤销事实，不做运行投影。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    change: RevokeAbilityRequest
+
+
 class AbilitiesEnableToolRequest(BaseModel):
     """``abilities.enable_tool`` 的请求信封。"""
 
@@ -601,11 +685,20 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("abilities.status", AbilitiesStatusRequest, AbilityApiStatus),
         Interface("abilities.grant", AbilitiesGrantRequest, AbilityTreeChangeResult),
         Interface("abilities.revoke", AbilitiesRevokeRequest, AbilityTreeChangeResult),
+        Interface("abilities.write_grant", AbilitiesWriteGrantRequest, AbilityGrantWriteView),
+        Interface("abilities.write_revoke", AbilitiesWriteRevokeRequest, AbilityGrantWriteView),
         Interface("abilities.enable_tool", AbilitiesEnableToolRequest, AbilityTreeChangeResult),
         Interface("abilities.disable_tool", AbilitiesDisableToolRequest, AbilityTreeChangeResult),
         Interface("agents.create", AgentCreateRequest, AgentIdView),
         Interface("agents.create_from_template", AgentCreateFromTemplateRequest, AgentIdView),
         Interface("agents.get", AgentGetRequest, AgentView),
+        Interface("agents.config", AgentConfigRequest, AgentConfigView),
+        Interface("agents.create_assembly", AgentCreateAssemblyRequest, AgentStartView),
+        Interface("agents.start_assembly", AgentAssemblyTargetRequest, AgentStartView),
+        Interface("agents.stop_assembly", AgentAssemblyTargetRequest, AckView),
+        Interface("agents.update_assembly", AgentAssemblyUpdateRequest, AgentStartView),
+        Interface("agents.delete_assembly", AgentAssemblyTargetRequest, AckView),
+        Interface("agents.update_model", AgentModelUpdateRequest, AgentStartView),
         Interface("agents.list", AgentListRequest, Page[str]),
         Interface("agents.delete", AgentDeleteRequest, AckView),
         Interface("agents.runtime", AgentRuntimeRequest, AgentRuntimeView),

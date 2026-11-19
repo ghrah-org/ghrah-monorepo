@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from ghrah.protocol.ability_tree import BindToolRequest, TreeId, TreeKey, UnbindToolRequest
+from ghrah.protocol.views.core import AGENT_CONTROL_MEMBER_KEYS
 from pydantic import TypeAdapter, ValidationError
 
 from ghrah.ability.access.backends import file_member_paths
@@ -72,7 +73,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-CONTROL_HANDLERS: frozenset[str] = frozenset({"conversation", "end_task"})
+CONTROL_HANDLERS: frozenset[str] = AGENT_CONTROL_MEMBER_KEYS
 """循环控制成员：不属于能力包授权面，不写入关系库。"""
 
 

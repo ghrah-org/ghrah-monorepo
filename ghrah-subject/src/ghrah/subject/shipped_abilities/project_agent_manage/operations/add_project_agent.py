@@ -14,7 +14,7 @@ from _shared import (  # type: ignore[import-not-found]
     receipt_to_result,
 )
 from ghrah.protocol.enums import CommandType
-from ghrah.protocol.payloads.project import AgentSpecSchema, ProjectAddAgentPayload
+from ghrah.protocol.payloads.project import AgentCreateSpecSchema, ProjectAddAgentPayload
 from ghrah.types.results import ActionResult
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,10 +30,8 @@ class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, description="新 Agent 的显示名")
-    manifest_ref: str = Field(default="", description="Agent manifest 引用；可空")
-    endpoint_name: str | None = Field(default=None, description="可选 endpoint 名")
-    system_prompt: str = Field(default="", description="可选系统提示词覆盖")
-    abilities: list[str] | None = Field(default=None, description="可选能力名列表")
+    template_id: str = Field(min_length=1, description="Agent 模板 id")
+    revision: int = Field(ge=1, description="模板修订号")
     desired_state: Literal["running", "stopped"] = Field(
         default="running", description="期望运行态"
     )
@@ -56,12 +54,10 @@ async def execute(call: Any, services: Any) -> ActionResult:
     if isinstance(port, ActionResult):
         return port
     args = dict(call.arguments)
-    agent = AgentSpecSchema(
+    agent = AgentCreateSpecSchema(
         name=str(args.get("name") or ""),
-        manifest_ref=str(args.get("manifest_ref") or ""),
-        endpoint_name=args.get("endpoint_name"),
-        system_prompt=str(args.get("system_prompt") or ""),
-        abilities=args.get("abilities"),
+        template_id=str(args.get("template_id") or ""),
+        revision=int(args.get("revision") or 0),
         desired_state=args.get("desired_state") or "running",
     )
     payload = ProjectAddAgentPayload(project_id=project_id, agent=agent)

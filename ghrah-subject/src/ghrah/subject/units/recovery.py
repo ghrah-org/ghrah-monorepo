@@ -21,7 +21,6 @@ from ghrah.subject.recovery.reconciler import ReconciliationService
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
     DESIRED_STATE_STORE,
-    MANIFEST_STORE,
     PROJECT_MANAGER,
     RECONCILIATION_SERVICE,
     RECOVERY_START,
@@ -105,7 +104,6 @@ class RecoveryUnit(SubjectUnit):
                     WORKSPACE_MANAGER,
                     TASK_STORE,
                     CORE_CLUSTER_REGISTRY,
-                    MANIFEST_STORE,
                 }
             ),
             provides=frozenset({RECONCILIATION_SERVICE, RECOVERY_START}),
@@ -129,14 +127,12 @@ class RecoveryUnit(SubjectUnit):
         workspace_mgr = ctx.get(WORKSPACE_MANAGER.name)
         task_store = ctx.get(TASK_STORE.name)
         cluster_transport = ctx.get(CORE_CLUSTER_REGISTRY.name)
-        manifest_store = ctx.get(MANIFEST_STORE.name)
         self._service = ReconciliationService(
             desired_store,
             project_mgr,
             workspace_mgr,
             task_store,
             cluster_transport,
-            manifest_store,
             subject_id=self._config.recovery.subject_id,
             on_event=self._emit_event,
             config=self._config.recovery,

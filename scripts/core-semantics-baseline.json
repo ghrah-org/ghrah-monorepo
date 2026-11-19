@@ -66,7 +66,6 @@
       "ghrah/agents/base.py": 4,
       "ghrah/communication/mailbox_reader.py": 4,
       "ghrah/communication/message_manager.py": 9,
-      "ghrah/core/api/handlers/agents.py": 1,
       "ghrah/core/read/ability.py": 3,
       "ghrah/core/read/ability_admin.py": 2,
       "ghrah/core/read/ability_catalog.py": 9,

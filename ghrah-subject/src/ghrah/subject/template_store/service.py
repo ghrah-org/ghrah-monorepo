@@ -19,7 +19,6 @@ from typing import Any
 from ghrah.subject.template_store.models import (
     AgentTemplateConfig,
     AgentTemplateRecord,
-    AgentTemplateSnapshotSummary,
 )
 from ghrah.subject.template_store.store import (
     TemplateNotFoundError,
@@ -115,24 +114,26 @@ class AgentTemplateService:
         tag: str | None = None,
         deprecated: bool | None = None,
         include_archived: bool = False,
+        include_history: bool = False,
     ) -> list[AgentTemplateRecord]:
-        """列模板（默认排除归档）。"""
+        """列模板（默认只返回每个模板的最新版本，且排除归档）。"""
         return await self._store.list(
             namespace=namespace,
             name=name,
             tag=tag,
             deprecated=deprecated,
             include_archived=include_archived,
+            include_history=include_history,
         )
 
-    async def history(self, template_id: str) -> list[AgentTemplateSnapshotSummary]:
-        """修订历史摘要（模板不存在时先抛 ``TemplateNotFoundError``）。"""
+    async def versions(self, template_id: str) -> list[AgentTemplateRecord]:
+        """该模板的全部版本（模板不存在时先抛 ``TemplateNotFoundError``）。"""
         await self.get(template_id)
-        return await self._store.history(template_id)
+        return await self._store.versions(template_id)
 
-    async def get_revision(self, template_id: str, revision: int) -> dict[str, Any]:
-        """指定 revision 的规范化快照对象。"""
-        snapshot = await self._store.get_revision(template_id, revision)
-        if snapshot is None:
+    async def get_version(self, template_id: str, revision: int) -> AgentTemplateRecord:
+        """指定 ``(template_id, revision)`` 的模板记录。"""
+        record = await self._store.get_version(template_id, revision)
+        if record is None:
             raise TemplateNotFoundError(f"{template_id}#{revision}")
-        return snapshot
+        return record

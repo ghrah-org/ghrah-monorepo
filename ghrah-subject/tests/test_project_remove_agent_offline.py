@@ -21,31 +21,33 @@ from ghrah.protocol.errors import ApiError
 from ghrah.protocol.problem import Problem, ProblemCode
 
 from ghrah.subject.project.manager import ProjectManager, _is_terminate_absent
-from ghrah.subject.project.models import AgentSpec, ProjectRecord, make_project_record
+from ghrah.subject.project.models import AgentRecord, ProjectRecord, make_project_record
 
 AGENT_ID = "a" * 32
 
 
 class _FakeHandle:
+    """假句柄：只实现删除路径用到的 ``delete_assembly``（停止 + 删快照）。"""
+
     def __init__(
         self,
-        terminate_result: dict[str, Any] | None = None,
+        delete_result: dict[str, Any] | None = None,
         *,
         raise_exc: Exception | None = None,
     ) -> None:
-        self._terminate_result = terminate_result or {}
+        self._delete_result = delete_result or {"success": True, "data": {}}
         self._raise_exc = raise_exc
-        self.terminate_calls: list[tuple[str, str]] = []
+        self.delete_calls: list[str] = []
 
     @property
     def is_connected(self) -> bool:
         return True
 
-    async def terminate_agent(self, agent_id: str, agent_name: str) -> dict[str, Any]:
-        self.terminate_calls.append((agent_id, agent_name))
+    async def delete_assembly(self, agent_id: str) -> dict[str, Any]:
+        self.delete_calls.append(agent_id)
         if self._raise_exc is not None:
             raise self._raise_exc
-        return self._terminate_result
+        return self._delete_result
 
 
 class _FakeTransport:
@@ -86,13 +88,12 @@ class _FakeStore:
 
 
 def _record() -> ProjectRecord:
-    agent = AgentSpec(
+    agent = AgentRecord(
         name="requirement",
         agent_id=AGENT_ID,
-        manifest_ref="demo.requirement",
         desired_state="running",
-        runtime_status="error",
-        runtime_error="model_configuration_invalid",
+        runtime_status="failed",
+        last_error="model_configuration_invalid",
     )
     return make_project_record(
         name="demo",
@@ -109,19 +110,16 @@ def _remove_payload(record: ProjectRecord) -> dict[str, Any]:
     }
 
 
-async def test_remove_agent_accepts_port_not_online_text() -> None:
-    """端口化后的 ``NOT_FOUND: ... is not online`` = 运行侧已无实例 → 删定义成功。"""
+async def test_remove_agent_accepts_absent_instance() -> None:
+    """快照/进程都不存在（``delete_assembly`` 幂等成功）→ 删定义成功。"""
     record = _record()
     store = _FakeStore(record)
-    handle = _FakeHandle(
-        {"success": False, "error": f"NOT_FOUND: agent '{AGENT_ID}' is not online"}
-    )
+    handle = _FakeHandle({"success": True, "data": {"deleted": False, "stopped": False}})
     manager = ProjectManager(
         store=store,  # type: ignore[arg-type]
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))
@@ -129,7 +127,7 @@ async def test_remove_agent_accepts_port_not_online_text() -> None:
     assert result["success"] is True, result
     assert store.update_calls == 1
     assert store.record.agents == []
-    assert handle.terminate_calls == [(AGENT_ID, "requirement")]
+    assert handle.delete_calls == [AGENT_ID]
 
 
 async def test_remove_agent_accepts_raised_port_api_error() -> None:
@@ -150,7 +148,6 @@ async def test_remove_agent_accepts_raised_port_api_error() -> None:
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))
@@ -170,7 +167,6 @@ async def test_remove_agent_keeps_definition_on_real_terminate_failure() -> None
         workspace_mgr=None,  # type: ignore[arg-type]
         task_mgr=None,  # type: ignore[arg-type]
         cluster_registry=_FakeTransport(handle),  # type: ignore[arg-type]
-        manifest_store=None,  # type: ignore[arg-type]
     )
 
     result = await manager.handle_command("project_remove_agent", _remove_payload(record))

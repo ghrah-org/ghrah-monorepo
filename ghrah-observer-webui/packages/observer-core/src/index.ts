@@ -75,6 +75,11 @@ export {
   type UploadXhrProgressEvent,
 } from "./attachments.js";
 export { type ConnectStoresOptions, connectStores } from "./bind.js";
+export {
+  AgentTemplatesApi,
+  createAgentTemplatesApi,
+  type AgentTemplateListQuery,
+} from "./agent-templates.js";
 export { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 export {
   type CreateProjectOptions,

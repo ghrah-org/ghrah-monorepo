@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ghrah.protocol.payloads.project import AgentSpecSchema
+from ghrah.protocol.payloads.project import AgentRecordSchema
 
 Identifier = Annotated[str, Field(min_length=1)]
 
@@ -41,7 +41,7 @@ class AgentSnapshot(EntityModel):
     """长期实体的可序列化视图；各子域数据仍来自原权威。"""
 
     identity: AgentIdentity
-    specification: AgentSpecSchema
+    specification: AgentRecordSchema
     specification_revision: int
     runtime: AgentRuntimeSnapshot
     context: dict[str, Any]
@@ -149,16 +149,13 @@ class AgentEntityPayload(AgentIdentity):
 
 
 class AgentEntityCreatePayload(EntityModel):
-    """创建持久实体；调用者显式选择是否立即启动。"""
+    """按模板创建持久实体；配置不进请求体，由模板在创建时填充。"""
 
     project_id: Identifier
     name: Identifier
     start: bool
-    endpoint_name: Identifier | None = None
-    model_overrides: dict[str, Any] | None = None
-    manifest_ref: str = ""
-    system_prompt: str = ""
-    ability_types: list[Identifier] | None = Field(default=None, min_length=1)
+    template_id: Identifier
+    revision: int = Field(ge=1)
 
 
 class AgentEntityListPayload(EntityModel):

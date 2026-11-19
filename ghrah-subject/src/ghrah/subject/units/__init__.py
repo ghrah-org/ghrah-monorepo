@@ -57,7 +57,6 @@ async def mount_builtin_units(
 
     from ghrah.subject.runtime.ouroboros_bridge import mount_unit, wait_active
     from ghrah.subject.units.ledger import LedgerUnit
-    from ghrah.subject.units.manifest_store import ManifestStoreUnit
     from ghrah.subject.units.recovery import DesiredStateUnit
     from ghrah.subject.units.sandbox import SandboxUnit
     from ghrah.subject.units.task import TaskUnit
@@ -66,7 +65,6 @@ async def mount_builtin_units(
 
     units: list[SubjectUnit] = [
         SandboxUnit(config),
-        ManifestStoreUnit(config),
         LedgerUnit(config),
         WorkspaceUnit(config),
     ]

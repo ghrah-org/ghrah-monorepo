@@ -22,12 +22,14 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from ghrah.core.wiring import build_core_catalog
 from ouroboros import Context  # type: ignore[import-untyped]
 from ouroboros_testutil import wait_active
 from starlette.requests import Request
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.ouroboros_bridge import mount_unit
+from ghrah.subject.runtime.service_keys import CORE_CATALOG_SERVICE
 from ghrah.subject.template_store import AgentTemplateRecord, AgentTemplateService, TemplateStore
 from ghrah.subject.units.ability_control import (
     _authorized,
@@ -48,6 +50,7 @@ def _record(template_id: str = "tpl-1") -> AgentTemplateRecord:
     return AgentTemplateRecord(
         template_id=template_id,
         revision=1,
+        format="ghrah.agent-templates.v1",
         metadata={"namespace": "writing", "name": "weekly_report", "title": "周报"},
         created_at="2026-11-17T00:00:00Z",
         updated_at="2026-11-17T00:00:00Z",
@@ -164,6 +167,8 @@ async def test_unit_mounts_templates_router_on_observer_app(tmp_path: Path) -> N
         db_path=str(tmp_path / "subject.db"),
     )
     async with Context() as ctx:
+        # 模板单元依赖目录端口：整包在保存时展开成成员，需要读包目录。
+        ctx.provide(CORE_CATALOG_SERVICE.name, build_core_catalog())
         endpoint = WebSocketObserverEndpointUnit(config)
         fiber = ctx.plugin(mount_unit(endpoint))
         await wait_active(fiber)
@@ -232,8 +237,8 @@ async def test_create_detail_list_and_defaults(running: Any) -> None:
     assert status == 200
     assert revisions["format"] == "ghrah.agent-templates.revisions.v1"
     assert [item["revision"] for item in revisions["revisions"]] == [1]
-    assert revisions["revisions"][0]["digest"].startswith("sha256:")
-    assert revisions["revisions"][0]["size_bytes"] > 0
+    assert revisions["revisions"][0]["is_latest"] is True
+    assert revisions["revisions"][0]["reference_count"] == 0
 
     status, references, _ = await _request(
         f"{base}/api/v1/agent-templates/{template_id}/references"
@@ -350,6 +355,34 @@ async def test_list_filters(running: Any) -> None:
     assert await names("?tag=ops") == ["alpha"]
     assert await names("?deprecated=true") == ["beta"]
     assert await names("?deprecated=false") == ["alpha", "gamma"]
+
+
+async def test_list_defaults_to_latest_and_can_include_history(running: Any) -> None:
+    """列表默认每个模板只返回最新版本；include_history=true 才列全部版本。"""
+    base, _, _ = running
+    status, created, _ = await _request(
+        f"{base}/api/v1/agent-templates",
+        method="POST",
+        body={"metadata": {"namespace": "writing", "name": "history_probe"}},
+    )
+    assert status == 201
+    template_id = created["template_id"]
+    status, _, _ = await _request(
+        f"{base}/api/v1/agent-templates/{template_id}",
+        method="PUT",
+        body={"expected_revision": 1, "title": "第二版"},
+    )
+    assert status == 200
+
+    status, listing, _ = await _request(f"{base}/api/v1/agent-templates?name=history_probe")
+    assert status == 200
+    assert [item["revision"] for item in listing["templates"]] == [2]
+
+    status, listing, _ = await _request(
+        f"{base}/api/v1/agent-templates?name=history_probe&include_history=true"
+    )
+    assert status == 200
+    assert [item["revision"] for item in listing["templates"]] == [1, 2]
 
 
 async def test_error_codes(running: Any) -> None:

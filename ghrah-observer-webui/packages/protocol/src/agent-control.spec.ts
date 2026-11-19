@@ -21,27 +21,31 @@ describe("agent control contracts", () => {
     const created = AgentCreateRequestSchema.parse({
       expected_revision: 1,
       name: "reviewer",
+      template_id: "tpl-reviewer",
+      revision: 3,
     });
     expect(created.desired_state).toBe("stopped");
-    expect(created.system_prompt).toBe("");
+    expect(created.revision).toBe(3);
   });
 
-  it("keeps the prompt body out of the list specification", () => {
+  it("keeps configuration out of the list specification", () => {
     const summary = AgentSpecificationSummarySchema.parse({
       agent_id: "a1",
       name: "reviewer",
-      prompt: { digest: "sha256:ab", size_bytes: 5 },
+      presentation: {},
       desired_state: "stopped",
       runtime_status: "stopped",
       project_version: 2,
     });
-    expect(summary.manifest_ref).toBe("");
+    expect(summary.origin).toBe(null);
+    expect(summary.last_error).toBe("");
     expect("system_prompt" in summary).toBe(false);
+    expect("manifest_ref" in summary).toBe(false);
     expect(() =>
       AgentSpecificationSummarySchema.parse({
         agent_id: "a1",
         name: "reviewer",
-        prompt: { digest: "sha256:ab", size_bytes: 5 },
+        presentation: {},
         desired_state: "stopped",
         runtime_status: "stopped",
         project_version: 2,

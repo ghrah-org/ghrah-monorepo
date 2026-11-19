@@ -40,7 +40,11 @@ from ghrah.protocol.agent_control import (
 from pydantic import BaseModel, ValidationError
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.runtime.service_keys import OBSERVER_ENDPOINT
+from ghrah.subject.runtime.service_keys import (
+    CORE_CATALOG_SERVICE,
+    OBSERVER_ENDPOINT,
+    TEMPLATE_STORE,
+)
 from ghrah.subject.template_store import (
     AgentTemplateRecord,
     AgentTemplateService,
@@ -71,11 +75,12 @@ def _summary(record: AgentTemplateRecord) -> AgentTemplateSummaryView:
     return AgentTemplateSummaryView(
         template_id=record.template_id,
         revision=record.revision,
+        is_latest=record.latest,
         metadata=_metadata(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
-        reference_count=0,
+        reference_count=record.reference_count,
     )
 
 
@@ -84,6 +89,7 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
     return AgentTemplateDetailView(
         template_id=record.template_id,
         revision=record.revision,
+        is_latest=record.latest,
         metadata=_metadata(record),
         model=AgentTemplateModelView.model_validate(record.model.model_dump(mode="json")),
         prompt=AgentTemplatePromptView.model_validate(record.prompt.model_dump(mode="json")),
@@ -103,7 +109,7 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
-        reference_count=0,
+        reference_count=record.reference_count,
     )
 
 
@@ -111,8 +117,14 @@ def build_agent_template_control_router(
     *,
     config: SubjectConfig,
     service: AgentTemplateService,
+    catalog: Any | None = None,
 ) -> APIRouter:
-    """构造模板路由；鉴权与能力管理面同形（回环免 token）。"""
+    """构造模板路由；鉴权与能力管理面同形（回环免 token）。
+
+    Args:
+        catalog: Core 目录端口；用来把「整包」展开成逐个成员。None 时整包申请
+            会被拒绝——落库不留整包，必须能展开。
+    """
     router = APIRouter(prefix="/api/v1")
     enabled = config.observer_http_api_enabled
 
@@ -151,6 +163,79 @@ def build_agent_template_control_router(
                 "template_revision_conflict", str(error), detail=detail, status=409
             ) from error
 
+    async def _profile(namespace: str, name: str, version: str | None) -> Any:
+        """取某个包版本的画像；``version`` 为空时取目录里的当前版本。"""
+        detail = await catalog.package_detail(namespace=namespace, name=name)
+        versions = [item for item in detail.versions if item.origin != "mcp"]
+        if not versions:
+            raise AbilityApiError(
+                "package_not_found", f"能力包没有可申请版本：{namespace}.{name}", status=404
+            )
+        chosen = next((item for item in versions if item.version == version), None)
+        if version and chosen is None:
+            raise AbilityApiError(
+                "package_version_not_found",
+                f"能力包 {namespace}.{name} 没有版本 {version}",
+                status=404,
+            )
+        chosen = chosen or versions[-1]
+        profile = await catalog.package_version_profile(
+            namespace=namespace, name=name, version=chosen.version
+        )
+        return profile
+
+    async def _expand_packages(payload: dict[str, Any]) -> None:
+        """把整包申请展开成逐成员，并给能力件钉住版本。
+
+        存储层不留「整包」概念：即便前端选的是整包，落库也是逐个成员。
+        这样快照、恢复与成员级选择只有一种形状。
+
+        Raises:
+            AbilityApiError: 没有目录端口、或包/版本解析不到（不能存一个空壳）。
+        """
+        request = payload.get("ability_request")
+        if not isinstance(request, dict):
+            return
+        packages = request.get("packages")
+        if not isinstance(packages, list):
+            return
+        for package in packages:
+            full_name = str(package.get("package") or "")
+            if not full_name:
+                continue
+            namespace, _, name = full_name.partition(".")
+            origin = package.get("origin")
+            expand = bool(package.get("whole_container"))
+            pin = origin != "builtin" and not package.get("version")
+            if not expand and not pin:
+                continue
+            if catalog is None:
+                raise AbilityApiError(
+                    "capability_unavailable",
+                    "目录端口未装配，无法把整包展开成成员；Core 目录服务不可用",
+                )
+            profile = await _profile(namespace, name or namespace, package.get("version"))
+            if pin:
+                package["version"] = None if origin == "builtin" else profile.version
+            if not expand:
+                continue
+            package["whole_container"] = False
+            package["operations"] = [
+                {"key": item.key, "visible": bool(item.expose), "available": True}
+                for item in profile.operations
+            ]
+            package["skills"] = [
+                {
+                    "key": item.key,
+                    "visible": True,
+                    "scripts": [
+                        {"key": script.key, "visible": True, "exec": False}
+                        for script in item.scripts
+                    ],
+                }
+                for item in profile.skills
+            ]
+
     async def _body(request: Request) -> dict[str, Any]:
         try:
             raw = await request.json()
@@ -180,6 +265,7 @@ def build_agent_template_control_router(
         tag: str | None = Query(default=None),
         deprecated: bool | None = Query(default=None),
         include_archived: bool = Query(default=False),
+        include_history: bool = Query(default=False),
         _: None = Depends(_ensure_enabled),
     ) -> dict[str, Any]:
         await _authorize(request)
@@ -190,6 +276,7 @@ def build_agent_template_control_router(
                 tag=tag,
                 deprecated=deprecated,
                 include_archived=include_archived,
+                include_history=include_history,
             )
         )
         return AgentTemplateListView(templates=[_summary(record) for record in records]).model_dump(
@@ -215,17 +302,17 @@ def build_agent_template_control_router(
         _: None = Depends(_ensure_enabled),
     ) -> dict[str, Any]:
         await _authorize(request)
-        summaries = await _guarded(service.history(template_id))
+        records = await _guarded(service.versions(template_id))
         return AgentTemplateRevisionsView(
             template_id=template_id,
             revisions=[
                 AgentTemplateRevisionSummaryView(
-                    revision=summary.revision,
-                    created_at=summary.created_at,
-                    digest=summary.digest,
-                    size_bytes=summary.size_bytes,
+                    revision=record.revision,
+                    created_at=record.created_at,
+                    is_latest=record.latest,
+                    reference_count=record.reference_count,
                 )
-                for summary in summaries
+                for record in records
             ],
         ).model_dump(mode="json")
 
@@ -237,7 +324,9 @@ def build_agent_template_control_router(
     ) -> JSONResponse:
         await _authorize(request)
         change = _parse(await _body(request), AgentTemplateCreateRequest, "创建请求不合法")
-        record = await _guarded(service.create(change.model_dump(mode="json")))
+        payload = change.model_dump(mode="json")
+        await _expand_packages(payload)
+        record = await _guarded(service.create(payload))
         return JSONResponse(
             status_code=201,
             content=_detail(record).model_dump(mode="json"),
@@ -254,6 +343,7 @@ def build_agent_template_control_router(
         await _authorize(request)
         change = _parse(await _body(request), AgentTemplateUpdateRequest, "编辑请求不合法")
         payload = change.model_dump(mode="json", exclude_unset=True, exclude={"expected_revision"})
+        await _expand_packages(payload)
         record = await _guarded(service.update(template_id, change.expected_revision, payload))
         return _detail(record).model_dump(mode="json")
 
@@ -298,7 +388,8 @@ class AgentTemplateControlUnit(SubjectUnit):
         self._router: APIRouter | None = None
         self._meta = UnitMeta(
             name="agent_template_control",
-            requires=frozenset({OBSERVER_ENDPOINT}),
+            requires=frozenset({OBSERVER_ENDPOINT, CORE_CATALOG_SERVICE}),
+            provides=frozenset({TEMPLATE_STORE}),
             routes=RouteSpec(),
         )
 
@@ -326,12 +417,17 @@ class AgentTemplateControlUnit(SubjectUnit):
 
     async def init(self, ctx: Any) -> None:
         endpoint = ctx.get(OBSERVER_ENDPOINT.name)
+        catalog = ctx.get(CORE_CATALOG_SERVICE.name)
         store = TemplateStore(self._config.persistence.db_path)
         await store.start()
         self._store = store
+        # 模板库是实例级唯一权威：以服务形式提供，创建服务与 ProjectUnit 共用同一实例。
+        ctx.provide(TEMPLATE_STORE.name, store)
         service = AgentTemplateService(store)
         self._service = service
-        router = build_agent_template_control_router(config=self._config, service=service)
+        router = build_agent_template_control_router(
+            config=self._config, service=service, catalog=catalog
+        )
         endpoint.app.include_router(router)
         self._router = router
         logger.info(

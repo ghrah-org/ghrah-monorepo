@@ -5,168 +5,351 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { AgentManifestInfo } from "@ghrah/observer-core";
-import { onMounted, ref } from "vue";
+/**
+ * 实例设置 → Agent 模板。
+ *
+ * 卡片网格展示模板（默认每个模板只显示最新版本），点卡片看详情与版本，
+ * 卡片上直接可以「创建 Agent / 编辑 / 归档」。
+ */
+import type {
+  AgentTemplateDetailView,
+  AgentTemplateRevisionSummaryView,
+  AgentTemplateSummaryView,
+} from "@ghrah/protocol";
+import { createAgentTemplatesApi, HttpClient, useConnectionStore } from "@ghrah/observer-core";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import AgentManifestCard from "@/components/config/agent-manifest-card.vue";
-import AgentManifestDetail from "@/components/config/agent-manifest-detail.vue";
-import EditAgentManifestDialog from "@/components/config/edit-agent-manifest-dialog.vue";
-import NewAgentManifestDialog from "@/components/config/new-agent-manifest-dialog.vue";
-import SpawnFromManifestDialog from "@/components/config/spawn-from-manifest-dialog.vue";
+import AgentTemplateCard from "@/components/config/agent-template-card.vue";
+import AgentTemplateDialog from "@/components/config/agent-template-dialog.vue";
+import CreateAgentFromTemplateDialog from "@/components/config/create-agent-from-template-dialog.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
-import { useObserver } from "@/composables/useObserver";
 import UiButton from "@/components/ui/button.vue";
 
-const { manifests, listManifestAgents, deleteAgent } = useObserver();
 const { t } = useI18n();
+const connection = useConnectionStore();
 const emit = defineEmits<{ dirtyChange: [dirty: boolean] }>();
 
-const selected = ref<AgentManifestInfo | null>(null);
-const showSpawnDialog = ref(false);
-const showNewDialog = ref(false);
 const loading = ref(false);
 const error = ref<string | null>(null);
-const deleteTarget = ref<string | null>(null);
-const editTarget = ref<string | null>(null);
-function closeEditDialog() {
-  editTarget.value = null;
-  setDialogDirty(false);
+const notice = ref<string | null>(null);
+const templates = ref<AgentTemplateSummaryView[]>([]);
+const selected = ref<AgentTemplateDetailView | null>(null);
+const versions = ref<AgentTemplateRevisionSummaryView[]>([]);
+const includeArchived = ref(false);
+const includeHistory = ref(false);
+const search = ref("");
+const dialogOpen = ref(false);
+const dialogTarget = ref<AgentTemplateDetailView | null>(null);
+/** 创建 Agent 只需要模板身份与版本，详情与摘要都能满足。 */
+interface TemplateRef {
+  template_id: string;
+  revision: number;
+  metadata: { namespace: string; name: string };
 }
-function onAgentSaved() {
-  selected.value =
-    manifests.agentList.find((agent) => agent.full_name === editTarget.value) ?? null;
+const spawnTarget = ref<TemplateRef | null>(null);
+const archiveTarget = ref<{ template_id: string; revision: number } | null>(null);
+
+function api() {
+  return createAgentTemplatesApi(
+    new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken }),
+  );
 }
 
-function setDialogDirty(dirty: boolean) {
-  emit("dirtyChange", dirty);
-}
-
-function closeSpawnDialog() {
-  showSpawnDialog.value = false;
-  setDialogDirty(false);
-}
-
-function closeNewDialog() {
-  showNewDialog.value = false;
-  setDialogDirty(false);
-}
-
-onMounted(async () => {
-  try {
-    const result = await listManifestAgents();
-    if (!result) error.value = t("config.agent.notConnected");
-    else if (!result.success) error.value = result.error || t("config.agent.loadFailed");
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t("config.agent.loadFailed");
-  }
+const visible = computed(() => {
+  const keyword = search.value.trim().toLowerCase();
+  if (keyword === "") return templates.value;
+  return templates.value.filter((row) => {
+    const haystack =
+      `${row.metadata.namespace}.${row.metadata.name} ${row.metadata.title} ${row.metadata.tags.join(" ")}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
 });
 
-function handleSelect(manifest: AgentManifestInfo) {
-  selected.value = selected.value?.full_name === manifest.full_name ? null : manifest;
-}
-
-function handleSpawn(manifest: AgentManifestInfo) {
-  selected.value = manifest;
-  showSpawnDialog.value = true;
-}
-
-function handleEdit(manifest: AgentManifestInfo) {
-  editTarget.value = manifest.full_name;
-}
-
-async function confirmDelete() {
-  const fullName = deleteTarget.value;
-  if (!fullName) return;
-  deleteTarget.value = null;
+async function refresh() {
   loading.value = true;
   error.value = null;
-  const result = await deleteAgent(fullName);
-  loading.value = false;
-  if (result && !result.success) {
-    error.value = result.error ?? t("config.agent.deleteFailed");
-  } else if (result === null) {
-    error.value = t("config.agent.notConnected");
-  }
-  if (selected.value?.full_name === fullName) {
-    selected.value = null;
+  try {
+    const list = await api().list({
+      includeArchived: includeArchived.value,
+      includeHistory: includeHistory.value,
+    });
+    templates.value = list.templates;
+    if (selected.value) {
+      const stillThere = list.templates.some(
+        (row) => row.template_id === selected.value?.template_id,
+      );
+      if (!stillThere) {
+        selected.value = null;
+        versions.value = [];
+      }
+    }
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("config.template.loadFailed");
+  } finally {
+    loading.value = false;
   }
 }
+
+async function select(templateId: string) {
+  if (selected.value?.template_id === templateId) {
+    selected.value = null;
+    versions.value = [];
+    return;
+  }
+  try {
+    selected.value = await api().get(templateId);
+    const list = await api().versions(templateId);
+    versions.value = list.revisions;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("config.template.loadFailed");
+  }
+}
+
+function openCreate() {
+  dialogTarget.value = null;
+  dialogOpen.value = true;
+  emit("dirtyChange", true);
+}
+
+function openEdit(template: AgentTemplateSummaryView) {
+  void (async () => {
+    try {
+      selected.value = await api().get(template.template_id);
+      dialogTarget.value = selected.value;
+      dialogOpen.value = true;
+      emit("dirtyChange", true);
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : t("config.template.loadFailed");
+    }
+  })();
+}
+
+function closeDialog() {
+  dialogOpen.value = false;
+  dialogTarget.value = null;
+  emit("dirtyChange", false);
+}
+
+async function onSaved() {
+  closeDialog();
+  await refresh();
+  if (selected.value) await select(selected.value.template_id);
+}
+
+function openSpawn(template: TemplateRef) {
+  spawnTarget.value = template;
+}
+
+function onSpawned(agentName: string, projectName: string) {
+  spawnTarget.value = null;
+  notice.value = t("config.template.spawned", { agent: agentName, project: projectName });
+  void refresh();
+}
+
+async function confirmArchive() {
+  const target = archiveTarget.value;
+  archiveTarget.value = null;
+  if (!target) return;
+  loading.value = true;
+  error.value = null;
+  try {
+    await api().archive(target.template_id, target.revision);
+    if (selected.value?.template_id === target.template_id) {
+      selected.value = null;
+      versions.value = [];
+    }
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("config.template.archiveFailed");
+  } finally {
+    loading.value = false;
+  }
+}
+
+function titleOf(row: { metadata: AgentTemplateSummaryView["metadata"] }): string {
+  const title = row.metadata.title.trim();
+  return title === "" ? `${row.metadata.namespace}.${row.metadata.name}` : title;
+}
+
+onMounted(refresh);
 </script>
 
 <template>
-  <section class="agent-config">
-    <header class="agent-config-header">
-      <h2>{{ t("config.agent.title") }}</h2>
-      <UiButton variant="primary" @click="showNewDialog = true">
-        {{ t("config.agent.newManifest") }}
-      </UiButton>
+  <section class="templates">
+    <header class="templates-head">
+      <div class="templates-heading">
+        <h2>{{ t("config.template.title") }}</h2>
+        <p class="templates-hint">{{ t("config.template.hint") }}</p>
+      </div>
+      <div class="templates-actions">
+        <UiButton variant="ghost" :disabled="loading" @click="refresh">
+          {{ t("config.template.refresh") }}
+        </UiButton>
+        <UiButton variant="primary" @click="openCreate">
+          {{ t("config.template.create") }}
+        </UiButton>
+      </div>
     </header>
 
-    <p v-if="error" class="agent-config-alert" role="alert">{{ error }}</p>
+    <div class="templates-toolbar">
+      <input
+        v-model="search"
+        class="templates-search"
+        type="search"
+        :placeholder="t('config.template.search')"
+        :aria-label="t('config.template.search')"
+      />
+      <label class="templates-check">
+        <input v-model="includeArchived" type="checkbox" @change="refresh" />
+        {{ t("config.template.showArchived") }}
+      </label>
+      <label class="templates-check">
+        <input v-model="includeHistory" type="checkbox" @change="refresh" />
+        {{ t("config.template.showHistory") }}
+      </label>
+    </div>
 
-    <p v-if="manifests.agentsLoading" class="agent-config-state">
-      {{ t("common.loading") }}
+    <p v-if="error" class="templates-alert" role="alert">{{ error }}</p>
+    <p v-if="notice" class="templates-notice">{{ notice }}</p>
+
+    <p v-if="loading" class="templates-state">{{ t("common.loading") }}</p>
+    <p v-else-if="templates.length === 0" class="templates-state">
+      {{ t("config.template.empty") }}
+    </p>
+    <p v-else-if="visible.length === 0" class="templates-state">
+      {{ t("config.template.noMatch") }}
     </p>
 
-    <p v-else-if="manifests.agentList.length === 0" class="agent-config-state">
-      {{ t("config.agent.empty") }}
-    </p>
-
-    <ul v-else class="agent-config-list">
-      <li v-for="m in manifests.agentList" :key="m.full_name">
-        <AgentManifestCard
-          :manifest="m"
-          :selected="selected?.full_name === m.full_name"
-          @select="handleSelect(m)"
-          @spawn="handleSpawn(m)"
-          @edit="handleEdit(m)"
-          @delete="deleteTarget = m.full_name"
+    <ul v-else class="templates-grid">
+      <li v-for="row in visible" :key="`${row.template_id}-${row.revision}`">
+        <AgentTemplateCard
+          :template="row"
+          :selected="selected?.template_id === row.template_id"
+          @select="select(row.template_id)"
+          @spawn="openSpawn(row)"
+          @edit="openEdit(row)"
+          @archive="archiveTarget = { template_id: row.template_id, revision: row.revision }"
         />
       </li>
     </ul>
 
-    <AgentManifestDetail
-      :manifest="selected"
-      @spawn="handleSpawn(selected!)"
-      @edit="handleEdit(selected!)"
-      @delete="deleteTarget = selected!.full_name"
+    <section v-if="selected" class="templates-detail">
+      <header class="templates-detail-head">
+        <div>
+          <h3>{{ titleOf(selected) }}</h3>
+          <p class="templates-detail-sub">
+            {{ selected.metadata.namespace }}.{{ selected.metadata.name }} · v{{
+              selected.revision
+            }}
+            <span v-if="selected.is_latest">· {{ t("config.template.latestTag") }}</span>
+          </p>
+        </div>
+        <div class="templates-actions">
+          <UiButton
+            variant="primary"
+            :disabled="Boolean(selected.archived_at)"
+            @click="openSpawn(selected)"
+          >
+            {{ t("config.template.spawn") }}
+          </UiButton>
+          <UiButton
+            variant="secondary"
+            @click="
+              dialogTarget = selected;
+              dialogOpen = true;
+            "
+          >
+            {{ t("config.template.edit") }}
+          </UiButton>
+        </div>
+      </header>
+
+      <div class="templates-facts">
+        <div class="templates-fact">
+          <span class="templates-fact-label">{{ t("config.template.factModel") }}</span>
+          <span class="templates-fact-value">
+            {{ selected.model.endpoint_name ?? t("config.template.endpointUnset") }}
+          </span>
+        </div>
+        <div class="templates-fact">
+          <span class="templates-fact-label">{{ t("config.template.factContext") }}</span>
+          <span class="templates-fact-value">
+            {{ t("config.template.factIterations") }}:
+            {{ selected.context_policy.max_iterations }} · {{ t("config.template.factTimeout") }}:
+            {{ selected.context_policy.communication_timeout }}s
+          </span>
+        </div>
+        <div class="templates-fact">
+          <span class="templates-fact-label">{{ t("config.template.references") }}</span>
+          <span class="templates-fact-value">{{ selected.reference_count }}</span>
+        </div>
+      </div>
+
+      <div class="templates-block">
+        <h4>{{ t("config.template.factPackages") }}</h4>
+        <p v-if="selected.ability_request.packages.length === 0" class="templates-muted">
+          {{ t("config.template.noPackages") }}
+        </p>
+        <ul v-else class="templates-packages">
+          <li v-for="item in selected.ability_request.packages" :key="item.package">
+            <strong>{{ item.package }}</strong>
+            <span v-if="item.whole_container"> · {{ t("config.template.wholeContainer") }}</span>
+            <span v-else> · {{ item.operations.map((op) => op.key).join(", ") || "—" }} </span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="templates-block">
+        <h4>{{ t("config.template.factPrompt") }}</h4>
+        <pre class="templates-prompt">{{ selected.prompt.system_prompt || "—" }}</pre>
+      </div>
+
+      <div class="templates-block">
+        <h4>{{ t("config.template.versions") }}</h4>
+        <ul class="templates-versions">
+          <li v-for="item in versions" :key="item.revision">
+            <span class="templates-version">v{{ item.revision }}</span>
+            <span v-if="item.is_latest" class="templates-version-tag">
+              {{ t("config.template.latestTag") }}
+            </span>
+            <span class="templates-muted">{{ item.created_at.slice(0, 10) }}</span>
+            <span class="templates-muted">
+              {{ t("config.template.references") }}: {{ item.reference_count }}
+            </span>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <AgentTemplateDialog
+      v-if="dialogOpen"
+      :template="dialogTarget"
+      @close="closeDialog"
+      @saved="onSaved"
+      @dirty-change="emit('dirtyChange', $event)"
     />
 
-    <EditAgentManifestDialog
-      v-if="editTarget"
-      :key="editTarget"
-      :full-name="editTarget"
-      @dirty-change="setDialogDirty"
-      @close="closeEditDialog"
-      @saved="onAgentSaved"
-    />
-    <SpawnFromManifestDialog
-      v-if="showSpawnDialog && selected"
-      :manifest="selected"
-      @dirty-change="setDialogDirty"
-      @close="closeSpawnDialog"
-    />
-
-    <NewAgentManifestDialog
-      v-if="showNewDialog"
-      @dirty-change="setDialogDirty"
-      @close="closeNewDialog"
+    <CreateAgentFromTemplateDialog
+      v-if="spawnTarget"
+      :template="spawnTarget"
+      @close="spawnTarget = null"
+      @created="onSpawned"
     />
 
     <ConfirmDialog
-      v-if="deleteTarget"
-      :title="t('config.agent.deleteTitle')"
-      :message="t('config.agent.deleteConfirm')"
-      :confirm-label="t('config.agent.delete')"
+      v-if="archiveTarget"
+      :title="t('config.template.archiveTitle')"
+      :message="t('config.template.archiveConfirm')"
+      :confirm-label="t('config.template.archive')"
       danger
-      @cancel="deleteTarget = null"
-      @confirm="confirmDelete"
+      @cancel="archiveTarget = null"
+      @confirm="confirmArchive"
     />
   </section>
 </template>
 
 <style scoped>
-.agent-config {
+.templates {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -176,27 +359,73 @@ async function confirmDelete() {
   overflow-wrap: anywhere;
 }
 
-.agent-config-header {
+.templates-head,
+.templates-detail-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem 1rem;
 }
 
-.agent-config-header h2,
-.agent-config-alert,
-.agent-config-state {
-  margin: 0;
+.templates-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
-.agent-config-header h2 {
+.templates-head h2,
+.templates-detail-head h3 {
+  margin: 0;
   font-size: var(--font-ui-body);
   font-weight: 600;
 }
 
-.agent-config-alert,
-.agent-config-state {
+.templates-hint,
+.templates-detail-sub {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.templates-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.templates-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.templates-search {
+  flex: 1 1 14rem;
+  max-width: 22rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-ui-note);
+}
+
+.templates-check {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.templates-alert,
+.templates-notice,
+.templates-state {
+  margin: 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -204,24 +433,119 @@ async function confirmDelete() {
   line-height: 1.5;
 }
 
-.agent-config-alert {
+.templates-alert {
   border-color: var(--color-danger);
   background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
   color: var(--color-danger);
 }
 
-.agent-config-state {
+.templates-notice {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+  color: var(--color-text);
+}
+
+.templates-state {
   background: var(--color-surface);
   color: var(--color-text-muted);
   text-align: center;
 }
 
-.agent-config-list {
+.templates-grid {
   display: grid;
   margin: 0;
   padding: 0;
-  gap: 0.5rem;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
   list-style: none;
+}
+
+.templates-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.templates-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+}
+
+.templates-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.templates-fact-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.templates-fact-value {
+  font-size: var(--font-ui-note);
+}
+
+.templates-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.templates-block h4 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  font-weight: 600;
+}
+
+.templates-muted {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.templates-packages,
+.templates-versions {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: var(--font-ui-note);
+  list-style: none;
+}
+
+.templates-versions li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.templates-version {
+  font-variant-numeric: tabular-nums;
+}
+
+.templates-version-tag {
+  color: var(--color-accent);
+}
+
+.templates-prompt {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  max-height: 14rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-family: var(--font-mono, ui-monospace);
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 </style>

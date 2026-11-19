@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
@@ -25,7 +24,6 @@ from ghrah.subject.template_store import (
     TemplateNotFoundError,
     TemplateStore,
 )
-from ghrah.subject.template_store.models import snapshot_digest
 
 DB_FILE = "subject.db"
 
@@ -81,14 +79,14 @@ async def test_ddl_self_creates_version_table_without_project_store(tmp_path: Pa
             for row in db.execute("SELECT component, version FROM subject_schema_versions")
         }
 
-    assert {"subject_schema_versions", "agent_templates", "agent_template_revisions"} <= tables
+    assert {"subject_schema_versions", "agent_templates"} <= tables
     assert {
-        "uq_agent_templates_identity",
-        "idx_agent_templates_namespace",
+        "uq_agent_templates_latest",
+        "idx_agent_templates_template",
         "idx_agent_templates_archived",
     } <= indexes
-    assert len(columns) == 18
-    assert versions == {"agent_template_store": 1}
+    assert len(columns) == 15
+    assert versions == {"agent_template_store": 2}
 
 
 async def test_component_versions_coexist_with_project_store(tmp_path: Path) -> None:
@@ -105,7 +103,7 @@ async def test_component_versions_coexist_with_project_store(tmp_path: Path) -> 
                 for row in db.execute("SELECT component, version FROM subject_schema_versions")
             }
         assert versions["project_store"] == 6
-        assert versions["agent_template_store"] == 1
+        assert versions["agent_template_store"] == 2
     finally:
         await templates.stop()
         await projects.stop()
@@ -118,7 +116,7 @@ async def test_component_version_newer_than_code_fails_fast(tmp_path: Path) -> N
     await opened.stop()
     with _inspect(path) as db:
         db.execute(
-            "UPDATE subject_schema_versions SET version = 2 WHERE component = ?",
+            "UPDATE subject_schema_versions SET version = 3 WHERE component = ?",
             ("agent_template_store",),
         )
         db.commit()
@@ -131,10 +129,13 @@ async def test_component_version_newer_than_code_fails_fast(tmp_path: Path) -> N
 # ─── CRUD 与默认值 ───
 
 
-async def test_create_applies_defaults_and_full_snapshot(store: TemplateStore) -> None:
+async def test_create_applies_defaults_and_writes_one_row(store: TemplateStore) -> None:
     record = await store.create(_config())
     assert len(record.template_id) == 32
     assert record.revision == 1
+    assert record.latest is True
+    assert record.format == "ghrah.agent-templates.v1"
+    assert record.reference_count == 0
     assert record.archived_at is None
     # T0 v3.1：max_iterations 默认 -1（关闭限制）；communication_timeout 默认 300
     assert record.context_policy.max_iterations == -1
@@ -144,10 +145,11 @@ async def test_create_applies_defaults_and_full_snapshot(store: TemplateStore) -
     assert record.permission_request.require_approval_by_default is True
     assert record.metadata.tags == []
     assert record.path_request == []
-    # 快照 = 规范化配置对象；不含服务端字段
-    snapshot = await store.get_revision(record.template_id, 1)
-    assert snapshot is not None
-    assert set(snapshot) == {
+    # 配置按 format 策略从列解回：七组齐全，不含服务端字段
+    version = await store.get_version(record.template_id, 1)
+    assert version is not None
+    document = version.config().document()
+    assert set(document) == {
         "metadata",
         "model",
         "prompt",
@@ -156,8 +158,8 @@ async def test_create_applies_defaults_and_full_snapshot(store: TemplateStore) -
         "permission_request",
         "path_request",
     }
-    assert snapshot["context_policy"]["max_iterations"] == -1
-    assert snapshot["model"] == {"endpoint_name": None, "model_overrides": None}
+    assert document["context_policy"]["max_iterations"] == -1
+    assert document["model"] == {"endpoint_name": None, "model_overrides": None}
 
 
 async def test_get_by_identity_and_list_filters(store: TemplateStore) -> None:
@@ -176,7 +178,7 @@ async def test_get_by_identity_and_list_filters(store: TemplateStore) -> None:
     assert len(await store.list(deprecated=False)) == 1
 
 
-async def test_update_bumps_revision_and_writes_snapshot(store: TemplateStore) -> None:
+async def test_update_appends_version_and_flips_latest(store: TemplateStore) -> None:
     created = await store.create(_config())
     updated = await store.update(
         created.template_id,
@@ -185,23 +187,23 @@ async def test_update_bumps_revision_and_writes_snapshot(store: TemplateStore) -
             prompt={"system_prompt": "先列事实"}, metadata={"title": "周报", "tags": ["b", "a"]}
         ),
     )
+    # 同一模板身份，版本 +1，新行成为 latest
+    assert updated.template_id == created.template_id
     assert updated.revision == 2
+    assert updated.latest is True
     assert updated.prompt.system_prompt == "先列事实"
     assert updated.metadata.title == "周报"
     assert updated.metadata.tags == ["a", "b"]
-    assert updated.created_at == created.created_at
-    assert updated.updated_at >= created.updated_at
+    assert updated.reference_count == 0
 
-    history = await store.history(created.template_id)
-    assert [item.revision for item in history] == [1, 2]
-    assert history[1].digest == snapshot_digest(
-        json.dumps(
-            (await store.get_revision(created.template_id, 2)),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-    )
+    versions = await store.versions(created.template_id)
+    assert [item.revision for item in versions] == [1, 2]
+    # 旧行保留但不再是最新版本，历史内容不被改写
+    assert versions[0].latest is False
+    assert versions[0].prompt.system_prompt == ""
+    # 默认列表只返回最新版本
+    assert [item.revision for item in await store.list()] == [2]
+    assert [item.revision for item in await store.list(include_history=True)] == [1, 2]
 
 
 # ─── CAS 与身份冲突 ───
@@ -213,8 +215,8 @@ async def test_cas_conflict_reports_current_revision(store: TemplateStore) -> No
     with pytest.raises(TemplateConflictError) as error:
         await store.update(created.template_id, 1, _config(prompt={"system_prompt": "stale"}))
     assert error.value.current_revision == 2
-    # 冲突不写快照
-    assert [item.revision for item in await store.history(created.template_id)] == [1, 2]
+    # 冲突不追加版本
+    assert [item.revision for item in await store.versions(created.template_id)] == [1, 2]
 
 
 async def test_update_missing_template_is_not_found(store: TemplateStore) -> None:
@@ -222,31 +224,31 @@ async def test_update_missing_template_is_not_found(store: TemplateStore) -> Non
         await store.update("missing", 1, _config())
 
 
-async def test_identity_conflict_until_archived(store: TemplateStore) -> None:
+async def test_identity_conflict_is_permanent(store: TemplateStore) -> None:
     created = await store.create(_config())
     with pytest.raises(TemplateIdentityConflictError):
         await store.create(_config(metadata={"title": "重名"}))
-    archived = await store.archive(created.template_id, 1)
-    assert archived.archived_at is not None
-    # 部分唯一索引只约束 archived_at IS NULL：归档后可再建同名模板
-    recreated = await store.create(_config())
-    assert recreated.template_id != created.template_id
+    # 归档不释放业务身份：模板名永久不可复用
+    await store.archive(created.template_id, 1)
+    with pytest.raises(TemplateIdentityConflictError):
+        await store.create(_config())
 
 
 # ─── 归档语义 ───
 
 
-async def test_archive_only_sets_archived_at(store: TemplateStore) -> None:
+async def test_archive_marks_every_version(store: TemplateStore) -> None:
     created = await store.create(_config())
     await store.update(created.template_id, 1, _config(prompt={"system_prompt": "v2"}))
-    before = await store.history(created.template_id)
 
     archived = await store.archive(created.template_id, 2)
     assert archived.archived_at is not None
     assert archived.revision == 2
     assert archived.metadata.name == created.metadata.name
-    # 不改 revision、不写快照
-    assert await store.history(created.template_id) == before
+    # 模板级归档：两个版本同一时间戳，revision 不变
+    versions = await store.versions(created.template_id)
+    assert {item.archived_at for item in versions} == {archived.archived_at}
+    assert [item.revision for item in versions] == [1, 2]
     # 归档后仍可按 id 读到（template_origin 悬空可读）
     assert (await store.get(created.template_id)) is not None
     assert await store.get(created.template_id, include_archived=False) is None
@@ -351,20 +353,20 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
     ]
 
 
-async def test_snapshot_text_is_canonical(store: TemplateStore, tmp_path: Path) -> None:
-    record = await store.create(_config(metadata={"tags": ["b", "a"]}))
+async def test_json_columns_are_canonical(store: TemplateStore, tmp_path: Path) -> None:
+    """七个 JSON 列都按 v1 策略以 ``sort_keys`` + 紧凑分隔符落库。"""
+    await store.create(_config(metadata={"tags": ["b", "a"]}))
     with _inspect(tmp_path / DB_FILE) as db:
-        (text,) = db.execute(
-            "SELECT snapshot FROM agent_template_revisions WHERE template_id = ? AND revision = ?",
-            (record.template_id, 1),
+        row = db.execute(
+            "SELECT metadata, model, prompt, context_policy, ability_request, "
+            "permission_request, path_request FROM agent_templates"
         ).fetchone()
-    assert text == json.dumps(
-        json.loads(text), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    assert snapshot_digest(text) == "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
-    history = await store.history(record.template_id)
-    assert history[0].size_bytes == len(text.encode("utf-8"))
-    assert history[0].digest == snapshot_digest(text)
+    for text in row:
+        assert text == json.dumps(
+            json.loads(text), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+    # 规范化后的 tags 已去重排序
+    assert json.loads(row[0])["tags"] == ["a", "b"]
 
 
 # ─── 校验 ───
