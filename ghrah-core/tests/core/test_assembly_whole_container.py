@@ -8,6 +8,7 @@ Subject 侧没有包目录，只能把包名交给 Core；这里是展开落点�
 from __future__ import annotations
 
 import pytest
+
 from ghrah.core.agents.assembly import resolve_members
 from ghrah.manifest.ability import AbilityManifest, AbilityMetadata
 from ghrah.manifest.errors import ManifestNotFoundError

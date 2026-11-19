@@ -303,9 +303,7 @@ def build_package_detail(
                     lock_state if isinstance(lock_state, str) else "missing",
                 )
 
-    version_names = sorted(
-        set(builtin_versions) | set(installed_versions), key=_version_sort_key
-    )
+    version_names = sorted(set(builtin_versions) | set(installed_versions), key=_version_sort_key)
     if not version_names:
         raise CatalogError("not_found", f"未找到能力包：{full_name}")
     # 内核件随源码发布、没有版本概念：只有已安装的能力件才参与「最新版本」。
@@ -750,9 +748,10 @@ def _group_view(
         None,
     )
     # 可选版本：能力件取最新版本，内核件取其唯一版本（本来就没有版本选择）。
-    selectable = next(
-        (draft for draft in reversed(versions) if draft.version == latest), None
-    ) or versions[-1]
+    selectable = (
+        next((draft for draft in reversed(versions) if draft.version == latest), None)
+        or versions[-1]
+    )
     rows = []
     for draft in versions:
         rows.append(

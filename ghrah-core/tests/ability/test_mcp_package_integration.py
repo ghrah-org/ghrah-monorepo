@@ -217,9 +217,7 @@ async def execute(call, services):
         ),
         mcp=McpDeploymentConfig((binding,), source=source) if wired else None,
     )
-    registry = CoreClusterRegistry(
-        unit_factory=default_core_unit_factory(cfg, lambda _: model)
-    )
+    registry = CoreClusterRegistry(unit_factory=default_core_unit_factory(cfg, lambda _: model))
     try:
         async with Context() as ctx:
             registry.bind(ctx)
@@ -232,47 +230,47 @@ async def execute(call, services):
                 # 让后面按 AGENT 构造的 MCP 绑定与运行实例对得上。
                 with patch("uuid.uuid4", return_value=UUID(AGENT)):
                     spawned = await unit.handle_command(
-                    "create_agent_assembly",
-                    {
-                        "spec": {
-                            "name": "consumer",
-                            "config": {
-                                "description": "",
-                                "model": {"endpoint_name": "default", "model_overrides": None},
-                                "prompt": {
-                                    "system_prompt": "Search and call the granted echo tool."
+                        "create_agent_assembly",
+                        {
+                            "spec": {
+                                "name": "consumer",
+                                "config": {
+                                    "description": "",
+                                    "model": {"endpoint_name": "default", "model_overrides": None},
+                                    "prompt": {
+                                        "system_prompt": "Search and call the granted echo tool."
+                                    },
+                                    "limits": {
+                                        "max_iterations": 12,
+                                        "communication_timeout": 300.0,
+                                    },
+                                    "context": None,
+                                    "surface": {
+                                        "mode": "progressive",
+                                        "static": [
+                                            "ghrah.fs.read_file",
+                                            "ghrah.core.load_skill",
+                                        ],
+                                        "max_static": None,
+                                    },
+                                    "mcp_refs": [],
+                                    "permission": None,
                                 },
-                                "limits": {
-                                    "max_iterations": 12,
-                                    "communication_timeout": 300.0,
-                                },
-                                "context": None,
-                                "surface": {
-                                    "mode": "progressive",
-                                    "static": [
-                                        "ghrah.fs.read_file",
-                                        "ghrah.core.load_skill",
-                                    ],
-                                    "max_static": None,
-                                },
-                                "mcp_refs": [],
-                                "permission": None,
-                            },
-                            "members": [
-                                {"member": "ghrah.core.conversation"},
-                                {"member": "ghrah.fs.read_file"},
-                                {"member": "ghrah.core.load_skill"},
-                                {
-                                    "member": "mcp.local.echo",
-                                    "type": "mcp",
-                                    "version": "0.0.1",
-                                    "permissions": {"net_access": True},
-                                },
-                            ],
-                        }
-                    },
-                    None,
-                )
+                                "members": [
+                                    {"member": "ghrah.core.conversation"},
+                                    {"member": "ghrah.fs.read_file"},
+                                    {"member": "ghrah.core.load_skill"},
+                                    {
+                                        "member": "mcp.local.echo",
+                                        "type": "mcp",
+                                        "version": "0.0.1",
+                                        "permissions": {"net_access": True},
+                                    },
+                                ],
+                            }
+                        },
+                        None,
+                    )
                 assert spawned["success"], spawned
                 actor = await unit.supervisor.get_agent_handle("consumer")
                 yield SimpleNamespace(
