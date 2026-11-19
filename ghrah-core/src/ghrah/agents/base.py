@@ -78,6 +78,7 @@ from ghrah.context.turn import (
     CompactClaimedError,
     RollbackTarget,
     TurnCloseStatus,
+    TurnClosure,
     TurnRevokedError,
 )
 from ghrah.context.window import parse_vendor_window_tokens
@@ -626,7 +627,7 @@ class ActorAgent:
                     ),
                 ):
                     if finish is not None and target_session_id and message.metadata.get("turn_id"):
-                        cm.attach_turn(
+                        await cm.attach_claimed_turn(
                             turn_id=message.metadata["turn_id"],
                             session_id=target_session_id,
                             opener_delivery_id=message.metadata["delivery_id"],
@@ -769,25 +770,16 @@ class ActorAgent:
                 end_node_id = (
                     convergence.row["end_node_id"] if convergence is not None else cm.active_head.id
                 )
-                publish = await cm.finish_received_turn(
+                closure = await cm.finish_received_turn(
                     status=status,
                     closing_kind=closing_kind,
                     end_node_id=end_node_id,
                     revoked=revoked,
                 )
-                if publish:
+                if closure is not None:
                     if convergence is not None:
                         await self._publish_convergence_branches(convergence)
-                    await self._publish_turn_event(
-                        TurnClosedEvent(
-                            agent_name=self.config.name,
-                            turn_id=active.turn_id,
-                            session_id=active.session_id,
-                            status=status,
-                            closing_kind=closing_kind,
-                            end_node_id=end_node_id,
-                        )
-                    )
+                    await self.publish_turn_closure(closure)
                 else:
                     for queued in self._drain_message_queue():
                         if queued.metadata.get("turn_id") != active.turn_id:
@@ -2243,18 +2235,21 @@ class ActorAgent:
         )
         if outcome.changed:
             await self._publish_convergence_branches(outcome)
-            row = outcome.row
-            await self._publish_turn_event(
-                TurnClosedEvent(
-                    agent_name=self.config.name,
-                    turn_id=row["turn_id"],
-                    session_id=row["session_id"],
-                    status=row["status"],
-                    closing_kind=row["closing_kind"],
-                    end_node_id=row["end_node_id"],
-                )
-            )
+            await self.publish_turn_closure(TurnClosure.from_row(outcome.row))
         return outcome.as_payload()
+
+    async def publish_turn_closure(self, closure: TurnClosure) -> None:
+        """通知读侧刷新已确认的轮次终态。"""
+        await self._publish_turn_event(
+            TurnClosedEvent(
+                agent_name=self.config.name,
+                turn_id=closure.turn_id,
+                session_id=closure.session_id,
+                status=closure.status,
+                closing_kind=closure.closing_kind,
+                end_node_id=closure.end_node_id,
+            )
+        )
 
     async def _publish_convergence_branches(self, outcome: recovery.ConvergenceOutcome) -> None:
         if outcome.changes is not None:

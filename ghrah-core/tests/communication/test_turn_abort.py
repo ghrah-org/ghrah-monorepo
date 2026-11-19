@@ -303,6 +303,7 @@ async def test_failure_converges_from_last_committed_member(rollback_runtime, mo
     agent, backend, mm, port = rollback_runtime
     cm = agent._context_manager
     completed_actions = 0
+    observed_closures = []
 
     async def action(data):
         nonlocal completed_actions
@@ -312,6 +313,12 @@ async def test_failure_converges_from_last_committed_member(rollback_runtime, mo
         metadata = {"pending_tool_call_ids": ["unfinished"]} if mode == "pending_tools" else {}
         return {"results": [], "llm_metadata": metadata}
 
+    async def publish(event):
+        if event.event_type.value == "turn_closed":
+            row = await backend.load_turn("agent", event.turn_id)
+            observed_closures.append((event.turn_id, event.status, row["status"]))
+
+    monkeypatch.setattr(agent._event_publisher, "publish", publish)
     if mode == "failed_convergence":
         monkeypatch.setattr(cm, "converge_turn", AsyncMock(side_effect=RuntimeError("db busy")))
     monkeypatch.setattr(agent, "_action", action)
@@ -322,6 +329,7 @@ async def test_failure_converges_from_last_committed_member(rollback_runtime, mo
     (opener,) = await mm.get_deliveries(request.message_id)
     view = await port.turns.get(agent_id="agent", turn_id=opener.turn_id)
     assert opener.state.value == view.status == "failed"
+    assert observed_closures == [(opener.turn_id, "failed", "failed")]
     assert view.start_node_id == view.end_node_id == opener.last_node_id
     assert "later action failed" in opener.error
     after = snapshot(backend.db_path)
@@ -533,3 +541,136 @@ async def test_zero_node_failure_records_phase_without_diagnosis(rollback_runtim
     assert "first call failed" in metadata["abort_reason"]
     assert "incomplete_node_id" not in metadata
     assert snapshot(backend.db_path)["branches"] == branches_before
+
+
+def test_install_convergence_rejects_active_iteration(rollback_runtime):
+    agent, backend, _, _ = rollback_runtime
+    cm = agent._context_manager
+    before = snapshot(backend.db_path)
+    cm.begin_iteration()
+    try:
+        with pytest.raises(RuntimeError, match="during an iteration"):
+            cm._install_convergence(ContextChanges(agent_name=cm.agent_name))
+        assert cm.in_iteration
+        assert snapshot(backend.db_path) == before
+    finally:
+        cm.ensure_iteration_closed()
+
+
+@pytest.mark.parametrize("cancel_before_attach", [False, True])
+async def test_abort_before_attach_needs_no_memory_tombstone(
+    rollback_runtime, monkeypatch, cancel_before_attach
+):
+    agent, backend, mm, port = rollback_runtime
+    cm = agent._context_manager
+    entered, resume = asyncio.Event(), asyncio.Event()
+    receive = agent.receive_atomic
+    publish = AsyncMock()
+    monkeypatch.setattr(agent._event_publisher, "publish", publish)
+
+    async def wait_before_attach(*args, **kwargs):
+        entered.set()
+        await resume.wait()
+        return await receive(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "receive_atomic", wait_before_attach)
+    request = await send(mm, "claimed")
+    dispatch = asyncio.create_task(mm.dispatch_pending())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        (delivery,) = await mm.get_deliveries(request.message_id)
+        assert delivery.state.value == "processing" and cm.active_turn is None
+        assert (await port.turns.abort(agent_id="agent", turn_id=delivery.turn_id)).aborted
+        assert cm._revoked_turns == set()
+        if cancel_before_attach:
+            await mm.unbind("agent")
+            await asyncio.gather(dispatch, return_exceptions=True)
+        else:
+            resume.set()
+            await asyncio.wait_for(dispatch, 3)
+    finally:
+        resume.set()
+        if not dispatch.done():
+            dispatch.cancel()
+            await asyncio.gather(dispatch, return_exceptions=True)
+
+    assert cm.active_turn is None and not cm._revoked_turns
+    assert (await backend.load_turn("agent", delivery.turn_id))["status"] == "aborted"
+    assert not await mm.get_replies(request.message_id)
+    assert [
+        (event.event_type.value, event.status)
+        for event in (call.args[0] for call in publish.await_args_list)
+    ] == [("turn_closed", "aborted")]
+
+
+@pytest.mark.parametrize("abort_wins", [True, False])
+async def test_close_event_follows_winner_of_result_abort_race(
+    rollback_runtime, monkeypatch, abort_wins
+):
+    agent, backend, mm, port = rollback_runtime
+    entered, resume = asyncio.Event(), asyncio.Event()
+    complete, finish_result = mm._complete_delivery, mm._finish_result
+    publish = AsyncMock()
+    monkeypatch.setattr(agent._event_publisher, "publish", publish)
+
+    async def pause_completion(delivery_id, result, result_node_id=None):
+        entered.set()
+        await resume.wait()
+        return await complete(delivery_id, result, result_node_id)
+
+    async def pause_finish_result(delivery_id):
+        entered.set()
+        await resume.wait()
+        return await finish_result(delivery_id)
+
+    if abort_wins:
+        # 模拟 Runner 已返回、MM 尚未进入持久结果写事务。
+        monkeypatch.setattr(mm, "_finish_atomic", AsyncMock())
+        monkeypatch.setattr(mm, "_complete_delivery", pause_completion)
+    else:
+        monkeypatch.setattr(mm, "_finish_result", pause_finish_result)
+
+    request = await send(mm, "completion race")
+    dispatch = asyncio.create_task(mm.dispatch_pending())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        (delivery,) = await mm.get_deliveries(request.message_id)
+        row = await backend.load_turn("agent", delivery.turn_id)
+        assert row["status"] == ("open" if abort_wins else "closed")
+        outcome = await port.turns.abort(agent_id="agent", turn_id=delivery.turn_id)
+        assert outcome.aborted == abort_wins
+        assert outcome.already_terminal == (not abort_wins)
+        resume.set()
+        await asyncio.wait_for(dispatch, 3)
+    finally:
+        resume.set()
+        if not dispatch.done():
+            dispatch.cancel()
+            await asyncio.gather(dispatch, return_exceptions=True)
+
+    row = await backend.load_turn("agent", delivery.turn_id)
+    statuses = [
+        event.status
+        for event in (call.args[0] for call in publish.await_args_list)
+        if event.event_type.value == "turn_closed" and event.turn_id == delivery.turn_id
+    ]
+    expected = "aborted" if abort_wins else "closed"
+    assert statuses == [row["status"]] == [expected]
+    assert bool(await mm.get_replies(request.message_id)) == (not abort_wins)
+
+
+async def test_aborted_turn_with_member_explicitly_supports_rollback(rollback_runtime):
+    agent, _, _, port = rollback_runtime
+    cm = agent._context_manager
+    turn_id = await cm.open_turn()
+    target = append_node(cm, "member")
+    await cm.persist()
+    initial = await port.turns.abort(agent_id="agent", turn_id=turn_id, reason="stop")
+    assert initial.aborted
+    await cm.close_turn(status="interrupted", closing_kind="cancelled")
+    args = {"agent_id": "agent", "turn_id": turn_id, "target": "node", "node_id": target.id}
+    preview = await port.turns.rollback_preview(**args)
+    result = await port.turns.rollback(**args)
+    assert result.target_node_id == preview.target_node_id == target.id
+    final = await port.turns.get(agent_id="agent", turn_id=turn_id)
+    assert final.status == "rolled_back" and final.abort_reason == "stop"

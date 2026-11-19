@@ -26,7 +26,8 @@ TERMINAL_STATUSES: tuple[TurnTerminalStatus, ...] = (
     "aborted",
 )
 _CLOSE_STATUSES = ("closed", "failed", "interrupted")
-_ROLLBACK_STATUSES = tuple(status for status in TERMINAL_STATUSES if status != "rolled_back")
+# 中止轮有有效锚点时也支持主动回滚。资格由回滚契约单独定义。
+_ROLLBACK_STATUSES = ("closed", "failed", "interrupted", "aborted")
 _ROLLBACK_PLACEHOLDERS = ",".join("?" for _ in _ROLLBACK_STATUSES)
 RollbackTarget = Literal["base", "node"]
 INCOMPLETE_KIND = "incomplete"
@@ -49,6 +50,35 @@ class ActiveTurn:
     session_id: str
     opener_delivery_id: str | None
     owner: Literal["mm", "self"]
+
+
+@dataclass(frozen=True)
+class TurnClosure:
+    """终态事件需要的轮次与锚点事实。"""
+
+    turn_id: str
+    session_id: str
+    status: str
+    closing_kind: str
+    end_node_id: str | None
+
+    @classmethod
+    def from_row(cls, row: aiosqlite.Row) -> TurnClosure:
+        """从已终结的持久轮次构造关闭通知。"""
+        return cls(
+            row["turn_id"],
+            row["session_id"],
+            row["status"],
+            row["closing_kind"],
+            row["end_node_id"],
+        )
+
+
+def ordinary_closure(row: aiosqlite.Row | None) -> TurnClosure | None:
+    """提取普通关闭事实。显式中止由其提交方通知。"""
+    if row is None or row["status"] not in _CLOSE_STATUSES:
+        return None
+    return TurnClosure.from_row(row)
 
 
 async def insert_turn_placeholder(

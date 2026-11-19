@@ -288,6 +288,25 @@ class ContextManager:
             turn.ActiveTurn(turn_id, self._agent_name, session_id, opener_delivery_id, "mm")
         )
 
+    async def attach_claimed_turn(
+        self, *, turn_id: str, session_id: str, opener_delivery_id: str
+    ) -> None:
+        """复核领取事实后挂载轮次，与同进程的中止串行。"""
+        async with self._convergence_lock:
+            backend = self._persistence
+            if isinstance(backend, SqliteBackend):
+                row = await backend.load_turn(self._agent_name, turn_id)
+                if (
+                    row is None
+                    or row["status"] in turn.TERMINAL_STATUSES
+                    or row["session_id"] != session_id
+                    or row["opener_delivery_id"] != opener_delivery_id
+                ):
+                    raise turn.TurnRevokedError("claimed turn is no longer active")
+            self.attach_turn(
+                turn_id=turn_id, session_id=session_id, opener_delivery_id=opener_delivery_id
+            )
+
     def _attach_turn(self, active: turn.ActiveTurn) -> None:
         self._active_turn = active
         self._turn_abort_event = asyncio.Event()
@@ -296,8 +315,8 @@ class ContextManager:
 
     def request_turn_abort(self, turn_id: str) -> None:
         """吊销该轮提交资格，并唤醒属于该轮的审批等待。"""
-        self._revoked_turns.add(turn_id)
         if self.active_turn_id == turn_id:
+            self._revoked_turns.add(turn_id)
             self.consume_compact_request()
             if self._turn_abort_event is not None:
                 self._turn_abort_event.set()
@@ -330,17 +349,20 @@ class ContextManager:
         active = turn.ActiveTurn(
             uuid4().hex, self._agent_name, self.active_session_id, opener_delivery_id, "self"
         )
-        if isinstance(self._persistence, SqliteBackend) and self._persistence.connected:
-            try:
-                async with self._persistence.transaction() as db:
-                    now = datetime.now(UTC).isoformat()
-                    await turn.normalize_open_turns(db, agent_name=self._agent_name, now=now)
-                    await turn.insert_turn_placeholder(db, active, opened_at=now)
-            except Exception:
-                logger.warning("Failed to persist direct turn %s", active.turn_id, exc_info=True)
-                return None
-        self._attach_turn(active)
-        return active.turn_id
+        async with self._convergence_lock:
+            if isinstance(self._persistence, SqliteBackend) and self._persistence.connected:
+                try:
+                    async with self._persistence.transaction() as db:
+                        now = datetime.now(UTC).isoformat()
+                        await turn.normalize_open_turns(db, agent_name=self._agent_name, now=now)
+                        await turn.insert_turn_placeholder(db, active, opened_at=now)
+                except Exception:
+                    logger.warning(
+                        "Failed to persist direct turn %s", active.turn_id, exc_info=True
+                    )
+                    return None
+            self._attach_turn(active)
+            return active.turn_id
 
     async def close_turn(
         self, *, status: turn.TurnCloseStatus, closing_kind: str, end_node_id: str | None = None
@@ -538,6 +560,7 @@ class ContextManager:
             )
 
     def _install_convergence(self, changes: ContextChanges) -> None:
+        self._ensure_not_in_iteration("install a convergence branch")
         session = changes.sessions[0]
         runtime = self._get_runtime(session.session_id)
         for node in changes.nodes:
@@ -556,8 +579,8 @@ class ContextManager:
         closing_kind: str,
         end_node_id: str | None,
         revoked: bool = False,
-    ) -> bool:
-        """收尾后安装已提交的诊断分支，返回是否应发普通关闭事件。"""
+    ) -> turn.TurnClosure | None:
+        """收尾并安装已提交的分支，只返回已确认的普通关闭事实。"""
         async with self._convergence_lock:
             self.ensure_iteration_closed()
             active = self._active_turn
@@ -569,7 +592,21 @@ class ContextManager:
             for changes in self._pending_convergences:
                 self._install_convergence(changes)
             self._pending_convergences.clear()
-            return not revoked
+            if revoked or active is None:
+                return None
+            backend = self._persistence
+            if isinstance(backend, SqliteBackend) and backend.connected:
+                try:
+                    row = await backend.load_turn(self._agent_name, active.turn_id)
+                except Exception:
+                    logger.warning(
+                        "Could not read persisted closure for %s", active.turn_id, exc_info=True
+                    )
+                    return None
+                return turn.ordinary_closure(row)
+            return turn.TurnClosure(
+                active.turn_id, active.session_id, status, closing_kind, end_node_id
+            )
 
     async def _apply_pending_diagnoses(self, agent_name: str) -> None:
         backend = self._persistence

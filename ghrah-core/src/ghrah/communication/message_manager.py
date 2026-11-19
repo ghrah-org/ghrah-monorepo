@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 #: Room 投影的最大重试次数；到达后标记终结，避免永久失败的行每轮扫描空转。
 ROOM_PROJECTION_MAX_ATTEMPTS = 5
 Receiver = Callable[[AgentMessage], Awaitable[AgentMessage]]
+TurnClosurePublisher = Callable[[turn.TurnClosure], Awaitable[None]]
 
 
 class MessageKind(StrEnum):
@@ -279,6 +280,7 @@ class MessageManager:
         self._lock = asyncio.Lock()
         self._scan_lock = asyncio.Lock()
         self._receivers: dict[str, Receiver] = {}
+        self._turn_closure_publishers: dict[str, TurnClosurePublisher] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
         self._reply_waiters: set[asyncio.Future[None]] = set()
         self._paused_agents: set[str] = set()
@@ -482,6 +484,7 @@ class MessageManager:
         self._workers.clear()
         self._paused_agents.clear()
         self._receivers.clear()
+        self._turn_closure_publishers.clear()
         self._session_receivers.clear()
         self._dispatcher = None
         async with self._lock:
@@ -509,6 +512,7 @@ class MessageManager:
         """停止该 agent 的消费；未开始消息继续离线待收。"""
         self._require_db()
         self._receivers.pop(agent_id, None)
+        self._turn_closure_publishers.pop(agent_id, None)
         self._paused_agents.discard(agent_id)
         self._session_receivers.discard(agent_id)
         task = self._workers.get(agent_id)
@@ -598,6 +602,7 @@ class MessageManager:
                 _ATOMIC.reset(token)
 
         self.bind(agent_id, receive, _session_aware=True)
+        self._turn_closure_publishers[agent_id] = agent.publish_turn_closure
 
     @staticmethod
     async def release_turn_inputs(
@@ -1878,6 +1883,8 @@ class MessageManager:
 
     async def _run(self, agent_id: str, receiver: Receiver) -> None:
         delivery_id: str | None = None
+        closure = None
+        publish_closure = self._turn_closure_publishers.get(agent_id)
         try:
             async with self._transaction() as db:
                 row = await (
@@ -1989,12 +1996,12 @@ class MessageManager:
                 raise TypeError("Receiver must return AgentMessage")
             if result.type == MessageType.ERROR:
                 raise RuntimeError(result.content)
-            await self._complete_delivery(delivery_id, result)
+            closure = await self._complete_delivery(delivery_id, result)
         except turn.TurnRevokedError:
             logger.debug("Delivery lost its turn execution right: %s", delivery_id)
         except Exception as exc:
             if delivery_id is not None:
-                await self._record_failure(
+                closure = await self._record_failure(
                     delivery_id,
                     DeliveryState.FAILED,
                     str(exc),
@@ -2003,11 +2010,17 @@ class MessageManager:
             logger.warning("Message delivery failed: %s", delivery_id, exc_info=True)
         except BaseException:
             if delivery_id is not None:
-                await self._record_failure(delivery_id, DeliveryState.INTERRUPTED, "Worker stopped")
+                closure = await self._record_failure(
+                    delivery_id, DeliveryState.INTERRUPTED, "Worker stopped"
+                )
             raise
         finally:
-            self._workers.pop(agent_id, None)
-            self._wake.set()
+            try:
+                if closure is not None and publish_closure is not None:
+                    await publish_closure(closure)
+            finally:
+                self._workers.pop(agent_id, None)
+                self._wake.set()
 
     async def _record_failure(
         self,
@@ -2016,12 +2029,12 @@ class MessageManager:
         error: str,
         *,
         session_unavailable: bool = False,
-    ) -> None:
+    ) -> turn.TurnClosure | None:
         # close 期间也必须保存中断；若磁盘失败，processing 留待下次 open 恢复。
         try:
             async with self._lock:
                 if self._db is None:
-                    return
+                    return None
                 db = self._db
                 try:
                     await db.execute("BEGIN IMMEDIATE")
@@ -2039,7 +2052,7 @@ class MessageManager:
                             stored = await cursor.fetchone()
                         if stored is not None and stored["status"] == "aborted":
                             await db.rollback()
-                            return
+                            return None
                     blocked = (
                         session_unavailable
                         and delivery is not None
@@ -2063,6 +2076,7 @@ class MessageManager:
                             "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
                             (state.value, error, delivery_id),
                         )
+                    closed = None
                     if delivery is not None and delivery["turn_id"]:
                         # session 不可用不是业务失败：即使输入已消费（投递按既有
                         # 语义记 failed），轮次也收敛为 interrupted，避免终态语义混淆。
@@ -2071,7 +2085,7 @@ class MessageManager:
                             and not blocked
                             and not session_unavailable
                         )
-                        await turn.close_turn(
+                        closed = await turn.close_turn(
                             db,
                             turn_id=delivery["turn_id"],
                             status="failed" if failed else "interrupted",
@@ -2086,15 +2100,17 @@ class MessageManager:
                             terminal_state="failed" if failed else "interrupted",
                         )
                     await db.commit()
+                    return turn.ordinary_closure(closed)
                 except BaseException:
                     await db.rollback()
                     raise
         except Exception:
             logger.exception("Could not persist delivery failure: %s", delivery_id)
+            return None
 
     async def _complete_delivery(
         self, delivery_id: str, result: AgentMessage, result_node_id: str | None = None
-    ) -> None:
+    ) -> turn.TurnClosure | None:
         if result.type == MessageType.ERROR:
             raise ValueError("Error responses cannot be recorded as successful final results")
         # 最终结果一旦落库，后续操作只重试事务，不再调用模型或工具。
@@ -2148,8 +2164,9 @@ class MessageManager:
                         else None,
                     ),
                 )
+            closed = None
             if delivery["turn_id"] and existing is None:
-                await turn.close_turn(
+                closed = await turn.close_turn(
                     db,
                     turn_id=delivery["turn_id"],
                     status="closed",
@@ -2164,6 +2181,7 @@ class MessageManager:
                     terminal_state="completed",
                 )
         await self._finish_result(delivery_id)
+        return turn.ordinary_closure(closed)
 
     async def _finish_atomic(self, scope: _AtomicDelivery, result: AgentMessage) -> None:
         scope.context_manager.check_turn_revoked()
