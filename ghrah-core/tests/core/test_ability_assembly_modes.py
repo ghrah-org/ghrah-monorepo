@@ -212,6 +212,7 @@ async def test_installed_package_executes_in_real_agent_loop_and_disappears_afte
             "{'rendered': Path(call.arguments['template']).read_text()})",
         ),
         encoding="utf-8",
+        newline="\n",
     )
     build(source)
     installer = AbilityInstaller(tmp_path / "installed")
@@ -219,7 +220,7 @@ async def test_installed_package_executes_in_real_agent_loop_and_disappears_afte
     shutil.rmtree(source)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "memo.txt").write_text("installed tool result", encoding="utf-8")
+    (workspace / "memo.txt").write_text("installed tool result", encoding="utf-8", newline="\n")
     manifests = _consumer_store()
     manifests._agents["w0.external"] = parse_agent_manifest(
         _AGENT_YAML_FS[: _AGENT_YAML_FS.index("abilities:")]
@@ -495,7 +496,7 @@ async def test_builtin_operation_runs_through_the_agent_executor(tmp_path: Path)
 
         target = tmp_path / "workspace" / "note.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("builtin source content", encoding="utf-8")
+        target.write_text("builtin source content", encoding="utf-8", newline="\n")
         result = await handle._ability_executor.execute_ability(
             handle._abilities["read_file"],
             make_call(arguments={"file_path": str(target)}),
@@ -679,7 +680,7 @@ async def test_subagent_spawn_uses_authorized_boundary(tmp_path: Path) -> None:
         handle = await unit.supervisor.get_agent_handle(resolved.config.name)
         target = tmp_path / "workspace" / "child.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("child ok", encoding="utf-8")
+        target.write_text("child ok", encoding="utf-8", newline="\n")
         result = await handle._ability_executor.execute_ability(
             handle._abilities["read_file"],
             make_call(arguments={"file_path": str(target)}),
@@ -815,7 +816,7 @@ async def test_builtin_mock_llm_tool_round_feeds_next_input(tmp_path: Path) -> N
 
     target = tmp_path / "workspace" / "note.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("builtin tool round", encoding="utf-8")
+    target.write_text("builtin tool round", encoding="utf-8", newline="\n")
 
     scripted = ToolScriptedLLM(
         rounds=[

@@ -222,7 +222,7 @@ async def test_projected_ability_executes_read_file(store, tmp_path):
     """包装层不改变执行语义：真实读取仍走原执行实例。"""
     assembly, resolved = _resolved(AGENT_YAML)
     target = tmp_path / "note.txt"
-    target.write_text("w1 content", encoding="utf-8")
+    target.write_text("w1 content", encoding="utf-8", newline="\n")
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
@@ -243,9 +243,9 @@ async def test_filesystem_roots_survive_restore_and_deny_common_parent(store, tm
     first = primary / "first.txt"
     second = extra / "second.txt"
     outside = tmp_path / "private.txt"
-    first.write_text("workspace")
-    second.write_text("repository")
-    outside.write_text("private")
+    first.write_text("workspace", newline="\n")
+    second.write_text("repository", newline="\n")
+    outside.write_text("private", newline="\n")
     roots = (str(primary), str(extra))
     assembly, resolved = _resolved(AGENT_YAML)
     agent = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -417,7 +417,7 @@ async def test_revoke_after_startup_denies_next_execution(store, tmp_path):
     """撤销立即影响下一次调用：已物化的工具在执行接纳处被拒绝。"""
     assembly, resolved = _resolved(AGENT_YAML)
     target = tmp_path / "note.txt"
-    target.write_text("w1 content", encoding="utf-8")
+    target.write_text("w1 content", encoding="utf-8", newline="\n")
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
@@ -439,7 +439,7 @@ async def test_execution_rejects_path_outside_workspace(store, tmp_path):
     """清单允许但实际路径越界：执行接纳在读取前拒绝，没有文件效果。"""
     assembly, resolved = _resolved(AGENT_YAML)
     outside = tmp_path.parent / "outside.txt"
-    outside.write_text("outside", encoding="utf-8")
+    outside.write_text("outside", encoding="utf-8", newline="\n")
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
@@ -510,7 +510,7 @@ async def test_unbound_tool_is_rejected(store, tmp_path):
     """未选中（工具选择被移除）的引用不能执行，即使关系仍在。"""
     assembly, resolved = _resolved(AGENT_YAML)
     target = tmp_path / "note.txt"
-    target.write_text("w1 content", encoding="utf-8")
+    target.write_text("w1 content", encoding="utf-8", newline="\n")
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
@@ -544,7 +544,7 @@ async def test_rebinding_tool_name_cannot_reuse_old_wrapper(store, tmp_path):
     """工具名改绑到别的成员后，旧包装对象不能按新绑定继续执行旧实现。"""
     assembly, resolved = _resolved(AGENT_YAML)
     target = tmp_path / "note.txt"
-    target.write_text("w1 content", encoding="utf-8")
+    target.write_text("w1 content", encoding="utf-8", newline="\n")
     materializer = _materializer(store, assembly, tmp_path)
     result = await materializer.materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
@@ -676,7 +676,7 @@ async def test_run_change_rejects_wrapper_from_earlier_run(tmp_path: Path) -> No
         )
         await materializer.bind_run("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
         target = tmp_path / "note.txt"
-        target.write_text("run content", encoding="utf-8")
+        target.write_text("run content", encoding="utf-8", newline="\n")
         read_file = next(item for item in result.abilities if item.name == "read_file")
         projector = materializer.tool_table_projector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result)
         assert _without_system(await projector()) == ("list_directory", "read_file")

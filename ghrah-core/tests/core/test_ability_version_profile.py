@@ -61,9 +61,11 @@ def _write_source_package(
         "members": {"operations": {"echo": dict(_OPERATION_TEMPLATE)}, "skills": {}},
     }
     (source / "ability.yaml").write_text(
-        yaml.safe_dump(definition, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        yaml.safe_dump(definition, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+        newline="\n",
     )
-    (source / "operations" / "echo.py").write_text('"""Echo."""\n', encoding="utf-8")
+    (source / "operations" / "echo.py").write_text('"""Echo."""\n', encoding="utf-8", newline="\n")
     return source
 
 
@@ -258,7 +260,9 @@ def test_installed_unreadable_definition_degrades_to_200_profile(tmp_path: Path)
     source = _write_source_package(tmp_path)
     _install(store_root, source)
     version_root = store_root / "fixtures" / "sample" / "0.1.0"
-    (version_root / "ability.yaml").write_text("not: [a valid definition\n", encoding="utf-8")
+    (version_root / "ability.yaml").write_text(
+        "not: [a valid definition\n", encoding="utf-8", newline="\n"
+    )
 
     profile = build_version_profile(str(store_root), "fixtures", "sample", "0.1.0")
 

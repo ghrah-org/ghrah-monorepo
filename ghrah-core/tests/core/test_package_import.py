@@ -224,7 +224,7 @@ async def test_missing_manifest_is_rejected(tmp_path: Path) -> None:
     install_root.mkdir()
     source = tmp_path / "src"
     source.mkdir()
-    (source / "readme.txt").write_text("no manifest", encoding="utf-8")
+    (source / "readme.txt").write_text("no manifest", encoding="utf-8", newline="\n")
     archive = zip_package(source, tmp_path / "bad.zip")
     catalog = build_core_catalog(install_root=str(install_root))
     try:
@@ -256,7 +256,7 @@ async def test_unknown_format_is_rejected(tmp_path: Path) -> None:
     install_root = tmp_path / "ability"
     install_root.mkdir()
     archive = tmp_path / "package.txt"
-    archive.write_text("not an archive", encoding="utf-8")
+    archive.write_text("not an archive", encoding="utf-8", newline="\n")
     catalog = build_core_catalog(install_root=str(install_root))
     try:
         with pytest.raises(ApiError) as failure:

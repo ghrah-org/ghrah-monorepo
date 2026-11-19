@@ -95,7 +95,7 @@ async def test_catalog_document_attachment_and_context_use_one_grant(content):
 async def test_source_changes_and_deletion_do_not_change_committed_bytes(content):
     _, provider, _, source, _ = content
     original = await provider.load_skill("reports/guide")
-    (source / "skills/guide/SKILL.md").write_text("changed", encoding="utf-8")
+    (source / "skills/guide/SKILL.md").write_text("changed", encoding="utf-8", newline="\n")
     assert await provider.load_skill("reports/guide") == original
     shutil.rmtree(source)
     assert await provider.load_skill("reports/guide") == original
@@ -209,7 +209,9 @@ async def test_json_asset_loads_as_text_and_binary_stays_rejected(tmp_path):
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
     payload = '{"slot":"length"}\n'
-    (source / "skills/guide/assets/example.json").write_text(payload, encoding="utf-8")
+    (source / "skills/guide/assets/example.json").write_text(
+        payload, encoding="utf-8", newline="\n"
+    )
     definition_path = source / "ability.yaml"
     definition = definition_path.read_text(encoding="utf-8")
     needle = "      assets:\n        mark:\n"
@@ -225,6 +227,7 @@ async def test_json_asset_loads_as_text_and_binary_stays_rejected(tmp_path):
             1,
         ),
         encoding="utf-8",
+        newline="\n",
     )
     runs = {ALICE: "alice-run"}
     store = await AbilityAccessStore.open(
@@ -328,7 +331,7 @@ async def test_version_switch_invalidates_old_fence(content):
     store, provider, _, source, _ = content
     old = await store.resolve(provider._identity, "reports", "skill/guide")
     body = source / "skills/guide/SKILL.md"
-    body.write_text(body.read_text() + "\nnew version", encoding="utf-8")
+    body.write_text(body.read_text() + "\nnew version", encoding="utf-8", newline="\n")
     version = capture_ability_version((source / "ability.yaml").read_text(), root=source)
     await store.commit_version(ADMIN, version)
     instance = await store.instance("reporting")

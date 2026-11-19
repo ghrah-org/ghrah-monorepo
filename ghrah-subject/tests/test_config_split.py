@@ -290,8 +290,11 @@ class TestFromEnv:
         monkeypatch.delenv("GHRAH_SUBJECT_PROJECT_BOOTSTRAP_WORKSPACE_LOCATOR", raising=False)
 
         config = SubjectConfig.from_env()
-        assert config.project.bootstrap_workspace_locator == str(
-            tmp_path / "ws" / "projects" / "default"
+        # 派生值可能混用平台分隔符：统一成 POSIX 分隔符再比较，
+        # 否则 Windows 上 '\\ws\\projects/default' 与纯反斜杠期望值不等。
+        assert (
+            config.project.bootstrap_workspace_locator.replace("\\", "/")
+            == (tmp_path / "ws" / "projects" / "default").as_posix()
         )
 
     def test_from_env_project_bootstrap_locator_explicit(
@@ -310,8 +313,9 @@ class TestFromEnv:
             workspace_root=str(tmp_path / "ws"),
             project_slice=ProjectConfig(bootstrap_workspace_locator=""),
         )
-        assert config.project.bootstrap_workspace_locator == str(
-            tmp_path / "ws" / "projects" / "default"
+        assert (
+            config.project.bootstrap_workspace_locator.replace("\\", "/")
+            == (tmp_path / "ws" / "projects" / "default").as_posix()
         )
 
     def test_from_env_sandbox_timeout_fallback_to_core(

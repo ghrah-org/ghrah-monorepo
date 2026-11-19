@@ -54,7 +54,7 @@ def _make_real_repo(tmp_path: Path) -> tuple[Path, bytes, str, str, list[str]]:
     repo = tmp_path / "ghrah-repo"
     repo.mkdir()
     _git(repo, "init", "--initial-branch=main")
-    (repo / "README.md").write_text("# real repo\n")
+    (repo / "README.md").write_text("# real repo\n", newline="\n")
     _git(repo, "add", "-A")
     _git(
         repo,
@@ -66,7 +66,7 @@ def _make_real_repo(tmp_path: Path) -> tuple[Path, bytes, str, str, list[str]]:
         "-m",
         "user commit",
     )
-    (repo / "wip.txt").write_text("user WIP\n")
+    (repo / "wip.txt").write_text("user WIP\n", newline="\n")
 
     config_bytes = (repo / ".git" / "config").read_bytes()
     refs = _git(repo, "for-each-ref")
@@ -132,7 +132,7 @@ class TestUnmountPreservation:
     async def test_register_then_unregister_by_id(self, tmp_path: Path) -> None:
         repo = tmp_path / "plain-dir"
         repo.mkdir()
-        (repo / "data.txt").write_text("keep")
+        (repo / "data.txt").write_text("keep", newline="\n")
         root = str(tmp_path / "subject-root")
         db = str(tmp_path / "workspaces.db")
 

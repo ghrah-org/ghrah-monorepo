@@ -25,7 +25,7 @@ def _make_context(**overrides: Any) -> tuple[OperationCall, ExecutionServices]:
 
 def _make_file(tmp_path, lines: list[str]) -> str:
     p = tmp_path / "sample.txt"
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return str(p)
 
 
@@ -72,7 +72,7 @@ class TestPagination:
 
     async def test_empty_file(self, tmp_path) -> None:
         p = tmp_path / "empty.txt"
-        p.write_text("", encoding="utf-8")
+        p.write_text("", encoding="utf-8", newline="\n")
         ability = ReadFileAbility()
         result = await ability.execute(
             *_make_context(tool_args={"file_path": str(p), "offset": 0, "limit": 10})
@@ -151,7 +151,7 @@ class TestSchema:
 
     async def test_encoding_still_honored_paginated(self, tmp_path) -> None:
         p = tmp_path / "cn.txt"
-        p.write_text("你好\n世界\n", encoding="utf-8")
+        p.write_text("你好\n世界\n", encoding="utf-8", newline="\n")
         ability = ReadFileAbility()
         result = await ability.execute(
             *_make_context(tool_args={"file_path": str(p), "encoding": "utf-8", "limit": 1})

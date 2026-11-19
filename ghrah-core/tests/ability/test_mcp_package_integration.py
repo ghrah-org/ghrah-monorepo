@@ -121,7 +121,7 @@ async def execute(call, services):
             )
     build(local)
     installer.install(local)
-    (tmp_path / "note.txt").write_text("local file input", encoding="utf-8")
+    (tmp_path / "note.txt").write_text("local file input", encoding="utf-8", newline="\n")
     version = InstalledAbilityProvider(installer.root).capture("mcp.local")
     operation = version.definition().operations["echo"]
     reference = MemberReference("mcp-local", "local", "echo", version.digest)

@@ -228,7 +228,9 @@ class TestCollection:
     def test_bad_definition_does_not_stop_the_scan(self, tmp_path: Path) -> None:
         """一份坏定义只记问题，其余包照常扫出来。"""
         (tmp_path / "broken").mkdir()
-        (tmp_path / "broken" / "ability.yaml").write_text("format: nope\n", encoding="utf-8")
+        (tmp_path / "broken" / "ability.yaml").write_text(
+            "format: nope\n", encoding="utf-8", newline="\n"
+        )
         _write_package(tmp_path, "ok")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
@@ -272,7 +274,9 @@ class TestCollection:
         _write_package(tmp_path, "alpha")
         for name in ("_draft", ".cache"):
             (tmp_path / name).mkdir()
-            (tmp_path / name / "ability.yaml").write_text("format: x\n", encoding="utf-8")
+            (tmp_path / name / "ability.yaml").write_text(
+                "format: x\n", encoding="utf-8", newline="\n"
+            )
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
@@ -317,7 +321,7 @@ class TestSkills:
             skills={"research": _skill_member("research", body_path="../outside.md")},
         )
         _write_package(tmp_path, "research", payload=payload, body=False)
-        (tmp_path / "outside.md").write_text("secret", encoding="utf-8")
+        (tmp_path / "outside.md").write_text("secret", encoding="utf-8", newline="\n")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 
@@ -385,7 +389,7 @@ class TestSkills:
         for key in ("a", "b"):
             body = package / "skills" / key / "SKILL.md"
             body.parent.mkdir(parents=True, exist_ok=True)
-            body.write_text(f"# {key}\n", encoding="utf-8")
+            body.write_text(f"# {key}\n", encoding="utf-8", newline="\n")
 
         result = scan_ability_definitions((roots.path_root(tmp_path),))
 

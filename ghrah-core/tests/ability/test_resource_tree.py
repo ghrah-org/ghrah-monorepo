@@ -50,7 +50,7 @@ async def slice_env(tmp_path, runs):
         for name in ("alice", "bob"):
             root = tmp_path / name
             root.mkdir()
-            (root / "memo.txt").write_text(name)
+            (root / "memo.txt").write_text(name, newline="\n")
             await store.register_agent(ADMIN, name)
             await store.select_instance(ADMIN, f"files-{name}", version.digest, root)
             await store.grant(
@@ -285,7 +285,7 @@ async def test_explicit_version_commit_only_affects_selected_instance(slice_env)
     before = await store.view(BOB, "bob")
     raw = builtin_root().locator.joinpath("fs", "ability.yaml").read_text(encoding="utf-8")
     source = root / "candidate.yaml"
-    source.write_text(raw.replace("title: Read File", "title: Read Report"))
+    source.write_text(raw.replace("title: Read File", "title: Read Report"), newline="\n")
     assert (await store.view(ALICE, "alice")).revision == 1
     version = capture_file_version(source.read_text())
     await store.commit_version(ADMIN, version)
@@ -556,7 +556,7 @@ async def test_switched_root_is_unavailable_until_matching_backend_is_installed(
     old = await client.acquire(path, actions=frozenset({"read_file"}))
     second = base / "new-root"
     second.mkdir()
-    (second / "memo.txt").write_text("new root")
+    (second / "memo.txt").write_text("new root", newline="\n")
     info = await store.instance("files-alice")
     await store.select_instance(
         ADMIN, "files-alice", info["digest"], second, expected_revision=info["revision"]

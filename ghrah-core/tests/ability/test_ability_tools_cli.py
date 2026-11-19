@@ -437,7 +437,9 @@ class TestVerify:
         """安装后改动包内文件：校验失败退出 1，失败细节在 error.details。"""
         assert _install(package_root, ability_root).returncode == 0
         body = _version_root(ability_root) / "skills" / "reporting-guide" / "SKILL.md"
-        body.write_text(body.read_text(encoding="utf-8") + "\n被篡改。\n", encoding="utf-8")
+        body.write_text(
+            body.read_text(encoding="utf-8") + "\n被篡改。\n", encoding="utf-8", newline="\n"
+        )
         result = _run("verify", _FULL_NAME, "--json", "--root", str(ability_root))
         assert result.returncode == 1
         payload = _json_only(result)

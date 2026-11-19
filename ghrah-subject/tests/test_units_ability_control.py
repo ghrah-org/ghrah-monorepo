@@ -844,11 +844,14 @@ def test_installed_available_reflects_the_real_install_root(tmp_path: Any) -> No
     assert all(row.origin == "builtin" for row in catalog.packages)
 
     as_file = tmp_path / "ability-file"
-    as_file.write_text("not a directory", encoding="utf-8")
+    as_file.write_text("not a directory", encoding="utf-8", newline="\n")
     assert build_package_catalog(str(as_file)).installed_available is False
 
     as_link = tmp_path / "ability-link"
-    as_link.symlink_to(readable, target_is_directory=True)
+    try:
+        as_link.symlink_to(readable, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - 平台相关
+        pytest.skip(f"当前平台不支持创建符号链接：{exc}")
     assert build_package_catalog(str(as_link)).installed_available is False
 
 

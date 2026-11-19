@@ -14,7 +14,7 @@ from ghrah.ability.scripts.process import run_script_process, script_environment
 @pytest.mark.parametrize("ending", ["timeout", "event", "task"])
 async def test_blocked_stdin_is_bounded_and_child_is_reaped(tmp_path: Path, ending: str):
     script = tmp_path / "blocked.py"
-    script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8", newline="\n")
     spawned = asyncio.Event()
     children = []
     cancel = asyncio.Event()
@@ -81,7 +81,7 @@ async def test_output_is_drained_while_input_is_backpressured(tmp_path: Path, sc
         "early_exit": "import sys\nprint('invalid reply')\nsys.exit(1)\n",
     }
     script = tmp_path / "exchange.py"
-    script.write_text(scripts[scenario], encoding="utf-8")
+    script.write_text(scripts[scenario], encoding="utf-8", newline="\n")
     children = []
 
     async def spawn(*args, **kwargs):
