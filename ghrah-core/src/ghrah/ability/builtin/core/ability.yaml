@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: ghrah
   name: core
@@ -7,933 +7,1106 @@ identity:
 title: Core
 description: Session-level abilities owned by the runtime itself — conversation, task completion, discovery, skill loading, history recall, and introspection.
 members:
-  operations:
-    conversation:
-      title: Conversation
-      description: Direct conversation with the LLM without tool usage
-      entry: operations/conversation.py
-      input_schema:
-        additionalProperties: false
-        properties: {}
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          response:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Assistant reply when the loop produced one
-        type: object
-      tags:
-      - conversation
-      - core
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: false
-    describe_tool:
-      title: Describe Tool
-      description: Describe a granted tool's schema, effects and availability; load its definition for the next turn.
-      entry: operations/describe_tool.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          name:
-            description: Exact tool name returned by search_tools.
-            minLength: 1
+- namespace: ghrah
+  name: core
+  member: ghrah.core.bind_member
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Bind Member
+    description: Bind a granted, visible tool into the model context so its full schema stays available on every turn.
+    input_schema:
+      additionalProperties: false
+      properties:
+        name:
+          description: Exact tool name returned by search_tools.
+          minLength: 1
+          type: string
+      required:
+      - name
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        bound:
+          items:
             type: string
-        required:
-        - name
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          name:
+          type: array
+      required:
+      - name
+      - bound
+      type: object
+    tags:
+    - binding
+    - core
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 30000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/bind_member.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.conversation
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Conversation
+    description: Direct conversation with the LLM without tool usage
+    input_schema:
+      additionalProperties: false
+      properties: {}
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        response:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Assistant reply when the loop produced one
+      type: object
+    tags:
+    - conversation
+    - core
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: false
+    path: ghrah/core/operations/conversation.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.describe_tool
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Describe Tool
+    description: Describe a granted tool's schema, effects and availability; load its definition for the next turn.
+    input_schema:
+      additionalProperties: false
+      properties:
+        name:
+          description: Exact tool name returned by search_tools.
+          minLength: 1
+          type: string
+      required:
+      - name
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        package:
+          type: string
+        description:
+          type: string
+        input_schema:
+          additionalProperties: true
+          type: object
+        output_schema:
+          additionalProperties: true
+          type: object
+        effects:
+          items:
             type: string
-          package:
+          type: array
+        available:
+          type: boolean
+        skills:
+          items:
             type: string
-          description:
-            type: string
-          input_schema:
-            additionalProperties: true
-            type: object
-          output_schema:
-            additionalProperties: true
-            type: object
-          effects:
-            items:
+          type: array
+      required:
+      - name
+      - package
+      - description
+      - input_schema
+      - output_schema
+      - effects
+      - available
+      - skills
+      type: object
+    tags:
+    - core
+    - discovery
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/describe_tool.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.end_task
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: End Task
+    description: End the current task and generate a final response
+    input_schema:
+      additionalProperties: false
+      properties:
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Optional summary of the task result
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        response:
+          description: Final response collected for the task
+          type: string
+      required:
+      - response
+      type: object
+    tags:
+    - core
+    - lifecycle
+    effects:
+    - session:end
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/end_task.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.execute_tool
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Execute Tool
+    description: Execute a granted tool by exact name and arguments. Inspect its schema with describe_tool first.
+    input_schema:
+      additionalProperties: false
+      properties:
+        name:
+          description: Exact tool name returned by search_tools.
+          minLength: 1
+          type: string
+        arguments:
+          additionalProperties: true
+          description: Arguments matching the target input schema.
+          type: object
+      required:
+      - name
+      - arguments
+      type: object
+    output_schema:
+      additionalProperties: false
+      patternProperties:
+        .*: {}
+      type: object
+    tags:
+    - core
+    - execution
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/execute_tool.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.list_abilities
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: List Abilities
+    description: List this Agent's granted Operations and Skills from the current authorization view. Pass an exact full_name for one entry. Skill names match load_skill's alias/skill input; Skill details include only granted attachment paths.
+    input_schema:
+      additionalProperties: false
+      properties:
+        full_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Optional exact entry name returned by this tool; omit to list granted entries.
+      type: object
+    output_schema:
+      $defs:
+        GrantedAttachmentOutput:
+          additionalProperties: false
+          description: 获授 Skill 的一个附件。
+          properties:
+            key:
+              description: Attachment key
               type: string
-            type: array
-          available:
-            type: boolean
-          skills:
-            items:
+            member:
+              description: Granted member address
               type: string
-            type: array
-        required:
-        - name
-        - package
-        - description
-        - input_schema
-        - output_schema
-        - effects
-        - available
-        - skills
-        type: object
-      tags:
-      - core
-      - discovery
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    end_task:
-      title: End Task
-      description: End the current task and generate a final response
-      entry: operations/end_task.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          summary:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Optional summary of the task result
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          response:
-            description: Final response collected for the task
-            type: string
-        required:
-        - response
-        type: object
-      tags:
-      - core
-      - lifecycle
-      effects:
-      - session:end
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    execute_tool:
-      title: Execute Tool
-      description: Execute a granted tool by exact name and arguments. Inspect its schema with describe_tool first.
-      entry: operations/execute_tool.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          name:
-            description: Exact tool name returned by search_tools.
-            minLength: 1
-            type: string
-          arguments:
-            additionalProperties: true
-            description: Arguments matching the target input schema.
-            type: object
-        required:
-        - name
-        - arguments
-        type: object
-      output_schema:
-        additionalProperties: false
-        patternProperties:
-          .*: {}
-        type: object
-      tags:
-      - core
-      - execution
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    list_abilities:
-      title: List Abilities
-      description: List this Agent's granted Operations and Skills from the current authorization view. Pass an exact full_name for one entry. Skill names match load_skill's alias/skill input; Skill details include only granted attachment paths.
-      entry: operations/list_abilities.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          full_name:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Optional exact entry name returned by this tool; omit to list granted entries.
-        type: object
-      output_schema:
-        $defs:
-          GrantedAttachmentOutput:
-            additionalProperties: false
-            description: 获授 Skill 的一个附件。
-            properties:
-              key:
-                description: Attachment key
-                type: string
-              member:
-                description: Granted member address
-                type: string
-              path:
-                description: Package-relative path
-                type: string
-              media_type:
-                description: Media type
-                type: string
-              size:
-                description: Size in bytes
-                type: integer
-              digest:
-                description: Content digest
-                type: string
-              available:
-                description: Whether the attachment may be executed
-                type: boolean
-            required:
-            - key
-            - member
-            - path
-            - media_type
-            - size
-            - digest
-            - available
-            type: object
-          ListedAbilityOutput:
-            additionalProperties: false
-            description: 目录模式下的一条 Operation。
-            properties:
-              full_name:
-                description: alias/operations/key
-                type: string
-              kind:
-                description: Entry kind
-                type: string
-              description:
-                description: Operation description
-                type: string
-              availability:
-                description: ready, unavailable, or unknown
-                type: string
-            required:
-            - full_name
-            - kind
-            - description
-            - availability
-            type: object
-          ListedSkillOutput:
-            additionalProperties: false
-            description: 目录模式下的一条 Skill。
-            properties:
-              full_name:
-                description: alias/skill
-                type: string
-              kind:
-                description: Entry kind
-                type: string
-              description:
-                description: Skill description
-                type: string
-            required:
-            - full_name
-            - kind
-            - description
-            type: object
-        additionalProperties: false
-        properties:
-          abilities:
-            anyOf:
-            - items:
-                $ref: '#/$defs/ListedAbilityOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Granted operations, when full_name was omitted
-          skills:
-            anyOf:
-            - items:
-                $ref: '#/$defs/ListedSkillOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Granted skills, when full_name was omitted
-          count:
-            anyOf:
-            - type: integer
-            - type: 'null'
-            default: null
-            description: Total granted entries before truncation
-          truncated:
-            anyOf:
-            - type: boolean
-            - type: 'null'
-            default: null
-            description: Whether either list was cut at 100
-          sources:
-            anyOf:
-            - additionalProperties:
-                type: boolean
-              type: object
-            - type: 'null'
-            default: null
-            description: Where the catalog was read from
-          full_name:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Exact entry, when full_name was given
-          kind:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Entry kind of the exact match
-          description:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Description of the exact match
-          alias:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Package alias of the exact match
-          member:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Member address of the exact match
-          instance_id:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Skill instance id
-          version_digest:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Committed version digest
-          input_schema:
-            anyOf:
-            - additionalProperties: true
-              type: object
-            - type: 'null'
-            default: null
-            description: Operation input schema of the exact match
-          output_schema:
-            anyOf:
-            - additionalProperties: true
-              type: object
-            - type: 'null'
-            default: null
-            description: Operation output schema of the exact match
-          availability:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Availability of the exact match
-          tool_names:
-            anyOf:
-            - items:
-                type: string
-              type: array
-            - type: 'null'
-            default: null
-            description: Bound tool names of the exact operation
-          assets:
-            anyOf:
-            - items:
-                $ref: '#/$defs/GrantedAttachmentOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Granted skill assets
-          references:
-            anyOf:
-            - items:
-                $ref: '#/$defs/GrantedAttachmentOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Granted skill references
-          scripts:
-            anyOf:
-            - items:
-                $ref: '#/$defs/GrantedAttachmentOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Granted skill scripts
-        type: object
-      tags:
-      - core
-      - discovery
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    load_skill:
-      title: Load Skill
-      description: Load the complete text of a granted Skill by its exact alias/skill catalog name. Pass path to read a granted text attachment relative to that Skill. Content comes from the committed version; returned paths are package-relative.
-      entry: operations/load_skill.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          full_name:
-            description: Exact alias/skill name from the available-skills catalog or list_abilities.
-            minLength: 1
-            type: string
-          path:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Optional registered attachment path relative to the Skill document, for example references/style.md. Omit to load the complete Skill document.
-        required:
-        - full_name
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          full_name:
-            description: alias/skill that was loaded
-            type: string
-          instance_id:
-            description: Instance that owns the committed text
-            type: string
-          version_digest:
-            description: Committed version digest
-            type: string
-          member:
-            description: Member address of the document or attachment
-            type: string
-          path:
-            description: Package-relative path
-            type: string
-          media_type:
-            description: Media type
-            type: string
-          digest:
-            description: Content digest
-            type: string
-          total_bytes:
-            description: Total size in bytes
-            type: integer
-          alias:
-            description: Package alias
-            type: string
-          uri:
-            description: 'ability: alias/member URI'
-            type: string
-          content:
-            description: UTF-8 text
-            type: string
-        required:
-        - full_name
-        - instance_id
-        - version_digest
-        - member
-        - path
-        - media_type
-        - digest
-        - total_bytes
-        - alias
-        - uri
-        - content
-        type: object
-      tags:
-      - core
-      - skill
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    recall_context:
-      title: Recall Context
-      description: Recall original messages from the current-branch action-chain history, including nodes summarized away by compaction.
-      entry: operations/recall_context.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          mode:
-            default: list
-            description: 'list: summarize nodes on the current branch; messages: fetch original messages of the selected nodes'
-            enum:
-            - list
-            - messages
-            type: string
-          node_id:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Target a single node on the current branch (exclusive with node_id_range)
-          node_id_range:
-            anyOf:
-            - items:
-                type: string
-              type: array
-            - type: 'null'
-            default: null
-            description: Inclusive [from_id, to_id] range of node ids on the current branch
-          keyword:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Case-insensitive substring filter over message text
-          role:
-            anyOf:
-            - enum:
-              - system
-              - user
-              - ai
-              - tool
+            path:
+              description: Package-relative path
               type: string
-            - type: 'null'
-            default: null
-            description: Filter messages by role
-          since_iteration:
-            anyOf:
-            - minimum: 0
+            media_type:
+              description: Media type
+              type: string
+            size:
+              description: Size in bytes
               type: integer
-            - type: 'null'
-            default: null
-            description: Only nodes with iteration >= this value
-          limit:
-            default: 20
-            description: Max number of nodes returned (most recent first)
-            maximum: 500
-            minimum: 1
-            type: integer
-          max_output_tokens:
-            default: 2000
-            description: Output budget; recall stops and sets truncated=True when exceeded
-            minimum: 100
-            type: integer
-        type: object
-      output_schema:
-        $defs:
-          RecallMessageOutput:
-            additionalProperties: false
-            description: messages 模式里的一条原文。
-            properties:
-              role:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Message role
-              source:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Message source
-              text:
-                description: Message text
-                type: string
-            required:
-            - text
-            type: object
-          RecallNodeOutput:
-            additionalProperties: false
-            description: list 模式的节点概要，或 messages 模式的一组分页原文。
-            properties:
-              node_id:
-                description: Action-chain node id
-                type: string
-              iteration:
-                description: Node iteration
-                type: integer
-              node_kind:
-                description: Node kind, such as action or compact
-                type: string
-              branch_id:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Branch the node was created on
-              timestamp:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: ISO timestamp, in list mode
-              ability_names:
-                anyOf:
-                - items:
-                    type: string
-                  type: array
-                - type: 'null'
-                default: null
-                description: Abilities recorded on the node, in list mode
-              message_count:
-                anyOf:
-                - type: integer
-                - type: 'null'
-                default: null
-                description: Messages on the node, in list mode
-              summarized_range:
-                anyOf:
-                - items:
-                    type: string
-                  type: array
-                - type: 'null'
-                default: null
-                description: Original node ids covered by a compact node
-              trigger_source:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: What triggered compaction, on a compact node
-              degraded:
-                anyOf:
-                - type: boolean
-                - type: 'null'
-                default: null
-                description: Whether compaction fell back to a folded view
-              messages:
-                anyOf:
-                - items:
-                    $ref: '#/$defs/RecallMessageOutput'
-                  type: array
-                - type: 'null'
-                default: null
-                description: Original messages, in messages mode
-            required:
-            - node_id
-            - iteration
-            - node_kind
-            type: object
-        additionalProperties: false
-        properties:
-          nodes:
-            description: Selected nodes
-            items:
-              $ref: '#/$defs/RecallNodeOutput'
+            digest:
+              description: Content digest
+              type: string
+            available:
+              description: Whether the attachment may be executed
+              type: boolean
+          required:
+          - key
+          - member
+          - path
+          - media_type
+          - size
+          - digest
+          - available
+          type: object
+        ListedAbilityOutput:
+          additionalProperties: false
+          description: 目录模式下的一条 Operation。
+          properties:
+            full_name:
+              description: alias/operations/key
+              type: string
+            kind:
+              description: Entry kind
+              type: string
+            description:
+              description: Operation description
+              type: string
+            availability:
+              description: ready, unavailable, or unknown
+              type: string
+          required:
+          - full_name
+          - kind
+          - description
+          - availability
+          type: object
+        ListedSkillOutput:
+          additionalProperties: false
+          description: 目录模式下的一条 Skill。
+          properties:
+            full_name:
+              description: alias/skill
+              type: string
+            kind:
+              description: Entry kind
+              type: string
+            description:
+              description: Skill description
+              type: string
+          required:
+          - full_name
+          - kind
+          - description
+          type: object
+      additionalProperties: false
+      properties:
+        abilities:
+          anyOf:
+          - items:
+              $ref: '#/$defs/ListedAbilityOutput'
             type: array
-          count:
-            description: Number of nodes returned
-            type: integer
-          truncated:
-            description: Whether the node window or token budget cut the result
-            type: boolean
-        required:
-        - nodes
-        - count
-        - truncated
-        type: object
-      tags:
-      - context
-      - core
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    search_tools:
-      title: Search Tools
-      description: Search granted tools when the visible tools are insufficient. Use English keywords if needed.
-      entry: operations/search_tools.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          query:
-            description: Keywords; English keywords may improve matches.
-            minLength: 1
+          - type: 'null'
+          default: null
+          description: Granted operations, when full_name was omitted
+        skills:
+          anyOf:
+          - items:
+              $ref: '#/$defs/ListedSkillOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: Granted skills, when full_name was omitted
+        count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          description: Total granted entries before truncation
+        truncated:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          description: Whether either list was cut at 100
+        sources:
+          anyOf:
+          - additionalProperties:
+              type: boolean
+            type: object
+          - type: 'null'
+          default: null
+          description: Where the catalog was read from
+        full_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Exact entry, when full_name was given
+        kind:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Entry kind of the exact match
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Description of the exact match
+        alias:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Package alias of the exact match
+        member:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Member address of the exact match
+        instance_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Skill instance id
+        version_digest:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Committed version digest
+        input_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          description: Operation input schema of the exact match
+        output_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          description: Operation output schema of the exact match
+        availability:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Availability of the exact match
+        tool_names:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          description: Bound tool names of the exact operation
+        assets:
+          anyOf:
+          - items:
+              $ref: '#/$defs/GrantedAttachmentOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: Granted skill assets
+        references:
+          anyOf:
+          - items:
+              $ref: '#/$defs/GrantedAttachmentOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: Granted skill references
+        scripts:
+          anyOf:
+          - items:
+              $ref: '#/$defs/GrantedAttachmentOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: Granted skill scripts
+      type: object
+    tags:
+    - core
+    - discovery
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/list_abilities.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.load_skill
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Load Skill
+    description: Load the complete text of a granted Skill by its exact alias/skill catalog name. Pass path to read a granted text attachment relative to that Skill. Content comes from the committed version; returned paths are package-relative.
+    input_schema:
+      additionalProperties: false
+      properties:
+        full_name:
+          description: Exact alias/skill name from the available-skills catalog or list_abilities.
+          minLength: 1
+          type: string
+        path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Optional registered attachment path relative to the Skill document, for example references/style.md. Omit to load the complete Skill document.
+      required:
+      - full_name
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        full_name:
+          description: alias/skill that was loaded
+          type: string
+        instance_id:
+          description: Instance that owns the committed text
+          type: string
+        version_digest:
+          description: Committed version digest
+          type: string
+        member:
+          description: Member address of the document or attachment
+          type: string
+        path:
+          description: Package-relative path
+          type: string
+        media_type:
+          description: Media type
+          type: string
+        digest:
+          description: Content digest
+          type: string
+        total_bytes:
+          description: Total size in bytes
+          type: integer
+        alias:
+          description: Package alias
+          type: string
+        uri:
+          description: 'ability: alias/member URI'
+          type: string
+        content:
+          description: UTF-8 text
+          type: string
+      required:
+      - full_name
+      - instance_id
+      - version_digest
+      - member
+      - path
+      - media_type
+      - digest
+      - total_bytes
+      - alias
+      - uri
+      - content
+      type: object
+    tags:
+    - core
+    - skill
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/load_skill.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.recall_context
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Recall Context
+    description: Recall original messages from the current-branch action-chain history, including nodes summarized away by compaction.
+    input_schema:
+      additionalProperties: false
+      properties:
+        mode:
+          default: list
+          description: 'list: summarize nodes on the current branch; messages: fetch original messages of the selected nodes'
+          enum:
+          - list
+          - messages
+          type: string
+        node_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Target a single node on the current branch (exclusive with node_id_range)
+        node_id_range:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          description: Inclusive [from_id, to_id] range of node ids on the current branch
+        keyword:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Case-insensitive substring filter over message text
+        role:
+          anyOf:
+          - enum:
+            - system
+            - user
+            - ai
+            - tool
             type: string
-          limit:
-            default: 8
-            description: Maximum number of results, at most 20.
-            maximum: 20
-            minimum: 1
+          - type: 'null'
+          default: null
+          description: Filter messages by role
+        since_iteration:
+          anyOf:
+          - minimum: 0
             type: integer
-        required:
-        - query
-        type: object
-      output_schema:
-        $defs:
-          SearchItem:
-            additionalProperties: false
-            description: 可返回给模型的一行搜索摘要。
-            properties:
-              name:
-                type: string
-              description:
-                type: string
-              package:
-                type: string
-            required:
-            - name
-            - description
-            - package
-            type: object
-        additionalProperties: false
-        properties:
-          tools:
-            items:
-              $ref: '#/$defs/SearchItem'
-            type: array
-        required:
-        - tools
-        type: object
-      tags:
-      - core
-      - discovery
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    session_info:
-      title: Session Info
-      description: Read-only introspection of the runtime environment (deployment mode, allowed roots, HITL parameters), current session, and cluster members.
-      entry: operations/session_info.py
-      input_schema:
-        additionalProperties: false
-        properties: {}
-        type: object
-      output_schema:
-        $defs:
-          EnvironmentOutput:
-            additionalProperties: false
-            description: spawn 装配期写入的部署快照。
-            properties:
-              deployment:
-                description: standalone or subject-mounted
-                type: string
-              project_id:
-                description: Project id; empty when the agent is unattached
-                type: string
-              cluster_id:
-                description: Cluster id
-                type: string
-              workspace_root:
-                anyOf:
-                - type: string
-                - type: 'null'
-                description: Workspace root, or null when unset
-              default_working_dir:
-                anyOf:
-                - type: string
-                - type: 'null'
-                description: Default working directory
-              allowed_roots:
-                description: Filesystem roots the agent may use
-                items:
+          - type: 'null'
+          default: null
+          description: Only nodes with iteration >= this value
+        limit:
+          default: 20
+          description: Max number of nodes returned (most recent first)
+          maximum: 500
+          minimum: 1
+          type: integer
+        max_output_tokens:
+          default: 2000
+          description: Output budget; recall stops and sets truncated=True when exceeded
+          minimum: 100
+          type: integer
+      type: object
+    output_schema:
+      $defs:
+        RecallMessageOutput:
+          additionalProperties: false
+          description: messages 模式里的一条原文。
+          properties:
+            role:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Message role
+            source:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Message source
+            text:
+              description: Message text
+              type: string
+          required:
+          - text
+          type: object
+        RecallNodeOutput:
+          additionalProperties: false
+          description: list 模式的节点概要，或 messages 模式的一组分页原文。
+          properties:
+            node_id:
+              description: Action-chain node id
+              type: string
+            iteration:
+              description: Node iteration
+              type: integer
+            node_kind:
+              description: Node kind, such as action or compact
+              type: string
+            branch_id:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Branch the node was created on
+            timestamp:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: ISO timestamp, in list mode
+            ability_names:
+              anyOf:
+              - items:
                   type: string
                 type: array
-              hitl_timeout:
-                description: Human-approval timeout in seconds
-                type: number
-              hitl_consecutive_timeout_limit:
-                description: Consecutive approval timeouts allowed
-                type: integer
-              hitl_degraded_timeout:
-                description: Timeout used after the approval limit
-                type: number
-            required:
-            - deployment
-            - project_id
-            - cluster_id
-            - workspace_root
-            - default_working_dir
-            - allowed_roots
-            - hitl_timeout
-            - hitl_consecutive_timeout_limit
-            - hitl_degraded_timeout
-            type: object
-          SessionAgentOutput:
-            additionalProperties: false
-            description: 当前 Agent 与活动会话。
-            properties:
-              name:
-                description: Agent name
-                type: string
-              session_id:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Active session id
-              active_branch_id:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Active branch id
-              session_error:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Why the active session could not be read
-              session:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Why session fields are absent when context is not wired
-            required:
-            - name
-            type: object
-          SessionClusterMemberOutput:
-            additionalProperties: false
-            description: 集群成员的公开记录。
-            properties:
-              agent_id:
-                description: Stable agent id
-                type: string
-              incarnation_id:
-                description: Incarnation id
-                type: string
-              name:
-                description: Runtime display name
-                type: string
-              config:
-                anyOf:
-                - additionalProperties: true
-                  type: object
-                - type: 'null'
-                description: Serializable agent configuration
-              description:
-                description: Agent description
-                type: string
-              tags:
-                description: Agent tags
-                items:
+              - type: 'null'
+              default: null
+              description: Abilities recorded on the node, in list mode
+            message_count:
+              anyOf:
+              - type: integer
+              - type: 'null'
+              default: null
+              description: Messages on the node, in list mode
+            summarized_range:
+              anyOf:
+              - items:
                   type: string
                 type: array
-              created_at:
-                description: Registration time as a Unix timestamp
-                type: number
-            required:
-            - agent_id
-            - incarnation_id
-            - name
-            - config
-            - description
-            - tags
-            - created_at
-            type: object
-          SessionClusterOutput:
-            additionalProperties: false
-            description: 集群段：列出成员，或在列举失败时只带 error。
-            properties:
-              members:
-                anyOf:
-                - items:
-                    $ref: '#/$defs/SessionClusterMemberOutput'
-                  type: array
-                - type: 'null'
-                default: null
-                description: Registered cluster members
-              count:
-                anyOf:
-                - type: integer
-                - type: 'null'
-                default: null
-                description: Number of members
-              error:
-                anyOf:
-                - type: string
-                - type: 'null'
-                default: null
-                description: Why the member list could not be read
-            type: object
-        additionalProperties: false
-        properties:
-          environment:
-            anyOf:
-            - $ref: '#/$defs/EnvironmentOutput'
-            - type: 'null'
-            description: Spawn-time deployment snapshot, or null when it was not injected
-          environment_source:
-            description: Where the environment snapshot came from
+              - type: 'null'
+              default: null
+              description: Original node ids covered by a compact node
+            trigger_source:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: What triggered compaction, on a compact node
+            degraded:
+              anyOf:
+              - type: boolean
+              - type: 'null'
+              default: null
+              description: Whether compaction fell back to a folded view
+            messages:
+              anyOf:
+              - items:
+                  $ref: '#/$defs/RecallMessageOutput'
+                type: array
+              - type: 'null'
+              default: null
+              description: Original messages, in messages mode
+          required:
+          - node_id
+          - iteration
+          - node_kind
+          type: object
+      additionalProperties: false
+      properties:
+        nodes:
+          description: Selected nodes
+          items:
+            $ref: '#/$defs/RecallNodeOutput'
+          type: array
+        count:
+          description: Number of nodes returned
+          type: integer
+        truncated:
+          description: Whether the node window or token budget cut the result
+          type: boolean
+      required:
+      - nodes
+      - count
+      - truncated
+      type: object
+    tags:
+    - context
+    - core
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/recall_context.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.search_tools
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Search Tools
+    description: Search granted tools when the visible tools are insufficient. Use English keywords if needed.
+    input_schema:
+      additionalProperties: false
+      properties:
+        query:
+          description: Keywords; English keywords may improve matches.
+          minLength: 1
+          type: string
+        limit:
+          default: 8
+          description: Maximum number of results, at most 20.
+          maximum: 20
+          minimum: 1
+          type: integer
+      required:
+      - query
+      type: object
+    output_schema:
+      $defs:
+        SearchItem:
+          additionalProperties: false
+          description: 可返回给模型的一行搜索摘要。
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+            package:
+              type: string
+          required:
+          - name
+          - description
+          - package
+          type: object
+      additionalProperties: false
+      properties:
+        tools:
+          items:
+            $ref: '#/$defs/SearchItem'
+          type: array
+      required:
+      - tools
+      type: object
+    tags:
+    - core
+    - discovery
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/search_tools.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.session_info
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Session Info
+    description: Read-only introspection of the runtime environment (deployment mode, allowed roots, HITL parameters), current session, and cluster members.
+    input_schema:
+      additionalProperties: false
+      properties: {}
+      type: object
+    output_schema:
+      $defs:
+        EnvironmentOutput:
+          additionalProperties: false
+          description: spawn 装配期写入的部署快照。
+          properties:
+            deployment:
+              description: standalone or subject-mounted
+              type: string
+            project_id:
+              description: Project id; empty when the agent is unattached
+              type: string
+            workspace_root:
+              anyOf:
+              - type: string
+              - type: 'null'
+              description: Workspace root, or null when unset
+            default_working_dir:
+              anyOf:
+              - type: string
+              - type: 'null'
+              description: Default working directory
+            allowed_roots:
+              description: Filesystem roots the agent may use
+              items:
+                type: string
+              type: array
+            hitl_timeout:
+              description: Human-approval timeout in seconds
+              type: number
+            hitl_consecutive_timeout_limit:
+              description: Consecutive approval timeouts allowed
+              type: integer
+            hitl_degraded_timeout:
+              description: Timeout used after the approval limit
+              type: number
+          required:
+          - deployment
+          - project_id
+          - workspace_root
+          - default_working_dir
+          - allowed_roots
+          - hitl_timeout
+          - hitl_consecutive_timeout_limit
+          - hitl_degraded_timeout
+          type: object
+        SessionAgentOutput:
+          additionalProperties: false
+          description: 当前 Agent 与活动会话。
+          properties:
+            name:
+              description: Agent name
+              type: string
+            session_id:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Active session id
+            active_branch_id:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Active branch id
+            session_error:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Why the active session could not be read
+            session:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Why session fields are absent when context is not wired
+          required:
+          - name
+          type: object
+        SessionClusterMemberOutput:
+          additionalProperties: false
+          description: 集群成员的公开记录。
+          properties:
+            agent_id:
+              description: Stable agent id
+              type: string
+            incarnation_id:
+              description: Incarnation id
+              type: string
+            name:
+              description: Runtime display name
+              type: string
+            config:
+              anyOf:
+              - additionalProperties: true
+                type: object
+              - type: 'null'
+              description: Serializable agent configuration
+            description:
+              description: Agent description
+              type: string
+            tags:
+              description: Agent tags
+              items:
+                type: string
+              type: array
+            created_at:
+              description: Registration time as a Unix timestamp
+              type: number
+          required:
+          - agent_id
+          - incarnation_id
+          - name
+          - config
+          - description
+          - tags
+          - created_at
+          type: object
+        SessionClusterOutput:
+          additionalProperties: false
+          description: 集群段：列出成员，或在列举失败时只带 error。
+          properties:
+            members:
+              anyOf:
+              - items:
+                  $ref: '#/$defs/SessionClusterMemberOutput'
+                type: array
+              - type: 'null'
+              default: null
+              description: Registered cluster members
+            count:
+              anyOf:
+              - type: integer
+              - type: 'null'
+              default: null
+              description: Number of members
+            error:
+              anyOf:
+              - type: string
+              - type: 'null'
+              default: null
+              description: Why the member list could not be read
+          type: object
+      additionalProperties: false
+      properties:
+        environment:
+          anyOf:
+          - $ref: '#/$defs/EnvironmentOutput'
+          - type: 'null'
+          description: Spawn-time deployment snapshot, or null when it was not injected
+        environment_source:
+          description: Where the environment snapshot came from
+          type: string
+        agent:
+          $ref: '#/$defs/SessionAgentOutput'
+          description: Current agent and session
+        cluster:
+          anyOf:
+          - $ref: '#/$defs/SessionClusterOutput'
+          - type: 'null'
+          description: Cluster members, an error object, or null when the supervisor is not wired
+      required:
+      - environment
+      - environment_source
+      - agent
+      - cluster
+      type: object
+    tags:
+    - core
+    - introspection
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/session_info.py
+- namespace: ghrah
+  name: core
+  member: ghrah.core.unbind_member
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Unbind Member
+    description: Remove a bound tool from the model context; it stays discoverable through search_tools and callable through execute_tool.
+    input_schema:
+      additionalProperties: false
+      properties:
+        name:
+          description: Exact tool name returned by search_tools.
+          minLength: 1
+          type: string
+      required:
+      - name
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        bound:
+          items:
             type: string
-          agent:
-            $ref: '#/$defs/SessionAgentOutput'
-            description: Current agent and session
-          cluster:
-            anyOf:
-            - $ref: '#/$defs/SessionClusterOutput'
-            - type: 'null'
-            description: Cluster members, an error object, or null when the supervisor is not wired
-        required:
-        - environment
-        - environment_source
-        - agent
-        - cluster
-        type: object
-      tags:
-      - core
-      - introspection
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-  skills: {}
+          type: array
+      required:
+      - name
+      - bound
+      type: object
+    tags:
+    - binding
+    - core
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 30000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/core/operations/unbind_member.py

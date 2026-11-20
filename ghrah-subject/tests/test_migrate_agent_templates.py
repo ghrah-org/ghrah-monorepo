@@ -131,11 +131,12 @@ def test_builds_config_and_reports_gaps(workspace: tuple[Path, Path]) -> None:
     assert config.model.model_overrides == {"temperature": 0.3}
     assert config.prompt.system_prompt == "先列事实"
     assert config.context_policy.max_iterations == 12
-    packages = {item.package: item for item in config.ability_request.packages}
     # type=load_skill → ghrah.core 的单个操作；控制成员 conversation 不入申请
-    assert [op.key for op in packages["ghrah.core"].operations] == ["load_skill"]
+    core_members = [item for item in config.ability_request.members if item.package == "ghrah.core"]
+    assert [item.key for item in core_members] == ["load_skill"]
     # ref 指向成员 → 拆成包 + 操作
-    assert [op.key for op in packages["demo.tools"].operations] == ["read_file"]
+    tool_members = [item for item in config.ability_request.members if item.package == "demo.tools"]
+    assert [item.key for item in tool_members] == ["read_file"]
     # 解析不到的成员进报告，不静默丢弃
     assert [item["ref"] for item in report.unresolved_members] == ["demo.pkg.missing_member"]
 

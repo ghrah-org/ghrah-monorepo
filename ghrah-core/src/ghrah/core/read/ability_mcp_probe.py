@@ -38,7 +38,7 @@ from ghrah.protocol.ability_control import (
     AbilityMcpToolView,
 )
 
-from ghrah.ability.loading.ability_schema import AbilityDefinition
+from ghrah.ability.loading.ability_schema import AbilityDefinition, definition_from_payload
 from ghrah.core.read.ability_catalog import (
     CatalogError,
     read_installed_version,
@@ -298,7 +298,7 @@ def _resolve_definition(
     if not isinstance(raw, dict):
         raise CatalogError("unavailable", "已安装能力包定义不可读")
     try:
-        return AbilityDefinition.model_validate(raw)
+        return definition_from_payload(raw, source="installed definition")
     except Exception as error:  # 定义损坏同样降级为「不可用」
         raise CatalogError("unavailable", "已安装能力包定义不可读") from error
 

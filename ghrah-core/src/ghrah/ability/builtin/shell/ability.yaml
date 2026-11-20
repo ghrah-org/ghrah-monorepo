@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: ghrah
   name: shell
@@ -7,69 +7,76 @@ identity:
 title: Shell
 description: Run shell commands through the delegated command runner, under the command safety classifier.
 members:
-  operations:
-    execute_command:
-      title: Execute Command
-      description: Execute a shell command and return its output. Dangerous commands are blocked. Other commands require human approval.
-      entry: operations/execute_command.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          command:
-            description: The shell command to execute
-            type: string
-          working_dir:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Working directory for the command
-        required:
-        - command
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          exit_code:
-            description: Process exit code
-            type: integer
-          stdout:
-            description: Standard output, folded when it exceeds the line limit
-            type: string
-          stderr:
-            description: Standard error
-            type: string
-          timed_out:
-            description: Whether the command exceeded its timeout
-            type: boolean
-          command:
-            description: Command that was executed
-            type: string
-          working_dir:
-            description: Working directory; empty when the caller omitted one
-            type: string
-        required:
-        - exit_code
-        - stdout
-        - stderr
-        - timed_out
-        - command
-        - working_dir
-        type: object
-      tags:
-      - execution
-      - shell
-      effects:
-      - process:spawn
-      permissions:
-        shell_access: true
-        require_hitl: true
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 300000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-  skills: {}
+- namespace: ghrah
+  name: shell
+  member: ghrah.shell.execute_command
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Execute Command
+    description: Execute a shell command and return its output. Dangerous commands are blocked. Other commands require human approval.
+    input_schema:
+      additionalProperties: false
+      properties:
+        command:
+          description: The shell command to execute
+          type: string
+        working_dir:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Working directory for the command
+      required:
+      - command
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        exit_code:
+          description: Process exit code
+          type: integer
+        stdout:
+          description: Standard output, folded when it exceeds the line limit
+          type: string
+        stderr:
+          description: Standard error
+          type: string
+        timed_out:
+          description: Whether the command exceeded its timeout
+          type: boolean
+        command:
+          description: Command that was executed
+          type: string
+        working_dir:
+          description: Working directory; empty when the caller omitted one
+          type: string
+      required:
+      - exit_code
+      - stdout
+      - stderr
+      - timed_out
+      - command
+      - working_dir
+      type: object
+    tags:
+    - execution
+    - shell
+    effects:
+    - process:spawn
+    permissions:
+      shell_access: true
+      require_hitl: true
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 300000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/shell/operations/execute_command.py

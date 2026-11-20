@@ -51,6 +51,7 @@ __all__ = [
     "catalog_description",
     "digest_skill_catalog",
     "load_skill_catalog",
+    "next_skill_reminder",
     "read_skill_body",
     "read_skill_document",
     "read_skill_text",
@@ -158,6 +159,34 @@ def render_skill_catalog(skills: Sequence[SkillCatalogEntry], *, changed: bool) 
         f"{footer}\n"
         "</system-reminder>"
     )
+
+
+def next_skill_reminder(
+    skills: Sequence[SkillCatalogEntry], last_digest: str | None
+) -> tuple[str | None, str]:
+    """算出本轮要注入的技能目录文本（目录是**每轮注入**的，不留在历史里）。
+
+    口径：
+
+    - 有技能：每轮都给完整清单；摘要与上一次不同时用"完整替换"口径，其余用
+      介绍口径（文案稳定，利于前缀缓存）。
+    - 没技能且从未注入过：``None``（不占上下文）。
+    - 从有到无：给一次"已清空"提醒，之后不再注入。
+
+    Args:
+        skills: 本轮技能清单。
+        last_digest: 上一次注入时的摘要；``None`` 表示本会话尚未注入过。
+
+    Returns:
+        ``(要注入的文本或 None, 本轮摘要)``。
+    """
+    digest = digest_skill_catalog(skills)
+    if skills:
+        changed = last_digest is not None and digest != last_digest
+        return render_skill_catalog(skills, changed=changed), digest
+    if last_digest is None or last_digest == digest:
+        return None, digest
+    return render_skill_catalog(skills, changed=True), digest
 
 
 def read_skill_text(locator: Traversable) -> str:

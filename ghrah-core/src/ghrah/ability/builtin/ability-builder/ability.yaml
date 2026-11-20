@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: ghrah
   name: ability-builder
@@ -7,18 +7,24 @@ identity:
 title: Ability Builder
 description: 提供 Ability 包开发指南的 Skill 包。
 members:
-  operations: {}
-  skills:
-    ability-package-development-guide:
-      title: Ability 包开发指南
-      description: 定义一个 Ability 包的标准结构、手写 ability.yaml 字段，以及 Operation 与 Skill 的声明方式。
-      tags:
-      - ability
-      - guide
-      - package
-      body:
-        path: skills/ability-package-development-guide/SKILL.md
-        media_type: text/markdown
-      assets: {}
-      references: {}
-      scripts: {}
+- namespace: ghrah
+  name: ability-builder
+  member: ghrah.ability-builder.ability-package-development-guide
+  type: skill
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Ability 包开发指南
+    description: 定义一个 Ability 包的标准结构、手写 ability.yaml 字段，以及 Operation 与 Skill 的声明方式。
+    tags:
+    - ability
+    - guide
+    - package
+    path: ghrah/ability-builder/skills/ability-package-development-guide/SKILL.md
+    media_type: text/markdown
+    assets: {}
+    references: {}
+    scripts: {}

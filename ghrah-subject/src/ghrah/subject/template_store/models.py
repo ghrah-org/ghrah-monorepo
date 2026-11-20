@@ -36,17 +36,15 @@ __all__ = [
     "AgentTemplateConfig",
     "AgentTemplateContextOverrides",
     "AgentTemplateContextPolicy",
+    "AgentTemplateMember",
     "AgentTemplateMetadata",
     "AgentTemplateModel",
-    "AgentTemplateOperation",
-    "AgentTemplatePackage",
     "AgentTemplatePathRequest",
     "AgentTemplatePersistenceOverrides",
     "AgentTemplatePermissionRequest",
     "AgentTemplatePrompt",
     "AgentTemplateRecord",
     "AgentTemplateScript",
-    "AgentTemplateSkill",
     "AgentTemplateSurface",
 ]
 
@@ -154,20 +152,6 @@ class AgentTemplateSurface(_TemplateModel):
         return _sorted_unique("surface.static", value)
 
 
-class AgentTemplateOperation(_TemplateModel):
-    """operation 轴申请；``visible=false && available=true`` 非法。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    available: bool = True
-
-    @model_validator(mode="after")
-    def _check_axes(self) -> AgentTemplateOperation:
-        if not self.visible and self.available:
-            raise ValueError("visible=false 的 operation 不能同时 available=true")
-        return self
-
-
 class AgentTemplateScript(_TemplateModel):
     """skill 下的脚本申请；``exec`` 才是可执行性。"""
 
@@ -176,78 +160,208 @@ class AgentTemplateScript(_TemplateModel):
     exec: bool = False
 
 
-class AgentTemplateSkill(_TemplateModel):
-    """skill 申请；skill 没有 ``available``，脚本保持申请顺序。"""
+class AgentTemplateAxes(_TemplateModel):
+    """成员两条轴；按现行语义二者恒等（不可见即不可执行，可见即一定可执行）。"""
 
-    key: str = Field(min_length=1)
     visible: bool = True
-    scripts: list[AgentTemplateScript] = Field(default_factory=list)
-
-    @field_validator("scripts")
-    @classmethod
-    def _check_scripts(cls, value: list[AgentTemplateScript]) -> list[AgentTemplateScript]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("skills[].scripts 的 key 必须唯一")
-        return value
-
-
-class AgentTemplatePackage(_TemplateModel):
-    """包级申请：成员按 key 排序；``version`` 只对能力件有意义。
-
-    内核件随源码发布、没有版本层，``version`` 为 ``None``；能力件在安装根下按
-    ``<ns>/<name>/<version>/`` 存放，同一包多版本并存，必须记住版本。
-    """
-
-    package: str = Field(min_length=1)
-    origin: Literal["builtin", "installed", "mcp"]
-    version: str | None = None
-    whole_container: bool = False
-    operations: list[AgentTemplateOperation] = Field(default_factory=list)
-    skills: list[AgentTemplateSkill] = Field(default_factory=list)
-
-    @field_validator("operations")
-    @classmethod
-    def _check_operations(cls, value: list[AgentTemplateOperation]) -> list[AgentTemplateOperation]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("operations 的 key 必须唯一")
-        return sorted(value, key=lambda item: item.key)
-
-    @field_validator("skills")
-    @classmethod
-    def _check_skills(cls, value: list[AgentTemplateSkill]) -> list[AgentTemplateSkill]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("skills 的 key 必须唯一")
-        return sorted(value, key=lambda item: item.key)
+    bind: bool = True
 
     @model_validator(mode="after")
-    def _check_container(self) -> AgentTemplatePackage:
-        if self.whole_container and (self.operations or self.skills):
-            raise ValueError("whole_container=true 时不能同时申请 operations/skills")
+    def _check_axes(self) -> AgentTemplateAxes:
+        if self.bind != self.visible:
+            raise ValueError("bind 必须与 visible 一致（不可见即不可执行，可见即一定可执行）")
+        return self
+
+
+class AgentTemplateMember(_TemplateModel):
+    """模板里的一条成员申请（引用态）。
+
+    与 Core 的统一成员实体同形：包身份 + 成员全名 + 类型 + 轴；**不复制定义数据**
+    （``data`` 恒为空）。``scripts`` 是模板侧独有的脚本申请，按成员挂在记录上。
+
+    落库的就是这个形状；接口层再按包聚合成 ``packages[]`` 视图。
+    """
+
+    namespace: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    member: str = Field(min_length=1)
+    type: Literal["operation", "skill", "mcp"] = "operation"
+    version: str | None = None
+    ability_type: Literal["kernel", "external"] = "external"
+    axes: AgentTemplateAxes = Field(default_factory=AgentTemplateAxes)
+    scripts: list[AgentTemplateScript] = Field(default_factory=list)
+
+    @property
+    def package(self) -> str:
+        """包全名；``name`` 等于 ``namespace`` 时退化为单段（与 Core 同口径）。"""
+        return self.namespace if self.name == self.namespace else f"{self.namespace}.{self.name}"
+
+    @property
+    def key(self) -> str:
+        """成员键（全名最后一段）。"""
+        return self.member.rsplit(".", 1)[-1]
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> AgentTemplateMember:
+        parts = self.member.split(".")
+        if ".".join(parts[:-1]) != self.package:
+            raise ValueError(f"member 必须是 {self.package}.<key>，当前是 {self.member!r}")
+        if self.ability_type == "kernel":
+            if self.version is not None:
+                raise ValueError("kernel 成员没有版本层，version 必须为 null")
+        elif self.version is not None and not self.version.strip():
+            raise ValueError("external 成员的 version 给定时不得为空串")
+        if self.type != "skill" and self.scripts:
+            raise ValueError("只有 skill 成员可以申请脚本")
+        keys = [item.key for item in self.scripts]
+        if len(keys) != len(set(keys)):
+            raise ValueError("scripts 的 key 必须唯一")
         return self
 
 
 class AgentTemplateAbilityRequest(_TemplateModel):
-    """能力申请：模板层只做形状与一致性校验，不判断成员是否存在。"""
+    """能力申请：模板层只做形状与一致性校验，不判断成员是否存在。
+
+    **落库形状是成员列表**（``members``）。接口层仍以包级视图 ``packages[]``
+    收发；``model_validator(mode="before")`` 在读入时把包级视图展开成成员记录，
+    :meth:`to_packages_payload` 在输出时再聚合回去。旧行（存的是 ``packages``）
+    因此不需要数据迁移。
+    """
 
     surface: AgentTemplateSurface = Field(default_factory=AgentTemplateSurface)
-    packages: list[AgentTemplatePackage] = Field(default_factory=list)
+    members: list[AgentTemplateMember] = Field(default_factory=list)
     mcp_refs: list[str] = Field(default_factory=list)
 
-    @field_validator("packages")
+    @model_validator(mode="before")
     @classmethod
-    def _check_packages(cls, value: list[AgentTemplatePackage]) -> list[AgentTemplatePackage]:
-        names = [item.package for item in value]
+    def _from_packages_view(cls, value: Any) -> Any:
+        """兼容两种输入：已落库的 ``members``，或接口层的 ``packages[]``。"""
+        if not isinstance(value, dict) or "packages" not in value:
+            return value
+        data = dict(value)
+        packages = data.pop("packages") or []
+        members = list(data.get("members") or [])
+        seen: set[str] = set()
+        for package in packages:
+            name = str((package or {}).get("package") or "") if isinstance(package, dict) else ""
+            if name and name in seen:
+                raise ValueError("packages 的 package 必须唯一")
+            seen.add(name)
+            members.extend(_members_from_package(package))
+        data["members"] = members
+        return data
+
+    @field_validator("members")
+    @classmethod
+    def _check_members(cls, value: list[AgentTemplateMember]) -> list[AgentTemplateMember]:
+        names = [item.member for item in value]
         if len(names) != len(set(names)):
-            raise ValueError("packages 的 package 必须唯一")
-        return sorted(value, key=lambda item: item.package)
+            raise ValueError("members 的 member 必须唯一")
+        return sorted(value, key=lambda item: item.member)
 
     @field_validator("mcp_refs")
     @classmethod
     def _check_mcp_refs(cls, value: list[str]) -> list[str]:
         return _ordered_unique("mcp_refs", value)
+
+    def to_packages_payload(self) -> dict[str, Any]:
+        """把成员记录聚合回接口层的包级视图（``packages[]``）。
+
+        Returns:
+            ``{"surface": {...}, "packages": [...], "mcp_refs": [...]}``。
+        """
+        grouped: dict[str, list[AgentTemplateMember]] = {}
+        for item in self.members:
+            grouped.setdefault(item.package, []).append(item)
+        packages: list[dict[str, Any]] = []
+        for package, items in sorted(grouped.items()):
+            first = items[0]
+            if first.ability_type == "kernel":
+                origin = "builtin"
+            elif any(item.type == "mcp" for item in items):
+                origin = "mcp"
+            else:
+                origin = "installed"
+            packages.append(
+                {
+                    "package": package,
+                    "origin": origin,
+                    "version": first.version,
+                    "whole_container": False,
+                    "operations": [
+                        {"key": item.key, "visible": item.axes.visible, "available": item.axes.bind}
+                        for item in items
+                        if item.type != "skill"
+                    ],
+                    "skills": [
+                        {
+                            "key": item.key,
+                            "visible": item.axes.visible,
+                            "scripts": [script.model_dump(mode="json") for script in item.scripts],
+                        }
+                        for item in items
+                        if item.type == "skill"
+                    ],
+                }
+            )
+        return {
+            "surface": self.surface.model_dump(mode="json"),
+            "packages": packages,
+            "mcp_refs": list(self.mcp_refs),
+        }
+
+
+def _members_from_package(package: Any) -> list[dict[str, Any]]:
+    """把一个包级申请展开成成员记录（落库前必展开，不留整包）。
+
+    展开时先构造统一成员实体：跨字段约束（版本层、轴、全名）只由实体判一次，
+    落库形状只是它的 wire 投影。
+    """
+    if not isinstance(package, dict):
+        return []
+    full_name = str(package.get("package") or "")
+    if not full_name:
+        return []
+    if package.get("whole_container"):
+        raise ValueError("整包申请必须先展开成成员再落库（whole_container 不被持久化）")
+    namespace, _, name = full_name.partition(".")
+    name = name or namespace
+    origin = package.get("origin")
+    ability_type = "kernel" if origin == "builtin" else "external"
+    version = None if ability_type == "kernel" else package.get("version")
+    members: list[dict[str, Any]] = []
+    for operation in package.get("operations") or []:
+        members.append(
+            {
+                "namespace": namespace,
+                "name": name,
+                "member": f"{full_name}.{operation['key']}",
+                "type": "operation",
+                "version": version,
+                "ability_type": ability_type,
+                "axes": {
+                    "visible": bool(operation.get("visible", True)),
+                    "bind": bool(operation.get("available", True)),
+                },
+            }
+        )
+    for skill in package.get("skills") or []:
+        members.append(
+            {
+                "namespace": namespace,
+                "name": name,
+                "member": f"{full_name}.{skill['key']}",
+                "type": "skill",
+                "version": version,
+                "ability_type": ability_type,
+                "axes": {
+                    "visible": bool(skill.get("visible", True)),
+                    "bind": bool(skill.get("visible", True)),
+                },
+                "scripts": skill.get("scripts") or [],
+            }
+        )
+    return members
 
 
 class AgentTemplatePermissionRequest(_TemplateModel):

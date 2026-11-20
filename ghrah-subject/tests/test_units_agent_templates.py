@@ -260,7 +260,13 @@ async def test_update_archive_and_cas(running: Any) -> None:
             "metadata": {"namespace": "writing", "name": "weekly_report"},
             "prompt": {"system_prompt": "旧提示词"},
             "ability_request": {
-                "packages": [{"package": "writing.beta", "origin": "builtin"}],
+                "packages": [
+                    {
+                        "package": "writing.beta",
+                        "origin": "builtin",
+                        "operations": [{"key": "draft"}],
+                    }
+                ],
                 "mcp_refs": [],
             },
         },

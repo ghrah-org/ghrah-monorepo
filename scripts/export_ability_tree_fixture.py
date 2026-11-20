@@ -139,7 +139,7 @@ def main() -> None:
         if target.read_text() != expected:
             raise SystemExit("Ability tree fixture is stale")
     else:
-        target.write_text(expected)
+        target.write_text(expected, encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":

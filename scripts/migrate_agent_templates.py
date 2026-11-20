@@ -152,8 +152,16 @@ def load_ability_index(roots: list[Path]) -> AbilityIndex:
             name = str(identity.get("name") or "").strip()
             if not namespace or not name:
                 continue
-            operations = ((document.get("members") or {}).get("operations")) or {}
-            index.add_package(f"{namespace}.{name}", list(operations))
+            members = document.get("members") or {}
+            if isinstance(members, list):
+                operations = [
+                    str(item.get("member", "")).rsplit(".", 1)[-1]
+                    for item in members
+                    if isinstance(item, dict) and item.get("type") == "operation"
+                ]
+            else:
+                operations = list(members.get("operations") or {})
+            index.add_package(f"{namespace}.{name}", operations)
     return index
 
 

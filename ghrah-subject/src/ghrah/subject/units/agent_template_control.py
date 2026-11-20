@@ -97,7 +97,7 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
             record.context_policy.model_dump(mode="json")
         ),
         ability_request=AgentTemplateAbilityRequestView.model_validate(
-            record.ability_request.model_dump(mode="json")
+            record.ability_request.to_packages_payload()
         ),
         permission_request=AgentTemplatePermissionRequestView.model_validate(
             record.permission_request.model_dump(mode="json")

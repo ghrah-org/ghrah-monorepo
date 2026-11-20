@@ -672,6 +672,7 @@ class CoreUnit:
         startup_materializer: Any = None
         if self._config.ability_store is not None:
             from ghrah.ability.access import build_startup_materializer
+            from ghrah.core.agents.bindings import MemberBindingState
 
             startup_materializer = build_startup_materializer(
                 store=self._config.ability_store,
@@ -691,6 +692,7 @@ class CoreUnit:
                 surface_thresholds=SurfaceThresholds.from_core_config(self._config),
                 surface_search_limit=self._config.surface_search_limit,
                 surface_loaded_limit=self._config.surface_loaded_limit,
+                binding_state=MemberBindingState(self._require_agent_instances),
             )
         self._startup_materializer = startup_materializer
 
@@ -1135,6 +1137,7 @@ class CoreUnit:
         from ghrah.core.agents import (
             AssemblyError,
             config_from_snapshot,
+            member_axes_from_spec,
             resolve_members,
             surface_from_snapshot,
         )
@@ -1146,6 +1149,7 @@ class CoreUnit:
                 config=config_from_snapshot(record.config),
                 abilities=resolve_members(source, record.members),
                 surface=surface_from_snapshot(record.surface),
+                member_axes=member_axes_from_spec(record.members),
             )
         except AssemblyError as error:
             return self._err(str(error))

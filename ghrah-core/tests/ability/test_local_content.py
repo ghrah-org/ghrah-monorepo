@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from _helpers import make_call as _make_call
 from _helpers import make_services
 from ghrah.protocol.ability_tree import GrantAbilityRequest, RevokeAbilityRequest, SkillReadScope
@@ -74,9 +75,11 @@ async def content(tmp_path):
 
 async def test_catalog_document_attachment_and_context_use_one_grant(content):
     store, provider, cm, _, _ = content
-    messages = await cm.get_llm_messages()
-    assert "reports/guide" in messages[-1].text
-    assert "# 报告编写" not in messages[-1].text
+    # 目录不再由 ContextManager 注入（改由工具面按绑定轴注入）；内容端口仍须
+    # 用同一份授予给出"只有摘要、没有正文"的目录。
+    catalog = await provider.catalog_text()
+    assert "reports/guide" in catalog
+    assert "# 报告编写" not in catalog
     before = await store.view(ADMIN, ALICE)
     loaded = await provider.load_skill("reports/guide")
     assert "# 报告编写" in loaded["content"]
@@ -213,19 +216,15 @@ async def test_json_asset_loads_as_text_and_binary_stays_rejected(tmp_path):
         payload, encoding="utf-8", newline="\n"
     )
     definition_path = source / "ability.yaml"
-    definition = definition_path.read_text(encoding="utf-8")
-    needle = "      assets:\n        mark:\n"
-    assert needle in definition
+    data = yaml.safe_load(definition_path.read_text(encoding="utf-8"))
+    guide = next(item for item in data["members"] if item["member"].endswith(".guide"))["data"]
+    assert "mark" in guide["assets"]
+    guide["assets"]["example"] = {
+        "path": "skills/guide/assets/example.json",
+        "media_type": "application/json",
+    }
     definition_path.write_text(
-        definition.replace(
-            needle,
-            "      assets:\n"
-            "        example:\n"
-            "          path: skills/guide/assets/example.json\n"
-            "          media_type: application/json\n"
-            "        mark:\n",
-            1,
-        ),
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
         newline="\n",
     )

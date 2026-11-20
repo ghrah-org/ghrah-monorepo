@@ -80,6 +80,36 @@ def test_only_granted_members_enter_the_spec() -> None:
     assert rendered.report.not_granted == ("ghrah.fs.write_file",)
 
 
+def test_initial_bindings_mark_only_the_selected_members() -> None:
+    """创建时选中的初始绑定写进成员轴：未选中的成员仍可见、只是不常驻。"""
+    rendered = render_assembly(
+        _template(),
+        agent_name="weekly",
+        workspaces=_WORKSPACES,
+        granted=[_granted()],
+        initial_bindings=("ghrah.fs.read_file",),
+    )
+
+    axes = {item.member: item.axes for item in rendered.spec.members}
+    assert axes["ghrah.fs.read_file"].available is True
+    assert axes["ghrah.fs.write_file"].available is False
+    assert axes["ghrah.fs.write_file"].visible is True
+
+
+def test_unknown_initial_binding_fails_closed() -> None:
+    """初始绑定只能选这次真正装上的成员；写错名字要报错而不是静默忽略。"""
+    with pytest.raises(RenderError) as error:
+        render_assembly(
+            _template(),
+            agent_name="weekly",
+            workspaces=_WORKSPACES,
+            granted=[_granted()],
+            initial_bindings=("ghrah.fs.ghost",),
+        )
+    assert error.value.code == "invalid_binding"
+    assert "ghrah.fs.ghost" in error.value.detail
+
+
 def test_missing_package_is_reported_not_fatal() -> None:
     rendered = render_assembly(
         _template(),
@@ -194,19 +224,17 @@ def test_subpath_cannot_escape_workspace(subpath: str) -> None:
         )
 
 
-def test_whole_container_selects_all_granted_operations() -> None:
-    template = _template(
-        ability_request={
-            "surface": {"mode": "auto"},
-            "packages": [{"package": "ghrah.fs", "origin": "builtin", "whole_container": True}],
-        }
-    )
+def test_explicit_members_pass_through_without_grant_view() -> None:
+    """没有授权视图时，模板里逐个列出的成员原样交给 Core（落库不再有整包）。"""
     rendered = render_assembly(
-        template, agent_name="weekly", workspaces=_WORKSPACES, granted=[_granted()]
+        _template(), agent_name="weekly", workspaces=_WORKSPACES, granted=None
     )
 
-    names = [item.member for item in rendered.spec.members]
-    assert names == ["ghrah.fs.read_file", "ghrah.fs.write_file"]
+    assert [item.member for item in rendered.spec.members] == [
+        "ghrah.fs.read_file",
+        "ghrah.fs.write_file",
+        "ghrah.fs.style",
+    ]
     assert rendered.report.not_granted == ()
 
 
@@ -225,22 +253,11 @@ def test_skills_enter_members_and_keep_axes() -> None:
     assert rendered.grants[0].scripts == {"style": ("lint",)}
 
 
-def test_whole_container_is_passed_through_to_core() -> None:
-    """没有授权视图时，「整包」以包名透传给 Core（成员由 Core 的能力来源展开）。"""
-    template = _template(
-        ability_request={
-            "packages": [
-                {
-                    "package": "ghrah.fs",
-                    "origin": "builtin",
-                    "whole_container": True,
-                    "operations": [],
-                }
-            ]
-        }
-    )
-    rendered = render_assembly(template, agent_name="weekly", workspaces=_WORKSPACES, granted=None)
-
-    assert [(item.member, item.whole_container) for item in rendered.spec.members] == [
-        ("ghrah.fs", True)
-    ]
+def test_whole_container_is_rejected_at_storage() -> None:
+    """整包不是持久化形状：写入口必须已展开成成员（由 API 层展开）。"""
+    with pytest.raises(ValidationError, match="whole_container"):
+        _template(
+            ability_request={
+                "packages": [{"package": "ghrah.fs", "origin": "builtin", "whole_container": True}]
+            }
+        )

@@ -195,7 +195,8 @@ async def test_receive_search_describe_execute_and_result_roundtrip(environment)
     assert "op_049" in model.tool_history[2]
     assert "search_tools" in model.tool_history[0]
     assert "run_script" in model.tool_history[0]
-    assert max(map(len, model.tool_history)) <= 7
+    # 5 个元工具（发现/描述/执行/绑定/解绑）+ run_script + 1 个常驻成员。
+    assert max(map(len, model.tool_history)) <= 8
     assert all(
         any("use search_tools" in item.text.lower() for item in messages)
         for messages in model.calls
@@ -414,7 +415,7 @@ async def test_auto_budget_and_explicit_meta_revoke_fall_back_to_static(environm
     surface.config = SurfaceConfig(max_static=12)
     tools = await surface.refresh(128000)
     names = [item["function"]["name"] for item in tools]
-    assert len(names) <= 16  # 12 个常驻、3 个元工具、1 个脚本入口。
+    assert len(names) <= 18  # 12 个常驻、5 个元工具、1 个脚本入口。
     assert _cost(tools) <= 128000 * 0.02
     assert "search_tools" in names
     revision = await store.agent_revision(ADMIN, AGENT)
@@ -557,3 +558,56 @@ async def test_hitl_real_member_and_target_hook_counts(environment, tmp_path, ap
     else:
         assert result.data["hitl_rejected"]
         assert not (tmp_path / "new.txt").exists()
+
+
+async def test_binding_controls_the_static_set_and_persists(environment):
+    """绑定集合决定常驻成员；bind/unbind 立即回调持久化，控制成员不可绑。"""
+    store, materializer, result, config, runs = environment
+    surfaces = materializer._surface_services[AGENT]  # noqa: SLF001 - 取同一工具面实例
+    surface = surfaces[-1]
+    persisted: list[frozenset[str]] = []
+
+    async def record(bound: frozenset[str]) -> None:
+        persisted.append(bound)
+
+    surface._on_bound_change = record  # noqa: SLF001 - 注入持久化接缝
+    surface._bound = {"acme.tools.op_000"}  # noqa: SLF001 - 直接固定初始绑定
+    names = [item["function"]["name"] for item in await surface.refresh(128000)]
+    assert "op_000" in names
+    assert "op_001" not in names
+
+    ok, error = await surface.set_member_bound("op_001", bind=True)
+    assert ok, error
+    assert persisted and "acme.tools.op_001" in persisted[-1]
+    names = [item["function"]["name"] for item in await surface.refresh(128000)]
+    assert "op_001" in names
+
+    ok, error = await surface.set_member_bound("op_001", bind=False)
+    assert ok, error
+    assert "acme.tools.op_001" not in persisted[-1]
+
+    ok, error = await surface.set_member_bound("not_a_tool", bind=True)
+    assert not ok and "not found" in error
+
+
+async def test_skills_follow_the_bind_axis_in_the_catalog(environment):
+    """技能成员按绑定轴分流：绑定进正式目录，未绑定只在一行提示里可发现。"""
+    store, materializer, result, config, runs = environment
+    surface = materializer._surface_services[AGENT][-1]  # noqa: SLF001
+    surface._bound = {"acme.tools.guide"}  # noqa: SLF001 - 技能成员直接绑定
+
+    bound_text = await surface.skill_reminder()
+    assert bound_text is not None and "tools/guide" in bound_text
+    assert "not bound" not in bound_text
+
+    ok, error = await surface.set_member_bound("tools/guide", bind=False)
+    assert ok, error
+    unbound_text = await surface.skill_reminder()
+    assert unbound_text is not None and "not bound" in unbound_text
+    assert "tools/guide" in unbound_text
+    # 解绑不应把技能从快照里删掉，只是不再注入正式目录。
+    assert "acme.tools.guide" not in (surface._bound or set())  # noqa: SLF001
+
+    ok, error = await surface.set_member_bound("tools/guide", bind=True)
+    assert ok, error
+    assert "acme.tools.guide" in surface._bound  # noqa: SLF001

@@ -775,6 +775,11 @@ export default {
       startNow: "Start this agent right away",
       startNowHint:
         "Starting validates the model endpoint immediately. Leave it unchecked to create a stopped agent and start it later.",
+      initialBindings: "Initially bound members",
+      initialBindingsHint:
+        "Only bound members keep their full schema in the model context. The rest stay discoverable and can be bound or unbound by the model later.",
+      noMembers: "This template declares no members yet.",
+      memberLoadFailed: "Could not load the template members.",
       updatedAt: "Updated",
       columnTemplate: "Template",
       columnRevision: "Version",

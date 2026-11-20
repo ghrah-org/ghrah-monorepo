@@ -15,6 +15,7 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -177,31 +178,40 @@ def test_capture_preserves_v1_metadata_title(tmp_path: Path) -> None:
     assert skill.tags == ["reporting"]
 
 
+def _by_type(data: dict[str, Any], kind: str) -> dict[str, dict[str, Any]]:
+    """把 v2 的 ``members`` 列表按类型索引成 ``{成员键: 记录}``。"""
+    return {
+        item["member"].rsplit(".", 1)[-1]: item for item in data["members"] if item["type"] == kind
+    }
+
+
 def test_multi_skill_fixture_carries_two_skills(tmp_path: Path) -> None:
-    """``multi-skill`` 生成 ``members.skills`` 两个键、路径与标题正确。"""
+    """``multi-skill`` 生成两条 skill 成员记录、路径与标题正确。"""
     root = _copy("multi-skill", tmp_path)
     result = build(root)
     data = yaml.safe_load(result.rendered)
-    skills = data["members"]["skills"]
+    skills = _by_type(data, "skill")
     assert set(skills) == {"reporting-guide", "review-guide"}
-    assert skills["reporting-guide"]["body"]["path"] == "skills/reporting-guide/SKILL.md"
-    assert skills["review-guide"]["title"] == "review-guide"
+    assert (
+        skills["reporting-guide"]["data"]["path"]
+        == "fixtures/multi-skill/0.1.0/skills/reporting-guide/SKILL.md"
+    )
+    assert skills["review-guide"]["data"]["title"] == "review-guide"
 
 
 def test_builder_fixture_members_match_frontmatter(tmp_path: Path) -> None:
-    """``builder`` 的 ``members`` 与 SKILL.md frontmatter 逐字段一致。"""
+    """``builder`` 的成员记录与 SKILL.md frontmatter 逐字段一致。"""
     root = _copy("builder", tmp_path)
     result = build(root)
     data = yaml.safe_load(result.rendered)
-    members = data["members"]
-    assert members["operations"] == {}
-    (skill,) = members["skills"].values()
-    assert skill["title"] == "Ability 包开发指南"
-    assert skill["description"].startswith("定义一个 Ability 包的标准结构")
-    assert skill["tags"] == ["ability", "guide", "package"]
-    assert set(members["skills"]) == {"ability-package-development-guide"}
-    assert "export" in skill["scripts"]
-    assert skill["scripts"]["export"]["media_type"] == "text/x-python"
+    assert _by_type(data, "operation") == {}
+    (skill,) = _by_type(data, "skill").values()
+    assert skill["data"]["title"] == "Ability 包开发指南"
+    assert skill["data"]["description"].startswith("定义一个 Ability 包的标准结构")
+    assert skill["data"]["tags"] == ["ability", "guide", "package"]
+    assert set(_by_type(data, "skill")) == {"ability-package-development-guide"}
+    assert "export" in skill["data"]["scripts"]
+    assert skill["data"]["scripts"]["export"]["media_type"] == "text/x-python"
 
 
 def test_scripts_are_content_not_operations(tmp_path: Path) -> None:
@@ -418,7 +428,7 @@ TIMEOUT_MS = 1000
     )
     result = build(root)
     data = yaml.safe_load(result.rendered)
-    schema = data["members"]["operations"]["nested"]["input_schema"]
+    schema = _by_type(data, "operation")["nested"]["data"]["input_schema"]
     assert "$defs" in schema
     assert schema["properties"]["item"]["$ref"] == "#/$defs/Item"
     assert schema["$defs"]["Item"]["properties"]["name"]["description"] == "item name"
@@ -450,7 +460,7 @@ def test_resource_keys_are_sorted(tmp_path: Path) -> None:
     (references / "a" / "b.md").write_text("y\n", encoding="utf-8", newline="\n")
     result = build(root)
     data = yaml.safe_load(result.rendered)
-    assert list(data["members"]["skills"]["s1"]["references"]) == ["a-b", "a-c"]
+    assert list(_by_type(data, "skill")["s1"]["data"]["references"]) == ["a-b", "a-c"]
 
 
 def test_shared_helper_module_is_importable(tmp_path: Path) -> None:
@@ -469,7 +479,7 @@ def test_shared_helper_module_is_importable(tmp_path: Path) -> None:
     )
     result = build(root)
     data = yaml.safe_load(result.rendered)
-    assert data["members"]["operations"]["plain"]["title"] == "来自 helper"
+    assert _by_type(data, "operation")["plain"]["data"]["title"] == "来自 helper"
 
 
 class TestPathRules:
@@ -623,10 +633,15 @@ def test_builtin_package_can_be_rebuilt(tmp_path: Path) -> None:
 
 
 def test_prototype_not_imported_by_runtime() -> None:
-    """运行时可用包加载器，构建/import 探测仍只允许作者侧工具引用。"""
+    """运行时可用包加载器，构建/import 探测仍只允许作者侧工具引用。
+
+    唯一例外是上传导入的规范化入口 ``intake``：它按设计要扫盘生成
+    ``ability.yaml``，只在 ``package_import`` 鉴权之后调用。
+    """
     source = Path(__file__).parents[3] / "src" / "ghrah"
     allowed = {
         (source / "ability" / "tools").resolve(),
+        (source / "ability" / "package" / "intake.py").resolve(),
     }
     hits: list[str] = []
     for path in source.rglob("*.py"):

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -30,6 +31,21 @@ DISCLOSURE_GUIDANCE = (
     "then describe_tool to inspect their schemas. Described tools may be called directly on "
     "the next turn; execute_tool is also available. Discovery never grants new permissions."
 )
+
+_UNBOUND_SKILLS_TEMPLATE = (
+    "<system-reminder>\n"
+    "These skills are available but not bound to this session: {names}. "
+    "Call bind_member with a catalog name (for example `{example}`) to bind one; "
+    "unbound skills are not part of the catalog above.\n"
+    "</system-reminder>"
+)
+
+
+def _unbound_skills_note(names: list[str]) -> str:
+    """可见但未绑定技能的提示：只给名字和绑定入口，不展开摘要。"""
+    return _UNBOUND_SKILLS_TEMPLATE.format(
+        names=", ".join(f"`{name}`" for name in names), example=names[0]
+    )
 
 
 def _failure(message: str) -> ActionResult:
@@ -57,6 +73,8 @@ class ToolSurfaceRuntime:
         thresholds: SurfaceThresholds | None = None,
         search_limit: int = DEFAULT_SEARCH_LIMIT,
         loaded_limit: int = DEFAULT_LOADED_LIMIT,
+        bound: Collection[str] | None = None,
+        on_bound_change: Callable[[frozenset[str]], Awaitable[None]] | None = None,
     ) -> None:
         if type(loaded_limit) is not int or loaded_limit < 0:
             raise ValueError("loaded_limit 必须是非负整数")
@@ -73,6 +91,11 @@ class ToolSurfaceRuntime:
         self._lru: OrderedDict[str, None] = OrderedDict()
         self._audit: list[dict[str, Any]] = []
         self._search: AgentToolSearch | None = None
+        self._skill_digest: str | None = None
+        # 绑定集合（成员全名）：权威在实例快照，这里只做镜像；None 表示调用方
+        # 没有提供成员轴（旧路径），按"全部可见成员都常驻"处理。
+        self._bound: set[str] | None = set(bound) if bound is not None else None
+        self._on_bound_change = on_bound_change
 
     def bind_run(self, run: str) -> None:
         """由生命周期边界固定 run，不允许旧对象绑定新代次。"""
@@ -134,6 +157,34 @@ class ToolSurfaceRuntime:
             await self.table.ability_content.view()  # 先更新受信 MCP 后端可用性。
         return await read_agent_catalog(self.agent, self.run, store=self.store)
 
+    async def skill_reminder(self) -> str | None:
+        """技能成员的注入文本：目录**每轮注入**，变化时改用"完整替换"口径。
+
+        成员来自同一次关系快照（授权表）→ 统一成员记录 → 技能摘要。按绑定轴
+        分流：绑定的技能进正式目录；可见但未绑定的技能只在一行提示里列出，
+        告诉模型可以用 ``bind_member`` 按目录名绑定。目录为空且从未注入过、
+        也没有可见技能时不占上下文。
+        """
+        from ghrah.ability.loading.skill_context import next_skill_reminder
+
+        catalog = await self._catalog()
+        skills = list(catalog.skills)
+        bound_set = getattr(self, "_bound", None)
+        if bound_set is None:
+            bound, unbound = skills, []
+        else:
+            bound = [item for item in skills if item.member.member in bound_set]
+            unbound = [item for item in skills if item.member.member not in bound_set]
+        text, digest = next_skill_reminder(bound, self._skill_digest)
+        self._skill_digest = digest
+        if not bound and unbound:
+            # 有技能但不绑定：不发"没有技能"的空目录文案，只给可发现提示。
+            text = None
+        if not unbound:
+            return text
+        note = _unbound_skills_note([item.catalog_name for item in unbound])
+        return f"{text}\n\n{note}" if text else note
+
     async def refresh(self, max_context_length: int | None = None) -> list[dict[str, Any]]:
         """每轮从当前授权与执行对象装配；撤销、版本改变和停止会清理加载集。"""
         catalog = await self._catalog()
@@ -166,9 +217,27 @@ class ToolSurfaceRuntime:
         )
         extras = controls + ([RunScriptTool(self).bind_tool()] if scripts else [])
         config = self.config
+        if self._bound is not None:
+            # 绑定集合决定常驻集：bound 的成员进静态装配，其余可见成员留给
+            # reset 发现（progressive）。成员消失（撤销/卸载）时自然掉出；
+            # 技能成员没有工具形态，单独保留在集合里（由 skill_reminder 消费）。
+            bound_full = {
+                tool.full_name
+                for tool in ready.values()
+                if (self._bound is None) or tool.full_name in self._bound
+            }
+            skill_full = {item.member.member for item in catalog.skills}
+            self._bound &= bound_full | skill_full
+            discoverable = [
+                name
+                for name, tool in ready.items()
+                if tool.full_name not in self._bound and name not in RESERVED_TOOL_NAMES
+            ]
+            mode = "progressive" if discoverable else "static"
+            config = config.model_copy(update={"mode": mode, "static": sorted(bound_full)})
         if len(meta) != len(META_TOOL_NAMES):
             # 显式撤销元工具后退回全量静态；仍受固定 64 项上限约束。
-            config = config.model_copy(update={"mode": "static"})
+            config = config.model_copy(update={"mode": "static", "static": []})
         assembly = assemble_surface(
             regular,
             config=config,
@@ -203,6 +272,90 @@ class ToolSurfaceRuntime:
                 loaded.append(definition)
                 remaining -= cost
         return static + loaded + extras
+
+    async def bound_members(self) -> list[str]:
+        """当前绑定成员的**全名**列表（空表示调用方没有提供成员轴）。"""
+        return sorted(self._bound or ())
+
+    async def set_member_bound(self, member_name: str, *, bind: bool) -> tuple[bool, str]:
+        """把某个已获授成员绑定进/移出模型上下文，并立即持久化。
+
+        操作成员按工具名（``search_tools`` 返回的名字）绑定；技能成员按目录名
+        （``<alias>/<key>``，即技能目录里显示的名字）绑定。控制成员不允许变更。
+
+        Args:
+            member_name: 目标工具名或技能目录名。
+            bind: True 绑定、False 解绑。
+
+        Returns:
+            ``(成功, 错误文案)``；控制成员与不可用成员拒绝变更。
+        """
+        catalog = await self._catalog()
+        tool = next(
+            (
+                item
+                for item in catalog.tools
+                if item.entry.tool_name == member_name and member_name not in RESERVED_TOOL_NAMES
+            ),
+            None,
+        )
+        if tool is None:
+            skill = next(
+                (
+                    item
+                    for item in catalog.skills
+                    if member_name in {item.catalog_name, item.member.member, item.member.key}
+                ),
+                None,
+            )
+            if skill is None:
+                return (
+                    False,
+                    "Member not found in the current grant and selection; "
+                    "use search_tools or the skill catalog",
+                )
+            if self._bound is None:
+                self._bound = self._baseline_bindings(catalog)
+            if bind:
+                self._bound.add(skill.member.member)
+            else:
+                self._bound.discard(skill.member.member)
+            await self._persist_bound()
+            return True, ""
+
+        ability = self._ability(tool)
+        if ability is None or getattr(ability, "member_reference", None) is None:
+            return False, "Loop-control members cannot be bound or unbound"
+        if bind and not tool.entry.available:
+            return False, "Tool is unavailable; restore its backend first"
+        if self._bound is None:
+            self._bound = self._baseline_bindings(catalog)
+        if bind:
+            self._bound.add(tool.full_name)
+        else:
+            self._bound.discard(tool.full_name)
+        await self._persist_bound()
+        return True, ""
+
+    @staticmethod
+    def _baseline_bindings(catalog: Any) -> set[str]:
+        """旧路径（无成员轴）首次变更时的基线：当前全部可见成员。"""
+        return {
+            item.full_name
+            for item in catalog.tools
+            if item.entry.available and item.entry.tool_name not in RESERVED_TOOL_NAMES
+        } | {item.member.member for item in catalog.skills}
+
+    async def _persist_bound(self) -> None:
+        """把绑定集合写回实例快照；失败只告警，不回滚内存视图。"""
+        if self._on_bound_change is None or self._bound is None:
+            return
+        try:
+            await self._on_bound_change(frozenset(self._bound))
+        except Exception:  # noqa: BLE001 — 持久化失败不该打断本轮工具面
+            logger.warning(
+                "Member binding persistence failed; keeping in-memory view", exc_info=True
+            )
 
     def _touch(self, tool: SurfaceTool, *, load: bool = False) -> None:
         name = tool.entry.tool_name
@@ -259,6 +412,17 @@ class ToolSurfaceRuntime:
                             }
                             for row in rows
                         ]
+                    },
+                )
+            if name == "bind_member" or name == "unbind_member":
+                bound, error = await self.set_member_bound(request.name, bind=name == "bind_member")
+                if not bound:
+                    return _failure(error)
+                return ActionResult(
+                    ActionOutcome.SUCCESS,
+                    {
+                        "name": request.name,
+                        "bound": await self.bound_members(),
                     },
                 )
             target = next(

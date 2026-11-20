@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from ghrah.subject.project.store import ProjectStore
 from ghrah.subject.template_store import (
+    AgentTemplateAbilityRequest,
     AgentTemplateConfig,
     AgentTemplateService,
     TemplateConflictError,
@@ -300,7 +301,12 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
                             {"key": "format"},
                         ],
                     },
-                    {"package": "writing.alpha", "origin": "mcp", "whole_container": True},
+                    {
+                        "package": "writing.alpha",
+                        "origin": "mcp",
+                        "version": "2.0.0",
+                        "operations": [{"key": "search"}],
+                    },
                 ],
                 "mcp_refs": ["conn.b", "conn.a"],
             },
@@ -330,14 +336,18 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
     )
     assert record.metadata.tags == ["a", "b"]
     assert record.ability_request.surface.static == ["a", "z"]
-    assert [item.package for item in record.ability_request.packages] == [
-        "writing.alpha",
-        "writing.beta",
+    members = {item.member: item for item in record.ability_request.members}
+    assert list(members) == [
+        "writing.alpha.search",
+        "writing.beta.draft",
+        "writing.beta.format",
+        "writing.beta.publish",
+        "writing.beta.style",
     ]
-    beta = record.ability_request.packages[1]
-    assert [item.key for item in beta.operations] == ["draft", "publish"]
-    assert [item.key for item in beta.skills] == ["format", "style"]
-    assert [item.key for item in beta.skills[1].scripts] == ["lint", "fix"]
+    assert members["writing.beta.draft"].axes.visible is False
+    assert members["writing.beta.draft"].axes.bind is False
+    assert members["writing.beta.style"].type == "skill"
+    assert [item.key for item in members["writing.beta.style"].scripts] == ["lint", "fix"]
     assert record.permission_request.auto_approve == [
         "ghrah.fs.read_file",
         "ghrah.fs.write_file",
@@ -350,6 +360,75 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
     assert [(item.scope, item.subpath) for item in record.path_request] == [
         ("agent", "."),
         ("package", "docs"),
+    ]
+
+
+async def test_stored_ability_request_uses_member_records(
+    store: TemplateStore, tmp_path: Path
+) -> None:
+    """落库字段是成员记录列表，不再是包级视图。"""
+    await store.create(
+        _config(
+            ability_request={
+                "packages": [
+                    {
+                        "package": "writing.beta",
+                        "origin": "builtin",
+                        "operations": [{"key": "draft"}],
+                    }
+                ]
+            }
+        )
+    )
+    with _inspect(tmp_path / DB_FILE) as db:
+        raw = json.loads(db.execute("SELECT ability_request FROM agent_templates").fetchone()[0])
+    assert "packages" not in raw
+    assert raw["members"] == [
+        {
+            "ability_type": "kernel",
+            "axes": {"bind": True, "visible": True},
+            "member": "writing.beta.draft",
+            "name": "beta",
+            "namespace": "writing",
+            "scripts": [],
+            "type": "operation",
+            "version": None,
+        }
+    ]
+
+
+def test_legacy_packages_payload_round_trips_through_members() -> None:
+    """旧形状（包级视图）在解析期展开成成员，输出时再聚合回去。"""
+    request = AgentTemplateAbilityRequest.model_validate(
+        {
+            "packages": [
+                {
+                    "package": "writing.beta",
+                    "origin": "installed",
+                    "version": "1.2.3",
+                    "operations": [{"key": "publish", "visible": False, "available": False}],
+                    "skills": [{"key": "style", "scripts": [{"key": "lint"}]}],
+                }
+            ]
+        }
+    )
+    assert [item.member for item in request.members] == [
+        "writing.beta.publish",
+        "writing.beta.style",
+    ]
+    publish = request.members[0]
+    assert (publish.axes.visible, publish.axes.bind, publish.version) == (False, False, "1.2.3")
+    payload = request.to_packages_payload()
+    (package,) = payload["packages"]
+    assert package["package"] == "writing.beta"
+    assert package["origin"] == "installed"
+    assert package["operations"] == [{"key": "publish", "visible": False, "available": False}]
+    assert package["skills"] == [
+        {
+            "key": "style",
+            "visible": True,
+            "scripts": [{"key": "lint", "visible": True, "exec": False}],
+        }
     ]
 
 

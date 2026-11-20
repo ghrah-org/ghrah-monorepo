@@ -75,12 +75,14 @@ class TemplateSource(Protocol):
 
 @dataclass(frozen=True)
 class CreateAgentRequest:
-    """创建请求：模板身份 + 实例名 + 期望状态。"""
+    """创建请求：模板身份 + 实例名 + 期望状态 + 初始绑定成员。"""
 
     template_id: str
     revision: int
     name: str
     desired_state: str = "running"
+    initial_bindings: tuple[str, ...] | None = None
+    """初始绑定的成员全名；``None`` 表示按模板默认轴全部绑定。"""
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,8 @@ class CreationError(RuntimeError):
     """创建不可完成；``code`` 是稳定领域码，供 REST 映射。
 
     ``template_not_found`` / ``template_archived`` / ``assembly_not_ready`` /
-    ``missing_workspace`` / ``invalid_path`` / ``agent_create_failed``。
+    ``missing_workspace`` / ``invalid_path`` / ``invalid_binding`` /
+    ``agent_create_failed``。
     """
 
     def __init__(self, code: str, detail: str = "") -> None:
@@ -176,6 +179,7 @@ async def create_agent(
             agent_name=request.name,
             workspaces=workspaces,
             granted=available,
+            initial_bindings=request.initial_bindings,
         )
     except RenderError as error:
         raise CreationError(error.code, error.detail) from error

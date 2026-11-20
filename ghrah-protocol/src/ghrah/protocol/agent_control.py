@@ -156,13 +156,19 @@ class AgentAdminView(TreeModel):
 
 
 class AgentCreateRequest(TreeModel):
-    """按模板创建 Agent；配置不进请求体，默认停止。"""
+    """按模板创建 Agent；配置不进请求体，默认停止。
+
+    ``initial_bindings`` 是创建时选中的成员全名（``<package>.<key>``）：只有这些
+    成员在启动后被绑定进模型上下文，其余模板成员仍可被搜索与调用。省略表示
+    "按模板成员的默认轴全部绑定"。
+    """
 
     expected_revision: int = Field(ge=0)
     name: str = Field(min_length=1)
     template_id: str = Field(min_length=1)
     revision: int = Field(ge=1)
     desired_state: Literal["running", "stopped"] = "stopped"
+    initial_bindings: list[str] | None = None
 
 
 class AgentSpecPatch(TreeModel):

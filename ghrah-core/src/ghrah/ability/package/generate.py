@@ -33,7 +33,10 @@ from typing import Any
 import yaml
 
 from ghrah.ability.loading.ability_schema import (
+    SUPPORTED_SCHEMA_VERSIONS,
     V1_SEMVER_PATTERN,
+    V2_SCHEMA_VERSION,
+    build_definition,
     load_yaml,
     parse_definition,
 )
@@ -141,8 +144,14 @@ def _load_header(raw: str, *, builtin: bool) -> dict[str, Any]:
         raise BuildError(f"头段未知字段 {sorted(unknown)}（契约拒绝未知字段）")
     if data.get("format") != "ghrah.ability-definition":
         raise BuildError("format 必须是 ghrah.ability-definition")
-    if str(data.get("schema_version")) != "1" or not isinstance(data.get("schema_version"), str):
-        raise BuildError("schema_version 必须是字符串 '1'（注意：YAML 裸 1 不是 '1'）")
+    if (
+        not isinstance(data.get("schema_version"), str)
+        or data["schema_version"] not in SUPPORTED_SCHEMA_VERSIONS
+    ):
+        raise BuildError(
+            "schema_version 必须是字符串 '1' 或 '2'（注意：YAML 裸数字不是字符串）；"
+            "生成器统一写 '2'"
+        )
     origin = data.get("origin", "source")
     if origin not in {"source", "mcp"}:
         raise BuildError(f"origin 只能是 source 或 mcp: {origin!r}")
@@ -379,12 +388,22 @@ def _validate_permissions(key: str, permissions: dict[str, Any]) -> None:
                 )
 
 
-def _operation_member(key: str, script: Path) -> dict[str, Any]:
-    """从实现模块声明生成一个 operation 成员。"""
+def _operation_member(key: str, script: Path, *, lenient: bool = False) -> dict[str, Any]:
+    """从实现模块声明生成一个 operation 成员。
+
+    ``lenient`` 只影响作者侧元数据：缺 ``TITLE`` / ``SUMMARY`` 时按成员键补默认值；
+    ``Input`` / ``Output`` / ``execute`` 仍是硬契约（缺了装进去也用不了）。
+    """
     try:
-        decl = read_declaration(script)
+        decl = read_declaration(script, lenient=lenient)
     except DeclarationError as exc:
         raise BuildError(f"operations/{key}.py: {exc}") from exc
+    title = decl.title or (key.replace("_", " ").title() if lenient else None)
+    if not title:
+        raise BuildError(f"operations/{key}.py: 缺少必填常量 TITLE")
+    summary = decl.summary or (f"{title}（上传导入时按模块生成）" if lenient else None)
+    if not summary:
+        raise BuildError(f"operations/{key}.py: 缺少必填常量 SUMMARY")
     _validate_permissions(key, decl.permissions)
     input_schema = _strip_schema_metadata(
         _validate_schema(key, decl.input_schema or {}, what="Input.model_json_schema()")
@@ -406,8 +425,8 @@ def _operation_member(key: str, script: Path) -> dict[str, Any]:
                 "不在 input_schema.properties"
             )
     return {
-        "title": decl.title,
-        "description": decl.summary,
+        "title": title,
+        "description": summary,
         "entry": f"operations/{key}.py",
         "input_schema": input_schema,
         "output_schema": output_schema,
@@ -428,7 +447,7 @@ def _operation_member(key: str, script: Path) -> dict[str, Any]:
 
 def _render(
     root: Path, *, builtin: bool = False, shipped: bool = False
-) -> tuple[str, dict[str, Any], list[str]]:
+) -> tuple[str, list[dict[str, Any]], list[str]]:
     definition_path = root / _DEFINITION_NAME
     if not definition_path.is_file():
         raise BuildError(f"{root}: 缺少 {_DEFINITION_NAME}")
@@ -438,6 +457,13 @@ def _render(
     if "\r" in raw:
         raise BuildError("ability.yaml 含 CR/CRLF（须 LF 换行）")
     header = _load_header(raw, builtin=_allow_ghrah(builtin=builtin, shipped=shipped))
+    return _render_with_header(root, header, builtin=builtin)
+
+
+def _render_with_header(
+    root: Path, header: dict[str, Any], *, builtin: bool = False, lenient: bool = False
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """按给定头段扫盘生成 ``ability.yaml`` 文本（不读盘上的旧 members）。"""
     files = ensure_portable_tree(root)
     op_files, skill_files = _walk_members(files)
     operations: dict[str, Any] = {}
@@ -453,7 +479,7 @@ def _render(
         )
         if key in _RESERVED_TOOL_NAMES and not system_meta:
             raise BuildError(f"operations/{key}.py: 保留名（生成期拒绝一次，表面投影再拒绝一次）")
-        operations[key] = _operation_member(key, op_files[key])
+        operations[key] = _operation_member(key, op_files[key], lenient=lenient)
     skills: dict[str, Any] = {}
     for name in sorted(skill_files):
         skills[name] = _skill_member(name, skill_files[name])
@@ -462,7 +488,17 @@ def _render(
     members = {"operations": operations, "skills": skills}
     document = dict(header)
     document.pop("members", None)
-    document["members"] = members
+    document["schema_version"] = V2_SCHEMA_VERSION
+    try:
+        definition = build_definition(document, members, source=str(root))
+    except ManifestValidationError as exc:
+        raise BuildError(f"生成的索引未通过解析器自检: {exc}") from exc
+    kernel = builtin and header["identity"]["namespace"] == "ghrah"
+    wire_members = [
+        member.to_wire()
+        for member in definition.to_members(ability_type="kernel" if kernel else "external")
+    ]
+    document["members"] = wire_members
     rendered = yaml.safe_dump(
         document, allow_unicode=True, sort_keys=False, default_flow_style=False, width=4096
     )
@@ -471,12 +507,12 @@ def _render(
         parse_definition(rendered, source=str(root))
     except (yaml.YAMLError, ManifestValidationError) as exc:
         raise BuildError(f"生成的索引未通过解析器自检: {exc}") from exc
-    return rendered, members, warnings
+    return rendered, wire_members, warnings
 
 
 def render(
     root: Path, *, builtin: bool = False, shipped: bool = False
-) -> tuple[str, dict[str, Any], list[str]]:
+) -> tuple[str, list[dict[str, Any]], list[str]]:
     """读声明并渲染完整 ``ability.yaml`` 文本（不写盘）。"""
     try:
         return _render(root, builtin=builtin, shipped=shipped)
@@ -484,7 +520,42 @@ def render(
         raise BuildError(str(exc)) from exc
 
 
-def _index_digest(members: dict[str, Any]) -> str:
+def render_document(
+    root: Path, header: dict[str, Any], *, builtin: bool = False, lenient: bool = False
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """按给定头段扫盘渲染 ``ability.yaml`` 文本（不读盘上的旧文件、不写盘）。
+
+    上传导入用它：头段可以由目录名合成，成员一律以磁盘为准。
+
+    Args:
+        root: 源包根目录。
+        header: 已校验的头段（``format`` / ``schema_version`` / ``identity`` / …）。
+        builtin: 是否按内置件口径生成（决定 ``kernel`` 命名空间判定）。
+        lenient: 宽松模式：Operation 缺 ``TITLE`` / ``SUMMARY`` 时按成员键补默认值。
+
+    Returns:
+        ``(渲染文本, 成员记录列表, 警告)``。
+
+    Raises:
+        BuildError: 目录树不可移植、成员不合格，或渲染结果过不了解析器自检。
+    """
+    try:
+        return _render_with_header(root, header, builtin=builtin, lenient=lenient)
+    except PathRuleError as exc:
+        raise BuildError(str(exc)) from exc
+
+
+def header_from_text(raw: str, *, builtin: bool = False) -> dict[str, Any]:
+    """校验并返回 ``ability.yaml`` 头段（供导入期复用）。"""
+    return _load_header(raw, builtin=builtin)
+
+
+def write_definition(root: Path, text: str) -> None:
+    """原子写入 ``ability.yaml``（LF、UTF-8 无 BOM）。"""
+    _write_atomic(root / _DEFINITION_NAME, text)
+
+
+def _index_digest(members: list[dict[str, Any]]) -> str:
     """规范化 JSON 的 sha256，``sha256:`` 前缀。"""
     blob = json.dumps(members, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return f"sha256:{hashlib.sha256(blob.encode('utf-8')).hexdigest()}"

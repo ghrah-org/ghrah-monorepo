@@ -89,6 +89,8 @@ class AgentCreateSpecSchema(BaseModel):
     template_id: str = Field(min_length=1)
     revision: int = Field(ge=1)
     desired_state: Literal["running", "stopped"] = "running"
+    initial_bindings: list[str] | None = None
+    """创建时选中的成员全名；``None`` 表示按模板默认轴全部绑定。"""
 
 
 class IsolationSpecPayload(BaseModel):

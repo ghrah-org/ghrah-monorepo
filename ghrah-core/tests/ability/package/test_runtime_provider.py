@@ -150,6 +150,8 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
         "search_tools",
         "describe_tool",
         "execute_tool",
+        "bind_member",
+        "unbind_member",
     }
 
     installer.uninstall("acme.reports", "1.0.0")
@@ -160,6 +162,8 @@ async def test_installed_operation_survives_source_removal_and_uninstall_invalid
         "search_tools",
         "describe_tool",
         "execute_tool",
+        "bind_member",
+        "unbind_member",
     }
     view = await store.view(ACTOR, AGENT)
     assert (
