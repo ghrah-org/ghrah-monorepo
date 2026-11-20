@@ -37,6 +37,23 @@ const { t } = useI18n();
 const connection = useConnectionStore();
 
 const ProjectListSchema = z.object({ projects: z.array(ProjectInfoPayloadSchema) });
+const TemplateDetailSchema = z.object({
+  available_members: z.array(
+    z.object({
+      namespace: z.string(),
+      name: z.string(),
+      member: z.string(),
+      type: z.enum(["operation", "skill", "mcp"]),
+      version: z.string().nullable().optional(),
+      ability_type: z.enum(["kernel", "external"]),
+    }),
+  ),
+});
+
+interface MemberOption {
+  name: string;
+  kind: "operation" | "skill";
+}
 
 interface ProjectOption {
   projectId: string;
@@ -51,6 +68,10 @@ const projects = ref<ProjectOption[]>([]);
 const projectId = ref("");
 const name = ref(`${props.template.metadata.name}-agent`);
 const startNow = ref(true);
+const members = ref<MemberOption[]>([]);
+/** 初始绑定的成员全名：进模型上下文的成员，创建后模型仍可自行增删。 */
+const boundMembers = ref<string[]>([]);
+const loadingMembers = ref(true);
 
 function client(): HttpClientType {
   return new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
@@ -75,6 +96,23 @@ onMounted(async () => {
   } finally {
     loadingProjects.value = false;
   }
+  try {
+    // 模板成员是"可能拥有的全集"；这里选的是创建后立刻进模型上下文的子集。
+    const detail = TemplateDetailSchema.parse(
+      await client().get(`/api/v1/agent-templates/${props.template.template_id}`),
+    );
+    members.value = detail.available_members
+      .filter((item) => item.type !== "mcp")
+      .map((item) => ({
+        name: item.member,
+        kind: item.type === "skill" ? ("skill" as const) : ("operation" as const),
+      }));
+    boundMembers.value = members.value.map((item) => item.name);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("config.template.memberLoadFailed");
+  } finally {
+    loadingMembers.value = false;
+  }
 });
 
 async function submit() {
@@ -90,6 +128,7 @@ async function submit() {
       template_id: props.template.template_id,
       revision: props.template.revision,
       desired_state: startNow.value ? "running" : "stopped",
+      initial_bindings: boundMembers.value,
     });
     emit("created", name.value.trim(), project.name);
   } catch (cause) {
@@ -139,6 +178,19 @@ async function submit() {
         {{ t("config.template.startNow") }}
       </label>
       <small class="spawn-hint">{{ t("config.template.startNowHint") }}</small>
+
+      <fieldset class="spawn-field spawn-members">
+        <legend>{{ t("config.template.initialBindings") }}</legend>
+        <p v-if="loadingMembers" class="spawn-hint">{{ t("common.loading") }}</p>
+        <p v-else-if="members.length === 0" class="spawn-hint">
+          {{ t("config.template.noMembers") }}
+        </p>
+        <label v-for="member in members" v-else :key="member.name" class="spawn-check">
+          <input v-model="boundMembers" type="checkbox" :value="member.name" />
+          <span>{{ member.name }}</span>
+        </label>
+        <small class="spawn-hint">{{ t("config.template.initialBindingsHint") }}</small>
+      </fieldset>
 
       <footer class="spawn-actions">
         <UiButton type="button" variant="ghost" @click="emit('close')">

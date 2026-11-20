@@ -742,6 +742,11 @@ export default {
       agentNameHint: "显示在项目里；模板身份不受影响。",
       startNow: "创建后立即启动",
       startNowHint: "立即启动会当场校验模型端点。不勾则创建一个停止状态的 Agent，之后再启动。",
+      initialBindings: "初始绑定成员",
+      initialBindingsHint:
+        "只有绑定的成员把完整 schema 常驻模型上下文；其余成员仍可被发现，创建后模型可自行绑定或解绑。",
+      noMembers: "该模板还没有声明任何成员。",
+      memberLoadFailed: "无法读取模板成员。",
       updatedAt: "更新时间",
       columnTemplate: "模板",
       columnRevision: "版本",

@@ -881,6 +881,9 @@ class ProjectManager:
                         revision=spec.revision,
                         name=spec.name,
                         desired_state=spec.desired_state,
+                        initial_bindings=(
+                            None if spec.initial_bindings is None else tuple(spec.initial_bindings)
+                        ),
                     ),
                     templates=templates,
                     workspaces=self._workspace_roots(project),

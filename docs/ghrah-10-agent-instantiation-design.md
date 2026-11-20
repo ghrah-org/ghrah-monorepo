@@ -51,7 +51,7 @@
 
 | 功能编号 | 名称 | 触发方式 | 一句话 |
 | --- | --- | --- | --- |
-| INST-01 | 按模板创建实例 | `POST /api/v1/projects/{project_id}/agents` | 渲染装配输入 → Core 创建 → 落记录 → 计引用 |
+| INST-01 | 按模板创建实例 | `POST /api/v1/projects/{project_id}/agents` | 渲染装配输入 → Core 创建 → 落记录 → 计引用；可同时指定初始绑定成员 |
 | INST-02 | 列出实例 | `GET /api/v1/projects/{project_id}/agents` | 每个实例一行：身份、展示、来源、期望态、运行态 |
 | INST-03 | 读取实例详情 | `GET /api/v1/projects/{project_id}/agents/{agent_id}` | 列表行 + 能力摘要 + 生效口径 |
 | INST-04 | 修改展示字段 | `PATCH /api/v1/projects/{project_id}/agents/{agent_id}` | 只改展示；配置不可经此改写 |
@@ -61,6 +61,7 @@
 | INST-08 | 读取实例配置 | Core 命令 `get_agent_config` | 只读：快照里的生效配置 |
 | INST-09 | 更新模型 | 实例命令 `model.configure` | 只改快照模型段；在线需重启生效 |
 | INST-10 | 重启恢复 | 进程启动时的对账 | 期望 `running` 且不在线的实例按快照拉起 |
+| INST-11 | 绑定 / 解绑成员 | 模型工具 `bind_member` / `unbind_member` | 把成员装进或移出模型上下文；立即写快照 |
 | ASM-01 | 装配输入 v3 契约 | Core 命令 `create_agent_assembly` | 新建（带 config+members）/ 恢复（只带身份） |
 | ASM-02 | 模板 → 成员渲染规则 | INST-01 内部步骤 | 类型映射、版本钉住、控制成员通道、轴与权限 |
 
@@ -208,6 +209,7 @@ stateDiagram-v2
 | `template_id` | string | 是 | — | 模板标识 |
 | `revision` | int ≥ 1 | 是 | — | 指定模板修订；**不是**「最新」的隐式语义 |
 | `desired_state` | `running\|stopped` | 否 | `stopped` | 创建后立即启动与否 |
+| `initial_bindings` | string[] \| null | 否 | `null` | 初始绑定进模型上下文的成员全名（`<package>.<key>`）；省略=按模板默认轴全部绑定 |
 
 响应 `201`：
 
@@ -651,10 +653,41 @@ sequenceDiagram
 | 功能描述 | 进程启动时按记录里的期望状态，把应运行的实例从快照重新拉起 |
 | 参与用户 | 系统（启动期自动） |
 | 输入 | 全部项目记录 + Core 当前在线列表 |
-| 操作序列 | 服务启动 → 对账扫描项目 → 跳过非 active 项目 → 对每个期望 `running` 且不在线的实例 → 按快照拉起 → 汇总报告 |
+| 操作序列 | 服务启动 → 对账扫描项目 → 跳过非 active 项目 → 对每个期望 `running` 且不在线的实例 → 按快照拉起（含成员轴与绑定集合）→ 汇总报告 |
 | 扩展及异常 | 项目非 active：跳过；实例 `desired_state=stopped`：跳过；已在线的：跳过（避免重复进程）；同名重复（历史遗留）：判失败并记录原因 |
 | 输出 | 对账报告：`spawned` / `restored` / `initialized` / `failed` 计数 + 逐项结果 |
-| 补充说明 | 恢复**不读模板**：模板后来被改或被归档，都不影响恢复结果；这是「模板只填一次」的另一半 |
+| 补充说明 | 恢复**不读模板**：模板后来被改或被归档，都不影响恢复结果；绑定集合同样从快照恢复，模型运行期调整过的绑定点不会丢 |
+
+### 6.9 INST-11 绑定 / 解绑成员
+
+| 项 | 内容 |
+| --- | --- |
+| 名称 | 绑定 / 解绑成员 |
+| 功能编号 | INST-11 |
+| 功能描述 | 模型在运行中把已获授成员装进或移出模型上下文；绑定只影响上下文占用，不改变授权 |
+| 参与用户 | 模型（元工具调用）；创建时的初始绑定由创建者选择（INST-01 的 `initial_bindings`） |
+| 输入 | 工具名（`bind_member` / `unbind_member` 的 `name`） |
+| 操作序列 | 模型发现工具（`search_tools`）→ 判断值得常驻 → 调 `bind_member` → 下一轮工具表含该成员 schema；需要腾上下文时调 `unbind_member`，成员仍可被发现与调用 |
+| 扩展及异常 | 未获授/不在目录：失败；控制成员（`conversation` / `end_task`）：拒绝；成员不可用（后端离线）：拒绝绑定；快照写入失败：保留内存视图并告警，下一轮仍生效 |
+| 输出 | `{name, bound: [成员全名]}`（当前绑定集合） |
+| 补充说明 | 绑定的权威是实例快照 `agent_instances.members[].axes`：每次变更立即写库，重启据此恢复；绑定集合成员消失（撤销/卸载）时自动掉出 |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as 模型
+    participant T as 元工具
+    participant S as 工具面（内存镜像）
+    participant DB as agent_instances
+
+    M->>T: bind_member {name: "read_file"}
+    T->>S: set_member_bound(name, bind=True)
+    S->>S: 校验：已获授、可见、成员非控制、后端可用
+    S->>DB: 立即写回 axes.available=true
+    DB-->>S: ok
+    S-->>T: {name, bound: [...]}
+    T-->>M: 回执；下一轮 refresh 把该成员放进静态装配
+```
 
 ```mermaid
 sequenceDiagram

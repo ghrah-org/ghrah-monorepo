@@ -228,7 +228,8 @@ async def test_snapshot_parser_rejects_entry_and_connection_fields(tmp_path):
         declaration(tmp_path), source=Source(), connector=Endpoint().connect
     )
     data = yaml.safe_load((result.root / "ability.yaml").read_text())
-    data["members"]["operations"]["echo"]["entry"] = "operations/echo.py"
+    echo = next(item for item in data["members"] if item["member"].endswith(".echo"))
+    echo["data"]["entry"] = "operations/echo.py"
     with pytest.raises(ManifestValidationError):
         parse_definition(yaml.safe_dump(data), source="test")
 

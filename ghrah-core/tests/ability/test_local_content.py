@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from _helpers import make_call as _make_call
 from _helpers import make_services
 from ghrah.protocol.ability_tree import GrantAbilityRequest, RevokeAbilityRequest, SkillReadScope
@@ -74,9 +75,11 @@ async def content(tmp_path):
 
 async def test_catalog_document_attachment_and_context_use_one_grant(content):
     store, provider, cm, _, _ = content
-    messages = await cm.get_llm_messages()
-    assert "reports/guide" in messages[-1].text
-    assert "# 报告编写" not in messages[-1].text
+    # 目录不再由 ContextManager 注入（改由工具面按绑定轴注入）；内容端口仍须
+    # 用同一份授予给出"只有摘要、没有正文"的目录。
+    catalog = await provider.catalog_text()
+    assert "reports/guide" in catalog
+    assert "# 报告编写" not in catalog
     before = await store.view(ADMIN, ALICE)
     loaded = await provider.load_skill("reports/guide")
     assert "# 报告编写" in loaded["content"]
@@ -90,6 +93,49 @@ async def test_catalog_document_attachment_and_context_use_one_grant(content):
     assert any("# 报告编写" in item.text for item in messages)
     assert any("短段落" in item.text for item in messages)
     assert await store.view(ADMIN, ALICE) == before  # 读取不授予、不绑定工具。
+
+
+async def test_load_skill_accepts_a_bare_skill_key(content):
+    """模型常把目录名里的技能键当名字：唯一命中时直接可用。"""
+    _, provider, _, _, _ = content
+
+    loaded = await provider.load_skill("guide")
+    assert loaded["full_name"] == "reports/guide"
+    assert "# 报告编写" in loaded["content"]
+
+    attachment = await provider.load_skill("guide", path="references/style.md")
+    assert "短段落" in attachment["content"]
+
+
+async def test_unknown_skill_key_lists_available_names(content):
+    _, provider, _, _, _ = content
+
+    with pytest.raises(ValueError, match="reports/guide"):
+        await provider.load_skill("ghost")
+
+
+async def test_load_skill_by_catalog_address(content):
+    """目录条目附带的 read 地址可直接加载，等价于 alias/skill。"""
+    _, provider, _, _, _ = content
+    address = "reporting/reporting/0.1.0/skills/guide/SKILL.md"
+
+    loaded = await provider.load_skill(address)
+    assert loaded["full_name"] == "reports/guide"
+    assert "# 报告编写" in loaded["content"]
+    assert loaded["uri"] == "ability:reports/skill/guide"
+
+    attachment = await provider.load_skill(address, path="references/style.md")
+    assert "短段落" in attachment["content"]
+
+
+async def test_load_skill_by_foreign_address_is_denied(content):
+    """地址反查只在已授予的实例里做：不存在/版本不符都按 not_found 拒绝。"""
+    _, provider, _, _, _ = content
+
+    with pytest.raises(AccessError):
+        await provider.load_skill("reporting/reporting/9.9.9/skills/guide/SKILL.md")
+    with pytest.raises(AccessError):
+        await provider.load_skill("other/other/0.1.0/skills/guide/SKILL.md")
 
 
 async def test_source_changes_and_deletion_do_not_change_committed_bytes(content):
@@ -213,19 +259,15 @@ async def test_json_asset_loads_as_text_and_binary_stays_rejected(tmp_path):
         payload, encoding="utf-8", newline="\n"
     )
     definition_path = source / "ability.yaml"
-    definition = definition_path.read_text(encoding="utf-8")
-    needle = "      assets:\n        mark:\n"
-    assert needle in definition
+    data = yaml.safe_load(definition_path.read_text(encoding="utf-8"))
+    guide = next(item for item in data["members"] if item["member"].endswith(".guide"))["data"]
+    assert "mark" in guide["assets"]
+    guide["assets"]["example"] = {
+        "path": "skills/guide/assets/example.json",
+        "media_type": "application/json",
+    }
     definition_path.write_text(
-        definition.replace(
-            needle,
-            "      assets:\n"
-            "        example:\n"
-            "          path: skills/guide/assets/example.json\n"
-            "          media_type: application/json\n"
-            "        mark:\n",
-            1,
-        ),
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
         newline="\n",
     )

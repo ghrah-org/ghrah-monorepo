@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ghrah.core.config.builders import (
     build_context_from_overrides,
@@ -30,6 +31,9 @@ from ghrah.manifest.errors import ManifestNotFoundError, ManifestValidationError
 from ghrah.manifest.protocols import AbilityCatalogPort
 from ghrah.manifest.types import ImplementationDef, PermissionFlags, SurfaceConfig, ToolSchema
 from ghrah.types.config_types import AgentConfig, ContextConfig, WindowConfig
+
+if TYPE_CHECKING:  # 仅类型标注：模块级导入会让 ability → manifest 形成环
+    from ghrah.ability.member import MemberAxes
 
 __all__ = [
     "ResolvedAbility",
@@ -78,6 +82,12 @@ class ResolvedAgent:
     config: AgentConfig
     abilities: list[ResolvedAbility]
     surface: SurfaceConfig | None = None
+    member_axes: dict[str, MemberAxes] = dataclasses.field(default_factory=dict)
+    """成员全名 → 两轴（``visible`` / ``bind``）。
+
+    来自装配输入的逐成员申请；工具面用它决定「哪些成员常驻上下文」。
+    缺省为空表示调用方没有提供轴（旧调用路径），工具面按全绑定处理。
+    """
 
 
 class ManifestResolver:

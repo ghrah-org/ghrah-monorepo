@@ -48,6 +48,7 @@ def build_startup_materializer(
     surface_thresholds: Any = None,
     surface_search_limit: int = 8,
     surface_loaded_limit: int = 8,
+    binding_state: Any = None,
 ) -> StartupGrantMaterializer:
     """构造本次部署唯一的启动核定器（授权装配边界）。
 
@@ -86,4 +87,5 @@ def build_startup_materializer(
         surface_thresholds=surface_thresholds,
         surface_search_limit=surface_search_limit,
         surface_loaded_limit=surface_loaded_limit,
+        binding_state=binding_state,
     )

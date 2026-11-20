@@ -77,12 +77,27 @@ class DeclarationError(ValueError):
     """读取 Operation 声明失败；消息面向包作者。"""
 
 
+_LENIENT_DEFAULTS: dict[str, Any] = {
+    "TITLE": None,
+    "SUMMARY": None,
+    "TAGS": [],
+    "PERMISSIONS": {},
+    "EFFECTS": [],
+    "TIMEOUT_MS": 60000,
+}
+"""宽松模式的默认值：只有 ``Input`` / ``Output`` / ``execute`` 是硬契约。"""
+
+
 @dataclass(frozen=True)
 class Declaration:
-    """一个 Operation 模块的声明读数。"""
+    """一个 Operation 模块的声明读数。
 
-    title: str
-    summary: str
+    ``title`` / ``summary`` 在宽松模式下允许为空（上传导入会按成员键补默认值）；
+    严格模式（作者侧 ``build``）仍然要求作者显式声明。
+    """
+
+    title: str | None
+    summary: str | None
     tags: list[str]
     permissions: dict[str, Any]
     effects: list[str]
@@ -93,17 +108,20 @@ class Declaration:
     output_schema: dict[str, Any] | None
 
 
-def read_declaration(script: Path) -> Declaration:
+def read_declaration(script: Path, *, lenient: bool = False) -> Declaration:
     """在子进程里 import ``operations/<键>.py`` 并读取声明。
 
     Args:
         script: 实现脚本的绝对路径。
+        lenient: 宽松模式：缺失 ``TITLE`` / ``SUMMARY`` / ``TAGS`` / ``PERMISSIONS`` /
+            ``EFFECTS`` / ``TIMEOUT_MS`` 时用空值或默认值，不报错。上传导入用它，
+            因为上传包允许只写 ``Input`` / ``Output`` / ``execute``。
 
     Returns:
         声明读数。
 
     Raises:
-        DeclarationError: import 失败、必填常量缺失或类型不符。
+        DeclarationError: import 失败、必填常量类型不符，或严格模式下常量缺失。
     """
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -132,17 +150,25 @@ def read_declaration(script: Path) -> Declaration:
             f"{script.name}: {envelope.get('stage')} 阶段失败: {envelope.get('error')}"
         )
     raw = envelope["payload"]
-    return _validate(script.name, raw)
+    return _validate(script.name, raw, lenient=lenient)
 
 
-def _validate(name: str, raw: dict[str, Any]) -> Declaration:
-    """按声明常量表校验类型；必填项缺失即失败，不做隐式补默认。"""
-    for field in ("TITLE", "SUMMARY", "TAGS", "PERMISSIONS", "EFFECTS", "TIMEOUT_MS"):
-        if raw.get(field) is None:
-            raise DeclarationError(f"{name}: 缺少必填常量 {field}")
-    if not isinstance(raw["TITLE"], str) or not raw["TITLE"].strip():
+def _validate(name: str, raw: dict[str, Any], *, lenient: bool = False) -> Declaration:
+    """按声明常量表校验类型；严格模式必填项缺失即失败，宽松模式补默认值。"""
+    required = ("TITLE", "SUMMARY", "TAGS", "PERMISSIONS", "EFFECTS", "TIMEOUT_MS")
+    if lenient:
+        for field in required:
+            if raw.get(field) is None:
+                raw[field] = _LENIENT_DEFAULTS[field]
+    else:
+        for field in required:
+            if raw.get(field) is None:
+                raise DeclarationError(f"{name}: 缺少必填常量 {field}")
+    if raw["TITLE"] is not None and (not isinstance(raw["TITLE"], str) or not raw["TITLE"].strip()):
         raise DeclarationError(f"{name}: TITLE 必须是非空字符串")
-    if not isinstance(raw["SUMMARY"], str) or not raw["SUMMARY"].strip():
+    if raw["SUMMARY"] is not None and (
+        not isinstance(raw["SUMMARY"], str) or not raw["SUMMARY"].strip()
+    ):
         raise DeclarationError(f"{name}: SUMMARY 必须是非空字符串")
     if not isinstance(raw["TAGS"], list) or not all(isinstance(t, str) for t in raw["TAGS"]):
         raise DeclarationError(f"{name}: TAGS 必须是 list[str]（可为 []）")

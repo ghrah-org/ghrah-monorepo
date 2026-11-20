@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: ghrah
   name: cluster
@@ -7,598 +7,659 @@ identity:
 title: Cluster
 description: Peer discovery, messaging, room delivery, and agent lifecycle inside the cluster.
 members:
-  operations:
-    broadcast_message:
-      title: Broadcast Message
-      description: Broadcast a message to all agents in the cluster (excluding the sender) after a durable wait checkpoint and collect their replies. Use this for cluster-wide announcements or queries.
-      entry: operations/broadcast_message.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          content:
-            description: Message content to broadcast to all agents
-            minLength: 1
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.broadcast_message
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Broadcast Message
+    description: Broadcast a message to all agents in the cluster (excluding the sender) after a durable wait checkpoint and collect their replies. Use this for cluster-wide announcements or queries.
+    input_schema:
+      additionalProperties: false
+      properties:
+        content:
+          description: Message content to broadcast to all agents
+          minLength: 1
+          type: string
+      required:
+      - content
+      type: object
+    output_schema:
+      $defs:
+        BroadcastAwaitReplyOutput:
+          additionalProperties: false
+          description: 广播在持久检查点之后等待回复的句柄。
+          properties:
+            message_id:
+              description: Prepared message id
+              type: string
+            mode:
+              description: Wait mode
+              type: string
+            timeout:
+              description: Wait timeout in seconds; -1 waits without a limit
+              type: number
+            targets:
+              description: Agents the broadcast was addressed to
+              items:
+                type: string
+              type: array
+          required:
+          - message_id
+          - mode
+          - timeout
+          - targets
+          type: object
+      additionalProperties: false
+      properties:
+        recipients:
+          description: Resolved recipient ids; empty when nobody else is up
+          items:
             type: string
-        required:
-        - content
-        type: object
-      output_schema:
-        $defs:
-          BroadcastAwaitReplyOutput:
-            additionalProperties: false
-            description: 广播在持久检查点之后等待回复的句柄。
-            properties:
-              message_id:
-                description: Prepared message id
+          type: array
+        agent_count:
+          description: Number of recipients
+          type: integer
+        responses:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          description: Collected replies; present and empty when there is no recipient
+        message_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Prepared message id
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Preparation status
+        mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Delivery mode
+        recipient_names:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          default: null
+          description: Stable recipient id to runtime display name
+        await_reply:
+          anyOf:
+          - $ref: '#/$defs/BroadcastAwaitReplyOutput'
+          - type: 'null'
+          default: null
+          description: Durable wait handle when at least one recipient exists
+      required:
+      - recipients
+      - agent_count
+      type: object
+    tags:
+    - cluster
+    - communication
+    effects:
+    - cluster:message
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/broadcast_message.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.query_agents
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Query Agents
+    description: Query registered agents in the cluster. Returns a list of agent names and descriptions. Optionally filter by a substring match on agent name.
+    input_schema:
+      additionalProperties: false
+      properties:
+        filter:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Optional substring to filter agent names
+      type: object
+    output_schema:
+      $defs:
+        AgentRecordOutput:
+          additionalProperties: false
+          description: 集群里一个已注册 Agent 的公开记录。
+          properties:
+            agent_id:
+              description: Stable agent id
+              type: string
+            incarnation_id:
+              description: Incarnation id of the running process
+              type: string
+            name:
+              description: Runtime display name
+              type: string
+            config:
+              anyOf:
+              - additionalProperties: true
+                type: object
+              - type: 'null'
+              description: Serializable agent configuration
+            description:
+              description: Agent description
+              type: string
+            tags:
+              description: Agent tags
+              items:
                 type: string
-              mode:
-                description: Wait mode
-                type: string
-              timeout:
-                description: Wait timeout in seconds; -1 waits without a limit
-                type: number
-              targets:
-                description: Agents the broadcast was addressed to
-                items:
+              type: array
+            created_at:
+              description: Registration time as a Unix timestamp
+              type: number
+          required:
+          - agent_id
+          - incarnation_id
+          - name
+          - config
+          - description
+          - tags
+          - created_at
+          type: object
+      additionalProperties: false
+      properties:
+        agents:
+          description: Registered agents matching the filter
+          items:
+            $ref: '#/$defs/AgentRecordOutput'
+          type: array
+        count:
+          description: Number of agents returned
+          type: integer
+      required:
+      - agents
+      - count
+      type: object
+    tags:
+    - cluster
+    - discovery
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/query_agents.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.query_manifests
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Query Manifests
+    description: Read-only query of available agent manifests. Without manifest_ref, lists all manifests; with manifest_ref, returns the full definition including its frozen ability list. Use before spawn_agent to pick the right manifest.
+    input_schema:
+      additionalProperties: false
+      properties:
+        manifest_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Optional full name of a single agent manifest to inspect (e.g. 'ghrah.designer'). Omit to list all available manifests.
+      type: object
+    output_schema:
+      $defs:
+        ManifestAbilityOutput:
+          additionalProperties: false
+          description: 单条 manifest 里的一项能力引用。
+          properties:
+            ability:
+              description: Ability ref or type
+              type: string
+            require_hitl:
+              anyOf:
+              - type: boolean
+              - type: 'null'
+              default: null
+              description: Whether the ability requires human approval
+            allowed_paths:
+              anyOf:
+              - items:
                   type: string
                 type: array
-            required:
-            - message_id
-            - mode
-            - timeout
-            - targets
-            type: object
-        additionalProperties: false
-        properties:
-          recipients:
-            description: Resolved recipient ids; empty when nobody else is up
-            items:
+              - type: 'null'
+              default: null
+              description: Filesystem roots granted to the ability
+          required:
+          - ability
+          type: object
+        ManifestSummaryOutput:
+          additionalProperties: false
+          description: 清单列表中的一行。
+          properties:
+            full_name:
+              description: Manifest full name
+              type: string
+            description:
+              description: Manifest description; empty when the file is unreadable
+              type: string
+            unavailable:
+              anyOf:
+              - type: boolean
+              - type: 'null'
+              default: null
+              description: True when this manifest could not be loaded
+          required:
+          - full_name
+          - description
+          type: object
+      additionalProperties: false
+      properties:
+        manifests:
+          anyOf:
+          - items:
+              $ref: '#/$defs/ManifestSummaryOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: All manifests, when manifest_ref was omitted
+        count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          description: Number of manifests listed
+        full_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Inspected manifest name
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Inspected manifest description
+        system_prompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: Inspected manifest system prompt
+        abilities:
+          anyOf:
+          - items:
+              $ref: '#/$defs/ManifestAbilityOutput'
+            type: array
+          - type: 'null'
+          default: null
+          description: Abilities frozen on the inspected manifest
+        truncated:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          description: Whether the ability list was cut at the display limit
+      type: object
+    tags:
+    - cluster
+    - discovery
+    effects: []
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/query_manifests.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.send
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Send
+    description: Send a message to rooms. Recipients are all agent members of the given rooms plus optional direct targets. The message is appended to each room's log and delivered via the supervisor.
+    input_schema:
+      additionalProperties: false
+      properties:
+        room_ids:
+          description: Room ids to send the message to (members are resolved as recipients)
+          items:
+            type: string
+          minItems: 1
+          type: array
+        message:
+          description: Message content to send
+          minLength: 1
+          type: string
+        targets:
+          anyOf:
+          - items:
               type: string
             type: array
-          agent_count:
-            description: Number of recipients
-            type: integer
-          responses:
-            anyOf:
-            - items:
-                type: string
-              type: array
-            - type: 'null'
-            default: null
-            description: Collected replies; present and empty when there is no recipient
-          message_id:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Prepared message id
-          status:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Preparation status
-          mode:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Delivery mode
-          recipient_names:
-            anyOf:
-            - additionalProperties:
-                type: string
-              type: object
-            - type: 'null'
-            default: null
-            description: Stable recipient id to runtime display name
-          await_reply:
-            anyOf:
-            - $ref: '#/$defs/BroadcastAwaitReplyOutput'
-            - type: 'null'
-            default: null
-            description: Durable wait handle when at least one recipient exists
-        required:
-        - recipients
-        - agent_count
-        type: object
-      tags:
-      - cluster
-      - communication
-      effects:
-      - cluster:message
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    query_agents:
-      title: Query Agents
-      description: Query registered agents in the cluster. Returns a list of agent names and descriptions. Optionally filter by a substring match on agent name.
-      entry: operations/query_agents.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          filter:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Optional substring to filter agent names
-        type: object
-      output_schema:
-        $defs:
-          AgentRecordOutput:
-            additionalProperties: false
-            description: 集群里一个已注册 Agent 的公开记录。
-            properties:
-              agent_id:
-                description: Stable agent id
-                type: string
-              incarnation_id:
-                description: Incarnation id of the running process
-                type: string
-              name:
-                description: Runtime display name
-                type: string
-              config:
-                anyOf:
-                - additionalProperties: true
-                  type: object
-                - type: 'null'
-                description: Serializable agent configuration
-              description:
-                description: Agent description
-                type: string
-              tags:
-                description: Agent tags
-                items:
-                  type: string
-                type: array
-              created_at:
-                description: Registration time as a Unix timestamp
-                type: number
-            required:
-            - agent_id
-            - incarnation_id
-            - name
-            - config
-            - description
-            - tags
-            - created_at
-            type: object
-        additionalProperties: false
-        properties:
-          agents:
-            description: Registered agents matching the filter
-            items:
-              $ref: '#/$defs/AgentRecordOutput'
-            type: array
-          count:
-            description: Number of agents returned
-            type: integer
-        required:
-        - agents
-        - count
-        type: object
-      tags:
-      - cluster
-      - discovery
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    query_manifests:
-      title: Query Manifests
-      description: Read-only query of available agent manifests. Without manifest_ref, lists all manifests; with manifest_ref, returns the full definition including its frozen ability list. Use before spawn_agent to pick the right manifest.
-      entry: operations/query_manifests.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          manifest_ref:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Optional full name of a single agent manifest to inspect (e.g. 'ghrah.designer'). Omit to list all available manifests.
-        type: object
-      output_schema:
-        $defs:
-          ManifestAbilityOutput:
-            additionalProperties: false
-            description: 单条 manifest 里的一项能力引用。
-            properties:
-              ability:
-                description: Ability ref or type
-                type: string
-              require_hitl:
-                anyOf:
-                - type: boolean
-                - type: 'null'
-                default: null
-                description: Whether the ability requires human approval
-              allowed_paths:
-                anyOf:
-                - items:
-                    type: string
-                  type: array
-                - type: 'null'
-                default: null
-                description: Filesystem roots granted to the ability
-            required:
-            - ability
-            type: object
-          ManifestSummaryOutput:
-            additionalProperties: false
-            description: 清单列表中的一行。
-            properties:
-              full_name:
-                description: Manifest full name
-                type: string
-              description:
-                description: Manifest description; empty when the file is unreadable
-                type: string
-              unavailable:
-                anyOf:
-                - type: boolean
-                - type: 'null'
-                default: null
-                description: True when this manifest could not be loaded
-            required:
-            - full_name
-            - description
-            type: object
-        additionalProperties: false
-        properties:
-          manifests:
-            anyOf:
-            - items:
-                $ref: '#/$defs/ManifestSummaryOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: All manifests, when manifest_ref was omitted
-          count:
-            anyOf:
-            - type: integer
-            - type: 'null'
-            default: null
-            description: Number of manifests listed
-          full_name:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Inspected manifest name
-          description:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Inspected manifest description
-          system_prompt:
-            anyOf:
-            - type: string
-            - type: 'null'
-            default: null
-            description: Inspected manifest system prompt
-          abilities:
-            anyOf:
-            - items:
-                $ref: '#/$defs/ManifestAbilityOutput'
-              type: array
-            - type: 'null'
-            default: null
-            description: Abilities frozen on the inspected manifest
-          truncated:
-            anyOf:
-            - type: boolean
-            - type: 'null'
-            default: null
-            description: Whether the ability list was cut at the display limit
-        type: object
-      tags:
-      - cluster
-      - discovery
-      effects: []
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    send:
-      title: Send
-      description: Send a message to rooms. Recipients are all agent members of the given rooms plus optional direct targets. The message is appended to each room's log and delivered via the supervisor.
-      entry: operations/send.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          room_ids:
-            description: Room ids to send the message to (members are resolved as recipients)
-            items:
+          - type: 'null'
+          default: null
+          description: Optional extra direct targets (agent names) in addition to the room members
+      required:
+      - room_ids
+      - message
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        message_id:
+          description: Prepared persistent message id
+          type: string
+        recipients:
+          description: Resolved room members and extra targets
+          items:
+            type: string
+          type: array
+        status:
+          description: Preparation status
+          type: string
+        mode:
+          description: Delivery mode
+          type: string
+        recipient_names:
+          additionalProperties:
+            type: string
+          description: Stable recipient id to runtime display name
+          type: object
+        delivered_to:
+          description: Recipients after the sender is excluded
+          items:
+            type: string
+          type: array
+        rooms:
+          description: Room ids the message was addressed to
+          items:
+            type: string
+          type: array
+      required:
+      - message_id
+      - recipients
+      - status
+      - mode
+      - recipient_names
+      - delivered_to
+      - rooms
+      type: object
+    tags: []
+    effects:
+    - cluster:message
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: false
+    path: ghrah/cluster/operations/send.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.send_message
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Send Message
+    description: Prepare a persistent request to another agent. Delivery starts after commit. By default replies arrive through the persistent mailbox; fire_and_forget=false waits after a durable checkpoint.
+    input_schema:
+      additionalProperties: false
+      properties:
+        target:
+          description: Target agent name or stable ID
+          minLength: 1
+          type: string
+        content:
+          description: Message content to send
+          minLength: 1
+          type: string
+        fire_and_forget:
+          default: true
+          description: If false, return the durable reply in this tool call
+          type: boolean
+      required:
+      - target
+      - content
+      type: object
+    output_schema:
+      $defs:
+        SendMessageAwaitReplyOutput:
+          additionalProperties: false
+          description: 点对点发送在持久检查点之后等待回复的句柄。
+          properties:
+            message_id:
+              description: Prepared message id
               type: string
-            minItems: 1
-            type: array
-          message:
-            description: Message content to send
-            minLength: 1
-            type: string
-          targets:
-            anyOf:
-            - items:
-                type: string
-              type: array
-            - type: 'null'
-            default: null
-            description: Optional extra direct targets (agent names) in addition to the room members
-        required:
-        - room_ids
-        - message
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          message_id:
-            description: Prepared persistent message id
-            type: string
-          recipients:
-            description: Resolved room members and extra targets
-            items:
+            mode:
+              description: Wait mode
               type: string
-            type: array
-          status:
-            description: Preparation status
-            type: string
-          mode:
-            description: Delivery mode
-            type: string
-          recipient_names:
-            additionalProperties:
+            target:
+              description: Agent the reply is expected from
               type: string
-            description: Stable recipient id to runtime display name
-            type: object
-          delivered_to:
-            description: Recipients after the sender is excluded
-            items:
-              type: string
-            type: array
-          rooms:
-            description: Room ids the message was addressed to
-            items:
-              type: string
-            type: array
-        required:
-        - message_id
-        - recipients
-        - status
-        - mode
-        - recipient_names
-        - delivered_to
-        - rooms
-        type: object
-      tags: []
-      effects:
-      - cluster:message
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: false
-    send_message:
-      title: Send Message
-      description: Prepare a persistent request to another agent. Delivery starts after commit. By default replies arrive through the persistent mailbox; fire_and_forget=false waits after a durable checkpoint.
-      entry: operations/send_message.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          target:
-            description: Target agent name or stable ID
-            minLength: 1
+            timeout:
+              description: Wait timeout in seconds
+              type: number
+          required:
+          - message_id
+          - mode
+          - target
+          - timeout
+          type: object
+      additionalProperties: false
+      properties:
+        message_id:
+          description: Prepared persistent message id
+          type: string
+        recipients:
+          description: Resolved recipient ids
+          items:
             type: string
-          content:
-            description: Message content to send
-            minLength: 1
+          type: array
+        status:
+          description: Preparation status
+          type: string
+        mode:
+          description: persistent, or async when fire_and_forget is set
+          type: string
+        recipient_names:
+          additionalProperties:
             type: string
-          fire_and_forget:
-            default: true
-            description: If false, return the durable reply in this tool call
-            type: boolean
-        required:
-        - target
-        - content
-        type: object
-      output_schema:
-        $defs:
-          SendMessageAwaitReplyOutput:
-            additionalProperties: false
-            description: 点对点发送在持久检查点之后等待回复的句柄。
-            properties:
-              message_id:
-                description: Prepared message id
-                type: string
-              mode:
-                description: Wait mode
-                type: string
-              target:
-                description: Agent the reply is expected from
-                type: string
-              timeout:
-                description: Wait timeout in seconds
-                type: number
-            required:
-            - message_id
-            - mode
-            - target
-            - timeout
-            type: object
-        additionalProperties: false
-        properties:
-          message_id:
-            description: Prepared persistent message id
-            type: string
-          recipients:
-            description: Resolved recipient ids
-            items:
-              type: string
-            type: array
-          status:
-            description: Preparation status
-            type: string
-          mode:
-            description: persistent, or async when fire_and_forget is set
-            type: string
-          recipient_names:
-            additionalProperties:
-              type: string
-            description: Stable recipient id to runtime display name
-            type: object
-          target:
-            description: Requested target name or stable id
-            type: string
-          await_reply:
-            anyOf:
-            - $ref: '#/$defs/SendMessageAwaitReplyOutput'
-            - type: 'null'
-            default: null
-            description: Durable wait handle when fire_and_forget is false
-        required:
-        - message_id
-        - recipients
-        - status
-        - mode
-        - recipient_names
-        - target
-        type: object
-      tags:
-      - cluster
-      - communication
-      effects:
-      - cluster:message
-      permissions: {}
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    spawn_agent:
-      title: Spawn Agent
-      description: Spawn a new peer agent in the cluster by instantiating an agent manifest.
-      entry: operations/spawn_agent.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          manifest_ref:
-            description: Manifest reference of the agent template to instantiate
-            minLength: 1
-            type: string
-          name:
-            default: ''
-            description: Optional runtime name override for the new agent (defaults to the manifest-defined name)
-            type: string
-          description:
-            default: ''
-            description: Optional description override for the new agent
-            type: string
-          system_prompt:
-            default: ''
-            description: Optional system prompt override for the new agent
-            type: string
-        required:
-        - manifest_ref
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          agent_name:
-            description: Runtime name of the spawned agent
-            type: string
-          status:
-            description: Spawn status
-            type: string
-          manifest_ref:
-            description: Manifest the agent was created from
-            type: string
-        required:
-        - agent_name
-        - status
-        - manifest_ref
-        type: object
-      tags:
-      - cluster
-      - lifecycle
-      effects:
-      - cluster:lifecycle
-      permissions:
-        require_hitl: true
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-    terminate_agent:
-      title: Terminate Agent
-      description: Terminate an agent in the cluster. The agent will be removed and cannot receive further messages. Only use this when you are certain the agent is no longer needed.
-      entry: operations/terminate_agent.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          agent_name:
-            description: Name of the agent to terminate
-            minLength: 1
-            type: string
-        required:
-        - agent_name
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          agent_name:
-            description: Name of the terminated agent
-            type: string
-          status:
-            description: Termination status
-            type: string
-        required:
-        - agent_name
-        - status
-        type: object
-      tags:
-      - cluster
-      - lifecycle
-      effects:
-      - cluster:lifecycle
-      permissions:
-        require_hitl: true
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 60000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-  skills: {}
+          description: Stable recipient id to runtime display name
+          type: object
+        target:
+          description: Requested target name or stable id
+          type: string
+        await_reply:
+          anyOf:
+          - $ref: '#/$defs/SendMessageAwaitReplyOutput'
+          - type: 'null'
+          default: null
+          description: Durable wait handle when fire_and_forget is false
+      required:
+      - message_id
+      - recipients
+      - status
+      - mode
+      - recipient_names
+      - target
+      type: object
+    tags:
+    - cluster
+    - communication
+    effects:
+    - cluster:message
+    permissions: {}
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/send_message.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.spawn_agent
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Spawn Agent
+    description: Spawn a new peer agent in the cluster by instantiating an agent manifest.
+    input_schema:
+      additionalProperties: false
+      properties:
+        manifest_ref:
+          description: Manifest reference of the agent template to instantiate
+          minLength: 1
+          type: string
+        name:
+          default: ''
+          description: Optional runtime name override for the new agent (defaults to the manifest-defined name)
+          type: string
+        description:
+          default: ''
+          description: Optional description override for the new agent
+          type: string
+        system_prompt:
+          default: ''
+          description: Optional system prompt override for the new agent
+          type: string
+      required:
+      - manifest_ref
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        agent_name:
+          description: Runtime name of the spawned agent
+          type: string
+        status:
+          description: Spawn status
+          type: string
+        manifest_ref:
+          description: Manifest the agent was created from
+          type: string
+      required:
+      - agent_name
+      - status
+      - manifest_ref
+      type: object
+    tags:
+    - cluster
+    - lifecycle
+    effects:
+    - cluster:lifecycle
+    permissions:
+      require_hitl: true
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/spawn_agent.py
+- namespace: ghrah
+  name: cluster
+  member: ghrah.cluster.terminate_agent
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Terminate Agent
+    description: Terminate an agent in the cluster. The agent will be removed and cannot receive further messages. Only use this when you are certain the agent is no longer needed.
+    input_schema:
+      additionalProperties: false
+      properties:
+        agent_name:
+          description: Name of the agent to terminate
+          minLength: 1
+          type: string
+      required:
+      - agent_name
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        agent_name:
+          description: Name of the terminated agent
+          type: string
+        status:
+          description: Termination status
+          type: string
+      required:
+      - agent_name
+      - status
+      type: object
+    tags:
+    - cluster
+    - lifecycle
+    effects:
+    - cluster:lifecycle
+    permissions:
+      require_hitl: true
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 60000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/cluster/operations/terminate_agent.py

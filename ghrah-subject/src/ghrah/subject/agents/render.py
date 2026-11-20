@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ghrah.protocol.views.core import (
+    AGENT_CONTROL_MEMBER_KEYS,
     AgentAssemblyConfig,
     AgentAssemblyContext,
     AgentAssemblyLimits,
@@ -34,10 +35,13 @@ from ghrah.protocol.views.core import (
     AgentAssemblySpec,
     AgentMemberAxes,
     AgentMemberPermissions,
-    AgentSurfaceSpec,
 )
 
-from ghrah.subject.template_store.models import AgentTemplateConfig, AgentTemplatePathRequest
+from ghrah.subject.template_store.models import (
+    AgentTemplateConfig,
+    AgentTemplateMember,
+    AgentTemplatePathRequest,
+)
 
 __all__ = [
     "GrantedPackage",
@@ -53,7 +57,7 @@ class RenderError(ValueError):
     """模板还不足以创建 Agent（缺模型、空提示词、workspace 角色解析不到）。
 
     ``code`` 是稳定的领域码，供 REST 映射：``assembly_not_ready`` /
-    ``missing_workspace`` / ``invalid_path``。
+    ``missing_workspace`` / ``invalid_path`` / ``invalid_binding``。
     """
 
     def __init__(self, code: str, detail: str) -> None:
@@ -217,8 +221,8 @@ def _config(template: AgentTemplateConfig) -> AgentAssemblyConfig:
             communication_timeout=policy.communication_timeout,
         ),
         context=context,
-        surface=AgentSurfaceSpec.model_validate(template.ability_request.surface.model_dump()),
-        mcp_refs=list(template.ability_request.mcp_refs),
+        surface=None,
+        mcp_refs=[],
         permission=AgentAssemblyPermission(
             auto_approve=list(request.auto_approve),
             require_approval_by_default=request.require_approval_by_default,
@@ -234,6 +238,7 @@ def render_assembly(
     agent_name: str,
     workspaces: Mapping[str, str],
     granted: list[GrantedPackage] | None,
+    initial_bindings: tuple[str, ...] | None = None,
 ) -> RenderedAssembly:
     """把模板渲染成装配输入 + 授权计划。
 
@@ -243,6 +248,8 @@ def render_assembly(
         agent_name: 项目内唯一的实例名（不是模板名）。
         workspaces: ``workspace_role`` → 绝对根；缺失即 ``missing_workspace``。
         granted: 该项目当前的已授予包事实（来自端口能力视图）。
+        initial_bindings: 创建时选中的成员全名；只有这些成员启动后绑定进模型
+            上下文。``None`` 表示按模板成员的默认轴（全部绑定）。
 
     Returns:
         装配输入、逐包授权计划与差异报告。
@@ -251,6 +258,7 @@ def render_assembly(
         RenderError: 模板尚不足以创建（``assembly_not_ready``）、workspace 角色
             解析不到（``missing_workspace``），或路径非法（``invalid_path``）。
     """
+    bindings = None if initial_bindings is None else set(initial_bindings)
     config = _config(template)
     resolved_paths = _resolve_roots(list(template.path_request), workspaces)
 
@@ -264,94 +272,75 @@ def render_assembly(
     missing: list[str] = []
     not_granted: list[str] = []
 
-    for request in template.ability_request.packages:
+    grouped: dict[str, list[AgentTemplateMember]] = {}
+    for item in template.available_members:
+        grouped.setdefault(item.package, []).append(item)
+
+    for package, items in sorted(grouped.items()):
+        first = items[0]
         # 来源标记：内核件随源码发布、没有版本层；能力件装在 <ns>/<name>/<version>/。
         # 这里只做标记，装载逻辑对两者是同一套（版本另取）。
-        ability_type = "kernel" if request.origin == "builtin" else "external"
-        version = None if request.origin == "builtin" else request.version
-        # MCP 快照包（mcp.<server>）的成员是远端工具，装载走 MCP 通路。
-        member_type = "mcp" if request.origin == "mcp" else "operation"
+        ability_type = first.ability_type
+        version = first.version
+        operations = [item for item in items if item.type != "skill"]
+        skills = [item for item in items if item.type == "skill"]
         if granted is None:
-            # 无授权视图：按模板申请原样装配。
-            # 「整包」需要包目录才能展开成员，Subject 侧没有目录，因此把**包名**
-            # 原样交给 Core（``whole_container=True``），由 Core 按自己的能力来源展开。
-            if request.whole_container and not request.operations and not request.skills:
-                members.append(
-                    AgentAssemblyMember(
-                        member=request.package,
-                        type=member_type,
-                        version=version,
-                        ability_type=ability_type,
-                        whole_container=True,
-                        permissions=_member_permissions(resolved_paths, package=request.package),
-                    )
-                )
-                continue
-            selected_ops = (
-                [] if request.whole_container else [item.key for item in request.operations]
-            )
-            requested_ops = [
-                (item.key, item.visible, item.available) for item in request.operations
-            ]
+            # 无授权视图：按模板申请原样装配（成员已逐个展开，不再有整包）。
             fact = None
+            selected_ops = [item.key for item in operations]
+            requested_ops = [(item.key, True, True) for item in operations]
         else:
-            fact = granted_by_name.get(request.package)
+            fact = granted_by_name.get(package)
             if fact is None:
-                missing.append(request.package)
+                missing.append(package)
                 continue
             granted_ops = set(fact.operations)
-            if request.whole_container:
-                selected_ops = sorted(granted_ops)
-                requested_ops = []
-            else:
-                requested_ops = [
-                    (item.key, item.visible, item.available) for item in request.operations
-                ]
-                selected_ops = []
-                for key, _, _ in requested_ops:
-                    if key in granted_ops:
-                        selected_ops.append(key)
-                    else:
-                        not_granted.append(f"{request.package}.{key}")
-        # 技能与脚本不进 members[]，只进授权行的 axes（见模块 docstring）。
-        requested_skills = [
-            (item.key, item.visible, [(s.key, s.visible, s.exec) for s in item.scripts])
-            for item in request.skills
-        ]
+            requested_ops = [(item.key, True, True) for item in operations]
+            selected_ops = []
+            for key, _, _ in requested_ops:
+                if key in granted_ops:
+                    selected_ops.append(key)
+                else:
+                    not_granted.append(f"{package}.{key}")
+        # 技能与脚本不进 members[]，只进授权行的 axes。
+        requested_skills = [(item.key, True, []) for item in skills]
         axes = _package_axes(requested_ops, requested_skills)
-        applicable = _applicable(resolved_paths, package=request.package)
+        applicable = _applicable(resolved_paths, package=package)
         allowed_roots = tuple(dict.fromkeys(root for item, root in applicable if not item.deny))
-        permissions = _member_permissions(resolved_paths, package=request.package)
+        permissions = _member_permissions(resolved_paths, package=package)
+        by_key = {item.key: item for item in operations}
         for key in selected_ops:
+            member = by_key[key]
+            visible, bind = axes.get(f"operations/{key}", (True, True))
+            if bindings is not None:
+                control = package == "ghrah.core" and key in AGENT_CONTROL_MEMBER_KEYS
+                bind = control or member.member in bindings
             members.append(
                 AgentAssemblyMember(
-                    member=f"{request.package}.{key}",
-                    type=member_type,
+                    member=member.member,
+                    type=member.type,
                     version=version,
                     ability_type=ability_type,
                     permissions=permissions,
-                    axes=AgentMemberAxes(
-                        visible=axes.get(f"operations/{key}", (True, True))[0],
-                        available=axes.get(f"operations/{key}", (True, True))[1],
-                    ),
+                    axes=AgentMemberAxes(visible=visible, available=bind),
                 )
             )
         # 技能按成员级下发：用户选了哪个技能，模板存了哪个，这里就传哪个。
-        # 技能没有"可见但不可用"（Core 会拒绝），所以只带 visible。
         # 有授权视图时按授予事实过滤，和 operation 同一口径。
         granted_skills = None if granted is None else set(fact.skills)  # type: ignore[union-attr]
-        for item in request.skills:
-            if granted_skills is not None and item.key not in granted_skills:
-                not_granted.append(f"{request.package}.{item.key}")
+        for member in skills:
+            if granted_skills is not None and member.key not in granted_skills:
+                not_granted.append(member.member)
                 continue
+            skill_bind = True if bindings is None else member.member in bindings
             members.append(
                 AgentAssemblyMember(
-                    member=f"{request.package}.{item.key}",
+                    member=member.member,
                     type="skill",
                     version=version,
                     ability_type=ability_type,
                     permissions=permissions,
-                    axes=AgentMemberAxes(visible=item.visible, available=True),
+                    axes=AgentMemberAxes(visible=True, available=skill_bind),
                 )
             )
         # 无授权视图时不产出授权计划：Subject 不写授权行（由 Core 启动核定器落实），
@@ -359,14 +348,12 @@ def render_assembly(
         if fact is not None:
             grants.append(
                 GrantPlan(
-                    package=request.package,
+                    package=package,
                     alias=fact.alias,
                     instance_id=fact.instance_id,
                     operations=tuple(selected_ops),
-                    skills=tuple(item.key for item in request.skills),
-                    scripts={
-                        item.key: tuple(s.key for s in item.scripts) for item in request.skills
-                    },
+                    skills=tuple(item.key for item in skills),
+                    scripts={item.key: () for item in skills},
                     axes=axes,
                     allowed_roots=allowed_roots,
                 )
@@ -377,6 +364,12 @@ def render_assembly(
         config=config,
         members=members,
     )
+    if bindings is not None:
+        # 初始绑定只能从"这次真正装上的成员"里选：名字写错或选了未授予成员时
+        # fail-closed，避免创建出一个"看起来选了但实际没绑"的实例。
+        unknown = sorted(bindings - {item.member for item in members})
+        if unknown:
+            raise RenderError("invalid_binding", ",".join(unknown))
     return RenderedAssembly(
         spec=spec,
         grants=tuple(grants),

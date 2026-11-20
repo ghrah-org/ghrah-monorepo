@@ -36,17 +36,14 @@ __all__ = [
     "AgentTemplateConfig",
     "AgentTemplateContextOverrides",
     "AgentTemplateContextPolicy",
+    "AgentTemplateMember",
     "AgentTemplateMetadata",
     "AgentTemplateModel",
-    "AgentTemplateOperation",
-    "AgentTemplatePackage",
     "AgentTemplatePathRequest",
     "AgentTemplatePersistenceOverrides",
     "AgentTemplatePermissionRequest",
     "AgentTemplatePrompt",
     "AgentTemplateRecord",
-    "AgentTemplateScript",
-    "AgentTemplateSkill",
     "AgentTemplateSurface",
 ]
 
@@ -154,100 +151,147 @@ class AgentTemplateSurface(_TemplateModel):
         return _sorted_unique("surface.static", value)
 
 
-class AgentTemplateOperation(_TemplateModel):
-    """operation 轴申请；``visible=false && available=true`` 非法。"""
+class AgentTemplateMember(_TemplateModel):
+    """模板里的一条成员选择。
 
-    key: str = Field(min_length=1)
-    visible: bool = True
-    available: bool = True
-
-    @model_validator(mode="after")
-    def _check_axes(self) -> AgentTemplateOperation:
-        if not self.visible and self.available:
-            raise ValueError("visible=false 的 operation 不能同时 available=true")
-        return self
-
-
-class AgentTemplateScript(_TemplateModel):
-    """skill 下的脚本申请；``exec`` 才是可执行性。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    exec: bool = False
-
-
-class AgentTemplateSkill(_TemplateModel):
-    """skill 申请；skill 没有 ``available``，脚本保持申请顺序。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    scripts: list[AgentTemplateScript] = Field(default_factory=list)
-
-    @field_validator("scripts")
-    @classmethod
-    def _check_scripts(cls, value: list[AgentTemplateScript]) -> list[AgentTemplateScript]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("skills[].scripts 的 key 必须唯一")
-        return value
-
-
-class AgentTemplatePackage(_TemplateModel):
-    """包级申请：成员按 key 排序；``version`` 只对能力件有意义。
-
-    内核件随源码发布、没有版本层，``version`` 为 ``None``；能力件在安装根下按
-    ``<ns>/<name>/<version>/`` 存放，同一包多版本并存，必须记住版本。
+    只记录「选了哪个包的哪个成员」：``member`` 固定为三段
+    ``<namespace>.<ability_name>.<member_name>``，类型/版本/来源随行携带；
+    定义数据（path、schema 等）**不进模板**，启动 Agent 时再扫能力定义。
     """
 
-    package: str = Field(min_length=1)
-    origin: Literal["builtin", "installed", "mcp"]
+    namespace: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    member: str = Field(min_length=1)
+    type: Literal["operation", "skill", "mcp"] = "operation"
     version: str | None = None
-    whole_container: bool = False
-    operations: list[AgentTemplateOperation] = Field(default_factory=list)
-    skills: list[AgentTemplateSkill] = Field(default_factory=list)
+    ability_type: Literal["kernel", "external"] = "external"
 
-    @field_validator("operations")
-    @classmethod
-    def _check_operations(cls, value: list[AgentTemplateOperation]) -> list[AgentTemplateOperation]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("operations 的 key 必须唯一")
-        return sorted(value, key=lambda item: item.key)
+    @property
+    def package(self) -> str:
+        """包身份：``<namespace>.<ability_name>``。"""
+        return f"{self.namespace}.{self.name}"
 
-    @field_validator("skills")
-    @classmethod
-    def _check_skills(cls, value: list[AgentTemplateSkill]) -> list[AgentTemplateSkill]:
-        keys = [item.key for item in value]
-        if len(keys) != len(set(keys)):
-            raise ValueError("skills 的 key 必须唯一")
-        return sorted(value, key=lambda item: item.key)
+    @property
+    def key(self) -> str:
+        """成员键（全名最后一段）。"""
+        return self.member.rsplit(".", 1)[-1]
 
     @model_validator(mode="after")
-    def _check_container(self) -> AgentTemplatePackage:
-        if self.whole_container and (self.operations or self.skills):
-            raise ValueError("whole_container=true 时不能同时申请 operations/skills")
+    def _check_shape(self) -> AgentTemplateMember:
+        parts = self.member.split(".")
+        if len(parts) != 3 or parts[0] != self.namespace or parts[1] != self.name:
+            raise ValueError(
+                f"member 必须是 <namespace>.<ability_name>.<member_name>"
+                f"（={self.namespace}.{self.name}.<key>），当前是 {self.member!r}"
+            )
+        if self.ability_type == "kernel":
+            if self.version is not None:
+                raise ValueError("kernel 成员没有版本层，version 必须为 null")
+        elif self.version is not None and not self.version.strip():
+            raise ValueError("external 成员的 version 给定时不得为空串")
         return self
 
 
 class AgentTemplateAbilityRequest(_TemplateModel):
-    """能力申请：模板层只做形状与一致性校验，不判断成员是否存在。"""
+    """能力申请：模板只做形状与一致性校验，不判断成员是否存在。
 
-    surface: AgentTemplateSurface = Field(default_factory=AgentTemplateSurface)
-    packages: list[AgentTemplatePackage] = Field(default_factory=list)
-    mcp_refs: list[str] = Field(default_factory=list)
+    ``available_members`` 是落库形态（成员数组）；旧行里的 ``packages`` /
+    ``members`` 由 :meth:`_from_legacy` 在读入时展开成同一形状。
+    """
 
-    @field_validator("packages")
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
+
+    @model_validator(mode="before")
     @classmethod
-    def _check_packages(cls, value: list[AgentTemplatePackage]) -> list[AgentTemplatePackage]:
-        names = [item.package for item in value]
+    def _from_legacy(cls, value: Any) -> Any:
+        """兼容两种旧形态：包级视图 ``packages[]`` 与带轴的 ``members[]``。"""
+        if not isinstance(value, dict):
+            return value
+        if "available_members" in value:
+            return value
+        data = dict(value)
+        packages = data.pop("packages", None)
+        legacy_members = data.pop("members", None)
+        # 旧形态里的 surface / mcp_refs 不再进模板：直接丢弃，避免 extra_forbidden。
+        data.pop("surface", None)
+        data.pop("mcp_refs", None)
+        converted: list[dict[str, Any]] = []
+        if packages is not None:
+            for package in packages:
+                converted.extend(_members_from_package(package))
+        for item in legacy_members or []:
+            if not isinstance(item, dict):
+                continue
+            converted.append(_member_from_legacy(item))
+        data["available_members"] = converted
+        return data
+
+    @field_validator("available_members")
+    @classmethod
+    def _check_members(cls, value: list[AgentTemplateMember]) -> list[AgentTemplateMember]:
+        names = [item.member for item in value]
         if len(names) != len(set(names)):
-            raise ValueError("packages 的 package 必须唯一")
-        return sorted(value, key=lambda item: item.package)
+            raise ValueError("available_members 的 member 必须唯一")
+        return sorted(value, key=lambda item: item.member)
 
-    @field_validator("mcp_refs")
-    @classmethod
-    def _check_mcp_refs(cls, value: list[str]) -> list[str]:
-        return _ordered_unique("mcp_refs", value)
+
+def _members_from_package(package: Any) -> list[dict[str, Any]]:
+    """把旧包级申请展开成成员记录（三段全名，不带轴/脚本）。"""
+    if not isinstance(package, dict):
+        return []
+    full_name = str(package.get("package") or "")
+    if not full_name:
+        return []
+    if package.get("whole_container"):
+        raise ValueError("整包申请必须先展开成成员再落库（whole_container 不被持久化）")
+    namespace, _, name = full_name.partition(".")
+    name = name or namespace
+    origin = package.get("origin")
+    ability_type = "kernel" if origin == "builtin" else "external"
+    version = None if ability_type == "kernel" else package.get("version")
+    members: list[dict[str, Any]] = []
+    for operation in package.get("operations") or []:
+        members.append(
+            {
+                "namespace": namespace,
+                "name": name,
+                "member": f"{namespace}.{name}.{operation['key']}",
+                "type": "operation",
+                "version": version,
+                "ability_type": ability_type,
+            }
+        )
+    for skill in package.get("skills") or []:
+        members.append(
+            {
+                "namespace": namespace,
+                "name": name,
+                "member": f"{namespace}.{name}.{skill['key']}",
+                "type": "skill",
+                "version": version,
+                "ability_type": ability_type,
+            }
+        )
+    return members
+
+
+def _member_from_legacy(item: dict[str, Any]) -> dict[str, Any]:
+    """旧成员记录（可能两段全名 + 轴/脚本）→ 新成员记录。"""
+    namespace = str(item.get("namespace") or "")
+    name = str(item.get("name") or namespace)
+    member = str(item.get("member") or "")
+    parts = member.split(".")
+    key = parts[-1] if parts else ""
+    if len(parts) == 2 and namespace and key:
+        member = f"{namespace}.{name}.{key}"
+    return {
+        "namespace": namespace,
+        "name": name,
+        "member": member,
+        "type": str(item.get("type") or "operation"),
+        "version": item.get("version"),
+        "ability_type": str(item.get("ability_type") or "external"),
+    }
 
 
 class AgentTemplatePermissionRequest(_TemplateModel):
@@ -320,13 +364,19 @@ class AgentTemplateConfig(_TemplateModel):
     model: AgentTemplateModel = Field(default_factory=AgentTemplateModel)
     prompt: AgentTemplatePrompt = Field(default_factory=AgentTemplatePrompt)
     context_policy: AgentTemplateContextPolicy = Field(default_factory=AgentTemplateContextPolicy)
-    ability_request: AgentTemplateAbilityRequest = Field(
-        default_factory=AgentTemplateAbilityRequest
-    )
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
     permission_request: AgentTemplatePermissionRequest = Field(
         default_factory=AgentTemplatePermissionRequest
     )
     path_request: list[AgentTemplatePathRequest] = Field(default_factory=list)
+
+    @field_validator("available_members")
+    @classmethod
+    def _check_members(cls, value: list[AgentTemplateMember]) -> list[AgentTemplateMember]:
+        names = [item.member for item in value]
+        if len(names) != len(set(names)):
+            raise ValueError("available_members 的 member 必须唯一")
+        return sorted(value, key=lambda item: item.member)
 
     @field_validator("path_request")
     @classmethod
@@ -367,9 +417,7 @@ class AgentTemplateRecord(_TemplateModel):
     model: AgentTemplateModel = Field(default_factory=AgentTemplateModel)
     prompt: AgentTemplatePrompt = Field(default_factory=AgentTemplatePrompt)
     context_policy: AgentTemplateContextPolicy = Field(default_factory=AgentTemplateContextPolicy)
-    ability_request: AgentTemplateAbilityRequest = Field(
-        default_factory=AgentTemplateAbilityRequest
-    )
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
     permission_request: AgentTemplatePermissionRequest = Field(
         default_factory=AgentTemplatePermissionRequest
     )
@@ -395,7 +443,7 @@ class AgentTemplateRecord(_TemplateModel):
             model=self.model,
             prompt=self.prompt,
             context_policy=self.context_policy,
-            ability_request=self.ability_request,
+            available_members=self.available_members,
             permission_request=self.permission_request,
             path_request=self.path_request,
         )

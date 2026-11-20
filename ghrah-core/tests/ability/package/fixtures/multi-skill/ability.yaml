@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: fixtures
   name: multi-skill
@@ -7,61 +7,84 @@ identity:
 title: Multi Skill
 description: 生成器 fixture：一个 Operation 与两个 Skill，验证 members.skills 多键。
 members:
-  operations:
-    render:
-      title: Ping
-      description: 探活。
-      entry: operations/render.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          host:
-            description: 目标主机
-            type: string
-        required:
-        - host
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          ok:
-            description: 是否可达
-            type: boolean
-        required:
-        - ok
-        type: object
-      tags:
-      - probe
-      effects:
-      - net:request
-      permissions:
-        net_access: true
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 5000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-  skills:
-    reporting-guide:
-      title: reporting-guide
-      description: 写报告的步骤与模板说明。
-      tags: []
-      body:
-        path: skills/reporting-guide/SKILL.md
-        media_type: text/markdown
-      assets: {}
-      references: {}
-      scripts: {}
-    review-guide:
-      title: review-guide
-      description: 审阅报告的检查清单。
-      tags: []
-      body:
-        path: skills/review-guide/SKILL.md
-        media_type: text/markdown
-      assets: {}
-      references: {}
-      scripts: {}
+- namespace: fixtures
+  name: multi-skill
+  member: fixtures.multi-skill.render
+  type: operation
+  version: 0.1.0
+  ability_type: external
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: Ping
+    description: 探活。
+    input_schema:
+      additionalProperties: false
+      properties:
+        host:
+          description: 目标主机
+          type: string
+      required:
+      - host
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        ok:
+          description: 是否可达
+          type: boolean
+      required:
+      - ok
+      type: object
+    tags:
+    - probe
+    effects:
+    - net:request
+    permissions:
+      net_access: true
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 5000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: fixtures/multi-skill/0.1.0/operations/render.py
+- namespace: fixtures
+  name: multi-skill
+  member: fixtures.multi-skill.reporting-guide
+  type: skill
+  version: 0.1.0
+  ability_type: external
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: reporting-guide
+    description: 写报告的步骤与模板说明。
+    tags: []
+    path: fixtures/multi-skill/0.1.0/skills/reporting-guide/SKILL.md
+    media_type: text/markdown
+    assets: {}
+    references: {}
+    scripts: {}
+- namespace: fixtures
+  name: multi-skill
+  member: fixtures.multi-skill.review-guide
+  type: skill
+  version: 0.1.0
+  ability_type: external
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: review-guide
+    description: 审阅报告的检查清单。
+    tags: []
+    path: fixtures/multi-skill/0.1.0/skills/review-guide/SKILL.md
+    media_type: text/markdown
+    assets: {}
+    references: {}
+    scripts: {}

@@ -463,6 +463,7 @@ class StartupGrantMaterializer:
         surface_thresholds: SurfaceThresholds | None = None,
         surface_search_limit: int = 8,
         surface_loaded_limit: int = 8,
+        binding_state: Any = None,
     ) -> None:
         if policy is not None and not isinstance(policy, GrantPolicy):
             raise TypeError("policy 必须是 GrantPolicy 或 None")
@@ -486,6 +487,8 @@ class StartupGrantMaterializer:
         self._surface_thresholds = surface_thresholds
         self._surface_search_limit = surface_search_limit
         self._surface_loaded_limit = surface_loaded_limit
+        self._binding_state = binding_state
+        """成员绑定状态的读写接缝（权威：实例快照 ``agent_instances.members``）。"""
 
     def registration(self, agent: str) -> Any:
         """返回从授权核定到运行绑定的库级独占范围。"""
@@ -585,6 +588,8 @@ class StartupGrantMaterializer:
             thresholds=self._surface_thresholds,
             search_limit=self._surface_search_limit,
             loaded_limit=self._surface_loaded_limit,
+            bound=self._bound_names(resolved),
+            on_bound_change=self._bound_writer(agent),
         )
         abilities.tool_surface = surface
         abilities.append(RunScriptTool(surface))
@@ -722,6 +727,8 @@ class StartupGrantMaterializer:
             thresholds=self._surface_thresholds,
             search_limit=self._surface_search_limit,
             loaded_limit=self._surface_loaded_limit,
+            bound=self._bound_names(resolved),
+            on_bound_change=self._bound_writer(agent),
         )
         abilities.tool_surface = surface
         abilities.append(RunScriptTool(surface))
@@ -800,6 +807,29 @@ class StartupGrantMaterializer:
             return tuple(entry.tool_name for entry in entries)
 
         return project
+
+    @staticmethod
+    def _bound_names(resolved: Any) -> set[str] | None:
+        """从解析结果取"应常驻上下文"的成员全名。
+
+        ``None`` 表示调用方没有提供成员轴（旧路径/无轴装配）：工具面按
+        "全部可见成员都常驻"处理，保持既有行为。
+        """
+        axes = getattr(resolved, "member_axes", None)
+        if not axes:
+            return None
+        return {name for name, item in axes.items() if getattr(item, "bind", True)}
+
+    def _bound_writer(self, agent: str) -> Any:
+        """绑定变更的持久化回调；未接线实例快照时返回 ``None``。"""
+        state = self._binding_state
+        if state is None:
+            return None
+
+        async def write(bound: frozenset[str]) -> None:
+            await state.save(agent, bound)
+
+        return write
 
     def _split(
         self, catalog: Any, resolved: list[ResolvedAbility]

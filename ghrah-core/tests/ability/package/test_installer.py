@@ -86,6 +86,31 @@ def _edit_definition(source: Path, mutator: Any) -> None:
     )
 
 
+def _member(data: dict[str, Any], kind: str, key: str) -> dict[str, Any]:
+    """按类型与成员键取 v2 ``members`` 列表里的一条记录。"""
+    for item in data["members"]:
+        if item["type"] == kind and item["member"].endswith(f".{key}"):
+            return item
+    raise AssertionError(f"未找到成员 {kind}:{key}")
+
+
+def _rename_package(definition: dict[str, Any], namespace: str, name: str) -> None:
+    """把包身份与成员记录里的身份一起改写（v2 的每条成员记录自带包身份）。"""
+    from ghrah.ability.member import Member
+
+    definition["identity"]["namespace"] = namespace
+    definition["identity"]["name"] = name
+    for item in definition["members"]:
+        member = Member.from_wire(item)
+        item["namespace"] = namespace
+        item["name"] = name
+        item["member"] = f"{namespace}.{name}.{member.key}"
+        if "path" in item["data"]:
+            item["data"]["path"] = (
+                f"{namespace}/{name}/{member.version}/{member.package_relative_path()}"
+            )
+
+
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -193,9 +218,10 @@ def test_install_does_not_import_package_code(tmp_path: Path) -> None:
     _write(source / "operations" / "boom.py", "raise RuntimeError('安装期不得 import 包代码')\n")
 
     def add_boom(definition: dict[str, Any]) -> None:
-        boom = copy.deepcopy(definition["members"]["operations"]["render"])
-        boom["entry"] = "operations/boom.py"
-        definition["members"]["operations"]["boom"] = boom
+        boom = copy.deepcopy(_member(definition, "operation", "render"))
+        boom["member"] = boom["member"].rsplit(".", 1)[0] + ".boom"
+        boom["data"]["path"] = boom["data"]["path"].rsplit("/", 1)[0] + "/boom.py"
+        definition["members"].append(boom)
 
     _edit_definition(source, add_boom)
     result = installer.install(source)
@@ -243,7 +269,7 @@ def test_install_rejects_legacy_layout(tmp_path: Path) -> None:
 def test_install_rejects_legacy_definition(tmp_path: Path) -> None:
     installer, source = _reporting(tmp_path)
     path = source / "ability.yaml"
-    text = path.read_text(encoding="utf-8").replace("schema_version: '1'", "schema_version: '0.2'")
+    text = path.read_text(encoding="utf-8").replace("schema_version: '2'", "schema_version: '0.2'")
     path.write_text(text, encoding="utf-8", newline="\n")
     _assert_error("invalid_definition", lambda: installer.install(source))
 
@@ -273,7 +299,7 @@ def test_install_rejects_reserved_namespaces(tmp_path: Path) -> None:
         source = _copy_fixture(tmp_path / namespace, "reporting")
 
         def set_namespace(definition: dict[str, Any], ns: str = namespace) -> None:
-            definition["identity"]["namespace"] = ns
+            _rename_package(definition, ns, "reporting")
 
         _edit_definition(source, set_namespace)
         _assert_error("reserved_namespace", lambda: installer.install(source))
@@ -286,8 +312,7 @@ def test_distro_origin_allows_ghrah_but_rejects_mcp(tmp_path: Path) -> None:
     source = _copy_fixture(tmp_path, "reporting")
 
     def set_ghrah(definition: dict[str, Any]) -> None:
-        definition["identity"]["namespace"] = "ghrah"
-        definition["identity"]["name"] = "reporting"
+        _rename_package(definition, "ghrah", "reporting")
 
     _edit_definition(source, set_ghrah)
     build(source, shipped=True)
@@ -299,8 +324,7 @@ def test_distro_origin_allows_ghrah_but_rejects_mcp(tmp_path: Path) -> None:
     mcp_source = _copy_fixture(tmp_path / "mcp-case", "reporting")
 
     def set_mcp(definition: dict[str, Any]) -> None:
-        definition["identity"]["namespace"] = "mcp"
-        definition["identity"]["name"] = "reporting"
+        _rename_package(definition, "mcp", "reporting")
 
     _edit_definition(mcp_source, set_mcp)
     _assert_error("reserved_namespace", lambda: distro.install(mcp_source))
@@ -344,9 +368,9 @@ def test_install_rejects_reserved_member_names(tmp_path: Path) -> None:
     (source / "operations" / "render.py").rename(source / "operations" / "search_tools.py")
 
     def rename_member(definition: dict[str, Any]) -> None:
-        operations = definition["members"]["operations"]
-        operations["search_tools"] = operations.pop("render")
-        operations["search_tools"]["entry"] = "operations/search_tools.py"
+        member = _member(definition, "operation", "render")
+        member["member"] = member["member"].rsplit(".", 1)[0] + ".search_tools"
+        member["data"]["path"] = member["data"]["path"].rsplit("/", 1)[0] + "/search_tools.py"
 
     _edit_definition(source, rename_member)
     _assert_error("reserved_member_name", lambda: installer.install(source))
@@ -363,7 +387,7 @@ def test_install_rejects_resource_size_mismatch(tmp_path: Path) -> None:
     installer, source = _reporting(tmp_path)
 
     def bump_size(definition: dict[str, Any]) -> None:
-        assets = definition["members"]["skills"]["reporting-guide"]["assets"]
+        assets = _member(definition, "skill", "reporting-guide")["data"]["assets"]
         assets["template"]["size"] = assets["template"]["size"] + 1
 
     _edit_definition(source, bump_size)
