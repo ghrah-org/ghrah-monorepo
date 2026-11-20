@@ -37,7 +37,9 @@ class V1Format:
             "model": _dumps(config.model.model_dump(mode="json")),
             "prompt": _dumps(config.prompt.model_dump(mode="json")),
             "context_policy": _dumps(config.context_policy.model_dump(mode="json")),
-            "ability_request": _dumps(config.ability_request.model_dump(mode="json")),
+            "available_members": _dumps(
+                [item.model_dump(mode="json") for item in config.available_members]
+            ),
             "permission_request": _dumps(config.permission_request.model_dump(mode="json")),
             "path_request": _dumps([item.model_dump(mode="json") for item in config.path_request]),
         }
@@ -50,7 +52,7 @@ class V1Format:
                 "model": json.loads(columns["model"]),
                 "prompt": json.loads(columns["prompt"]),
                 "context_policy": json.loads(columns["context_policy"]),
-                "ability_request": json.loads(columns["ability_request"]),
+                "available_members": json.loads(columns["available_members"]),
                 "permission_request": json.loads(columns["permission_request"]),
                 "path_request": json.loads(columns["path_request"]),
             }

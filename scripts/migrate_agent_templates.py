@@ -185,13 +185,27 @@ def _split_model(
 def _abilities(
     entries: Any, index: AbilityIndex, report: Report, source: Path
 ) -> list[dict[str, Any]]:
-    """``abilities[]`` → ``ability_request.packages``（按包聚合）。"""
-    packages: dict[str, dict[str, Any]] = {}
+    """``abilities[]`` → ``available_members``（三段成员名，按成员展开）。"""
+    members: dict[str, dict[str, Any]] = {}
 
-    def package_entry(name: str) -> dict[str, Any]:
-        return packages.setdefault(
-            name, {"package": name, "origin": "builtin", "whole_container": False, "operations": []}
-        )
+    def member_entry(package: str, key: str) -> dict[str, Any]:
+        namespace, _, name = package.partition(".")
+        name = name or namespace
+        full_name = f"{namespace}.{name}.{key}"
+        entry = {
+            "namespace": namespace,
+            "name": name,
+            "member": full_name,
+            "type": "operation",
+            "version": None,
+            "ability_type": "kernel",
+        }
+        return members.setdefault(full_name, entry)
+
+    def expand(package: str) -> None:
+        for key, hits in index.members.items():
+            if any(hit_package == package for hit_package, _ in hits):
+                member_entry(package, key)
 
     for entry in entries or []:
         if not isinstance(entry, dict):
@@ -204,9 +218,9 @@ def _abilities(
                 continue
             package, member = resolved
             if member is None:
-                package_entry(package)["whole_container"] = True
+                expand(package)
             else:
-                package_entry(package)["operations"].append({"key": member})
+                member_entry(package, member)
         elif entry.get("type"):
             name = str(entry["type"])
             if name in CONTROL_MEMBERS:
@@ -215,8 +229,8 @@ def _abilities(
             if resolved is None:
                 report.unresolved_members.append({"source": str(source), "type": name})
                 continue
-            package_entry(resolved[0])["operations"].append({"key": resolved[1]})
-    return list(packages.values())
+            member_entry(resolved[0], resolved[1])
+    return sorted(members.values(), key=lambda item: str(item["member"]))
 
 
 def _context_policy(document: dict[str, Any]) -> dict[str, Any]:
@@ -290,10 +304,7 @@ def build_config(
         "model": {"endpoint_name": endpoint, "model_overrides": overrides},
         "prompt": {"system_prompt": document.get("system_prompt") or ""},
         "context_policy": _context_policy(document),
-        "ability_request": {
-            "packages": _abilities(abilities, index, report, path),
-            "mcp_refs": [],
-        },
+        "available_members": _abilities(abilities, index, report, path),
         "permission_request": _permissions(abilities, report, path),
         "path_request": [],
     }

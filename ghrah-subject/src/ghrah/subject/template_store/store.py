@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +51,8 @@ _SCHEMA_COMPONENT = "agent_template_store"
 #: v2：单表 + 行级版本（v1 的「current 行 + revisions 表」未发布，直接换代）。
 _SCHEMA_VERSION = 2
 
+logger = logging.getLogger(__name__)
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS subject_schema_versions (
     component TEXT PRIMARY KEY,
@@ -63,7 +67,7 @@ CREATE TABLE IF NOT EXISTS agent_templates (
     model              TEXT NOT NULL,
     prompt             TEXT NOT NULL,
     context_policy     TEXT NOT NULL,
-    ability_request    TEXT NOT NULL,
+    available_members  TEXT NOT NULL,
     permission_request TEXT NOT NULL,
     path_request       TEXT NOT NULL,
     reference_count    INTEGER NOT NULL DEFAULT 0,
@@ -93,7 +97,7 @@ _COLUMNS = (
     "model",
     "prompt",
     "context_policy",
-    "ability_request",
+    "available_members",
     "permission_request",
     "path_request",
     "reference_count",
@@ -154,7 +158,7 @@ def _row_to_record(row: aiosqlite.Row) -> AgentTemplateRecord:
         model=config.model,
         prompt=config.prompt,
         context_policy=config.context_policy,
-        ability_request=config.ability_request,
+        available_members=config.available_members,
         permission_request=config.permission_request,
         path_request=config.path_request,
         created_at=str(row["created_at"]),
@@ -226,12 +230,46 @@ class TemplateStore:
             await db.execute("DROP TABLE IF EXISTS agent_template_revisions")
             await db.execute("DROP TABLE IF EXISTS agent_templates")
         await db.executescript(_DDL)
+        await self._migrate_members_column(db)
         await db.execute(
             "INSERT INTO subject_schema_versions(component, version) VALUES (?, ?) "
             "ON CONFLICT(component) DO UPDATE SET version = excluded.version",
             (_SCHEMA_COMPONENT, _SCHEMA_VERSION),
         )
         await db.commit()
+
+    async def _migrate_members_column(self, db: aiosqlite.Connection) -> None:
+        """``ability_request`` → ``available_members``：改名列并把值转成成员数组。
+
+        旧值是 ``{surface, packages, mcp_refs}`` 或带轴/脚本的 ``members``；
+        转换走与读入相同的兼容器，保证迁移后 ``available_members`` 是纯成员数组。
+        """
+        cursor = await db.execute("PRAGMA table_info(agent_templates)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "available_members" in columns or "ability_request" not in columns:
+            return
+        from ghrah.subject.template_store.models import AgentTemplateAbilityRequest
+
+        await db.execute(
+            "ALTER TABLE agent_templates RENAME COLUMN ability_request TO available_members"
+        )
+        cursor = await db.execute(
+            "SELECT template_id, revision, available_members FROM agent_templates"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            raw = json.loads(row["available_members"] or "{}")
+            members = AgentTemplateAbilityRequest.model_validate(raw).available_members
+            await db.execute(
+                "UPDATE agent_templates SET available_members = ? "
+                "WHERE template_id = ? AND revision = ?",
+                (
+                    json.dumps([item.model_dump(mode="json") for item in members]),
+                    row["template_id"],
+                    row["revision"],
+                ),
+            )
+        logger.info("agent_templates: ability_request → available_members（%d 行）", len(rows))
 
     async def stop(self) -> None:
         """关闭连接。"""

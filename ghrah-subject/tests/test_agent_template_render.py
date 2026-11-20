@@ -24,21 +24,32 @@ def _template(**overrides: object) -> AgentTemplateConfig:
         "model": {"endpoint_name": "default-llm", "model_overrides": {"temperature": 0.3}},
         "prompt": {"system_prompt": "先列事实"},
         "context_policy": {"max_iterations": -1, "communication_timeout": 120},
-        "ability_request": {
-            "surface": {"mode": "auto"},
-            "packages": [
-                {
-                    "package": "ghrah.fs",
-                    "origin": "builtin",
-                    "operations": [
-                        {"key": "read_file", "visible": True, "available": True},
-                        {"key": "write_file", "visible": True, "available": True},
-                    ],
-                    "skills": [{"key": "style", "scripts": [{"key": "lint", "exec": False}]}],
-                }
-            ],
-            "mcp_refs": ["search"],
-        },
+        "available_members": [
+            {
+                "namespace": "ghrah",
+                "name": "fs",
+                "member": "ghrah.fs.read_file",
+                "type": "operation",
+                "version": None,
+                "ability_type": "kernel",
+            },
+            {
+                "namespace": "ghrah",
+                "name": "fs",
+                "member": "ghrah.fs.write_file",
+                "type": "operation",
+                "version": None,
+                "ability_type": "kernel",
+            },
+            {
+                "namespace": "ghrah",
+                "name": "fs",
+                "member": "ghrah.fs.style",
+                "type": "skill",
+                "version": None,
+                "ability_type": "kernel",
+            },
+        ],
         "permission_request": {"auto_approve": ["ghrah.fs.read_file"]},
         "path_request": [
             {
@@ -135,7 +146,7 @@ def test_config_carries_limits_prompt_and_model() -> None:
     assert config.prompt.system_prompt == "先列事实"
     assert config.limits.max_iterations == -1
     assert config.limits.communication_timeout == 120
-    assert config.mcp_refs == ["search"]
+    assert config.mcp_refs == []
     assert config.permission is not None
     assert config.permission.auto_approve == ["ghrah.fs.read_file"]
 
@@ -238,26 +249,22 @@ def test_explicit_members_pass_through_without_grant_view() -> None:
     assert rendered.report.not_granted == ()
 
 
-def test_skills_enter_members_and_keep_axes() -> None:
+def test_skills_enter_members_without_axes() -> None:
     rendered = render_assembly(
         _template(), agent_name="weekly", workspaces=_WORKSPACES, granted=[_granted()]
     )
 
     axes = rendered.grants[0].axes
     assert axes["skill/style"] == (True, True)
-    assert axes["skill/style/scripts/lint"] == (True, False)
-    # 技能现在与 operation 一样是成员：模板选了就下发，不再只写进 axes。
+    # 模板不再携带脚本申请：脚本授权回到定义面默认。
+    assert "skill/style/scripts/lint" not in axes
     skills = [item for item in rendered.spec.members if item.type == "skill"]
     assert [item.member for item in skills] == ["ghrah.fs.style"]
     assert rendered.grants[0].skills == ("style",)
-    assert rendered.grants[0].scripts == {"style": ("lint",)}
+    assert rendered.grants[0].scripts == {"style": ()}
 
 
-def test_whole_container_is_rejected_at_storage() -> None:
-    """整包不是持久化形状：写入口必须已展开成成员（由 API 层展开）。"""
-    with pytest.raises(ValidationError, match="whole_container"):
-        _template(
-            ability_request={
-                "packages": [{"package": "ghrah.fs", "origin": "builtin", "whole_container": True}]
-            }
-        )
+def test_packages_payload_is_no_longer_a_storage_shape() -> None:
+    """落库只认成员数组：旧的包级入参在模型层被拒。"""
+    with pytest.raises(ValidationError):
+        _template(available_members={"packages": [{"package": "ghrah.fs"}]})

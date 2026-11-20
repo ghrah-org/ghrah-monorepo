@@ -14,7 +14,7 @@ const DETAIL = {
   model: { endpoint_name: "default-llm" },
   prompt: { system_prompt: "" },
   context_policy: { max_iterations: -1, communication_timeout: 300 },
-  ability_request: { packages: [] },
+  available_members: [],
   permission_request: {},
   path_request: [],
   reference_count: 0,

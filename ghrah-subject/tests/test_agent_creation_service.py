@@ -38,16 +38,15 @@ _SNAPSHOT: dict[str, Any] = {
     "model": {"endpoint_name": "default-llm"},
     "prompt": {"system_prompt": "先列事实"},
     "context_policy": {"max_iterations": -1, "communication_timeout": 120},
-    "ability_request": {
-        "surface": {"mode": "auto"},
-        "packages": [
-            {
-                "package": "ghrah.fs",
-                "origin": "builtin",
-                "operations": [{"key": "read_file"}],
-            }
-        ],
-    },
+    "available_members": [
+        {
+            "namespace": "ghrah",
+            "name": "fs",
+            "member": "ghrah.fs.read_file",
+            "type": "operation",
+            "ability_type": "kernel",
+        }
+    ],
     "permission_request": {"auto_approve": []},
     "path_request": [
         {
@@ -98,7 +97,7 @@ def _record_from(snapshot: dict[str, Any]) -> AgentTemplateRecord:
         model=config.model,
         prompt=config.prompt,
         context_policy=config.context_policy,
-        ability_request=config.ability_request,
+        available_members=config.available_members,
         permission_request=config.permission_request,
         path_request=config.path_request,
         created_at="2026-11-17T00:00:00Z",

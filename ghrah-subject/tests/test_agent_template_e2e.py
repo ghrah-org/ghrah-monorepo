@@ -70,16 +70,15 @@ def _config(prompt: str, *, name: str = "weekly") -> AgentTemplateConfig:
             "model": {"endpoint_name": "default-llm"},
             "prompt": {"system_prompt": prompt},
             "context_policy": {"max_iterations": 6},
-            "ability_request": {
-                "surface": {"mode": "auto"},
-                "packages": [
-                    {
-                        "package": "ghrah.core",
-                        "origin": "builtin",
-                        "operations": [{"key": "load_skill"}],
-                    }
-                ],
-            },
+            "available_members": [
+                {
+                    "namespace": "ghrah",
+                    "name": "core",
+                    "member": "ghrah.core.load_skill",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                }
+            ],
             "permission_request": {},
             "path_request": [],
         }

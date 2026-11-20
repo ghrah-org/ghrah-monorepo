@@ -213,12 +213,7 @@ async def test_create_detail_list_and_defaults(running: Any) -> None:
     assert created["context_policy"]["communication_timeout"] == 300
     assert created["model"] == {"endpoint_name": None, "model_overrides": None}
     assert created["prompt"] == {"system_prompt": ""}
-    assert created["ability_request"]["packages"] == []
-    assert created["ability_request"]["surface"] == {
-        "mode": "auto",
-        "static": [],
-        "max_static": None,
-    }
+    assert created["available_members"] == []
     assert created["permission_request"]["require_approval_by_default"] is True
     assert created["path_request"] == []
 
@@ -259,16 +254,15 @@ async def test_update_archive_and_cas(running: Any) -> None:
         body={
             "metadata": {"namespace": "writing", "name": "weekly_report"},
             "prompt": {"system_prompt": "旧提示词"},
-            "ability_request": {
-                "packages": [
-                    {
-                        "package": "writing.beta",
-                        "origin": "builtin",
-                        "operations": [{"key": "draft"}],
-                    }
-                ],
-                "mcp_refs": [],
-            },
+            "available_members": [
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.draft",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                }
+            ],
         },
     )
     template_id = created["template_id"]
@@ -291,7 +285,7 @@ async def test_update_archive_and_cas(running: Any) -> None:
     assert updated["metadata"]["namespace"] == "writing"
     assert updated["prompt"]["system_prompt"] == "先列事实，再给结论。"
     # 未提供的组保持不变（组级替换，不是整体覆盖）
-    assert [item["package"] for item in updated["ability_request"]["packages"]] == ["writing.beta"]
+    assert [item["member"] for item in updated["available_members"]] == ["writing.beta.draft"]
 
     # CAS：过期 revision → 409，detail 带 current_revision
     status, conflict, _ = await _request(

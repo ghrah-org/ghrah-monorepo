@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from ghrah.subject.template_store.models import (
     AgentTemplateAbilityRequest,
-    AgentTemplateAxes,
     AgentTemplateConfig,
     AgentTemplateContextOverrides,
     AgentTemplateContextPolicy,
@@ -24,7 +23,6 @@ from ghrah.subject.template_store.models import (
     AgentTemplatePersistenceOverrides,
     AgentTemplatePrompt,
     AgentTemplateRecord,
-    AgentTemplateScript,
     AgentTemplateSurface,
 )
 from ghrah.subject.template_store.service import AgentTemplateService
@@ -40,7 +38,6 @@ __all__ = [
     "AgentTemplateAbilityRequest",
     "AgentTemplateConfig",
     "AgentTemplateContextOverrides",
-    "AgentTemplateAxes",
     "AgentTemplateContextPolicy",
     "AgentTemplateMember",
     "AgentTemplateMetadata",
@@ -50,7 +47,6 @@ __all__ = [
     "AgentTemplatePermissionRequest",
     "AgentTemplatePrompt",
     "AgentTemplateRecord",
-    "AgentTemplateScript",
     "AgentTemplateService",
     "AgentTemplateSurface",
     "TemplateConflictError",

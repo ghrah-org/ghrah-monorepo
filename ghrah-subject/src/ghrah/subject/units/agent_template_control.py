@@ -20,12 +20,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from ghrah.protocol.agent_control import (
-    AgentTemplateAbilityRequestView,
     AgentTemplateArchiveRequest,
     AgentTemplateContextPolicyView,
     AgentTemplateCreateRequest,
     AgentTemplateDetailView,
     AgentTemplateListView,
+    AgentTemplateMemberView,
     AgentTemplateMetadataView,
     AgentTemplateModelView,
     AgentTemplatePathRequestView,
@@ -96,9 +96,10 @@ def _detail(record: AgentTemplateRecord) -> AgentTemplateDetailView:
         context_policy=AgentTemplateContextPolicyView.model_validate(
             record.context_policy.model_dump(mode="json")
         ),
-        ability_request=AgentTemplateAbilityRequestView.model_validate(
-            record.ability_request.to_packages_payload()
-        ),
+        available_members=[
+            AgentTemplateMemberView.model_validate(item.model_dump(mode="json"))
+            for item in record.available_members
+        ],
         permission_request=AgentTemplatePermissionRequestView.model_validate(
             record.permission_request.model_dump(mode="json")
         ),
@@ -183,58 +184,6 @@ def build_agent_template_control_router(
             namespace=namespace, name=name, version=chosen.version
         )
         return profile
-
-    async def _expand_packages(payload: dict[str, Any]) -> None:
-        """把整包申请展开成逐成员，并给能力件钉住版本。
-
-        存储层不留「整包」概念：即便前端选的是整包，落库也是逐个成员。
-        这样快照、恢复与成员级选择只有一种形状。
-
-        Raises:
-            AbilityApiError: 没有目录端口、或包/版本解析不到（不能存一个空壳）。
-        """
-        request = payload.get("ability_request")
-        if not isinstance(request, dict):
-            return
-        packages = request.get("packages")
-        if not isinstance(packages, list):
-            return
-        for package in packages:
-            full_name = str(package.get("package") or "")
-            if not full_name:
-                continue
-            namespace, _, name = full_name.partition(".")
-            origin = package.get("origin")
-            expand = bool(package.get("whole_container"))
-            pin = origin != "builtin" and not package.get("version")
-            if not expand and not pin:
-                continue
-            if catalog is None:
-                raise AbilityApiError(
-                    "capability_unavailable",
-                    "目录端口未装配，无法把整包展开成成员；Core 目录服务不可用",
-                )
-            profile = await _profile(namespace, name or namespace, package.get("version"))
-            if pin:
-                package["version"] = None if origin == "builtin" else profile.version
-            if not expand:
-                continue
-            package["whole_container"] = False
-            package["operations"] = [
-                {"key": item.key, "visible": bool(item.expose), "available": True}
-                for item in profile.operations
-            ]
-            package["skills"] = [
-                {
-                    "key": item.key,
-                    "visible": True,
-                    "scripts": [
-                        {"key": script.key, "visible": True, "exec": False}
-                        for script in item.scripts
-                    ],
-                }
-                for item in profile.skills
-            ]
 
     async def _body(request: Request) -> dict[str, Any]:
         try:
@@ -324,8 +273,7 @@ def build_agent_template_control_router(
     ) -> JSONResponse:
         await _authorize(request)
         change = _parse(await _body(request), AgentTemplateCreateRequest, "创建请求不合法")
-        payload = change.model_dump(mode="json")
-        await _expand_packages(payload)
+        payload = change.model_dump(mode="json", exclude_unset=True)
         record = await _guarded(service.create(payload))
         return JSONResponse(
             status_code=201,
@@ -343,7 +291,6 @@ def build_agent_template_control_router(
         await _authorize(request)
         change = _parse(await _body(request), AgentTemplateUpdateRequest, "编辑请求不合法")
         payload = change.model_dump(mode="json", exclude_unset=True, exclude={"expected_revision"})
-        await _expand_packages(payload)
         record = await _guarded(service.update(template_id, change.expected_revision, payload))
         return _detail(record).model_dump(mode="json")
 

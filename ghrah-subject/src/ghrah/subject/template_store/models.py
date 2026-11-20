@@ -44,7 +44,6 @@ __all__ = [
     "AgentTemplatePermissionRequest",
     "AgentTemplatePrompt",
     "AgentTemplateRecord",
-    "AgentTemplateScript",
     "AgentTemplateSurface",
 ]
 
@@ -152,34 +151,12 @@ class AgentTemplateSurface(_TemplateModel):
         return _sorted_unique("surface.static", value)
 
 
-class AgentTemplateScript(_TemplateModel):
-    """skill 下的脚本申请；``exec`` 才是可执行性。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    exec: bool = False
-
-
-class AgentTemplateAxes(_TemplateModel):
-    """成员两条轴；按现行语义二者恒等（不可见即不可执行，可见即一定可执行）。"""
-
-    visible: bool = True
-    bind: bool = True
-
-    @model_validator(mode="after")
-    def _check_axes(self) -> AgentTemplateAxes:
-        if self.bind != self.visible:
-            raise ValueError("bind 必须与 visible 一致（不可见即不可执行，可见即一定可执行）")
-        return self
-
-
 class AgentTemplateMember(_TemplateModel):
-    """模板里的一条成员申请（引用态）。
+    """模板里的一条成员选择。
 
-    与 Core 的统一成员实体同形：包身份 + 成员全名 + 类型 + 轴；**不复制定义数据**
-    （``data`` 恒为空）。``scripts`` 是模板侧独有的脚本申请，按成员挂在记录上。
-
-    落库的就是这个形状；接口层再按包聚合成 ``packages[]`` 视图。
+    只记录「选了哪个包的哪个成员」：``member`` 固定为三段
+    ``<namespace>.<ability_name>.<member_name>``，类型/版本/来源随行携带；
+    定义数据（path、schema 等）**不进模板**，启动 Agent 时再扫能力定义。
     """
 
     namespace: str = Field(min_length=1)
@@ -188,13 +165,11 @@ class AgentTemplateMember(_TemplateModel):
     type: Literal["operation", "skill", "mcp"] = "operation"
     version: str | None = None
     ability_type: Literal["kernel", "external"] = "external"
-    axes: AgentTemplateAxes = Field(default_factory=AgentTemplateAxes)
-    scripts: list[AgentTemplateScript] = Field(default_factory=list)
 
     @property
     def package(self) -> str:
-        """包全名；``name`` 等于 ``namespace`` 时退化为单段（与 Core 同口径）。"""
-        return self.namespace if self.name == self.namespace else f"{self.namespace}.{self.name}"
+        """包身份：``<namespace>.<ability_name>``。"""
+        return f"{self.namespace}.{self.name}"
 
     @property
     def key(self) -> str:
@@ -204,119 +179,61 @@ class AgentTemplateMember(_TemplateModel):
     @model_validator(mode="after")
     def _check_shape(self) -> AgentTemplateMember:
         parts = self.member.split(".")
-        if ".".join(parts[:-1]) != self.package:
-            raise ValueError(f"member 必须是 {self.package}.<key>，当前是 {self.member!r}")
+        if len(parts) != 3 or parts[0] != self.namespace or parts[1] != self.name:
+            raise ValueError(
+                f"member 必须是 <namespace>.<ability_name>.<member_name>"
+                f"（={self.namespace}.{self.name}.<key>），当前是 {self.member!r}"
+            )
         if self.ability_type == "kernel":
             if self.version is not None:
                 raise ValueError("kernel 成员没有版本层，version 必须为 null")
         elif self.version is not None and not self.version.strip():
             raise ValueError("external 成员的 version 给定时不得为空串")
-        if self.type != "skill" and self.scripts:
-            raise ValueError("只有 skill 成员可以申请脚本")
-        keys = [item.key for item in self.scripts]
-        if len(keys) != len(set(keys)):
-            raise ValueError("scripts 的 key 必须唯一")
         return self
 
 
 class AgentTemplateAbilityRequest(_TemplateModel):
-    """能力申请：模板层只做形状与一致性校验，不判断成员是否存在。
+    """能力申请：模板只做形状与一致性校验，不判断成员是否存在。
 
-    **落库形状是成员列表**（``members``）。接口层仍以包级视图 ``packages[]``
-    收发；``model_validator(mode="before")`` 在读入时把包级视图展开成成员记录，
-    :meth:`to_packages_payload` 在输出时再聚合回去。旧行（存的是 ``packages``）
-    因此不需要数据迁移。
+    ``available_members`` 是落库形态（成员数组）；旧行里的 ``packages`` /
+    ``members`` 由 :meth:`_from_legacy` 在读入时展开成同一形状。
     """
 
-    surface: AgentTemplateSurface = Field(default_factory=AgentTemplateSurface)
-    members: list[AgentTemplateMember] = Field(default_factory=list)
-    mcp_refs: list[str] = Field(default_factory=list)
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
-    def _from_packages_view(cls, value: Any) -> Any:
-        """兼容两种输入：已落库的 ``members``，或接口层的 ``packages[]``。"""
-        if not isinstance(value, dict) or "packages" not in value:
+    def _from_legacy(cls, value: Any) -> Any:
+        """兼容两种旧形态：包级视图 ``packages[]`` 与带轴的 ``members[]``。"""
+        if not isinstance(value, dict):
+            return value
+        if "available_members" in value:
             return value
         data = dict(value)
-        packages = data.pop("packages") or []
-        members = list(data.get("members") or [])
-        seen: set[str] = set()
-        for package in packages:
-            name = str((package or {}).get("package") or "") if isinstance(package, dict) else ""
-            if name and name in seen:
-                raise ValueError("packages 的 package 必须唯一")
-            seen.add(name)
-            members.extend(_members_from_package(package))
-        data["members"] = members
+        packages = data.pop("packages", None)
+        legacy_members = data.pop("members", None)
+        converted: list[dict[str, Any]] = []
+        if packages is not None:
+            for package in packages:
+                converted.extend(_members_from_package(package))
+        for item in legacy_members or []:
+            if not isinstance(item, dict):
+                continue
+            converted.append(_member_from_legacy(item))
+        data["available_members"] = converted
         return data
 
-    @field_validator("members")
+    @field_validator("available_members")
     @classmethod
     def _check_members(cls, value: list[AgentTemplateMember]) -> list[AgentTemplateMember]:
         names = [item.member for item in value]
         if len(names) != len(set(names)):
-            raise ValueError("members 的 member 必须唯一")
+            raise ValueError("available_members 的 member 必须唯一")
         return sorted(value, key=lambda item: item.member)
-
-    @field_validator("mcp_refs")
-    @classmethod
-    def _check_mcp_refs(cls, value: list[str]) -> list[str]:
-        return _ordered_unique("mcp_refs", value)
-
-    def to_packages_payload(self) -> dict[str, Any]:
-        """把成员记录聚合回接口层的包级视图（``packages[]``）。
-
-        Returns:
-            ``{"surface": {...}, "packages": [...], "mcp_refs": [...]}``。
-        """
-        grouped: dict[str, list[AgentTemplateMember]] = {}
-        for item in self.members:
-            grouped.setdefault(item.package, []).append(item)
-        packages: list[dict[str, Any]] = []
-        for package, items in sorted(grouped.items()):
-            first = items[0]
-            if first.ability_type == "kernel":
-                origin = "builtin"
-            elif any(item.type == "mcp" for item in items):
-                origin = "mcp"
-            else:
-                origin = "installed"
-            packages.append(
-                {
-                    "package": package,
-                    "origin": origin,
-                    "version": first.version,
-                    "whole_container": False,
-                    "operations": [
-                        {"key": item.key, "visible": item.axes.visible, "available": item.axes.bind}
-                        for item in items
-                        if item.type != "skill"
-                    ],
-                    "skills": [
-                        {
-                            "key": item.key,
-                            "visible": item.axes.visible,
-                            "scripts": [script.model_dump(mode="json") for script in item.scripts],
-                        }
-                        for item in items
-                        if item.type == "skill"
-                    ],
-                }
-            )
-        return {
-            "surface": self.surface.model_dump(mode="json"),
-            "packages": packages,
-            "mcp_refs": list(self.mcp_refs),
-        }
 
 
 def _members_from_package(package: Any) -> list[dict[str, Any]]:
-    """把一个包级申请展开成成员记录（落库前必展开，不留整包）。
-
-    展开时先构造统一成员实体：跨字段约束（版本层、轴、全名）只由实体判一次，
-    落库形状只是它的 wire 投影。
-    """
+    """把旧包级申请展开成成员记录（三段全名，不带轴/脚本）。"""
     if not isinstance(package, dict):
         return []
     full_name = str(package.get("package") or "")
@@ -335,14 +252,10 @@ def _members_from_package(package: Any) -> list[dict[str, Any]]:
             {
                 "namespace": namespace,
                 "name": name,
-                "member": f"{full_name}.{operation['key']}",
+                "member": f"{namespace}.{name}.{operation['key']}",
                 "type": "operation",
                 "version": version,
                 "ability_type": ability_type,
-                "axes": {
-                    "visible": bool(operation.get("visible", True)),
-                    "bind": bool(operation.get("available", True)),
-                },
             }
         )
     for skill in package.get("skills") or []:
@@ -350,18 +263,32 @@ def _members_from_package(package: Any) -> list[dict[str, Any]]:
             {
                 "namespace": namespace,
                 "name": name,
-                "member": f"{full_name}.{skill['key']}",
+                "member": f"{namespace}.{name}.{skill['key']}",
                 "type": "skill",
                 "version": version,
                 "ability_type": ability_type,
-                "axes": {
-                    "visible": bool(skill.get("visible", True)),
-                    "bind": bool(skill.get("visible", True)),
-                },
-                "scripts": skill.get("scripts") or [],
             }
         )
     return members
+
+
+def _member_from_legacy(item: dict[str, Any]) -> dict[str, Any]:
+    """旧成员记录（可能两段全名 + 轴/脚本）→ 新成员记录。"""
+    namespace = str(item.get("namespace") or "")
+    name = str(item.get("name") or namespace)
+    member = str(item.get("member") or "")
+    parts = member.split(".")
+    key = parts[-1] if parts else ""
+    if len(parts) == 2 and namespace and key:
+        member = f"{namespace}.{name}.{key}"
+    return {
+        "namespace": namespace,
+        "name": name,
+        "member": member,
+        "type": str(item.get("type") or "operation"),
+        "version": item.get("version"),
+        "ability_type": str(item.get("ability_type") or "external"),
+    }
 
 
 class AgentTemplatePermissionRequest(_TemplateModel):
@@ -434,13 +361,19 @@ class AgentTemplateConfig(_TemplateModel):
     model: AgentTemplateModel = Field(default_factory=AgentTemplateModel)
     prompt: AgentTemplatePrompt = Field(default_factory=AgentTemplatePrompt)
     context_policy: AgentTemplateContextPolicy = Field(default_factory=AgentTemplateContextPolicy)
-    ability_request: AgentTemplateAbilityRequest = Field(
-        default_factory=AgentTemplateAbilityRequest
-    )
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
     permission_request: AgentTemplatePermissionRequest = Field(
         default_factory=AgentTemplatePermissionRequest
     )
     path_request: list[AgentTemplatePathRequest] = Field(default_factory=list)
+
+    @field_validator("available_members")
+    @classmethod
+    def _check_members(cls, value: list[AgentTemplateMember]) -> list[AgentTemplateMember]:
+        names = [item.member for item in value]
+        if len(names) != len(set(names)):
+            raise ValueError("available_members 的 member 必须唯一")
+        return sorted(value, key=lambda item: item.member)
 
     @field_validator("path_request")
     @classmethod
@@ -481,9 +414,7 @@ class AgentTemplateRecord(_TemplateModel):
     model: AgentTemplateModel = Field(default_factory=AgentTemplateModel)
     prompt: AgentTemplatePrompt = Field(default_factory=AgentTemplatePrompt)
     context_policy: AgentTemplateContextPolicy = Field(default_factory=AgentTemplateContextPolicy)
-    ability_request: AgentTemplateAbilityRequest = Field(
-        default_factory=AgentTemplateAbilityRequest
-    )
+    available_members: list[AgentTemplateMember] = Field(default_factory=list)
     permission_request: AgentTemplatePermissionRequest = Field(
         default_factory=AgentTemplatePermissionRequest
     )
@@ -509,7 +440,7 @@ class AgentTemplateRecord(_TemplateModel):
             model=self.model,
             prompt=self.prompt,
             context_policy=self.context_policy,
-            ability_request=self.ability_request,
+            available_members=self.available_members,
             permission_request=self.permission_request,
             path_request=self.path_request,
         )

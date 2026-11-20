@@ -9,9 +9,8 @@ import {
   AgentSpecificationSummarySchema,
   AgentTemplateCreateRequestSchema,
   AgentTemplateDetailViewSchema,
+  AgentTemplateMemberViewSchema,
   AgentTemplateMetadataViewSchema,
-  AgentTemplateOperationViewSchema,
-  AgentTemplatePackageViewSchema,
   AgentTemplatePathRequestViewSchema,
   AgentTemplateUpdateRequestSchema,
 } from "./agent-control.js";
@@ -99,7 +98,7 @@ describe("agent template contracts", () => {
       model: {},
       prompt: {},
       context_policy: {},
-      ability_request: {},
+      available_members: [],
       permission_request: {},
       created_at: "2026-11-17T00:00:00Z",
       updated_at: "2026-11-17T00:00:00Z",
@@ -107,7 +106,7 @@ describe("agent template contracts", () => {
     expect(detail.format).toBe("ghrah.agent-templates.v1");
     expect(detail.context_policy.max_iterations).toBe(-1);
     expect(detail.context_policy.communication_timeout).toBe(300);
-    expect(detail.ability_request.surface.mode).toBe("auto");
+    expect(detail.available_members).toEqual([]);
     expect(detail.permission_request.require_approval_by_default).toBe(true);
     expect(detail.archived_at).toBeNull();
     expect(detail.reference_count).toBe(0);
@@ -122,25 +121,18 @@ describe("agent template contracts", () => {
     ).toThrow();
   });
 
-  it("rejects whole_container combined with member applications", () => {
-    expect(() =>
-      AgentTemplatePackageViewSchema.parse({
-        package: "writing.weekly_report",
-        origin: "builtin",
-        whole_container: true,
-        operations: [{ key: "generate" }],
-      }),
-    ).toThrow();
-    expect(
-      AgentTemplatePackageViewSchema.parse({
-        package: "writing.weekly_report",
-        origin: "builtin",
-        whole_container: true,
-      }).whole_container,
-    ).toBe(true);
-    expect(() =>
-      AgentTemplateOperationViewSchema.parse({ key: "generate", visible: false, available: true }),
-    ).toThrow();
+  it("parses three-segment member records", () => {
+    // 三段全名的形状校验由 Python 侧 model_validator 承担（JSON Schema 只能
+    // 断言字符串非空）；这里钉住 wire 字段与默认值。
+    const member = AgentTemplateMemberViewSchema.parse({
+      namespace: "writing",
+      name: "weekly_report",
+      member: "writing.weekly_report.generate",
+      type: "operation",
+    });
+    expect(member.member).toBe("writing.weekly_report.generate");
+    expect(member.version).toBeNull();
+    expect(member.ability_type).toBe("external");
   });
 
   it("rejects path requests whose scope and package disagree", () => {
@@ -170,7 +162,7 @@ describe("agent template contracts", () => {
     const patch = AgentTemplateUpdateRequestSchema.parse({ expected_revision: 2, title: "周报" });
     expect(patch.title).toBe("周报");
     expect(patch.prompt).toBeNull();
-    expect(patch.ability_request).toBeNull();
+    expect(patch.available_members).toBeNull();
     expect(patch.path_request).toBeNull();
   });
 });

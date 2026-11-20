@@ -35,7 +35,6 @@ from ghrah.protocol.views.core import (
     AgentAssemblySpec,
     AgentMemberAxes,
     AgentMemberPermissions,
-    AgentSurfaceSpec,
 )
 
 from ghrah.subject.template_store.models import (
@@ -222,8 +221,8 @@ def _config(template: AgentTemplateConfig) -> AgentAssemblyConfig:
             communication_timeout=policy.communication_timeout,
         ),
         context=context,
-        surface=AgentSurfaceSpec.model_validate(template.ability_request.surface.model_dump()),
-        mcp_refs=list(template.ability_request.mcp_refs),
+        surface=None,
+        mcp_refs=[],
         permission=AgentAssemblyPermission(
             auto_approve=list(request.auto_approve),
             require_approval_by_default=request.require_approval_by_default,
@@ -274,7 +273,7 @@ def render_assembly(
     not_granted: list[str] = []
 
     grouped: dict[str, list[AgentTemplateMember]] = {}
-    for item in template.ability_request.members:
+    for item in template.available_members:
         grouped.setdefault(item.package, []).append(item)
 
     for package, items in sorted(grouped.items()):
@@ -289,29 +288,22 @@ def render_assembly(
             # 无授权视图：按模板申请原样装配（成员已逐个展开，不再有整包）。
             fact = None
             selected_ops = [item.key for item in operations]
-            requested_ops = [(item.key, item.axes.visible, item.axes.bind) for item in operations]
+            requested_ops = [(item.key, True, True) for item in operations]
         else:
             fact = granted_by_name.get(package)
             if fact is None:
                 missing.append(package)
                 continue
             granted_ops = set(fact.operations)
-            requested_ops = [(item.key, item.axes.visible, item.axes.bind) for item in operations]
+            requested_ops = [(item.key, True, True) for item in operations]
             selected_ops = []
             for key, _, _ in requested_ops:
                 if key in granted_ops:
                     selected_ops.append(key)
                 else:
                     not_granted.append(f"{package}.{key}")
-        # 技能与脚本不进 members[]，只进授权行的 axes（见模块 docstring）。
-        requested_skills = [
-            (
-                item.key,
-                item.axes.visible,
-                [(s.key, s.visible, s.exec) for s in item.scripts],
-            )
-            for item in skills
-        ]
+        # 技能与脚本不进 members[]，只进授权行的 axes。
+        requested_skills = [(item.key, True, []) for item in skills]
         axes = _package_axes(requested_ops, requested_skills)
         applicable = _applicable(resolved_paths, package=package)
         allowed_roots = tuple(dict.fromkeys(root for item, root in applicable if not item.deny))
@@ -321,9 +313,6 @@ def render_assembly(
             member = by_key[key]
             visible, bind = axes.get(f"operations/{key}", (True, True))
             if bindings is not None:
-                # 创建时选中的初始绑定优先于模板默认轴；未选中的成员依然可见，
-                # 只是不进模型上下文（可被搜索/调用，模型也能自己再绑）。
-                # 循环控制成员例外：它们由 Core 在 control 通道装配，永远算"在"。
                 control = package == "ghrah.core" and key in AGENT_CONTROL_MEMBER_KEYS
                 bind = control or member.member in bindings
             members.append(
@@ -350,7 +339,7 @@ def render_assembly(
                     version=version,
                     ability_type=ability_type,
                     permissions=permissions,
-                    axes=AgentMemberAxes(visible=member.axes.visible, available=member.axes.bind),
+                    axes=AgentMemberAxes(visible=True, available=bind),
                 )
             )
         # 无授权视图时不产出授权计划：Subject 不写授权行（由 Core 启动核定器落实），
@@ -363,7 +352,7 @@ def render_assembly(
                     instance_id=fact.instance_id,
                     operations=tuple(selected_ops),
                     skills=tuple(item.key for item in skills),
-                    scripts={item.key: tuple(s.key for s in item.scripts) for item in skills},
+                    scripts={item.key: () for item in skills},
                     axes=axes,
                     allowed_roots=allowed_roots,
                 )
