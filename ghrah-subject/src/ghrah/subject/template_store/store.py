@@ -246,19 +246,23 @@ class TemplateStore:
         """
         cursor = await db.execute("PRAGMA table_info(agent_templates)")
         columns = {row["name"] for row in await cursor.fetchall()}
-        if "available_members" in columns or "ability_request" not in columns:
+        if "ability_request" in columns:
+            await db.execute(
+                "ALTER TABLE agent_templates RENAME COLUMN ability_request TO available_members"
+            )
+        elif "available_members" not in columns:
             return
         from ghrah.subject.template_store.models import AgentTemplateAbilityRequest
 
-        await db.execute(
-            "ALTER TABLE agent_templates RENAME COLUMN ability_request TO available_members"
-        )
         cursor = await db.execute(
             "SELECT template_id, revision, available_members FROM agent_templates"
         )
         rows = await cursor.fetchall()
+        converted = 0
         for row in rows:
             raw = json.loads(row["available_members"] or "{}")
+            if isinstance(raw, list):
+                continue
             members = AgentTemplateAbilityRequest.model_validate(raw).available_members
             await db.execute(
                 "UPDATE agent_templates SET available_members = ? "
@@ -269,7 +273,8 @@ class TemplateStore:
                     row["revision"],
                 ),
             )
-        logger.info("agent_templates: ability_request → available_members（%d 行）", len(rows))
+            converted += 1
+        logger.info("agent_templates: 成员列已就绪，转换 %d 行", converted)
 
     async def stop(self) -> None:
         """关闭连接。"""

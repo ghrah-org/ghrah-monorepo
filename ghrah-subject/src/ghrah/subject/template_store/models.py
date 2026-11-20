@@ -212,6 +212,9 @@ class AgentTemplateAbilityRequest(_TemplateModel):
         data = dict(value)
         packages = data.pop("packages", None)
         legacy_members = data.pop("members", None)
+        # 旧形态里的 surface / mcp_refs 不再进模板：直接丢弃，避免 extra_forbidden。
+        data.pop("surface", None)
+        data.pop("mcp_refs", None)
         converted: list[dict[str, Any]] = []
         if packages is not None:
             for package in packages:
