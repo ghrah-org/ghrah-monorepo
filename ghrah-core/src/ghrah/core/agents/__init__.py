@@ -29,6 +29,7 @@ from ghrah.core.agents.instance_store import (
     AgentInstanceStore,
     AgentInstanceStoreError,
 )
+from ghrah.core.agents.members import resolve_member_entities
 
 __all__ = [
     "AgentInstanceRecord",
@@ -39,6 +40,7 @@ __all__ = [
     "config_to_snapshot",
     "member_axes_from_spec",
     "resolve_assembly",
+    "resolve_member_entities",
     "resolve_members",
     "surface_from_snapshot",
 ]

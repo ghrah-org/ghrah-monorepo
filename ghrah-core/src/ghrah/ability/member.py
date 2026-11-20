@@ -220,10 +220,18 @@ class Member:
             raise MemberError(f"成员键非法: {key!r}（member={self.member!r}）")
         package = self.package_full_name
         parts = self.member.split(".")
-        if ".".join(parts[:-1]) != package or len(parts) != len(package.split(".")) + 1:
+        # 规范形态是 ``<namespace>.<ability_name>.<member_name>``；退化包
+        # （name == namespace）的历史记录是 ``<package>.<key>``，继续接受，
+        # 存量快照不必迁移即可读取。
+        canonical = f"{self.namespace}.{self.name}.{key}"
+        legacy = f"{package}.{key}"
+        if self.member not in {canonical, legacy}:
             raise MemberError(
-                f"member 必须是 <package>.<key>（package={package!r}），当前是 {self.member!r}"
+                f"member 必须是 <namespace>.<ability_name>.<member_name>"
+                f"（= {canonical!r}），当前是 {self.member!r}"
             )
+        if len(parts) not in {2, 3}:
+            raise MemberError(f"member 段数非法: {self.member!r}")
         if self.ability_type == "kernel":
             if self.version is not None:
                 raise MemberError("ability_type=kernel 时 version 必须为 null（内置件没有版本层）")

@@ -1082,6 +1082,7 @@ class CoreUnit:
             config_to_snapshot,
             resolve_assembly,
         )
+        from ghrah.core.agents.members import resolve_member_entities
 
         del cmd_ctx
         source = self._require_assembly().source
@@ -1103,6 +1104,11 @@ class CoreUnit:
         agent_id = uuid4().hex
         try:
             resolved = resolve_assembly(spec, source, workspace_root=self._config.workspace_root)
+            # 规格里的成员是引用态；创建时按来源读定义，补成定义态成员再落快照。
+            snapshot_members = resolve_member_entities(
+                [item.model_dump() for item in spec.members],
+                install_root=self._config.ability_install_root,
+            )
         except AssemblyError as error:
             return self._err(str(error))
         resolved.config = replace(resolved.config, agent_id=agent_id)
@@ -1114,7 +1120,7 @@ class CoreUnit:
             agent_id=agent_id,
             name=resolved.config.name,
             config=config_to_snapshot(resolved.config),
-            members=[item.model_dump() for item in spec.members],
+            members=[member.to_wire() for member in snapshot_members],
             surface=surface,
             mcp_refs=list(spec.config.mcp_refs),
             incarnation_id=(result.get("data") or {}).get("incarnation_id"),
