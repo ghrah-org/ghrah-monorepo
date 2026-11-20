@@ -1,0 +1,33 @@
+{
+  "availability": "offline",
+  "active_session_id": "session",
+  "sessions": [
+    {
+      "session_id": "session",
+      "agent_name": "agent",
+      "name": "Session 1",
+      "root_node_id": "",
+      "active_branch_id": "",
+      "lifecycle": "open",
+      "system_prompt": "",
+      "origin_agent_name": null,
+      "origin_session_id": null,
+      "origin_node_id": null,
+      "created_at": "",
+      "metadata": {}
+    }
+  ],
+  "branches": [
+    {
+      "branch_id": "main",
+      "session_id": "session",
+      "name": "main",
+      "head_node_id": "",
+      "lifecycle": "open",
+      "parent_branch_id": null,
+      "fork_point_node_id": null,
+      "created_at": "",
+      "metadata": {}
+    }
+  ]
+}

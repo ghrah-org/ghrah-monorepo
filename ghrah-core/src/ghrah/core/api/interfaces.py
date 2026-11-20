@@ -80,6 +80,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
+from ghrah.protocol.views.observer_room import TurnDetailView
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 __all__ = [
@@ -751,6 +752,7 @@ CORE_INTERFACES = InterfaceRegistry(
     (
         Interface("nodes.get", NodeGetRequest, NodeView),
         Interface("turns.abort", TurnAbortRequest, TurnAbortView),
+        Interface("turns.detail", TurnGetRequest, TurnDetailView),
         Interface("turns.get", TurnGetRequest, TurnView),
         Interface("turns.list", TurnListRequest, TurnListView),
         Interface("turns.rollback", TurnRollbackRequest, TurnRollbackView),

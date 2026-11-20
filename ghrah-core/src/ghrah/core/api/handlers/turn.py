@@ -18,6 +18,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
+from ghrah.protocol.views.observer_room import TurnDetailView
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.handlers.session_write import resolve_agent_name
@@ -52,6 +53,16 @@ def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[st
         if view is None:
             raise CoreApiError(
                 Problem.make(ProblemCode.NOT_FOUND, capability="turns.get", detail="Turn not found")
+            )
+        return view
+
+    async def detail(request: TurnGetRequest) -> TurnDetailView:
+        view = await store.detail(agent_id=request.agent_id, turn_id=request.turn_id)
+        if view is None:
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.NOT_FOUND, capability="turns.detail", detail="Turn not found"
+                )
             )
         return view
 
@@ -120,6 +131,7 @@ def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[st
 
     return {
         "turns.abort": abort,
+        "turns.detail": detail,
         "turns.get": get,
         "turns.list": list_turns,
         "turns.rollback": rollback,

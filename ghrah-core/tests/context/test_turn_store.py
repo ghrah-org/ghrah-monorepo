@@ -10,6 +10,7 @@ from ghrah.context import ContextManager, turn
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.session_runtime import SessionRuntime
+from ghrah.core.read.turn import TurnReadStore
 
 
 async def test_first_compact_member_anchors_turn(tmp_path):
@@ -32,7 +33,17 @@ async def test_first_compact_member_anchors_turn(tmp_path):
         )
         row = await backend.load_turn("agent", active.turn_id)
         assert row["start_node_id"] == compact.id
-        ordinary = runtime.commit_node(turn_id=active.turn_id)
+        ordinary = runtime.commit_node(
+            turn_id=active.turn_id,
+            metadata={
+                "token_usage": {
+                    "input_tokens": 40,
+                    "output_tokens": 10,
+                    "total_tokens": 50,
+                    "cache_read_tokens": 20,
+                },
+            },
+        )
         await backend.apply_changes(
             ContextChanges(
                 agent_name="agent", branches=(runtime.get_branch(branch),), nodes=(ordinary,)
@@ -65,6 +76,16 @@ async def test_first_compact_member_anchors_turn(tmp_path):
         )
         assert row["branch_id"] == row["end_branch_id"] == branch
         assert (await backend.load_node("agent", compact.id)).turn_id == active.turn_id
+        detail = await TurnReadStore(db_path=backend.db_path).detail(
+            agent_id="agent", turn_id=active.turn_id
+        )
+        assert detail is not None
+        assert [node.id for node in detail.nodes] == [compact.id, ordinary.id]
+        stats = detail.turn.stats
+        assert (stats.steps, stats.node_count) == (1, 2)
+        assert (stats.token_input, stats.token_output, stats.token_total) == (40, 10, 50)
+        assert stats.cache_hit_rate == 0.5
+        assert stats.duration_ms is not None and stats.duration_ms >= 0
 
 
 async def test_context_restore_only_normalizes_its_own_turns(tmp_path):

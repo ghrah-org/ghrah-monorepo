@@ -28,6 +28,7 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     SessionView,
 )
+from ghrah.protocol.views.observer_room import TurnCardView, TurnDetailView, TurnStatsView
 
 __all__ = [
     "AckView",
@@ -49,4 +50,7 @@ __all__ = [
     "SessionCatalogView",
     "SessionIdView",
     "SessionView",
+    "TurnCardView",
+    "TurnDetailView",
+    "TurnStatsView",
 ]

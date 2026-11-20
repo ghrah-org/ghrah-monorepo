@@ -150,6 +150,59 @@ async def test_get_log_since_and_limit(tmp_path: Path) -> None:
         await store.stop()
 
 
+async def test_log_page_uses_room_scope_and_drains_incremental_pages(tmp_path: Path) -> None:
+    path = tmp_path / "rooms.sqlite3"
+    reader = RoomStore(path)
+    assert await reader.get_log_page("missing", project_id="p") is None
+    assert not path.exists()
+    store = RoomStore(path)
+    await store.start()
+    try:
+        room = make_room_record(project_id="p", name="Room")
+        await store.upsert(room)
+        for _ in range(7):
+            await store.append_log(
+                room.room_id,
+                lambda seq: make_room_log_record(
+                    room_id=room.room_id,
+                    seq=seq,
+                    author="user",
+                    author_type="human",
+                ),
+            )
+        assert await reader.get_log_page(room.room_id, project_id="foreign") is None
+        tail = await reader.get_log_page(room.room_id, project_id="p", limit=2)
+        assert tail is not None
+        assert [entry.seq for entry in tail.entries] == [6, 7]
+        assert tail.has_more and tail.next_before_seq == 6
+        earlier = await reader.get_log_page(
+            room.room_id, project_id="p", before_seq=tail.next_before_seq, limit=2
+        )
+        assert earlier is not None
+        assert [entry.seq for entry in earlier.entries] == [4, 5]
+
+        cursor = 0
+        sequences: list[int] = []
+        while True:
+            page = await reader.get_log_page(
+                room.room_id, project_id="p", since_seq=cursor, limit=2
+            )
+            assert page is not None and page.latest_seq == 7
+            assert page.next_since_seq is not None and page.next_since_seq > cursor
+            assert page.next_before_seq is None
+            cursor = page.next_since_seq
+            sequences.extend(entry.seq for entry in page.entries)
+            if not page.has_more:
+                break
+        assert sequences == list(range(1, 8))
+        empty = await reader.get_log_page(room.room_id, project_id="p", since_seq=cursor, limit=2)
+        assert empty is not None
+        assert empty.entries == []
+        assert empty.next_since_seq == empty.latest_seq == cursor
+    finally:
+        await store.stop()
+
+
 async def test_delete_cascades_logs_and_guards(tmp_path: Path) -> None:
     store = await _started(tmp_path)
     try:

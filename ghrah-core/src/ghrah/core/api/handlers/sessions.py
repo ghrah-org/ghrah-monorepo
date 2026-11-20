@@ -50,7 +50,8 @@ def make_session_handlers(store: ChainReadStore) -> dict[str, Handler]:
                     ProblemCode.NOT_FOUND,
                     capability="sessions.history",
                     detail=(
-                        f"session {request.session_id!r} not found for agent {request.agent_id!r}"
+                        f"branch {request.branch_id!r} in session "
+                        f"{request.session_id!r} not found for agent {request.agent_id!r}"
                     ),
                 ),
             )

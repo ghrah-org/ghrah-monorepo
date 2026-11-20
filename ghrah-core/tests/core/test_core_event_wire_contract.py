@@ -12,6 +12,10 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+from ghrah.context.persistence import deserialize_node, serialize_node
 from ghrah.core.events import (
     ActionChainUpdatedEvent,
     BranchActivatedEvent,
@@ -81,11 +85,15 @@ class TestCoreEventDictWireContract:
         assert payload["branch"] == _BRANCH_INFO
 
     def test_action_chain_updated_event_dict_carries_branch_snapshot(self) -> None:
-        node = {
-            "id": "node-001",
-            "session_id": "session-001",
-            "created_on_branch_id": "branch-main",
-        }
+        snapshot = (
+            Path(__file__).resolve().parents[3]
+            / "ghrah-observer-webui/packages/protocol/src"
+            / "__snapshots__/ActionChainUpdatedPayload.json"
+        )
+        fixture = json.loads(snapshot.read_text())
+        node = serialize_node(deserialize_node(fixture["node"]))
+        assert set(fixture["node"]) == set(node)
+        assert node["turn_id"] == "turn-001"
         event = ActionChainUpdatedEvent(agent_name="agent-1", node=node, branch=_BRANCH_INFO)
         event_type, payload = _core_event_to_dict(event)
         assert event_type == "action_chain_updated"

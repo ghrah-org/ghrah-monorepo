@@ -28,6 +28,7 @@ import {
   BranchLifecyclePayloadSchema,
   BranchListPayloadSchema,
   BranchListResultPayloadSchema,
+  BranchListViewSchema,
   BroadcastMessagePayloadSchema,
   ChainHistoryResultPayloadSchema,
   ChatMessageWireSchema,
@@ -44,6 +45,8 @@ import {
   HealthStatusPayloadSchema,
   HITLRequestPayloadSchema,
   HITLResolvedPayloadSchema,
+  HistoryViewSchema,
+  HitlRequestListViewSchema,
   DeliveryViewSchema,
   DeliveryAcceptanceViewSchema,
   DeliveryQueueEntryViewSchema,
@@ -52,6 +55,7 @@ import {
   TurnOpenedPayloadSchema,
   TurnWaitingHitlPayloadSchema,
   TurnClosedPayloadSchema,
+  TurnDetailSchema,
   HITLResponsePayloadSchema,
   ListAgentsPayloadSchema,
   PersistDeletePayloadSchema,
@@ -115,6 +119,7 @@ import {
   SessionInfoPayloadSchema,
   SessionListPayloadSchema,
   SessionListResultPayloadSchema,
+  SessionCatalogViewSchema,
   SpawnAgentPayloadSchema,
   SubscribePayloadSchema,
   TaskAssignPayloadSchema,
@@ -415,6 +420,23 @@ describe("ServerMessage cross-validation", () => {
     expect(reparsed.type).toBe(parsed.type);
     expect(reparsed.request_id).toBe(parsed.request_id);
   });
+});
+
+it("TurnDetailSchema preserves the Python REST snapshot", () => {
+  const snapshot = loadSnapshot("TurnDetailView");
+  const parsed = TurnDetailSchema.parse(snapshot);
+  expect(parsed).toEqual(snapshot);
+  expect(parsed.nodes[0]?.turn_id).toBe(parsed.turn.turn_id);
+});
+
+it("session, history and pending approval REST views preserve the Python response fields", () => {
+  const catalog = loadSnapshot("SessionCatalogView");
+  expect(SessionCatalogViewSchema.parse(catalog)).toEqual(catalog);
+  expect(BranchListViewSchema.parse(catalog)).toEqual({ branches: catalog.branches });
+  const history = loadSnapshot("HistoryView");
+  expect(HistoryViewSchema.parse(history)).toEqual(history);
+  const pending = loadSnapshot("HitlRequestListView");
+  expect(HitlRequestListViewSchema.parse(pending)).toEqual(pending);
 });
 
 // NOTE: ActionChainUpdatedPayload 快照为 synthetic 样本（由 Python serialize_node

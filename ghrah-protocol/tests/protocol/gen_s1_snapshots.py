@@ -48,12 +48,20 @@ from ghrah.protocol.types import (
     TaskVerifyPayload,
 )
 from ghrah.protocol.views.core import (
+    BranchView,
     DeliveryAcceptanceView,
     DeliveryQueueEntryView,
     DeliveryQueueView,
     DeliveryView,
+    HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MessageAcceptanceView,
+    NodeView,
+    SessionCatalogView,
+    SessionView,
 )
+from ghrah.protocol.views.observer_room import TurnCardView, TurnDetailView, TurnStatsView
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -84,6 +92,55 @@ SAMPLES: dict[str, object] = {
         cancelable=True,
     ),
     "DeliveryQueueView": DeliveryQueueView(agent_id="agent", session_id="session"),
+    "SessionCatalogView": SessionCatalogView(
+        active_session_id="session",
+        sessions=[SessionView(session_id="session", agent_name="agent")],
+        branches=[BranchView(branch_id="main", session_id="session")],
+    ),
+    "HistoryView": HistoryView(
+        agent_id="agent",
+        agent_name="agent",
+        session_id="session",
+        branch_id="main",
+        nodes=[NodeView(id="node", turn_id="turn")],
+    ),
+    "HitlRequestListView": HitlRequestListView(
+        agent_id="agent",
+        items=[
+            HitlRequestView(
+                promise_id="promise",
+                turn_id="turn",
+                ability_name="tool",
+                tool_call={},
+                reason="review",
+                options={},
+                status="pending",
+                created_at="2026-11-20T09:00:00+00:00",
+            ),
+        ],
+    ),
+    "TurnDetailView": TurnDetailView(
+        turn=TurnCardView(
+            turn_id="turn",
+            agent_name="agent",
+            session_id="session",
+            status="closed",
+            opened_at="2026-11-20T09:00:00+00:00",
+            closed_at="2026-11-20T09:00:01+00:00",
+            turn_index=1,
+            stats=TurnStatsView(
+                steps=1,
+                node_count=1,
+                token_input=40,
+                token_cache_read=20,
+                token_output=10,
+                token_total=50,
+                cache_hit_rate=0.5,
+                duration_ms=1000,
+            ),
+        ),
+        nodes=[NodeView(id="end", turn_id="turn")],
+    ),
     "TurnOpenedPayload": TurnOpenedPayload(
         agent_name="beta", turn_id="turn", session_id="session", opener_delivery_id="delivery"
     ),

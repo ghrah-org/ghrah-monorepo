@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +30,22 @@ from ghrah.subject.room.models import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ConcurrentModificationError", "RoomArchivedError", "RoomStore"]
+__all__ = ["ConcurrentModificationError", "RoomArchivedError", "RoomLogPage", "RoomStore"]
 
 RoomRecordList = list[RoomRecord]
 RoomLogList = list[RoomLogRecord]
+
+
+@dataclass(frozen=True)
+class RoomLogPage:
+    """同一 SQLite 快照中的 Room、日志页及其游标。"""
+
+    room: RoomRecord
+    entries: RoomLogList
+    latest_seq: int
+    next_before_seq: int | None = None
+    next_since_seq: int | None = None
+    has_more: bool = False
 
 
 class ConcurrentModificationError(Exception):
@@ -344,3 +357,78 @@ class RoomStore:
                 )
             rows = await cursor.fetchall()
             return [_row_to_log(r) for r in rows[-limit:]]
+
+    async def get_log_page(
+        self,
+        room_id: str,
+        *,
+        project_id: str,
+        before_seq: int | None = None,
+        since_seq: int | None = None,
+        limit: int = 50,
+    ) -> RoomLogPage | None:
+        """按所属项目只读分页，历史页和增量页都以序号升序返回。"""
+        if before_seq is not None and since_seq is not None:
+            raise ValueError("before_seq and since_seq are mutually exclusive")
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if not self._db_path.is_file():
+            return None
+        async with aiosqlite.connect(
+            self._db_path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+        ) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN")
+            async with db.execute(
+                "SELECT * FROM subject_rooms WHERE project_id=? AND room_id=?",
+                (project_id, room_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                return None
+            room = _row_to_room(row)
+            if room.status == RoomStatus.ARCHIVED:
+                raise RoomArchivedError(room_id)
+            async with db.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM subject_room_logs WHERE room_id=?",
+                (room_id,),
+            ) as cursor:
+                latest = await cursor.fetchone()
+            assert latest is not None
+            latest_seq = latest[0]
+            if since_seq is not None:
+                sql = (
+                    "SELECT * FROM subject_room_logs WHERE room_id=? AND seq>? "
+                    "ORDER BY seq ASC LIMIT ?"
+                )
+                params = (room_id, since_seq, limit + 1)
+            elif before_seq is not None:
+                sql = (
+                    "SELECT * FROM subject_room_logs WHERE room_id=? AND seq<? "
+                    "ORDER BY seq DESC LIMIT ?"
+                )
+                params = (room_id, before_seq, limit + 1)
+            else:
+                sql = "SELECT * FROM subject_room_logs WHERE room_id=? ORDER BY seq DESC LIMIT ?"
+                params = (room_id, limit + 1)
+            async with db.execute(sql, params) as cursor:
+                rows = await cursor.fetchall()
+
+        entries = [_row_to_log(row) for row in rows[:limit]]
+        has_more = len(rows) > limit
+        if since_seq is not None:
+            return RoomLogPage(
+                room,
+                entries,
+                latest_seq,
+                next_since_seq=entries[-1].seq if entries else since_seq,
+                has_more=has_more,
+            )
+        entries.reverse()
+        return RoomLogPage(
+            room,
+            entries,
+            latest_seq,
+            next_before_seq=entries[0].seq if has_more else None,
+            has_more=has_more,
+        )

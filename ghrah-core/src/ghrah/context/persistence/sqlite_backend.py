@@ -422,6 +422,19 @@ class SqliteBackend(PersistenceBackend):
         logger.debug("Database schema initialized for run: %s", self._run_id)
 
     @asynccontextmanager
+    async def read_snapshot(self) -> AsyncIterator[aiosqlite.Connection]:
+        """使用专用只读后端在同一快照执行多条查询。"""
+        if not self._read_only:
+            raise RuntimeError("A read snapshot requires a dedicated read-only backend")
+        async with self._write_lock:
+            db = await self._ensure_db()
+            await db.execute("BEGIN")
+            try:
+                yield db
+            finally:
+                await db.rollback()
+
+    @asynccontextmanager
     async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
         """持有后端写锁的独立写事务。"""
         if self._read_only:

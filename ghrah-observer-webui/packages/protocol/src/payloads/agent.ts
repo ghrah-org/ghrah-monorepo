@@ -5,7 +5,7 @@ import { ShellRememberOptionsSchema } from "../hitl.generated.js";
 
 import { z } from "zod";
 import { InputContentBlockSchema } from "./content.js";
-import { BranchInfoPayloadSchema } from "./session.js";
+import { BranchInfoPayloadSchema, ChainHistoryResultPayloadSchema } from "./session.js";
 
 export const AgentConfigPayloadSchema = z
   .object({
@@ -282,8 +282,15 @@ export const ActionNodeSchema = z.object({
   metadata: z.record(z.unknown()).optional().default({}),
   session_id: z.string().optional().default(""),
   created_on_branch_id: z.string().optional().default(""),
+  turn_id: z.string().nullable().optional(),
 });
 export type ActionNode = z.infer<typeof ActionNodeSchema>;
+
+export const HistoryViewSchema = ChainHistoryResultPayloadSchema.omit({ project_id: true }).extend({
+  nodes: z.array(ActionNodeSchema),
+});
+
+export type HistoryView = z.infer<typeof HistoryViewSchema>;
 
 export const AgentResponsePayloadSchema = z.object({
   project_id: z.string().optional().default(""),

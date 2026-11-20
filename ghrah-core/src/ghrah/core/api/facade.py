@@ -89,6 +89,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
+from ghrah.protocol.views.observer_room import TurnDetailView
 
 from ghrah.core.api.runtime import CoreRuntime
 
@@ -244,6 +245,12 @@ class _Turns:
     async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
         return TurnView.model_validate(
             await self._facade._call("turns.get", agent_id=agent_id, turn_id=turn_id)
+        )
+
+    async def detail(self, *, agent_id: AgentId, turn_id: str) -> TurnDetailView:
+        """读取所属轮次的完整详情。"""
+        return TurnDetailView.model_validate(
+            await self._facade._call("turns.detail", agent_id=agent_id, turn_id=turn_id)
         )
 
     async def list(

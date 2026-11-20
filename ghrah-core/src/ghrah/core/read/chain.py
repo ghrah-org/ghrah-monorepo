@@ -236,7 +236,7 @@ class ChainReadStore:
             limit: ``-1`` 表示全部；``>0`` 表示只取末尾 N 个节点
 
         Returns:
-            链历史；会话不存在时返回 ``None``
+            链历史；会话或分支不存在时返回 ``None``
         """
         backend = await self._maybe_backend()
         if backend is None:
@@ -250,9 +250,12 @@ class ChainReadStore:
         )
         if session is None:
             return None
+        branches = [item for item in checkpoint.branches if item.session_id == session_id]
+        if branch_id and not any(item.branch_id == branch_id for item in branches):
+            return None
         runtime = SessionRuntime.restore(
             session=session,
-            branches=[item for item in checkpoint.branches if item.session_id == session_id],
+            branches=branches,
             nodes=[item for item in checkpoint.nodes if item.session_id == session_id],
         )
         nodes = runtime.get_history(branch_id=branch_id, limit=limit)

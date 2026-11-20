@@ -30,11 +30,11 @@ async def mount_builtin_units(
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
     均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
-    + taskstore + task/desired_state）；full = 21（coexistence 7 +
+    + taskstore + task/desired_state）；full = 21（coexistence 6 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
     project/project_control/ability_control/agent_template_control/
     agent_control/agentconf_control/media_control/artifact_control/
-    room/recovery + room_filter）。
+    room/turn_control/recovery + room_filter）。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
     实测并发挂载会让多个 store 同时打开同一 SQLite 文件触发 ``database is locked``）。
@@ -93,6 +93,7 @@ async def mount_builtin_units(
         from ghrah.subject.units.room import RoomUnit
         from ghrah.subject.units.room_filter import RoomFilterUnit
         from ghrah.subject.units.shipped_abilities import ShippedAbilityUnit
+        from ghrah.subject.units.turn_control import TurnControlUnit
         from ghrah.subject.units.websocket_observer_endpoint import (
             WebSocketObserverEndpointUnit,
         )
@@ -125,6 +126,7 @@ async def mount_builtin_units(
                 # （ProjectUnit/WorkspaceUnit 之后）；REST 错误映射由 AbilityControlUnit 提供。
                 ArtifactControlUnit(config),
                 RoomUnit(config),
+                TurnControlUnit(config),
                 RecoveryUnit(config),
             ]
         )

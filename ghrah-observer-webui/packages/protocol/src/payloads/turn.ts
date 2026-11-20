@@ -4,6 +4,8 @@
 
 import { z } from "zod";
 
+import { ActionNodeSchema } from "./agent.js";
+
 const TurnPayloadSchema = z.object({
   project_id: z.string().optional().default(""),
   agent_id: z.string().optional().default(""),
@@ -30,3 +32,82 @@ export const TurnClosedPayloadSchema = TurnPayloadSchema.extend({
 export type TurnOpenedPayload = z.infer<typeof TurnOpenedPayloadSchema>;
 export type TurnWaitingHitlPayload = z.infer<typeof TurnWaitingHitlPayloadSchema>;
 export type TurnClosedPayload = z.infer<typeof TurnClosedPayloadSchema>;
+
+const TurnFieldsSchema = z.object({
+  turn_id: z.string(),
+  agent_name: z.string(),
+  session_id: z.string(),
+  status: z.string(),
+  closing_kind: z.string().nullable(),
+  base_node_id: z.string().nullable(),
+  start_node_id: z.string().nullable(),
+  end_node_id: z.string().nullable(),
+  branch_id: z.string().nullable(),
+  end_branch_id: z.string().nullable(),
+  opener_delivery_id: z.string().nullable(),
+  opened_at: z.string(),
+  waiting_since: z.string().nullable(),
+  closed_at: z.string().nullable(),
+  abort_reason: z.string().nullable(),
+  incomplete_node_id: z.string().nullable(),
+  recovery_branch_id: z.string().nullable(),
+});
+
+export const TurnListSchema = z.object({
+  agent_id: z.string(),
+  items: z.array(TurnFieldsSchema.extend({ injections: z.number().int() })),
+});
+
+export const TurnStatsSchema = z.object({
+  steps: z.number().int().nonnegative(),
+  node_count: z.number().int().nonnegative(),
+  token_input: z.number().int().nonnegative(),
+  token_output: z.number().int().nonnegative(),
+  token_total: z.number().int().nonnegative(),
+  token_cache_read: z.number().int().nonnegative(),
+  token_cache_write: z.number().int().nonnegative(),
+  cache_hit_rate: z.number().nonnegative().nullable(),
+  duration_ms: z.number().int().nonnegative().nullable(),
+  waiting_ms: z.number().int().nonnegative(),
+});
+
+export const TurnCardSchema = TurnFieldsSchema.extend({
+  turn_index: z.number().int().positive(),
+  opener_message_id: z.string().nullable(),
+  opener_entry_id: z.string().nullable(),
+  parent_turn_id: z.string().nullable(),
+  stats: TurnStatsSchema,
+});
+
+export const TurnDetailSchema = z.object({
+  turn: TurnCardSchema,
+  nodes: z.array(ActionNodeSchema),
+});
+
+export type TurnListView = z.infer<typeof TurnListSchema>;
+export type TurnStatsView = z.infer<typeof TurnStatsSchema>;
+export type TurnCardView = z.infer<typeof TurnCardSchema>;
+export type TurnDetailView = z.infer<typeof TurnDetailSchema>;
+
+export const HitlRequestListViewSchema = z.object({
+  agent_id: z.string(),
+  items: z.array(
+    z.object({
+      promise_id: z.string(),
+      turn_id: z.string(),
+      delivery_id: z.string().nullable(),
+      ability_name: z.string(),
+      tool_call: z.record(z.unknown()),
+      reason: z.string(),
+      options: z.record(z.unknown()),
+      status: z.string(),
+      created_at: z.string(),
+      deadline_at: z.string().nullable(),
+      resolved_at: z.string().nullable(),
+      resolved_by: z.string().nullable(),
+      resolution: z.unknown(),
+    }),
+  ),
+});
+
+export type HitlRequestListView = z.infer<typeof HitlRequestListViewSchema>;

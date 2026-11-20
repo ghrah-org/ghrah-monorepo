@@ -71,6 +71,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
+from ghrah.protocol.views.observer_room import TurnDetailView
 
 __all__ = [
     "AbilityOperations",
@@ -539,6 +540,10 @@ class TurnOperations(Protocol):
 
     async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
         """读取单个轮次。"""
+        ...
+
+    async def detail(self, *, agent_id: AgentId, turn_id: str) -> TurnDetailView:
+        """读取所属轮次的节点、导航锚点与统计。"""
         ...
 
     async def list(
