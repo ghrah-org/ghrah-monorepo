@@ -61,7 +61,9 @@ def test_member_view_rejects_bad_shapes() -> None:
     with pytest.raises(ValidationError):
         AgentTemplateMemberView.model_validate({"namespace": "a", "name": "b", "member": ""})
     with pytest.raises(ValidationError):
-        AgentTemplateMemberView.model_validate({"namespace": "a", "name": "b", "member": "a.b.c", "unknown": 1})
+        AgentTemplateMemberView.model_validate(
+            {"namespace": "a", "name": "b", "member": "a.b.c", "unknown": 1}
+        )
 
 
 def test_permission_request_defaults() -> None:
