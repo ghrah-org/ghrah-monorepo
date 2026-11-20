@@ -137,7 +137,9 @@ members:
 
 def _pure_skill_catalog() -> SurfaceCatalog:
     """纯技能包没有 operation，目录也必须列出它的技能。"""
-    definition = parse_definition(yaml.safe_dump(yaml.safe_load(SKILL_ONLY_DEFINITION)), source="test")
+    definition = parse_definition(
+        yaml.safe_dump(yaml.safe_load(SKILL_ONLY_DEFINITION)), source="test"
+    )
     digest = "sha256:" + "0" * 64
     node = AbilityNode(
         alias="guide",

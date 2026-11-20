@@ -251,9 +251,7 @@ class LocalGrantedContentProvider:
         rows = await self.skills()
         matches = [row for row in rows if row["member"] == f"skill/{skill_key}"]
         if not matches:
-            raise ValueError(
-                f"Skill 不存在：{skill_key}；可用：{await self._skill_names()}"
-            )
+            raise ValueError(f"Skill 不存在：{skill_key}；可用：{await self._skill_names()}")
         if len(matches) > 1:
             names = ", ".join(str(row["full_name"]) for row in matches)
             raise ValueError(f"Skill 名称有歧义：{skill_key}；请用 {names}")

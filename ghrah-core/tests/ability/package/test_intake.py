@@ -222,9 +222,7 @@ def test_stray_files_inside_member_directories_are_ignored(tmp_path: Path) -> No
     """operations/ 下的说明文件、skills/<name>/ 下的杂物只跳过，不阻断安装。"""
     root = _package(tmp_path / "acme.tools", skill=True)
     (root / "operations" / "notes.txt").write_text("说明\n", encoding="utf-8", newline="\n")
-    (root / "skills" / "guide" / "CREDITS.md").write_text(
-        "来源\n", encoding="utf-8", newline="\n"
-    )
+    (root / "skills" / "guide" / "CREDITS.md").write_text("来源\n", encoding="utf-8", newline="\n")
 
     result = normalize_source(root)
 
