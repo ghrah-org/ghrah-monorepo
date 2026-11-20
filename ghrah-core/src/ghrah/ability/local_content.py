@@ -201,18 +201,30 @@ class LocalGrantedContentProvider:
     async def load_skill(self, full_name: str, *, path: str | None = None) -> dict[str, Any]:
         """读取一个 Skill 的完整正文，或其获授的相对文本附件。
 
-        ``full_name`` 接受两种写法：目录里的 ``alias/skill``，或目录条目附带的
-        ``read: <path>`` 地址（ability 根相对路径，外部件带版本段）。后者按当前
-        Agent 已授予的实例反查，仍走同一套授权与版本校验。
+        ``full_name`` 接受三种写法：
+
+        - 目录里的 ``alias/skill``；
+        - 只给技能键（``research``）：在**当前 Agent 已获授的技能**里匹配，唯一
+          命中即可用，多个命中报歧义并列出候选；
+        - 目录条目附带的 ``read: <path>`` 地址（ability 根相对路径，外部件带
+          版本段）：按当前授予的实例反查。
+
+        三种写法最终都落到同一套授权与版本校验。
         """
         if _looks_like_address(full_name):
             body = await self.store.resolve_address(self._identity, full_name)
             alias = str(body.alias or "")
             skill_key = body.member.split("/", 1)[-1]
+        elif "/" not in full_name:
+            alias, skill_key = await self._resolve_skill_key(full_name)
+            body = await self.store.resolve(self._identity, alias, f"skill/{skill_key}")
         else:
             parts = full_name.split("/")
             if len(parts) != 2:
-                raise ValueError("Skill 名称必须为目录中的 alias/skill，或目录条目附带的 read 地址")
+                raise ValueError(
+                    "Skill 名称必须为目录中的 alias/skill、技能键，或 read 地址；"
+                    f"可用：{await self._skill_names()}"
+                )
             alias, skill_key = (TypeAdapter(TreeKey).validate_python(part) for part in parts)
             body = await self.store.resolve(self._identity, alias, f"skill/{skill_key}")
         fence = await self._relative_reference(alias, skill_key, path) if path is not None else body
@@ -227,6 +239,25 @@ class LocalGrantedContentProvider:
         if path is None and self.mcp_service is not None:
             await self.mcp_service.skill_loaded(body)
         return {"full_name": f"{alias}/{skill_key}", **result}
+
+    async def _skill_names(self) -> str:
+        """当前获授技能的可读名字清单（用于错误提示）。"""
+        rows = await self.skills()
+        return ", ".join(str(row["full_name"]) for row in rows) or "（无）"
+
+    async def _resolve_skill_key(self, skill_key: str) -> tuple[str, str]:
+        """把裸技能键解析成 ``(alias, key)``；歧义或未知都 fail-closed。"""
+        TypeAdapter(TreeKey).validate_python(skill_key)
+        rows = await self.skills()
+        matches = [row for row in rows if row["member"] == f"skill/{skill_key}"]
+        if not matches:
+            raise ValueError(
+                f"Skill 不存在：{skill_key}；可用：{await self._skill_names()}"
+            )
+        if len(matches) > 1:
+            names = ", ".join(str(row["full_name"]) for row in matches)
+            raise ValueError(f"Skill 名称有歧义：{skill_key}；请用 {names}")
+        return str(matches[0]["alias"]), skill_key
 
     async def unload_skill(self, full_name: str) -> None:
         """显式卸载正文对应的 MCP 激活；不修改持久授权。"""

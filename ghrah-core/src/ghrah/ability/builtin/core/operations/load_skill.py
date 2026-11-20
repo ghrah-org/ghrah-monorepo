@@ -42,8 +42,9 @@ class LoadSkillInput(BaseModel):
     full_name: str = Field(
         min_length=1,
         description=(
-            "Exact alias/skill name from the available-skills catalog, or the catalog "
-            "entry's `read:` address (the committed SKILL.md path)."
+            "Exact alias/skill name from the available-skills catalog, a bare skill key "
+            "when unambiguous, or the catalog entry's `read:` address (the committed "
+            "SKILL.md path)."
         ),
     )
     path: str | None = Field(

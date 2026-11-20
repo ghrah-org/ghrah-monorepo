@@ -95,6 +95,25 @@ async def test_catalog_document_attachment_and_context_use_one_grant(content):
     assert await store.view(ADMIN, ALICE) == before  # 读取不授予、不绑定工具。
 
 
+async def test_load_skill_accepts_a_bare_skill_key(content):
+    """模型常把目录名里的技能键当名字：唯一命中时直接可用。"""
+    _, provider, _, _, _ = content
+
+    loaded = await provider.load_skill("guide")
+    assert loaded["full_name"] == "reports/guide"
+    assert "# 报告编写" in loaded["content"]
+
+    attachment = await provider.load_skill("guide", path="references/style.md")
+    assert "短段落" in attachment["content"]
+
+
+async def test_unknown_skill_key_lists_available_names(content):
+    _, provider, _, _, _ = content
+
+    with pytest.raises(ValueError, match="reports/guide"):
+        await provider.load_skill("ghost")
+
+
 async def test_load_skill_by_catalog_address(content):
     """目录条目附带的 read 地址可直接加载，等价于 alias/skill。"""
     _, provider, _, _, _ = content
