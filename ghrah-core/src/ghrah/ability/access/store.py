@@ -1384,18 +1384,10 @@ class AbilityAccessStore:
         """
         async with self._tx():
             await self._agent(actor, actor.subject_id)
-            async with self._db.execute(
-                "SELECT alias, instance FROM ability_grants WHERE project=? AND agent=?"
-                " ORDER BY alias",
-                (self.project_id, actor.subject_id),
-            ) as cursor:
-                grants = list(await cursor.fetchall())
+            view = await self._view(actor.subject_id)
             matches: list[tuple[str, str]] = []
-            for grant in grants:
-                instance = await self._row("ability_instances", "id=?", grant["instance"])
-                if instance is None:
-                    continue
-                version = await self._row("ability_versions", "digest=?", instance["digest"])
+            for node in view.abilities:
+                version = await self._row("ability_versions", "digest=?", node.version_digest)
                 if version is None:
                     continue
                 definition = json.loads(version["definition"])
@@ -1413,7 +1405,7 @@ class AbilityAccessStore:
                         continue
                     relative = str(declared.get("path") or "")
                     if any(address == prefix + relative for prefix in prefixes):
-                        matches.append((str(grant["alias"]), f"skill/{skill_key}"))
+                        matches.append((node.alias, f"skill/{skill_key}"))
                         break
             if not matches:
                 raise AccessError("not_found")
