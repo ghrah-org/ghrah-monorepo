@@ -38,15 +38,16 @@ const connection = useConnectionStore();
 
 const ProjectListSchema = z.object({ projects: z.array(ProjectInfoPayloadSchema) });
 const TemplateDetailSchema = z.object({
-  ability_request: z.object({
-    packages: z.array(
-      z.object({
-        package: z.string(),
-        operations: z.array(z.object({ key: z.string() })),
-        skills: z.array(z.object({ key: z.string() })),
-      }),
-    ),
-  }),
+  available_members: z.array(
+    z.object({
+      namespace: z.string(),
+      name: z.string(),
+      member: z.string(),
+      type: z.enum(["operation", "skill", "mcp"]),
+      version: z.string().nullable().optional(),
+      ability_type: z.enum(["kernel", "external"]),
+    }),
+  ),
 });
 
 interface MemberOption {
@@ -100,13 +101,12 @@ onMounted(async () => {
     const detail = TemplateDetailSchema.parse(
       await client().get(`/api/v1/agent-templates/${props.template.template_id}`),
     );
-    members.value = detail.ability_request.packages.flatMap((pkg) => [
-      ...pkg.operations.map((item) => ({
-        name: `${pkg.package}.${item.key}`,
-        kind: "operation" as const,
-      })),
-      ...pkg.skills.map((item) => ({ name: `${pkg.package}.${item.key}`, kind: "skill" as const })),
-    ]);
+    members.value = detail.available_members
+      .filter((item) => item.type !== "mcp")
+      .map((item) => ({
+        name: item.member,
+        kind: item.type === "skill" ? ("skill" as const) : ("operation" as const),
+      }));
     boundMembers.value = members.value.map((item) => item.name);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : t("config.template.memberLoadFailed");
