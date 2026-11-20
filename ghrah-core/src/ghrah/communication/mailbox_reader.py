@@ -13,8 +13,13 @@ from typing import Any
 import aiosqlite
 from ghrah.protocol.payloads.entity import AgentIdentity
 
+from ghrah.communication.delivery_queue import (
+    delivery_projection,
+    first_queue_blocker,
+    has_turns,
+    project_delivery,
+)
 from ghrah.communication.delivery_queue import display_state as _display_state  # noqa: F401
-from ghrah.communication.delivery_queue import has_turns, project_delivery
 
 
 class MailboxReader:
@@ -142,14 +147,36 @@ class MailboxReader:
                 "SELECT d.*, r.delivery_id IS NOT NULL AS result_ready FROM mm_deliveries d "
                 "LEFT JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
                 "WHERE d.recipient_id=? AND d.target_session_id IS ? "
+                "AND d.state!='completed' "
                 "AND (d.state IN ('pending','processing') OR "
                 "(r.delivery_id IS NOT NULL AND d.state!='completed')) ORDER BY d.seq",
                 (self._identity.agent_id, session_id),
             )
         ).fetchall()
+        with_turns = await has_turns(self._db)
+        first_blocker = None
+        if any(row["state"] == "pending" and row["turn_id"] is None for row in rows):
+            first_blocker = await first_queue_blocker(
+                self._db,
+                recipient_id=self._identity.agent_id,
+                session_id=session_id,
+                with_turns=with_turns,
+            )
         entries = []
+        queue_position = 0
         for row in rows:
-            item = await project_delivery(self._db, row)
+            queued = row["state"] == "pending" and row["turn_id"] is None
+            if queued and row["consumed_node_id"] is None and row["parked"] == 0:
+                queue_position += 1
+            item = delivery_projection(
+                row,
+                position=queue_position if queued else 0,
+                blocker=(
+                    first_blocker
+                    if queued and first_blocker is not None and first_blocker["seq"] < row["seq"]
+                    else None
+                ),
+            )
             entries.append(
                 {
                     "delivery_id": item["delivery_id"],
@@ -163,7 +190,7 @@ class MailboxReader:
                 }
             )
         active = None
-        if await has_turns(self._db):
+        if with_turns:
             active = await (
                 await self._db.execute(
                     "SELECT turn_id FROM turns WHERE agent_name=? AND session_id IS ? "

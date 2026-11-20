@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS subject_room_logs (
     data       TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (room_id, seq)
 );
+CREATE INDEX IF NOT EXISTS idx_subject_room_log_reference ON subject_room_logs(room_id, id);
 """
 
 _ROOM_COLUMNS = (
@@ -345,17 +346,17 @@ class RoomStore:
         """按 seq 升序读取 room 日志；since_seq 增量、limit 截尾（取尾部 N 条）。"""
         async with self._lock:
             db = self._require_db()
+            sql = "SELECT * FROM subject_room_logs WHERE room_id=?"
+            params: list[str | int] = [room_id]
             if since_seq is not None:
-                cursor = await db.execute(
-                    "SELECT * FROM subject_room_logs WHERE room_id = ? AND seq > ? ORDER BY seq",  # noqa: S608
-                    (room_id, since_seq),
+                sql += " AND seq>?"
+                params.append(since_seq)
+            if limit > 0:
+                rows = await db.execute_fetchall(
+                    sql + " ORDER BY seq DESC LIMIT ?", (*params, min(limit, 2**63 - 1))
                 )
-            else:
-                cursor = await db.execute(
-                    "SELECT * FROM subject_room_logs WHERE room_id = ? ORDER BY seq",  # noqa: S608
-                    (room_id,),
-                )
-            rows = await cursor.fetchall()
+                return [_row_to_log(row) for row in reversed(rows)]
+            rows = await db.execute_fetchall(sql + " ORDER BY seq", params)
             return [_row_to_log(r) for r in rows[-limit:]]
 
     async def get_log_page(

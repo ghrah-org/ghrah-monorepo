@@ -6,8 +6,10 @@
 import asyncio
 
 import pytest
+from ghrah.protocol.payloads.entity import AgentIdentity
 
 from ghrah.communication import DeliveryState
+from ghrah.communication.mailbox_reader import MailboxReader
 from ghrah.core.read.mailbox import MailboxReadStore
 
 pytest_plugins = ["test_turn_lifecycle"]
@@ -60,6 +62,43 @@ async def test_queued_cancel_is_visible_and_retryable(runtime):
     assert (await reader.queue(agent_id="agent", session_id=queue.session_id)).entries == []
     await mm.retry(delivery.delivery_id)
     assert (await mm.get_deliveries(request.message_id))[0].state == DeliveryState.PENDING
+
+
+async def test_queue_and_injection_reads_batch_and_idle_scan_does_not_write(runtime):
+    agent, backend, mm = runtime
+    await mm.close()
+    await mm.open(start_dispatcher=False)
+    session_id = agent._context_manager.active_session_id
+    for index in range(16):
+        await accept(mm, f"queued-{index}", policy="queue")
+
+    statements = []
+    identity = AgentIdentity(project_id="p", agent_id="agent")
+    async with MailboxReader(backend.db_path, identity) as reader:
+        await reader._db.set_trace_callback(statements.append)
+        entries = (await reader.queue(session_id))["entries"]
+        assert [entry["position"] for entry in entries] == list(range(1, 17))
+        assert {entry["blocked_by_delivery_id"] for entry in entries[1:]} == {
+            entries[0]["delivery_id"]
+        }
+        assert sum(sql.startswith("SELECT") for sql in statements) <= 4
+
+    statements.clear()
+    db = mm._require_db()
+    await db.set_trace_callback(statements.append)
+    try:
+        await mm._scan()
+        assert all(not sql.startswith("BEGIN IMMEDIATE") for sql in statements)
+
+        turn_id = await agent._context_manager.open_turn()
+        for index in range(16):
+            await accept(mm, f"injected-{index}")
+        statements.clear()
+        inputs = await mm.load_turn_inputs(turn_id)
+        assert [item.text for item in inputs] == [f"injected-{index}" for index in range(16)]
+        assert sum(sql.startswith("SELECT") for sql in statements) == 1
+    finally:
+        await db.set_trace_callback(None)
 
 
 async def test_two_injections_commit_with_opener_in_one_node(runtime, monkeypatch):

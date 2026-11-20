@@ -35,7 +35,6 @@ from ghrah.protocol.views.core import (
 
 from ghrah.context.persistence import serialize_node
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
-from ghrah.context.session_runtime import SessionRuntime
 
 __all__ = ["ChainReadStore", "ChainDatabaseUnavailableError"]
 
@@ -184,7 +183,7 @@ class ChainReadStore:
         session_id: str,
         branch_id: str,
     ) -> str | None:
-        """读取某分支的当前头节点 id。
+        """按 ID 读取某分支的头节点，包含软删除的会话和分支。
 
         Args:
             agent_id: 稳定 Agent ID
@@ -197,27 +196,7 @@ class ChainReadStore:
         backend = await self._maybe_backend()
         if backend is None:
             return None
-        checkpoint = await backend.load_checkpoint(agent_id, snapshot_payloads="boundaries")
-        if checkpoint is None:
-            return None
-        session = next(
-            (item for item in checkpoint.sessions if item.session_id == session_id),
-            None,
-        )
-        if session is None:
-            return None
-        runtime = SessionRuntime.restore(
-            session=session,
-            branches=[item for item in checkpoint.branches if item.session_id == session_id],
-            nodes=[item for item in checkpoint.nodes if item.session_id == session_id],
-        )
-        branch = next(
-            (item for item in runtime.branches.values() if item.branch_id == branch_id),
-            None,
-        )
-        if branch is None:
-            return None
-        return str(branch.head_node_id) or None
+        return await backend.load_branch_head(agent_id, session_id, branch_id)
 
     async def history(
         self,
@@ -227,7 +206,7 @@ class ChainReadStore:
         branch_id: str,
         limit: int = -1,
     ) -> HistoryView | None:
-        """读取某分支上的链历史。
+        """按 ID 读取某分支的链历史，包含软删除的会话和分支。
 
         Args:
             agent_id: 稳定 Agent ID
@@ -241,30 +220,16 @@ class ChainReadStore:
         backend = await self._maybe_backend()
         if backend is None:
             return None
-        checkpoint = await backend.load_checkpoint(agent_id, snapshot_payloads="boundaries")
-        if checkpoint is None:
+        history = await backend.load_branch_history(agent_id, session_id, branch_id, limit=limit)
+        if history is None:
             return None
-        session = next(
-            (item for item in checkpoint.sessions if item.session_id == session_id),
-            None,
-        )
-        if session is None:
-            return None
-        branches = [item for item in checkpoint.branches if item.session_id == session_id]
-        if branch_id and not any(item.branch_id == branch_id for item in branches):
-            return None
-        runtime = SessionRuntime.restore(
-            session=session,
-            branches=branches,
-            nodes=[item for item in checkpoint.nodes if item.session_id == session_id],
-        )
-        nodes = runtime.get_history(branch_id=branch_id, limit=limit)
+        active_session_id, nodes = history
         return HistoryView(
             agent_name=agent_id,
             agent_id=agent_id,
             session_id=session_id,
             branch_id=branch_id,
-            active_session_id=checkpoint.active_session_id,
+            active_session_id=active_session_id,
             nodes=[NodeView.model_validate(serialize_node(node)) for node in nodes],
         )
 

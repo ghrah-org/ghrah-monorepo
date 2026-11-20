@@ -522,31 +522,52 @@ async def test_interrupted_predecessor_releases_after_reopen(tmp_path):
         assert await manager.get_replies(first.message_id) == ()
 
 
-async def test_v6_delivery_migration_preserves_rows_and_policy_constraint(tmp_path):
-    """v6 待投递记录升级后可读，新增列使用和新库相同的默认值和约束。"""
+@pytest.mark.parametrize("source_version", [6, 7])
+async def test_reopen_rebuilds_message_indexes(tmp_path, source_version):
+    """补建 v6 和现有 v7 库的索引，保留待投递记录及投递策略约束。"""
     path = tmp_path / "messages.sqlite"
     async with make_manager(path) as manager:
         request = await send_request(manager)
+        original_deliveries = await manager.get_deliveries(request.message_id)
 
+    indexes = {
+        "mm_bound_inflight",
+        "mm_delivery_candidates",
+        "mm_delivery_unfinished",
+        "mm_inline_waits_waiting",
+        "mm_room_projection_pending",
+        "mm_session_order",
+    }
+    if source_version == 6:
+        indexes.add("idx_deliveries_turn")
     async with aiosqlite.connect(path) as db:
-        await db.execute("DROP INDEX IF EXISTS idx_deliveries_turn")
-        columns = await (await db.execute("PRAGMA table_info(mm_deliveries)")).fetchall()
-        for column in ("turn_id", "delivery_policy", "parked", "parked_reason"):
-            if column in {row[1] for row in columns}:
+        for index in sorted(indexes):
+            await db.execute(f"DROP INDEX IF EXISTS {index}")
+        if source_version == 6:
+            for column in ("turn_id", "delivery_policy", "parked", "parked_reason"):
                 await db.execute(f"ALTER TABLE mm_deliveries DROP COLUMN {column}")
-        await db.execute("UPDATE mm_meta SET version=6")
+        await db.execute("UPDATE mm_meta SET version=?", (source_version,))
         await db.commit()
 
-    async with make_manager(path) as manager:
-        assert await manager.get_message(request.message_id) == request
+    for _ in range(2):
+        async with make_manager(path) as manager:
+            assert await manager.get_message(request.message_id) == request
+            assert await manager.get_deliveries(request.message_id) == original_deliveries
         async with aiosqlite.connect(path) as db:
+            schema_indexes = await db.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+            assert indexes <= {row[0] for row in schema_indexes}
             assert await (await db.execute("SELECT version FROM mm_meta")).fetchone() == (7,)
-            rows = await (
-                await db.execute(
-                    "SELECT state, turn_id, delivery_policy, parked, parked_reason"
-                    " FROM mm_deliveries"
-                )
-            ).fetchall()
-            assert rows == [("pending", None, "queue", 0, None)] * 2
+            deliveries = await db.execute_fetchall(
+                "SELECT state, turn_id, delivery_policy, parked, parked_reason FROM mm_deliveries"
+            )
+            assert deliveries == [("pending", None, "queue", 0, None)] * 2
+            plan = await db.execute_fetchall(
+                "EXPLAIN QUERY PLAN " + MessageManager._next_delivery_sql(with_turns=False), ("b",)
+            )
+            searches = [row[3] for row in plan if row[3].startswith("SEARCH ")]
+            for index in ("mm_delivery_candidates", "mm_session_order"):
+                assert any(f"INDEX {index} " in detail for detail in searches), plan
             with pytest.raises(aiosqlite.IntegrityError):
                 await db.execute("UPDATE mm_deliveries SET delivery_policy='unknown'")

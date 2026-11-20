@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from _helpers import ScriptedLLM
 from ghrah.protocol.problem import ProblemCode
 from test_turn_rollback import append_node, send, snapshot
 
@@ -21,6 +22,7 @@ from ghrah.ability.execution.invocation import MemberReference, OperationCall
 from ghrah.communication.message_manager import _ATOMIC, _AtomicDelivery
 from ghrah.context import ContextManager, turn
 from ghrah.context.persistence import ContextChanges
+from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.events import HITLRequestEvent
 from ghrah.core.message import AgentMessage
@@ -277,6 +279,10 @@ async def test_abort_defers_to_existing_result_and_reports_scope_errors(rollback
     before = snapshot(backend.db_path)
     receipt = await port.turns.abort(agent_id="agent", session_id=cm.active_session_id)
     assert receipt.result_pending and not receipt.aborted
+    async with SqliteBackend(backend.db_path) as other_backend:
+        other = ContextManager("agent", persistence=other_backend)
+        outcome = await other.abort_turn(turn_id=turn_id)
+        assert outcome.result_pending and not outcome.changed
     assert snapshot(backend.db_path) == before
     assert await mm.recover_completions() == 1
     assert (await mm.get_replies(opener.message_id))[0].content == "ok"
@@ -403,6 +409,56 @@ async def test_cross_process_abort_revokes_atomic_commit(rollback_runtime):
     with pytest.raises(turn.TurnRevokedError):
         await mm._apply_atomic(scope, changes)
     assert snapshot(backend.db_path) == before
+
+
+async def test_abort_without_local_settler_releases_next_delivery(rollback_runtime, monkeypatch):
+    agent, backend, mm, _ = rollback_runtime
+    entered = asyncio.Event()
+    proceed = asyncio.Event()
+    original = agent._ensure_llm
+    late = ScriptedLLM(["late"])
+    first_turn = None
+
+    async def pause_first_model_call():
+        nonlocal first_turn
+        active_turn = agent._context_manager.active_turn_id
+        if entered.is_set() and active_turn != first_turn:
+            return await original()
+        first_turn = active_turn
+        entered.set()
+        await proceed.wait()
+        return late
+
+    monkeypatch.setattr(agent, "_ensure_llm", pause_first_model_call)
+    opener = await send(mm, "opener")
+    await mm._scan()
+    await asyncio.wait_for(entered.wait(), 3)
+    later = await send(mm, "later")
+    (claimed,) = await mm.get_deliveries(opener.message_id)
+    async with SqliteBackend(backend.db_path) as other_backend:
+        other = ContextManager("agent", persistence=other_backend)
+        assert (await other.abort_turn(turn_id=claimed.turn_id)).changed
+    worker = mm._workers["agent"]
+    scan = mm._scan
+
+    async def finish_revoked_worker_during_scan():
+        saw_worker = await scan()
+        # 旧 worker 在扫描跳过该 Agent 后结束，同步调度必须再检查一次。
+        proceed.set()
+        await worker
+        return saw_worker
+
+    monkeypatch.setattr(mm, "_scan", finish_revoked_worker_during_scan)
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+
+    (original_delivery,) = await mm.get_deliveries(opener.message_id)
+    assert (original_delivery.state.value, original_delivery.error) == (
+        "interrupted",
+        "aborted_by_user",
+    )
+    assert (original_delivery.turn_id, original_delivery.attempts) == (claimed.turn_id, 1)
+    assert await mm.get_replies(opener.message_id) == ()
+    assert (await mm.get_replies(later.message_id))[0].content == "done"
 
 
 async def test_consecutive_failures_do_not_pick_previous_diagnosis(rollback_runtime, monkeypatch):

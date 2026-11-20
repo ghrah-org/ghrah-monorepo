@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -267,3 +268,36 @@ async def test_start_migrates_pre_archive_room_schema(tmp_path: Path) -> None:
         assert "archived_at" in columns
     finally:
         db.close()
+
+
+async def test_start_rebuilds_reference_index_for_existing_room_logs(tmp_path: Path) -> None:
+    """重开存量 Room 库时补建引用索引并保留日志和房间水位。"""
+    path = tmp_path / "rooms.db"
+    store = await _started(tmp_path)
+    try:
+        room = make_room_record(project_id="project", name="room")
+        await store.upsert(room)
+        appended = await store.append_log(
+            room.room_id,
+            lambda seq: make_room_log_record(
+                room_id=room.room_id, seq=seq, author="agent", author_type="agent"
+            ),
+        )
+        assert appended is not None
+        entry, updated_room = appended
+    finally:
+        await store.stop()
+
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("DROP INDEX IF EXISTS idx_subject_room_log_reference")
+
+    for _ in range(2):
+        store = await _started(tmp_path)
+        try:
+            assert await store.get_log_by_id(room.room_id, entry.id) == entry
+            assert await store.get(room.room_id) == updated_room
+        finally:
+            await store.stop()
+        with closing(sqlite3.connect(path)) as db:
+            columns = db.execute("PRAGMA index_info('idx_subject_room_log_reference')")
+            assert [row[2] for row in columns] == ["room_id", "id"]

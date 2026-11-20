@@ -33,7 +33,7 @@ def _config(tmp_path: Path, *, enabled: bool = True) -> SubjectConfig:
     )
 
 
-async def test_reads_committed_history_without_starting_core(tmp_path: Path) -> None:
+async def test_reads_committed_history_without_starting_core(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path)
     project = make_project_record(name="sample", project_root_locator=str(tmp_path / "project"))
     agent = AgentRecord(agent_id="agent-a", project_id=project.project_id, name="display name")
@@ -48,6 +48,10 @@ async def test_reads_committed_history_without_starting_core(tmp_path: Path) -> 
         await chain.persist()
         session_id = chain.active_session_id
         branch_id = chain.active_head.created_on_branch_id
+        for _ in range(3):
+            chain.begin_iteration()
+            chain.commit_iteration()
+        await chain.persist()
         turn_id = await chain.open_turn()
         opened = await chain.open_hitl_request(
             promise_id="approval",
@@ -80,9 +84,18 @@ async def test_reads_committed_history_without_starting_core(tmp_path: Path) -> 
             branches = await client.get(branches_url)
             assert branches.status_code == 200
             assert [branch["branch_id"] for branch in branches.json()["branches"]] == [branch_id]
-            nodes = await client.get(f"{branches_url}/{branch_id}/nodes", params={"limit": 1})
+
+            async def reject_full_checkpoint(*args, **kwargs):
+                raise AssertionError("bounded history must not restore the full Agent checkpoint")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(SqliteBackend, "load_checkpoint", reject_full_checkpoint)
+                nodes = await client.get(f"{branches_url}/{branch_id}/nodes", params={"limit": 2})
             assert nodes.status_code == 200
-            assert [node["id"] for node in nodes.json()["nodes"]] == [chain.active_head.id]
+            assert [node["id"] for node in nodes.json()["nodes"]] == [
+                chain.active_head.parent_id,
+                chain.active_head.id,
+            ]
             assert (await client.get(f"{branches_url}/unknown/nodes")).status_code == 404
 
             turns = await client.get(

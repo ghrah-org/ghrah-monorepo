@@ -14,6 +14,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 from ghrah.protocol.types import RoomSubjectType
 
@@ -1169,5 +1170,21 @@ async def test_hydrate_reference_keeps_plain_text_message(tmp_path: Path) -> Non
         entry = _data(result)["entry"]
         assert entry["data"]["message"] == "纯文本"
         assert "content_blocks" not in entry["data"]
+        event = AsyncMock()
+        m._on_event = event
+        again = await m.append_log(
+            room["room_id"],
+            author="human:yuki",
+            author_type=RoomSubjectType.HUMAN,
+            data={"mm_message_id": "m-text"},
+        )
+        assert _data(again)["entry"] == entry
+        event.assert_not_awaited()
+
+        lookup = AsyncMock(wraps=m._project_get)
+        m._project_get = lookup
+        log = await m.handle_command("room_get_log", {"room_id": room["room_id"]})
+        assert _data(log)["entries"] == [entry]
+        assert lookup.await_count == 1
     finally:
         await m.store.stop()

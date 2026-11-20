@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from ghrah.protocol.problem import ProblemCode
 
+from ghrah.context import ContextManager
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.session_runtime import SessionRuntime
@@ -108,6 +109,70 @@ async def test_missing_data_root_returns_empty_semantics(tmp_path: Path) -> None
         assert missing_node.value.problem.code is ProblemCode.NOT_FOUND
         summary = await port.mailbox.summary(agent_id="agent-x")
         assert summary.availability in {"available", "empty"}
+    finally:
+        await port.aclose()
+
+
+@pytest.mark.parametrize("deleted", ["branch", "session"])
+async def test_head_remains_readable_after_soft_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deleted: str
+) -> None:
+    """目录隐藏墓碑，按原 ID 读取的 Head 仍与历史末节点一致。"""
+    path = tmp_path / "context.db"
+    async with SqliteBackend(path) as backend:
+        cm = ContextManager("agent", persistence=backend, auto_persist=False)
+        initial_session_id = cm.active_session_id
+        session = cm.create_session(name="history")
+        cm.activate_session(session.session_id)
+        main_branch_id = cm.get_active_session_branch().branch_id
+        branch = cm.create_branch(session_id=session.session_id, name="fork")
+        cm.activate_branch(session.session_id, branch.branch_id)
+        cm.begin_iteration()
+        node = cm.commit_iteration(ability_names=["fork-only"])
+        cm.activate_branch(session.session_id, main_branch_id)
+        cm.activate_session(initial_session_id)
+        if deleted == "branch":
+            cm.delete_branch(session.session_id, branch.branch_id)
+        else:
+            cm.delete_session(session.session_id)
+        await cm.persist()
+
+    port = _port("scope", path)
+    try:
+        catalog = await port.sessions.catalog(agent_id="agent")
+        assert branch.branch_id not in {item.branch_id for item in catalog.branches}
+        visible_sessions = {item.session_id for item in catalog.sessions}
+        if deleted == "branch":
+            assert session.session_id in visible_sessions
+            branches = await port.branches.list(agent_id="agent", session_id=session.session_id)
+            assert [item.branch_id for item in branches] == [main_branch_id]
+        else:
+            assert session.session_id not in visible_sessions
+            with pytest.raises(CoreApiError) as missing:
+                await port.branches.list(agent_id="agent", session_id=session.session_id)
+            assert missing.value.problem.code is ProblemCode.NOT_FOUND
+
+        target = dict(agent_id="agent", session_id=session.session_id, branch_id=branch.branch_id)
+        assert await port.sessions.head(**target) == node.id
+        history = await port.sessions.history(**target, limit=1)
+        assert [item.id for item in history.nodes] == [node.id]
+        for mismatch in (
+            {"agent_id": "other"},
+            {"session_id": initial_session_id},
+            {"branch_id": "missing"},
+        ):
+            with pytest.raises(CoreApiError) as missing:
+                await port.sessions.head(**{**target, **mismatch})
+            assert missing.value.problem.code is ProblemCode.NOT_FOUND
+
+        def reject_bulk_read(*_args: Any, **_kwargs: Any) -> None:
+            pytest.fail("读单个 Head 时加载了目录或节点")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(SqliteBackend, "load_session_catalog", reject_bulk_read)
+            patch.setattr(SqliteBackend, "load_checkpoint", reject_bulk_read)
+            patch.setattr(SqliteBackend, "load_branch_history", reject_bulk_read)
+            assert await port.sessions.head(**target) == node.id
     finally:
         await port.aclose()
 
@@ -205,8 +270,6 @@ async def test_dispatch_command_reaches_started_unit_only(
 
 
 async def test_turn_and_hitl_queries_are_scoped_and_node_view_has_identity(tmp_path: Path) -> None:
-    from ghrah.context.manager import ContextManager
-
     path = tmp_path / "scope.db"
     port = _port("scope", path)
     try:

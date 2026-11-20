@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -404,15 +405,23 @@ class RoomManager:
 
     async def _handle_get_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = RoomGetLogPayload.model_validate(payload)
-        existing, _project, error = await self._require_room_access(p.room_id)
+        _, project, error = await self._require_room_access(p.room_id)
         if error is not None:
             return error
         records = await self._store.get_log(p.room_id, since_seq=p.since_seq, limit=p.limit)
+        message_ids = {
+            message_id for record in records if (message_id := record.data.get("mm_message_id"))
+        }
+        messages, deliveries = (
+            await self._read_mm_references(project, message_ids)
+            if message_ids and project is not None
+            else ({}, {})
+        )
         entries: list[dict[str, Any]] = []
         dropped = 0
         for record in records:
             try:
-                entries.append((await self._hydrate_reference(record)).to_wire())
+                entries.append(self._hydrate_reference(record, messages, deliveries).to_wire())
             except ValueError:
                 # Room 日志是投影，正文权威在 MM。单条引用失配（源消息被回收、
                 # 或库被单独恢复导致不一致）不应让整个列表不可读。
@@ -558,29 +567,42 @@ class RoomManager:
 
     # ─── send 收敛点（双路径共用：room_send 命令 + Core send ability serial） ───
 
-    async def _hydrate_reference(self, record: RoomLogRecord) -> RoomLogRecord:
-        """从 Core MM 权威读通正文，Room 日志仅持消息引用。"""
+    @staticmethod
+    async def _read_mm_references(
+        project: dict[str, Any], message_ids: set[str]
+    ) -> tuple[dict[str, tuple[Any, ...]], dict[str, list[tuple[Any, ...]]]]:
+        """在一次只读快照内批量读取消息正文和投递。"""
+        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
+        ids = json.dumps(list(message_ids))
+        async with aiosqlite.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+            await db.execute("BEGIN")
+            messages = await db.execute_fetchall(
+                "SELECT message_id, content, sender_id, metadata FROM mm_messages "
+                "WHERE message_id IN (SELECT value FROM json_each(?))",
+                (ids,),
+            )
+            rows = await db.execute_fetchall(
+                "SELECT message_id, delivery_id, recipient_id, state, error, blocked_reason "
+                "FROM mm_deliveries WHERE message_id IN (SELECT value FROM json_each(?)) "
+                "ORDER BY seq",
+                (ids,),
+            )
+        deliveries = defaultdict(list)
+        for row in rows:
+            deliveries[row[0]].append(row[1:])
+        return {row[0]: row[1:] for row in messages}, dict(deliveries)
+
+    @staticmethod
+    def _hydrate_reference(
+        record: RoomLogRecord,
+        messages: dict[str, tuple[Any, ...]],
+        deliveries: dict[str, list[tuple[Any, ...]]],
+    ) -> RoomLogRecord:
+        """合并 Room 日志与经作者和房间校验的 MM 权威事实。"""
         message_id = record.data.get("mm_message_id")
         if not message_id:
             return record
-        room, project, error = await self._require_room_access(record.room_id)
-        if error or project is None or room is None:
-            raise ValueError(error or "Room project unavailable")
-        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
-        async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
-            row = await (
-                await db.execute(
-                    "SELECT content, sender_id, metadata FROM mm_messages WHERE message_id=?",
-                    (message_id,),
-                )
-            ).fetchone()
-            deliveries = await (
-                await db.execute(
-                    "SELECT delivery_id, recipient_id, state, error, blocked_reason "
-                    "FROM mm_deliveries WHERE message_id=? ORDER BY seq",
-                    (message_id,),
-                )
-            ).fetchall()
+        row = messages.get(message_id)
         if row is None or row[1] not in (record.author, f"human:{record.author}"):
             raise ValueError("Room message reference is missing or has a different author")
         metadata = json.loads(row[2])
@@ -611,7 +633,7 @@ class RoomManager:
                 "error": d[3],
                 "blocked_reason": d[4],
             }
-            for d in deliveries
+            for d in deliveries.get(message_id, [])
         ]
         return record.model_copy(update={"data": data})
 
@@ -624,12 +646,13 @@ class RoomManager:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """分配 seq → 落库 → 广播 ROOM_LOG_APPENDED → 返回 _ok({entry})。"""
-        _room, _project, error = await self._require_room_access(room_id)
+        _, project, error = await self._require_room_access(room_id)
         if error is not None:
             return error
         data = dict(data or {})
         message_id = data.get("mm_message_id")
         reference_id = f"mm:{message_id}:{room_id}" if message_id else None
+        messages, deliveries = {}, {}
         if reference_id:
             data.pop("message", None)
             candidate = make_room_log_record(
@@ -637,19 +660,23 @@ class RoomManager:
             )
             candidate.id = reference_id
             try:
-                await self._hydrate_reference(candidate)
+                if project is None:
+                    raise ValueError("Room project unavailable")
+                messages, deliveries = await self._read_mm_references(project, {message_id})
+                self._hydrate_reference(candidate, messages, deliveries)
             except (ValueError, aiosqlite.Error) as exc:
                 return _err(str(exc))
-            existing = await self._store.get_log_by_id(room_id, reference_id)
-            if existing:
-                return _ok({"entry": (await self._hydrate_reference(existing)).to_wire()})
+
+        created = None
 
         def make_record(seq: int) -> RoomLogRecord:
+            nonlocal created
             record = make_room_log_record(
                 room_id=room_id, seq=seq, author=author, author_type=author_type, data=data
             )
             if reference_id:
                 record.id = reference_id
+            created = record
             return record
 
         try:
@@ -658,9 +685,11 @@ class RoomManager:
             return _err("resource_archived")
         if result is None:
             return _err(f"room not found: {room_id}")
-        record: RoomLogRecord = await self._hydrate_reference(result[0])
-        await self._emit("room_log_appended", {"entry": record.to_wire()})
-        return _ok({"entry": record.to_wire()})
+        entry = self._hydrate_reference(result[0], messages, deliveries).to_wire()
+        # Store 对首写返回 factory 生成的对象，对幂等重放返回已存记录。
+        if result[0] is created:
+            await self._emit("room_log_appended", {"entry": entry})
+        return _ok({"entry": entry})
 
     # ─── send ability 支撑（Core 侧 recipients 解析用） ───
 

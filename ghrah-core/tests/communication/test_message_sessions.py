@@ -6,16 +6,23 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import aiosqlite
 import pytest
 from _helpers import ScriptedLLM
 
+from ghrah.ability.builtin.cluster.operations.send_message import SendMessageAbility
 from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication import DeliveryState, MessageKind, MessageManager
+from ghrah.communication.supervisor import SupervisorActor
+from ghrah.context.manager import ContextManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.turn import TurnRevokedError
 from ghrah.core.config import AgentConfig
 from ghrah.types.config_types import ContextConfig
+from ghrah.types.results import ActionOutcome, ActionResult
 
 
 async def agent_for(backend, agent_id, replies, *, restore=False):
@@ -35,6 +42,248 @@ async def agent_for(backend, agent_id, replies, *, restore=False):
 
 def manager_for(path):
     return MessageManager(path, project_id="p", agent_ids=("a", "b"), session_routing=True)
+
+
+@pytest.mark.parametrize("abort_mode", ["local", "other_context", "turn_only"])
+async def test_abort_wakes_inline_wait_and_releases_worker(tmp_path, monkeypatch, abort_mode):
+    path = tmp_path / "core.sqlite"
+    async with SqliteBackend(path) as backend:
+        sender, _ = await agent_for(backend, "a", ["next reply"])
+        await agent_for(backend, "b", [])  # 固定目标会话，接收方保持离线。
+        mm = manager_for(path)
+        await mm.open(start_dispatcher=False)
+        dispatch = None
+        try:
+            sender._supervisor = SupervisorActor(message_manager=mm)
+            action = sender._action
+            polled = asyncio.Event()
+            draft = None
+            get_deliveries = mm.get_deliveries
+
+            async def observe_poll(message_id):
+                deliveries = await get_deliveries(message_id)
+                if draft is not None and message_id == draft.message_id:
+                    polled.set()
+                return deliveries
+
+            async def checkpoint_then_wait(data):
+                nonlocal draft
+                if draft is not None:
+                    with pytest.raises(TurnRevokedError) as revoked:
+                        await mm.wait_inline(draft.message_id, timeout=-1)
+                    raise revoked.value
+                draft = await mm.prepare_send(
+                    recipient_ids=("b",),
+                    content="inline request",
+                    kind=MessageKind.REQUEST,
+                    idempotency_key="inline",
+                    metadata={"inline_reply": True},
+                )
+                return {"results": []}
+
+            async def wait_state():
+                async with (
+                    backend.transaction() as db,
+                    db.execute(
+                        "SELECT state FROM mm_inline_waits WHERE message_id=?", (draft.message_id,)
+                    ) as cursor,
+                ):
+                    row = await cursor.fetchone()
+                assert row is not None
+                return row[0]
+
+            monkeypatch.setattr(mm, "get_deliveries", observe_poll)
+            monkeypatch.setattr(sender, "_action", checkpoint_then_wait)
+            monkeypatch.setattr(sender.config, "max_iterations", 2)
+            await mm.bind_atomic(sender)
+            opener = await mm.send_external(
+                sender="user", recipient_ids=("a",), content="opener", idempotency_key="opener"
+            )
+            await mm._scan()
+            await asyncio.wait_for(polled.wait(), 3)
+            worker = mm._workers["a"]
+            (parent,) = await mm.get_deliveries(opener.message_id)
+            assert parent.turn_id is not None
+            assert await wait_state() == "waiting"
+            assert draft.message_id in mm._reply_changes
+            later = await mm.send_external(
+                sender="user", recipient_ids=("a",), content="later", idempotency_key="later"
+            )
+            monkeypatch.setattr(sender, "_action", action)
+            dispatch = asyncio.create_task(mm.dispatch_pending())
+
+            if abort_mode == "local":
+                await sender.abort_turn(turn_id=parent.turn_id)
+            else:
+                async with SqliteBackend(path) as other_backend:
+                    other = ContextManager("a", persistence=other_backend)
+                    await other.abort_turn(
+                        turn_id=parent.turn_id,
+                        settle_deliveries=None
+                        if abort_mode == "turn_only"
+                        else mm.converge_turn_deliveries,
+                    )
+            if abort_mode != "turn_only":
+                assert (await mm.get_deliveries(opener.message_id))[0].state == (
+                    DeliveryState.INTERRUPTED
+                )
+                assert await wait_state() == "released"
+
+            await asyncio.wait_for(asyncio.shield(worker), 1)
+            assert mm._workers.get("a") is not worker
+            assert not mm._reply_waiters
+            assert not mm._reply_changes
+            assert not mm._wait_edges
+            await asyncio.wait_for(asyncio.shield(dispatch), 3)
+            (stopped,) = await mm.get_deliveries(opener.message_id)
+            assert stopped.state == DeliveryState.INTERRUPTED
+            assert await wait_state() == "released"
+            assert not await mm.get_replies(opener.message_id)
+            assert (await mm.get_replies(later.message_id))[0].content == "next reply"
+        finally:
+            await mm.close()
+            if dispatch is not None:
+                await asyncio.gather(dispatch, return_exceptions=True)
+
+
+@pytest.mark.parametrize("after_stop", ["mailbox", "scan", "reopen", "resume", "claimed"])
+async def test_stopped_inline_wait_releases_queue_or_reserves_on_resume(
+    tmp_path, monkeypatch, after_stop
+):
+    path = tmp_path / "core.sqlite"
+    async with SqliteBackend(path) as backend:
+        sender, llm = await agent_for(backend, "a", ["received", "next"])
+        peer, _ = await agent_for(backend, "b", ["peer reply"])
+        mm = manager_for(path)
+        await mm.open(start_dispatcher=False)
+        try:
+            sender._supervisor = SupervisorActor(message_manager=mm)
+            monkeypatch.setitem(sender._abilities, "send_message", SendMessageAbility())
+            action = sender._action
+            entered = asyncio.Event()
+            draft = None
+
+            async def checkpoint_then_wait(data):
+                nonlocal draft
+                if draft is not None:
+                    entered.set()
+                    await asyncio.Event().wait()
+                draft = await mm.prepare_send(
+                    recipient_ids=("b",),
+                    content="inline request",
+                    kind=MessageKind.REQUEST,
+                    idempotency_key="inline",
+                    metadata={"inline_reply": True},
+                )
+                return {
+                    "results": [
+                        {
+                            "ability_name": "send_message",
+                            "action_result": ActionResult(
+                                outcome=ActionOutcome.SUCCESS,
+                                data={
+                                    "await_reply": {
+                                        "message_id": draft.message_id,
+                                        "timeout": 1,
+                                        "mode": "sync",
+                                    }
+                                },
+                            ),
+                        }
+                    ],
+                    "llm_metadata": {
+                        "pending_tool_replies": True,
+                        "pending_tool_call_ids": ["inline-call"],
+                    },
+                }
+
+            async def wait_state():
+                async with (
+                    backend.transaction() as db,
+                    db.execute(
+                        "SELECT state FROM mm_inline_waits WHERE message_id=?", (draft.message_id,)
+                    ) as cursor,
+                ):
+                    row = await cursor.fetchone()
+                assert row is not None
+                return row[0]
+
+            monkeypatch.setattr(sender, "_action", checkpoint_then_wait)
+            monkeypatch.setattr(sender.config, "max_iterations", 2)
+            await mm.bind_atomic(sender)
+            request = await mm.send_external(
+                sender="user", recipient_ids=("a",), content="opener", idempotency_key="opener"
+            )
+            await mm._scan()
+            await asyncio.wait_for(entered.wait(), 3)
+            assert await wait_state() == "waiting"
+            await mm.unbind("a")
+            (parent,) = await mm.get_deliveries(request.message_id)
+            assert parent.state == DeliveryState.INTERRUPTED
+            assert await wait_state() == "released"
+            monkeypatch.setattr(sender, "_action", action)
+
+            if after_stop in ("scan", "reopen"):
+                # 注入旧版本留下的无主等待，扫描和启动都应收敛。
+                async with backend.transaction() as db:
+                    await db.execute("UPDATE mm_inline_waits SET state='waiting'")
+                if after_stop == "reopen":
+                    await mm.close()
+                    await mm.open(start_dispatcher=False)
+                else:
+                    await mm.dispatch_pending()
+                assert await wait_state() == "released"
+
+            await mm.bind_atomic(peer)
+            await mm.dispatch_pending()
+            (reply,) = await mm.get_replies(draft.message_id)
+            (reply_delivery,) = await mm.get_deliveries(reply.message_id)
+            assert reply_delivery.state == DeliveryState.PENDING
+            resume_options = {
+                "expected_last_node_id": parent.last_node_id,
+                "acknowledge_side_effect_risk": True,
+            }
+            if after_stop == "claimed":
+                # 回复已由普通收件箱执行，但尚未提交任何节点移动原检查点。
+                async with backend.transaction() as db:
+                    await db.execute(
+                        "UPDATE mm_deliveries SET state='failed' WHERE delivery_id=?",
+                        (reply_delivery.delivery_id,),
+                    )
+                assert (await mm.get_progress(parent.delivery_id)).resume_block_reason == (
+                    "inline_reply_unavailable"
+                )
+                with pytest.raises(ValueError, match="inline_reply_unavailable"):
+                    await mm.resume_interrupted(parent.delivery_id, **resume_options)
+                assert await wait_state() == "released"
+                return
+            if after_stop == "resume":
+                await mm.resume_interrupted(parent.delivery_id, **resume_options)
+                await mm._scan()
+                assert await wait_state() == "waiting"
+
+            await mm.bind_atomic(sender)
+            later = await mm.send_external(
+                sender="user", recipient_ids=("a",), content="later", idempotency_key="later"
+            )
+            await asyncio.wait_for(mm.dispatch_pending(), 3)
+            (reply_delivery,) = await mm.get_deliveries(reply.message_id)
+            assert reply_delivery.state == DeliveryState.COMPLETED
+            assert (await mm.get_replies(later.message_id))[0].content == "next"
+            if after_stop == "resume":
+                assert reply_delivery.attempts == 0
+                assert reply_delivery.consumed_node_id is not None
+                assert await wait_state() == "consumed"
+                (parent,) = await mm.get_deliveries(request.message_id)
+                assert parent.state == DeliveryState.COMPLETED
+                node = await backend.load_node("a", reply_delivery.consumed_node_id)
+                assert node.action_results[0]["action_result"].data["response"] == "peer reply"
+            else:
+                assert reply_delivery.attempts == 1
+                assert await wait_state() == "released"
+                assert sum(message.text == "peer reply" for message in llm.calls[0]) == 1
+        finally:
+            await mm.close()
 
 
 async def test_acceptance_freezes_sessions_and_late_reply_preserves_active_selection(tmp_path):

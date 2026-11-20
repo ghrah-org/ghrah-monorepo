@@ -314,7 +314,7 @@ class ContextManager:
             self._turn_abort_event.set()
 
     def request_turn_abort(self, turn_id: str) -> None:
-        """吊销该轮提交资格，并唤醒属于该轮的审批等待。"""
+        """吊销该轮提交资格，并唤醒属于该轮的审批和同步回复等待。"""
         if self.active_turn_id == turn_id:
             self._revoked_turns.add(turn_id)
             self.consume_compact_request()
@@ -322,7 +322,7 @@ class ContextManager:
                 self._turn_abort_event.set()
 
     def turn_abort_event(self) -> asyncio.Event | None:
-        """获取该轮审批等待使用的中止信号。"""
+        """获取该轮等待者使用的中止信号。"""
         return self._turn_abort_event
 
     def check_turn_revoked(self) -> None:
@@ -488,9 +488,17 @@ class ContextManager:
                     return recovery.ConvergenceOutcome(row)
                 resolved_id = row["turn_id"]
                 opener = row["opener_delivery_id"]
-                if opener is not None and settle_deliveries is not None:
+                if opener is not None and (
+                    settle_deliveries is not None
+                    or await db.execute_fetchall(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='mm_delivery_results'"
+                    )
+                ):
                     async with db.execute(
-                        "SELECT 1 FROM mm_delivery_results WHERE delivery_id=?", (opener,)
+                        "SELECT 1 FROM mm_delivery_results r JOIN mm_deliveries d "
+                        "ON d.delivery_id=r.delivery_id WHERE d.delivery_id=? AND d.turn_id=?",
+                        (opener, resolved_id),
                     ) as cursor:
                         if await cursor.fetchone() is not None:
                             return recovery.ConvergenceOutcome(row, result_pending=True)

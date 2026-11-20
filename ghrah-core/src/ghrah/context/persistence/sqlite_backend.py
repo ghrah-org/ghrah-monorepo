@@ -29,6 +29,7 @@ from typing import Any
 
 import aiosqlite
 
+from ghrah.context.chain import ActionChain
 from ghrah.context.node import ContextNode
 from ghrah.context.persistence.backend import PersistenceBackend
 from ghrah.context.persistence.catalog import ContextChainMeta
@@ -182,6 +183,9 @@ CREATE TABLE IF NOT EXISTS turns (
 );
 CREATE INDEX IF NOT EXISTS idx_turns_agent_status ON turns(agent_name, session_id, status);
 CREATE INDEX IF NOT EXISTS idx_turns_opened ON turns(agent_name, opened_at);
+CREATE INDEX IF NOT EXISTS idx_turns_session_opened ON turns(
+    agent_name, session_id, opened_at, turn_id
+);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_turns_active ON turns(agent_name, session_id)
     WHERE status IN ('open','waiting_hitl');
 CREATE INDEX IF NOT EXISTS idx_nodes_turn ON nodes(turn_id);
@@ -208,6 +212,8 @@ CREATE TABLE IF NOT EXISTS hitl_requests (
     resolution TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_hitl_pending ON hitl_requests(agent_name, session_id, status);
+CREATE INDEX IF NOT EXISTS idx_hitl_waiting_only ON hitl_requests(agent_name, session_id)
+    WHERE status='pending';
 CREATE INDEX IF NOT EXISTS idx_hitl_turn ON hitl_requests(turn_id);
 """
 
@@ -643,14 +649,19 @@ class SqliteBackend(PersistenceBackend):
         db = await self._ensure_db()
         if not await self._has_turn_schema(db):
             return []
+        where = "agent_name=?"
+        params: list[str | int] = [agent_name]
+        if session_id is not None:
+            where += " AND session_id=?"
+            params.append(session_id)
+        if status is not None:
+            where += " AND status=?"
+            params.append(status)
         return list(
-            await (
-                await db.execute(
-                    "SELECT * FROM turns WHERE agent_name=? AND (? IS NULL OR session_id=?) "
-                    "AND (? IS NULL OR status=?) ORDER BY opened_at DESC, turn_id DESC LIMIT ?",
-                    (agent_name, session_id, session_id, status, status, limit),
-                )
-            ).fetchall()
+            await db.execute_fetchall(
+                f"SELECT * FROM turns WHERE {where} ORDER BY opened_at DESC, turn_id DESC LIMIT ?",
+                (*params, limit),
+            )
         )
 
     async def load_hitl_request(
@@ -801,6 +812,71 @@ class SqliteBackend(PersistenceBackend):
             branches=branches,
             nodes=nodes,
         )
+
+    async def load_branch_head(
+        self, agent_name: str, session_id: str, branch_id: str
+    ) -> str | None:
+        """按归属精确读取分支头节点 ID，包含软删除的会话和分支。"""
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return None
+        async with db.execute(
+            "SELECT b.head_node_id FROM branches b "
+            "JOIN sessions s ON s.session_id=b.session_id "
+            "JOIN chain_meta c ON c.agent_name=s.agent_name "
+            "WHERE b.branch_id=? AND s.session_id=? AND s.agent_name=?",
+            (branch_id, session_id, agent_name),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return (row[0] or None) if row is not None else None
+
+    async def load_branch_history(
+        self, agent_name: str, session_id: str, branch_id: str, *, limit: int
+    ) -> tuple[str, list[ContextNode]] | None:
+        """在同一快照按指定分支的 Head 回溯节点，限制持久层读取窗口。"""
+        db = await self._ensure_db()
+        if not self._context_schema_present:
+            return None
+        await self._has_turn_schema(db)
+        columns = _projected_node_columns("boundaries", self._schema_version)
+        rows = await db.execute_fetchall(
+            f"""
+            WITH RECURSIVE target AS (
+                SELECT c.active_session_id, b.head_node_id FROM chain_meta c
+                JOIN sessions s ON s.agent_name=c.agent_name AND s.session_id=?
+                JOIN branches b ON b.session_id=s.session_id
+                    AND b.branch_id=COALESCE(NULLIF(?, ''), s.active_branch_id)
+                WHERE c.agent_name=?
+            ), ancestors(node_id) AS (
+                SELECT head_node_id FROM target
+                UNION
+                SELECT n.parent_id FROM ancestors a JOIN nodes n ON n.id=a.node_id
+                WHERE n.agent_name=? AND n.session_id=? AND n.parent_id IS NOT NULL
+                LIMIT ?
+            )
+            SELECT target.active_session_id, target.head_node_id, {columns}
+            FROM target LEFT JOIN ancestors ON TRUE
+            LEFT JOIN nodes n ON n.id=ancestors.node_id AND n.agent_name=? AND n.session_id=?
+            """,
+            (
+                session_id,
+                branch_id,
+                agent_name,
+                agent_name,
+                session_id,
+                min(limit, 2**63 - 1) if limit > 0 else -1,
+                agent_name,
+                session_id,
+            ),
+        )
+        if not rows:
+            return None
+        chain = ActionChain(agent_name=agent_name, session_id=session_id)
+        for row in rows:
+            if row["id"] is not None:
+                chain.ingest_node(deserialize_node(self._row_to_dict(row)))
+        head = rows[0]["head_node_id"]
+        return rows[0]["active_session_id"], chain.get_history_from(head)
 
     async def has_checkpoint(self, agent_name: str) -> bool:
         """判断 Agent 是否存在 checkpoint（单条索引查询，不加载节点）。"""
