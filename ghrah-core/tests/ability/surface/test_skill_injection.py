@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
-from ghrah.protocol.ability_tree import SkillNode
+from ghrah.protocol.ability_tree import AbilityNode, AbilityTreeView, SkillNode
 
 from ghrah.ability.loading.ability_schema import parse_definition
 from ghrah.ability.loading.skill_context import next_skill_reminder, render_skill_catalog
@@ -20,6 +20,7 @@ from ghrah.ability.surface.catalog import (
     SkillSurfaceEntry,
     SurfaceCatalog,
     _skill_entries,
+    catalog_from_view,
 )
 from ghrah.ability.surface.runtime import ToolSurfaceRuntime
 
@@ -104,6 +105,79 @@ def test_skill_entry_rejects_non_skill_members() -> None:
     )
     with pytest.raises((MemberError, ValueError), match="skill"):
         SkillSurfaceEntry(member=member, name="docs/render")
+
+
+SKILL_ONLY_DEFINITION = """\
+format: ghrah.ability-definition
+schema_version: '2'
+identity:
+  namespace: acme
+  name: guide
+  version: '1.0.0'
+title: Guide package
+description: 纯技能包夹具
+members:
+- namespace: acme
+  name: guide
+  member: acme.guide.style
+  type: skill
+  version: 1.0.0
+  ability_type: external
+  data:
+    title: Style
+    description: 写作风格
+    path: acme/guide/1.0.0/skills/style/SKILL.md
+    media_type: text/markdown
+    tags: [writing]
+    assets: {}
+    references: {}
+    scripts: {}
+"""
+
+
+def _pure_skill_catalog() -> SurfaceCatalog:
+    """纯技能包没有 operation，目录也必须列出它的技能。"""
+    definition = parse_definition(yaml.safe_dump(yaml.safe_load(SKILL_ONLY_DEFINITION)), source="test")
+    digest = "sha256:" + "0" * 64
+    node = AbilityNode(
+        alias="guide",
+        instance_id="acme-guide",
+        instance_revision=1,
+        definition_digest=digest,
+        version_digest=digest,
+        revision=1,
+        allowed_roots=[],
+        operations=[],
+        skills=[
+            SkillNode(
+                key="style",
+                title="Style",
+                description="写作风格",
+                body_allowed=True,
+                assets=[],
+                references=[],
+                availability="ready",
+            )
+        ],
+        availability="ready",
+    )
+    view = AbilityTreeView(
+        project_id="project",
+        agent_id="agent",
+        run_id="run",
+        revision=1,
+        abilities=[node],
+        bound_tools=[],
+    )
+    return catalog_from_view(view, {digest: definition})
+
+
+def test_pure_skill_package_still_enters_the_catalog() -> None:
+    catalog = _pure_skill_catalog()
+
+    assert catalog.tools == ()
+    assert [item.catalog_name for item in catalog.skills] == ["guide/style"]
+    assert catalog.skills[0].read_path == "acme/guide/1.0.0/skills/style/SKILL.md"
 
 
 def test_catalog_entry_carries_the_read_address() -> None:

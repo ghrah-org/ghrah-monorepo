@@ -117,7 +117,6 @@ def catalog_from_view(
     """
     nodes = {node.alias: node for node in view.abilities}
     tools = []
-    skills: list[SkillSurfaceEntry] = []
     for entry in project_grants(view):
         node = nodes[entry.package]
         definition = definitions[node.version_digest]
@@ -141,7 +140,15 @@ def catalog_from_view(
                 ),
             )
         )
-        skills.extend(_skill_entries(definition, node.alias, tuple(node.skills)))
+    # 技能按包节点独立收集：纯技能包没有 operation，不能挂在工具循环里，
+    # 否则这类包的技能永远进不了目录。
+    skills: list[SkillSurfaceEntry] = []
+    for node in view.abilities:
+        if node.availability == "unavailable":
+            continue
+        skills.extend(
+            _skill_entries(definitions[node.version_digest], node.alias, tuple(node.skills))
+        )
     return SurfaceCatalog(
         view.project_id,
         view.agent_id,
