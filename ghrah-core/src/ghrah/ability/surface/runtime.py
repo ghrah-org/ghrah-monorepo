@@ -41,6 +41,18 @@ _UNBOUND_SKILLS_TEMPLATE = (
 )
 
 
+def _member_forms(name: str) -> set[str]:
+    """成员全名的等价形态。
+
+    能力定义侧对单层身份包输出两段名（``research.research``），模板/快照用三段
+    规范名（``research.research.research``）；绑定集合的比较必须两种都认。
+    """
+    parts = name.split(".")
+    if len(parts) != 3 or parts[0] != parts[1]:
+        return {name}
+    return {name, f"{parts[0]}.{parts[2]}"}
+
+
 def _unbound_skills_note(names: list[str]) -> str:
     """可见但未绑定技能的提示：只给名字和绑定入口，不展开摘要。"""
     return _UNBOUND_SKILLS_TEMPLATE.format(
@@ -173,8 +185,9 @@ class ToolSurfaceRuntime:
         if bound_set is None:
             bound, unbound = skills, []
         else:
-            bound = [item for item in skills if item.member.member in bound_set]
-            unbound = [item for item in skills if item.member.member not in bound_set]
+            forms = {form for name in bound_set for form in _member_forms(name)}
+            bound = [item for item in skills if item.member.member in forms]
+            unbound = [item for item in skills if item.member.member not in forms]
         text, digest = next_skill_reminder(bound, self._skill_digest)
         self._skill_digest = digest
         if not bound and unbound:
@@ -228,7 +241,7 @@ class ToolSurfaceRuntime:
                 if name not in RESERVED_TOOL_NAMES
                 and (self._bound is None or tool.full_name in self._bound)
             }
-            skill_full = {item.member.member for item in catalog.skills}
+            skill_full = {form for item in catalog.skills for form in _member_forms(item.member.member)}
             self._bound &= bound_full | skill_full
             discoverable = [
                 name
@@ -319,9 +332,9 @@ class ToolSurfaceRuntime:
             if self._bound is None:
                 self._bound = self._baseline_bindings(catalog)
             if bind:
-                self._bound.add(skill.member.member)
+                self._bound |= _member_forms(skill.member.member)
             else:
-                self._bound.discard(skill.member.member)
+                self._bound -= _member_forms(skill.member.member)
             await self._persist_bound()
             return True, ""
 
