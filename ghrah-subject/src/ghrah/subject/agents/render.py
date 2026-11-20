@@ -332,6 +332,7 @@ def render_assembly(
             if granted_skills is not None and member.key not in granted_skills:
                 not_granted.append(member.member)
                 continue
+            skill_bind = True if bindings is None else member.member in bindings
             members.append(
                 AgentAssemblyMember(
                     member=member.member,
@@ -339,7 +340,7 @@ def render_assembly(
                     version=version,
                     ability_type=ability_type,
                     permissions=permissions,
-                    axes=AgentMemberAxes(visible=True, available=bind),
+                    axes=AgentMemberAxes(visible=True, available=skill_bind),
                 )
             )
         # 无授权视图时不产出授权计划：Subject 不写授权行（由 Core 启动核定器落实），

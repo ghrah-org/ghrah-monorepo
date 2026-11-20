@@ -264,6 +264,29 @@ def test_skills_enter_members_without_axes() -> None:
     assert rendered.grants[0].scripts == {"style": ()}
 
 
+def test_skill_only_package_renders_without_operations() -> None:
+    """纯技能包（没有 operation）也要能渲染：技能绑定独立于 operation 循环。"""
+    rendered = render_assembly(
+        _template(
+            available_members=[
+                {
+                    "namespace": "ghrah",
+                    "name": "fs",
+                    "member": "ghrah.fs.style",
+                    "type": "skill",
+                    "ability_type": "kernel",
+                }
+            ]
+        ),
+        agent_name="weekly",
+        workspaces=_WORKSPACES,
+        granted=[_granted(operations=(), skills=("style",))],
+    )
+    skills = [item for item in rendered.spec.members if item.type == "skill"]
+    assert [item.member for item in skills] == ["ghrah.fs.style"]
+    assert skills[0].axes.available is True
+
+
 def test_packages_payload_is_no_longer_a_storage_shape() -> None:
     """落库只认成员数组：旧的包级入参在模型层被拒。"""
     with pytest.raises(ValidationError):
