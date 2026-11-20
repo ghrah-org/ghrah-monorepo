@@ -590,6 +590,18 @@ async def test_binding_controls_the_static_set_and_persists(environment):
     assert not ok and "not found" in error
 
 
+async def test_bound_meta_tools_do_not_break_static_assembly(environment):
+    """元工具按固定通道注入；即使成员轴把它们标成绑定，也不能塞进 static。"""
+    store, materializer, result, config, runs = environment
+    surface = materializer._surface_services[AGENT][-1]  # noqa: SLF001
+    surface._bound = {"acme.tools.op_000", "ghrah.core.describe_tool"}  # noqa: SLF001
+
+    names = [item["function"]["name"] for item in await surface.refresh(128000)]
+    assert "op_000" in names
+    assert "describe_tool" in names
+    assert "op_001" not in names
+
+
 async def test_skills_follow_the_bind_axis_in_the_catalog(environment):
     """技能成员按绑定轴分流：绑定进正式目录，未绑定只在一行提示里可发现。"""
     store, materializer, result, config, runs = environment

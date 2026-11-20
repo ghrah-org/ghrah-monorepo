@@ -221,10 +221,12 @@ class ToolSurfaceRuntime:
             # 绑定集合决定常驻集：bound 的成员进静态装配，其余可见成员留给
             # reset 发现（progressive）。成员消失（撤销/卸载）时自然掉出；
             # 技能成员没有工具形态，单独保留在集合里（由 skill_reminder 消费）。
+            # 保留的元工具永远走 extras 通道，不能出现在 static 里（装配会拒绝）。
             bound_full = {
                 tool.full_name
-                for tool in ready.values()
-                if (self._bound is None) or tool.full_name in self._bound
+                for name, tool in ready.items()
+                if name not in RESERVED_TOOL_NAMES
+                and (self._bound is None or tool.full_name in self._bound)
             }
             skill_full = {item.member.member for item in catalog.skills}
             self._bound &= bound_full | skill_full
