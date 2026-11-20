@@ -143,7 +143,16 @@ def _resolve_member(
     try:
         manifest = source.load_ability(member, version=version)
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
-        raise AssemblyError(f"member not resolvable: {member}: {error}") from error
+        # 单层身份包（安装槽 <ns>/<name>/，identity 省略 name）在能力来源里按
+        # 旧两段名登记；三段规范名先按原样试，失败再回退一次。
+        parts = member.split(".")
+        fallback = f"{parts[0]}.{parts[-1]}" if len(parts) == 3 and parts[0] == parts[1] else None
+        if fallback is None or fallback == member:
+            raise AssemblyError(f"member not resolvable: {member}: {error}") from error
+        try:
+            manifest = source.load_ability(fallback, version=version)
+        except Exception as retry_error:  # noqa: BLE001
+            raise AssemblyError(f"member not resolvable: {member}: {retry_error}") from retry_error
     declared = manifest.metadata.permissions
     requested = _permissions(request)
     return ResolvedAbility(

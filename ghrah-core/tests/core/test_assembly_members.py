@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from ghrah.ability.member import Member
-from ghrah.core.agents.assembly import AssemblyError, parse_spec_member
+from ghrah.core.agents.assembly import AssemblyError, _resolve_member, parse_spec_member
 
 
 def test_spec_member_becomes_the_core_entity() -> None:
@@ -76,6 +76,36 @@ def test_axes_allow_discoverable_but_unbound() -> None:
                 "axes": {"visible": False, "available": True},
             }
         )
+
+
+def test_single_level_package_retries_with_legacy_two_segment_name() -> None:
+    """单层身份包在能力来源里按两段名登记：三段名失败后要回退一次。"""
+    calls: list[str] = []
+
+    class Source:
+        def load_ability(self, full_name: str, *, version: str | None = None) -> object:
+            calls.append(full_name)
+            raise RuntimeError(f"lookup failed for {full_name}")
+
+    with pytest.raises(AssemblyError) as error:
+        _resolve_member(Source(), "research.research.research", None, version="0.1.0")
+
+    assert calls == ["research.research.research", "research.research"]
+    assert "lookup failed for research.research" in str(error.value)
+    assert "lookup failed for research.research.research" not in str(error.value)
+
+
+def test_non_degenerate_member_is_not_retried() -> None:
+    calls: list[str] = []
+
+    class Source:
+        def load_ability(self, full_name: str, *, version: str | None = None) -> object:
+            calls.append(full_name)
+            raise RuntimeError("boom")
+
+    with pytest.raises(AssemblyError):
+        _resolve_member(Source(), "ghrah.fs.read_file", None)  # type: ignore[arg-type]
+    assert calls == ["ghrah.fs.read_file"]
 
 
 def test_unknown_type_is_rejected() -> None:
