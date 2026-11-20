@@ -219,9 +219,9 @@ class AgentInstanceStore:
     ) -> AgentInstanceRecord | None:
         """改写某实例成员快照的绑定轴；其余字段（含配置与表面）原样保留。
 
-        绑定状态的权威就是这张表：成员条目里的 ``axes.available`` 承载
-        "绑定为工具"（Core 内部按 ``MemberAxes.bind`` 读取），``visible`` 不动。
-        成员不在快照里时忽略——绑定不能凭空创造成员。
+        绑定状态的权威就是这张表：成员条目里的 ``axes.bind`` 承载
+        "绑定为工具"（历史快照可能写 ``axes.available``，两键同时同步），
+        ``visible`` 不动。成员不在快照里时忽略——绑定不能凭空创造成员。
 
         Args:
             agent_id: 实例标识。
@@ -239,7 +239,11 @@ class AgentInstanceStore:
             entry = dict(item)
             axes = dict(entry.get("axes") or {})
             name = str(entry.get("member") or "")
-            axes["available"] = name in wanted
+            bound_now = name in wanted
+            axes["bind"] = bound_now
+            if "available" in axes:
+                # 旧快照键：同步，避免两处说法不一致。
+                axes["available"] = bound_now
             entry["axes"] = axes
             members.append(entry)
         return await self.save(
