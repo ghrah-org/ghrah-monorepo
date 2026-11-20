@@ -602,6 +602,54 @@ async def test_bound_meta_tools_do_not_break_static_assembly(environment):
     assert "op_001" not in names
 
 
+async def test_degenerate_two_segment_skill_names_stay_bound(environment):
+    """快照用三段规范名、定义侧给两段退化名时，绑定不能被误判成未绑定。"""
+    from unittest.mock import AsyncMock
+
+    from ghrah.ability.member import Member, MemberAxes
+    from ghrah.ability.surface.catalog import SkillSurfaceEntry, SurfaceCatalog
+
+    store, materializer, result, config, runs = environment
+    surface = materializer._surface_services[AGENT][-1]  # noqa: SLF001
+    member = Member(
+        namespace="research",
+        name="research",
+        member="research.research",
+        type="skill",
+        version="0.1.0",
+        ability_type="external",
+        axes=MemberAxes(visible=True, bind=True),
+        data={
+            "title": "research",
+            "description": "调研",
+            "path": "research/research/0.1.0/skills/research/SKILL.md",
+            "media_type": "text/markdown",
+        },
+    )
+    catalog = SurfaceCatalog(
+        "project",
+        "agent",
+        "run",
+        1,
+        (),
+        (SkillSurfaceEntry(member=member, name="research/research"),),
+    )
+    surface._bound = {"research.research.research"}  # noqa: SLF001 - 三段快照名
+    surface._catalog = AsyncMock(return_value=catalog)  # noqa: SLF001
+
+    text = await surface.skill_reminder()
+    assert text is not None and "research/research" in text
+    assert "not bound" not in text
+
+    await surface.refresh(128000)
+    assert surface._bound == {"research.research.research"}  # noqa: SLF001
+
+    ok, error = await surface.set_member_bound("research/research", bind=False)
+    assert ok, error
+    assert "research.research.research" not in (surface._bound or set())  # noqa: SLF001
+    assert "research.research" not in (surface._bound or set())  # noqa: SLF001
+
+
 async def test_skills_follow_the_bind_axis_in_the_catalog(environment):
     """技能成员按绑定轴分流：绑定进正式目录，未绑定只在一行提示里可发现。"""
     store, materializer, result, config, runs = environment

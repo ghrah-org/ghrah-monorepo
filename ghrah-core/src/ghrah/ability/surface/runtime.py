@@ -48,9 +48,11 @@ def _member_forms(name: str) -> set[str]:
     规范名（``research.research.research``）；绑定集合的比较必须两种都认。
     """
     parts = name.split(".")
-    if len(parts) != 3 or parts[0] != parts[1]:
-        return {name}
-    return {name, f"{parts[0]}.{parts[2]}"}
+    if len(parts) == 3 and parts[0] == parts[1]:
+        return {name, f"{parts[0]}.{parts[2]}"}
+    if len(parts) == 2 and parts[0] == parts[1]:
+        return {name, f"{parts[0]}.{parts[1]}.{parts[1]}"}
+    return {name}
 
 
 def _unbound_skills_note(names: list[str]) -> str:
@@ -242,7 +244,10 @@ class ToolSurfaceRuntime:
                 and (self._bound is None or tool.full_name in self._bound)
             }
             skill_full = {form for item in catalog.skills for form in _member_forms(item.member.member)}
-            self._bound &= bound_full | skill_full
+            keep = bound_full | skill_full
+            # 快照里的成员名可能是三段规范名，而定义侧给出两段退化名；按等价
+            # 形态判断保留，避免纯技能包的绑定被修剪掉。
+            self._bound = {name for name in self._bound if name in keep or _member_forms(name) & keep}
             discoverable = [
                 name
                 for name, tool in ready.items()
