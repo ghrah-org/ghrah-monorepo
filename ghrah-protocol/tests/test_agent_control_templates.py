@@ -9,20 +9,17 @@ import pytest
 from pydantic import ValidationError
 
 from ghrah.protocol.agent_control import (
-    AgentTemplateAbilityRequestView,
     AgentTemplateArchiveRequest,
     AgentTemplateContextPolicyView,
     AgentTemplateCreateRequest,
     AgentTemplateDetailView,
     AgentTemplateListView,
+    AgentTemplateMemberView,
     AgentTemplateMetadataView,
-    AgentTemplateOperationView,
-    AgentTemplatePackageView,
     AgentTemplatePathRequestView,
     AgentTemplatePermissionRequestView,
     AgentTemplateReferencesView,
     AgentTemplateRevisionsView,
-    AgentTemplateSurfaceView,
     AgentTemplateUpdateRequest,
 )
 
@@ -38,7 +35,7 @@ def test_create_request_only_requires_metadata() -> None:
     assert change.model is None
     assert change.prompt is None
     assert change.context_policy is None
-    assert change.ability_request is None
+    assert change.available_members is None
     assert change.permission_request is None
     assert change.path_request == []
 
@@ -56,15 +53,15 @@ def test_context_policy_defaults_to_unlimited_iterations() -> None:
         AgentTemplateContextPolicyView.model_validate({"max_iterations": -2})
 
 
-def test_surface_defaults_and_max_static_floor() -> None:
-    surface = AgentTemplateSurfaceView.model_validate({})
-    assert surface.mode == "auto"
-    assert surface.static == []
-    assert surface.max_static is None
+def test_member_view_rejects_bad_shapes() -> None:
+    member = AgentTemplateMemberView.model_validate(
+        {"namespace": "a", "name": "b", "member": "a.b.c"}
+    )
+    assert member.member == "a.b.c"
     with pytest.raises(ValidationError):
-        AgentTemplateSurfaceView.model_validate({"max_static": 0})
+        AgentTemplateMemberView.model_validate({"namespace": "a", "name": "b", "member": ""})
     with pytest.raises(ValidationError):
-        AgentTemplateSurfaceView.model_validate({"mode": "unknown"})
+        AgentTemplateMemberView.model_validate({"namespace": "a", "name": "b", "member": "a.b.c", "unknown": 1})
 
 
 def test_permission_request_defaults() -> None:
@@ -85,11 +82,9 @@ def test_unknown_fields_are_rejected_everywhere() -> None:
     with pytest.raises(ValidationError):
         AgentTemplateCreateRequest.model_validate({"metadata": MINIMAL_METADATA, "unknown": True})
     with pytest.raises(ValidationError):
-        AgentTemplatePackageView.model_validate(
-            {"package": "writing.beta", "origin": "builtin", "unknown": 1}
+        AgentTemplateMemberView.model_validate(
+            {"namespace": "a", "name": "b", "member": "a.b.c", "unknown": 1}
         )
-    with pytest.raises(ValidationError):
-        AgentTemplateOperationView.model_validate({"key": "draft", "available": "true"})
 
 
 def test_namespace_and_name_patterns() -> None:
@@ -103,40 +98,33 @@ def test_namespace_and_name_patterns() -> None:
             AgentTemplateMetadataView.model_validate(metadata)
 
 
-def test_whole_container_excludes_members() -> None:
-    AgentTemplatePackageView.model_validate(
-        {"package": "writing.beta", "origin": "builtin", "whole_container": True}
-    )
-    with pytest.raises(ValidationError):
-        AgentTemplatePackageView.model_validate(
+def test_three_segment_member_names_round_trip() -> None:
+    members = [
+        AgentTemplateMemberView.model_validate(
             {
-                "package": "writing.beta",
-                "origin": "builtin",
-                "whole_container": True,
-                "operations": [{"key": "draft"}],
+                "namespace": "ghrah",
+                "name": "fs",
+                "member": "ghrah.fs.read_file",
+                "type": "operation",
+                "ability_type": "kernel",
             }
-        )
-    with pytest.raises(ValidationError):
-        AgentTemplatePackageView.model_validate(
+        ),
+        AgentTemplateMemberView.model_validate(
             {
-                "package": "writing.beta",
-                "origin": "builtin",
-                "whole_container": True,
-                "skills": [{"key": "style"}],
+                "namespace": "research",
+                "name": "research",
+                "member": "research.research.research",
+                "type": "skill",
+                "version": "0.1.0",
             }
-        )
-
-
-def test_invisible_operation_cannot_stay_available() -> None:
-    assert AgentTemplateOperationView.model_validate({"key": "a"}).available is True
-    with pytest.raises(ValidationError):
-        AgentTemplateOperationView.model_validate({"key": "a", "visible": False, "available": True})
-    assert (
-        AgentTemplateOperationView.model_validate(
-            {"key": "a", "visible": False, "available": False}
-        ).visible
-        is False
-    )
+        ),
+    ]
+    assert [item.member for item in members] == [
+        "ghrah.fs.read_file",
+        "research.research.research",
+    ]
+    assert members[0].version is None
+    assert members[1].version == "0.1.0"
 
 
 def test_path_request_scope_and_subpath_rules() -> None:
@@ -167,11 +155,13 @@ def test_path_request_scope_and_subpath_rules() -> None:
         AgentTemplatePathRequestView.model_validate({**base, "scope": "agent", "subpath": "/abs"})
 
 
-def test_ability_request_surface_default_is_materialized() -> None:
-    request = AgentTemplateAbilityRequestView.model_validate({})
-    assert request.surface.mode == "auto"
-    assert request.packages == []
-    assert request.mcp_refs == []
+def test_available_members_defaults_to_none_on_create() -> None:
+    change = AgentTemplateCreateRequest.model_validate({"metadata": MINIMAL_METADATA})
+    assert change.available_members is None
+    member = AgentTemplateMemberView.model_validate(
+        {"namespace": "a", "name": "b", "member": "a.b.c"}
+    )
+    assert (member.type, member.ability_type, member.version) == ("operation", "external", None)
 
 
 def test_update_request_patch_semantics() -> None:
@@ -230,11 +220,7 @@ def test_view_formats_and_detail_shape() -> None:
                 "window": None,
                 "overrides": None,
             },
-            "ability_request": {
-                "surface": {"mode": "auto", "static": [], "max_static": None},
-                "packages": [],
-                "mcp_refs": [],
-            },
+            "available_members": [],
             "permission_request": {
                 "auto_approve": [],
                 "require_approval_by_default": True,
