@@ -168,6 +168,58 @@ def test_type_mismatch_is_rejected(monkeypatch) -> None:
         )
 
 
+def test_single_level_package_falls_back_to_namespace(monkeypatch) -> None:
+    """单层身份包（ns == name）在安装记录里叫 namespace，三段名要能回退命中。"""
+    calls: list[str] = []
+    definition = {
+        "format": "ghrah.ability-definition",
+        "schema_version": "2",
+        "identity": {"namespace": "research", "version": "0.1.0"},
+        "title": "Research",
+        "description": "fixture",
+        "members": [
+            {
+                "namespace": "research",
+                "name": "research",
+                "member": "research.research.research",
+                "type": "skill",
+                "version": "0.1.0",
+                "ability_type": "external",
+                "data": {
+                    "title": "research",
+                    "description": "guide",
+                    "path": "research/research/0.1.0/skills/research/SKILL.md",
+                    "media_type": "text/markdown",
+                },
+            }
+        ],
+    }
+
+    def fake_read(install_root: str | None, full_name: str, version: str) -> dict:
+        calls.append(full_name)
+        if full_name == "research":
+            return {"definition": definition}
+        raise __import__("ghrah.core.read.ability_catalog", fromlist=["CatalogError"]).CatalogError(
+            "not_found", full_name
+        )
+
+    monkeypatch.setattr("ghrah.core.agents.members.read_installed_version", fake_read)
+    members = resolve_member_entities(
+        [
+            _item(
+                "research.research.research",
+                type_="skill",
+                version="0.1.0",
+                ability_type="external",
+            )
+        ],
+        install_root="/tmp/ability",
+    )
+
+    assert calls == ["research.research", "research"]
+    assert members[0].data["path"].endswith("skills/research/SKILL.md")
+
+
 def test_snapshot_wire_shape_carries_data() -> None:
     members = resolve_member_entities(
         [_item("ghrah.fs.read_file", type_="operation", version=None, ability_type="kernel")],

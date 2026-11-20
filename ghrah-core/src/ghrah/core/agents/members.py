@@ -51,18 +51,31 @@ def _external_definition(install_root: str | None, reference: Member) -> Any:
     """按版本读安装记录并解析成定义；版本必须显式存在。"""
     if reference.version is None:
         raise AssemblyError(f"external 成员缺少版本，无法定位能力定义：{reference.member}")
-    package = f"{reference.namespace}.{reference.name}"
-    try:
-        payload = read_installed_version(install_root, package, reference.version)
-    except CatalogError as error:
-        raise AssemblyError(f"member not resolvable: {reference.member}: {error}") from error
+    # 单层身份包（安装目录 <ns>/<name>/，但 yaml identity 省略 name）在安装记录里
+    # 的包名是 namespace 本身；两种候选都试，避免把可用包判成不存在。
+    candidates = [f"{reference.namespace}.{reference.name}"]
+    if reference.name == reference.namespace:
+        candidates.append(reference.namespace)
+    payload: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    for package in candidates:
+        try:
+            payload = read_installed_version(install_root, package, reference.version)
+        except CatalogError as error:
+            last_error = error
+            continue
+        break
+    if payload is None:
+        raise AssemblyError(
+            f"member not resolvable: {reference.member}: {last_error or 'not installed'}"
+        )
     raw = payload.get("definition")
     if not isinstance(raw, dict):
         raise AssemblyError(
             f"member not resolvable: {reference.member}: installed definition missing"
         )
     try:
-        return definition_from_payload(raw, source=f"installed {package}@{reference.version}")
+        return definition_from_payload(raw, source=f"installed {candidates[0]}@{reference.version}")
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
         raise AssemblyError(f"member not resolvable: {reference.member}: {error}") from error
 
