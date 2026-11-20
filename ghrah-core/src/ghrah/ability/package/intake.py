@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -95,7 +96,12 @@ def normalize_source(source: str | Path, *, name_hint: str | None = None) -> Int
     raw = _read_text(root / _DEFINITION_NAME)
     if raw is not None and _declares_mcp(raw):
         return IntakeResult(definition=None, rendered=raw, changed=False, is_mcp=True)
+    # 先把包内文本源统一成 UTF-8 无 BOM + LF：上传包常见的 CRLF/BOM 不该阻断安装，
+    # 也不该让 SKILL.md frontmatter 解析失败。这一步只改文本，不动二进制。
+    normalized = _normalize_text_sources(root)
     header, warnings = _header_for(root, name_hint=name_hint)
+    if normalized:
+        warnings = (*warnings, f"已把 {len(normalized)} 个文本源统一为 LF")
     try:
         rendered, _members, _warnings = render_document(root, header, lenient=True)
     except BuildError as exc:
@@ -125,6 +131,37 @@ def _read_text(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except OSError, UnicodeDecodeError:
         return None
+
+
+_TEXT_SUFFIXES = frozenset({".py", ".md", ".yaml", ".yml", ".json", ".txt"})
+_SKIP_DIRS = frozenset({"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+
+
+def _normalize_text_sources(root: Path) -> tuple[str, ...]:
+    """把包内文本源统一成 UTF-8 无 BOM + LF，返回被改写的相对路径。
+
+    上传包经常带着 CRLF 或 BOM（``CREDITS.md``、从别人仓库抄来的 ``SKILL.md``）。
+    这些不影响语义，却会让「包内文本必须 LF」的既有校验直接拒绝整个包，因此
+    在入库规范化阶段就地修正；二进制文件不碰。
+    """
+    changed: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name.casefold() not in _SKIP_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix.casefold() not in _TEXT_SUFFIXES:
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            text = data[3:] if data.startswith(b"\xef\xbb\xbf") else data
+            if b"\r" in text:
+                text = text.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            if text != data:
+                path.write_bytes(text)
+                changed.append(path.relative_to(root).as_posix())
+    return tuple(changed)
 
 
 def _declares_mcp(raw: str) -> bool:

@@ -205,6 +205,35 @@ def test_mcp_snapshot_with_members_is_also_passed_through(tmp_path: Path) -> Non
     assert (root / "ability.yaml").read_text(encoding="utf-8") == snapshot
 
 
+def test_crlf_in_non_member_file_does_not_block_import(tmp_path: Path) -> None:
+    """包里的杂物（CREDITS.md）用 CRLF 不该拒绝整个包；入库时统一成 LF。"""
+    root = _package(tmp_path / "acme.tools")
+    credits = root / "CREDITS.md"
+    credits.write_bytes(b"# Credits\r\n\r\n- someone\r\n")
+
+    result = normalize_source(root)
+
+    assert [member.member for member in result.definition.to_members()] == ["acme.tools.op_0"]
+    assert credits.read_bytes() == b"# Credits\n\n- someone\n"
+    assert any("LF" in item for item in result.warnings)
+
+
+def test_stray_files_inside_member_directories_are_ignored(tmp_path: Path) -> None:
+    """operations/ 下的说明文件、skills/<name>/ 下的杂物只跳过，不阻断安装。"""
+    root = _package(tmp_path / "acme.tools", skill=True)
+    (root / "operations" / "notes.txt").write_text("说明\n", encoding="utf-8", newline="\n")
+    (root / "skills" / "guide" / "CREDITS.md").write_text(
+        "来源\n", encoding="utf-8", newline="\n"
+    )
+
+    result = normalize_source(root)
+
+    assert [member.member for member in result.definition.to_members()] == [
+        "acme.tools.op_0",
+        "acme.tools.guide",
+    ]
+
+
 def test_second_normalisation_is_a_no_op(tmp_path: Path) -> None:
     root = _package(tmp_path / "acme.tools")
     normalize_source(root)
