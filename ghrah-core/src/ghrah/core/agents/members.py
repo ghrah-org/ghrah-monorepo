@@ -23,7 +23,7 @@ from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.loading.ability_schema import definition_from_payload
 from ghrah.ability.member import Member, MemberAxes, MemberError
 from ghrah.core.agents.assembly import AssemblyError, parse_spec_member
-from ghrah.core.read.ability_catalog import CatalogError, read_installed_version
+from ghrah.core.read.ability_catalog import read_installed_version
 
 __all__ = ["resolve_member_entities"]
 
@@ -61,7 +61,7 @@ def _external_definition(install_root: str | None, reference: Member) -> Any:
     for package in candidates:
         try:
             payload = read_installed_version(install_root, package, reference.version)
-        except CatalogError as error:
+        except Exception as error:  # noqa: BLE001 — 单层身份包会以校验错误拒绝三段包名
             last_error = error
             continue
         break
