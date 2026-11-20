@@ -14,7 +14,7 @@ import yaml
 from ghrah.protocol.ability_tree import SkillNode
 
 from ghrah.ability.loading.ability_schema import parse_definition
-from ghrah.ability.loading.skill_context import next_skill_reminder
+from ghrah.ability.loading.skill_context import next_skill_reminder, render_skill_catalog
 from ghrah.ability.member import Member, MemberError
 from ghrah.ability.surface.catalog import (
     SkillSurfaceEntry,
@@ -106,12 +106,19 @@ def test_skill_entry_rejects_non_skill_members() -> None:
         SkillSurfaceEntry(member=member, name="docs/render")
 
 
+def test_catalog_entry_carries_the_read_address() -> None:
+    """目录条目附带正文读取地址（外部件带版本段）。"""
+    entries = _skill_entries(_definition(), "docs", (_node(),))
+    text = render_skill_catalog(entries, changed=False)
+    assert "read: `acme/tools/1.0.0/skills/guide/SKILL.md`" in text
+
+
 def test_first_injection_uses_the_intro_copy() -> None:
     entries = _skill_entries(_definition(), "docs", (_node(),))
     text, digest = next_skill_reminder(entries, None)
     assert text is not None
     assert "The following skills are available" in text
-    assert "`docs/guide`: 写作指南" in text
+    assert "`docs/guide`" in text and "写作指南" in text
     # 目录每轮注入：摘要不变时仍是介绍口径（文案稳定，利于前缀缓存）。
     again, same = next_skill_reminder(entries, digest)
     assert again is not None
@@ -173,7 +180,7 @@ async def test_runtime_filters_the_catalog_by_the_bind_axis() -> None:
     runtime._catalog = lambda: _catalog(catalog)  # type: ignore[method-assign]
 
     bound_text = await runtime.skill_reminder()
-    assert bound_text is not None and "`docs/guide`: 写作指南" in bound_text
+    assert bound_text is not None and "`docs/guide`" in bound_text and "写作指南" in bound_text
     assert "not bound" not in bound_text
 
     runtime._bound = set()

@@ -95,6 +95,30 @@ async def test_catalog_document_attachment_and_context_use_one_grant(content):
     assert await store.view(ADMIN, ALICE) == before  # 读取不授予、不绑定工具。
 
 
+async def test_load_skill_by_catalog_address(content):
+    """目录条目附带的 read 地址可直接加载，等价于 alias/skill。"""
+    _, provider, _, _, _ = content
+    address = "reporting/reporting/0.1.0/skills/guide/SKILL.md"
+
+    loaded = await provider.load_skill(address)
+    assert loaded["full_name"] == "reports/guide"
+    assert "# 报告编写" in loaded["content"]
+    assert loaded["uri"] == "ability:reports/skill/guide"
+
+    attachment = await provider.load_skill(address, path="references/style.md")
+    assert "短段落" in attachment["content"]
+
+
+async def test_load_skill_by_foreign_address_is_denied(content):
+    """地址反查只在已授予的实例里做：不存在/版本不符都按 not_found 拒绝。"""
+    _, provider, _, _, _ = content
+
+    with pytest.raises(AccessError):
+        await provider.load_skill("reporting/reporting/9.9.9/skills/guide/SKILL.md")
+    with pytest.raises(AccessError):
+        await provider.load_skill("other/other/0.1.0/skills/guide/SKILL.md")
+
+
 async def test_source_changes_and_deletion_do_not_change_committed_bytes(content):
     _, provider, _, source, _ = content
     original = await provider.load_skill("reports/guide")

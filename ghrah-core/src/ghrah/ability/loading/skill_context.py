@@ -127,10 +127,29 @@ def digest_skill_catalog(skills: Sequence[SkillCatalogEntry]) -> str:
         十六进制摘要串。
     """
     canonical = "\n".join(
-        json.dumps([skill.catalog_name, catalog_description(skill.description)])
+        json.dumps(
+            [
+                skill.catalog_name,
+                catalog_description(skill.description),
+                getattr(skill, "read_path", None) or "",
+            ]
+        )
         for skill in sorted(skills, key=lambda item: item.catalog_name)
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _skill_line(skill: SkillCatalogEntry) -> str:
+    """目录里的一条：名字 + 可选读取地址 + 一行描述。
+
+    地址是该技能正文在 ability 根下的相对路径（外部件带版本段，内核件不带），
+    模型可以直接把它交给 ``load_skill`` 精确读取该版本。
+    """
+    read_path = getattr(skill, "read_path", None)
+    address = f" (read: `{read_path}`)" if read_path else ""
+    return (
+        f"- `{skill.catalog_name}`{address}: {_escape_text(catalog_description(skill.description))}"
+    )
 
 
 def render_skill_catalog(skills: Sequence[SkillCatalogEntry], *, changed: bool) -> str:
@@ -145,8 +164,7 @@ def render_skill_catalog(skills: Sequence[SkillCatalogEntry], *, changed: bool) 
         可直接作为一条 user 消息追加的文本。
     """
     entries = "\n".join(
-        f"- `{skill.catalog_name}`: {_escape_text(catalog_description(skill.description))}"
-        for skill in sorted(skills, key=lambda item: item.catalog_name)
+        _skill_line(skill) for skill in sorted(skills, key=lambda item: item.catalog_name)
     )
     header = _HEADER_CHANGED if (changed or not skills) else _HEADER_FIRST
     footer = _FOOTER_EMPTY if not skills else _FOOTER

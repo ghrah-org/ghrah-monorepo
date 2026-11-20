@@ -72,6 +72,12 @@ class SkillSurfaceEntry:
         """一行描述（来自成员记录的定义数据）。"""
         return str(self.member.data.get("description") or "")
 
+    @property
+    def read_path(self) -> str | None:
+        """正文的读取地址（ability 根相对路径；外部件带版本段）。"""
+        path = self.member.data.get("path")
+        return str(path) if path else None
+
 
 @dataclass(frozen=True)
 class SurfaceCatalog:

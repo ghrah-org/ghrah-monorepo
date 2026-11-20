@@ -1363,6 +1363,65 @@ class AbilityAccessStore:
                 actor, alias, member, tool=tool, global_instance=global_instance
             )
 
+    async def resolve_address(self, actor: AccessIdentity, address: str) -> MemberFence:
+        """按技能正文地址（ability 根相对路径）解析到当前 Agent 的授予成员。
+
+        地址来自目录注入（``read: <path>``）。反查只在本 Agent 已授予的实例里做：
+        定义里声明的路径必须与地址逐字相等，命中后仍走 ``_resolve`` 的授权与
+        版本校验——地址不是绕开授权的新入口。
+
+        Args:
+            actor: Agent 自己的受信身份（当前 run）。
+            address: 技能正文的 ability 根相对路径，例如
+                ``research/research/0.1.0/skills/research/SKILL.md``。
+
+        Returns:
+            该正文成员的 :class:`MemberFence`。
+
+        Raises:
+            AccessError: 地址不属于任何已授予技能（``not_found``），或多个授予
+                指向同一地址（``conflict``）。
+        """
+        async with self._tx():
+            await self._agent(actor, actor.subject_id)
+            async with self._db.execute(
+                "SELECT alias, instance FROM ability_grants WHERE project=? AND agent=?"
+                " ORDER BY alias",
+                (self.project_id, actor.subject_id),
+            ) as cursor:
+                grants = list(await cursor.fetchall())
+            matches: list[tuple[str, str]] = []
+            for grant in grants:
+                instance = await self._row("ability_instances", "id=?", grant["instance"])
+                if instance is None:
+                    continue
+                version = await self._row("ability_versions", "digest=?", instance["digest"])
+                if version is None:
+                    continue
+                definition = json.loads(version["definition"])
+                identity = definition.get("identity") or {}
+                namespace = str(identity.get("namespace") or "")
+                name = str(identity.get("name") or namespace)
+                package_version = str(identity.get("version") or "")
+                prefixes = (
+                    f"{namespace}/{name}/{package_version}/",
+                    f"{namespace}/{name}/",
+                )
+                for skill_key in definition.get("skills", {}):
+                    declared = _declared_content(definition, f"skill/{skill_key}")
+                    if declared is None:
+                        continue
+                    relative = str(declared.get("path") or "")
+                    if any(address == prefix + relative for prefix in prefixes):
+                        matches.append((str(grant["alias"]), f"skill/{skill_key}"))
+                        break
+            if not matches:
+                raise AccessError("not_found")
+            if len(matches) > 1:
+                raise AccessError("conflict")
+            alias, member = matches[0]
+            return await self._resolve(actor, alias, member, tool=None)
+
     async def resolve_script(
         self, actor: AccessIdentity, agent: str, grant_address: str
     ) -> ScriptGrant:
