@@ -186,10 +186,9 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#146-subjectconfigcore_db_path-是零引用属性且-docstring-与实现不符" class="lv3">14.6 SubjectConfig.core_db_path 是零引用属性，且 docstring 与实现不符</a>
 <a href="#147-模块边界基线的-note-引用了-plans-下的本地文档" class="lv3">14.7 模块边界基线的 note 引用了 plans/ 下的本地文档</a>
 <a href="#148-ghrah-coretests-下有两处目录名与内容不符" class="lv3">14.8 ghrah-core/tests/ 下有两处目录名与内容不符</a>
-<a href="#149-node-版本下限在三处声明不一致" class="lv3">14.9 Node 版本下限在三处声明不一致</a>
-<a href="#1410-同一个容器键在两个包里各写一份字面量" class="lv3">14.10 同一个容器键在两个包里各写一份字面量</a>
-<a href="#1411-内置链挂载-taskstore-与目标形态是插件自相矛盾" class="lv3">14.11 内置链挂载 TaskStore 与&quot;目标形态是插件&quot;自相矛盾</a>
-<a href="#1412-契约包反向依赖-ghrah-plugin" class="lv3">14.12 契约包反向依赖 ghrah-plugin</a>
+<a href="#149-同一个容器键在两个包里各写一份字面量" class="lv3">14.9 同一个容器键在两个包里各写一份字面量</a>
+<a href="#1410-内置链挂载-taskstore-与目标形态是插件自相矛盾" class="lv3">14.10 内置链挂载 TaskStore 与&quot;目标形态是插件&quot;自相矛盾</a>
+<a href="#1411-契约包反向依赖-ghrah-plugin" class="lv3">14.11 契约包反向依赖 ghrah-plugin</a>
 <a href="#附录-a术语表">附录 A：术语表</a>
 <a href="#附录-b按角色选读">附录 B：按角色选读</a>
   </nav>
@@ -331,7 +330,7 @@ for p in [&quot;ghrah-core&quot;,&quot;ghrah-kernel&quot;,&quot;ghrah-plugin&quo
 <tr><td><code>release_dry_run.py</code></td><td>6 个 Python + 2 个 npm</td><td><code>scripts/release_dry_run.py:21</code>–<code>:31</code></td></tr>
 </tbody></table>
 <p><code>ghrah.toml</code> 是声明式组件清单（<code>schema = 1</code>，<code>ghrah.toml:1</code>–<code>:4</code>）；<code>[distro.generic]</code> 把上述 10 个组件组合成一个发行集合，入口写在 <code>roots = [&quot;subject/server&quot;]</code>（<code>ghrah.toml:43</code>–<code>:44</code>）。</p>
-<p>跨清单的版本声明不一致：仓库根要求 Node <code>&gt;=26.0.0</code>（<code>package.json:16</code>；<code>.nvmrc:1</code> 为 <code>26</code>），<code>ghrah.toml:49</code> 的发行运行时写 <code>node = &quot;&gt;=22.12&quot;</code>，而各 npm 包自己的 <code>engines</code> 又写 <code>&gt;=20.19.0</code>（如 <code>ghrah-observer-webui/packages/protocol/package.json:15</code>）。</p>
+<p>跨清单的 Node 版本下限一致为 <code>&gt;=26.0.0</code>：仓库根 <code>engines</code>（<code>package.json:16</code>；<code>.nvmrc:1</code> 为 <code>26</code>）、<code>ghrah.toml:49</code> 的发行运行时、各 npm 包自己的 <code>engines</code>（如 <code>ghrah-observer-webui/packages/protocol/package.json:15</code>）三处同值。</p>
 <h3 id="22-发布白名单">2.2 发布白名单</h3>
 <p>唯一的<strong>包发布</strong>工作流是 <code>.github/workflows/publish.yml</code>，由 tag 前缀路由到三个 job；<code>github-release.yml</code> 只按已存在的 tag 创建 GitHub Release，不发布任何包（<code>.github/workflows/github-release.yml:24</code>–<code>:28</code>）。白名单写在两处：顶层 <code>on.push.tags</code> 决定<strong>能否触发</strong>，job 内的 <code>case</code> 决定<strong>允许哪个包</strong>。</p>
 <p>表 2-2 进入发布通道的包</p>
@@ -2468,7 +2467,7 @@ catalog = ctx.get(CORE_CATALOG)  # -&gt; CoreCatalogPort（无作用域）</code
 <li>安装命令（CI 与本地同形）：<code>uv sync --all-packages --frozen</code>（<code>.github/workflows/ci.yml:16</code>、<code>:70</code>、<code>:81</code>）；后端无独立 requirements，全部依赖走 <code>pyproject.toml:7-18</code> 的成员依赖加 <code>aiohttp</code>/<code>agentconf</code>/<code>openai</code>。</li>
 <li>根包本身声明了同名依赖，只为把成员拉进同一环境：<code>ghrah-core[mcp]</code> 到 <code>ghrah-taskstore</code> 七个成员在 <code>pyproject.toml:8-14</code>。</li>
 <li>Node 版本在 CI 由 <code>node-version-file: .nvmrc</code> 读取（<code>.github/workflows/ci.yml:97-100</code>），即 <code>.nvmrc</code> 是执行侧真相，<code>engines</code> 是声明侧真相。</li>
-<li>三处 Node 下限声明不一致（26 / 22.12 / 20.19.0），见 14.9；实际约束以根 <code>package.json:16</code> 为准。</li>
+<li>三处 Node 下限声明已对齐为 <code>&gt;=26.0.0</code>（根 <code>package.json:16</code>、<code>ghrah.toml:49</code> 的发行运行时、三个 npm 库包的 <code>engines</code>）；<code>.nvmrc</code> 为 <code>26</code>。</li>
 <li><code>ghrah-subject</code> 的 console script 与内置 Unit 扩展点：<code>ghrah-subject/pyproject.toml:25-28</code> 定义 <code>ghrah-subject</code>、<code>ghrah-subject-server</code>、<code>subject</code> 三个入口；<code>[project.entry-points.&quot;ghrah.subject.units&quot;]</code> 为空表（<code>:30-34</code>），内置 Unit 由 <code>mount_builtin_units()</code> 显式构造（<code>ghrah-subject/src/ghrah/subject/units/__init__.py:21-28</code>，Unit 清单在 <code>:66-119</code>）。</li>
 </ul>
 <h3 id="132-pnpm-脚本清单">13.2 pnpm 脚本清单</h3>
@@ -2680,28 +2679,17 @@ catalog = ctx.get(CORE_CATALOG)  # -&gt; CoreCatalogPort（无作用域）</code
 <ul>
 <li>影响：<code>loading_legacy</code> 会让人以为被测实现已下线，实际它是能力扫描/装载链的生产依赖（<code>ghrah.ability.loading.ability_scan:51-63</code> 引用 <code>skill_*</code> 模块）；<code>tests/api/</code> 是一个零测试的包，收集期看不出缺口，API 路由层实际覆盖为空。</li>
 </ul>
-<h3 id="149-node-版本下限在三处声明不一致">14.9 Node 版本下限在三处声明不一致</h3>
-<table>
-<thead><tr><th>声明位置</th><th>值</th></tr></thead>
-<tbody>
-<tr><td><code>package.json:16</code>（根）</td><td><code>&gt;=26.0.0</code></td></tr>
-<tr><td><code>ghrah.toml:47-49</code>（<code>[distro.generic.runtime]</code>）</td><td><code>node = &quot;&gt;=22.12&quot;</code></td></tr>
-<tr><td><code>ghrah-observer-webui/packages/protocol/package.json:14-15</code>、<code>plugin-registry:16-17</code>、<code>observer-core:14-15</code></td><td><code>&gt;=20.19.0</code></td></tr>
-</tbody></table>
-<ul>
-<li>影响：分发声明入口给出的 22.12 与根 <code>package.json</code> 的 26 相差一个大版本，两个数字不可能同时作为可运行环境的判据；三个库包的 20.19.0 只对&quot;单独安装该包&quot;成立，也不代表本仓环境。哪一处会被实际执行取决于调用方（<code>ghrah</code> 工具链读 <code>ghrah.toml</code>，pnpm/CI 读 <code>.nvmrc</code>）。</li>
-</ul>
-<h3 id="1410-同一个容器键在两个包里各写一份字面量">14.10 同一个容器键在两个包里各写一份字面量</h3>
+<h3 id="149-同一个容器键在两个包里各写一份字面量">14.9 同一个容器键在两个包里各写一份字面量</h3>
 <ul>
 <li>现状：<code>CORE_PORT = &quot;core.port&quot;</code> / <code>CORE_CATALOG = &quot;core.catalog&quot;</code> 在协议包（<code>ghrah-protocol/src/ghrah/protocol/ports/keys.py:13</code>、<code>:10</code>），Subject 又在服务键表里重新写了两份同值字面量并加注释说明&quot;名字就是协议包的 <code>core.port</code> / <code>core.catalog</code>&quot;（<code>ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278</code>、<code>:280</code>）。两处都有使用方：<code>units/core_cluster.py:277-282</code> 用协议常量 provide，<code>units/ability_control.py</code>、<code>units/agent_control.py</code> 用 Subject 常量 requires。</li>
 <li>影响：容器键本应只有一处真相（<code>keys.py:4</code> 的 docstring 即如此声明），现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为&quot;依赖未满足 / service not found&quot;。</li>
 </ul>
-<h3 id="1411-内置链挂载-taskstore-与目标形态是插件自相矛盾">14.11 内置链挂载 TaskStore 与&quot;目标形态是插件&quot;自相矛盾</h3>
+<h3 id="1410-内置链挂载-taskstore-与目标形态是插件自相矛盾">14.10 内置链挂载 TaskStore 与&quot;目标形态是插件&quot;自相矛盾</h3>
 <ul>
 <li>现状：<code>TaskStoreConfig</code> 的 docstring 写明&quot;目标装配形态是插件…当前经 builtin 链挂载属<strong>待纠正偏离</strong>&quot;（<code>ghrah-subject/src/ghrah/subject/config.py:281-293</code>），装配处同样标注&quot;待纠正偏离&quot;（<code>units/__init__.py:73-79</code>）。</li>
 <li>影响：<code>taskstore.enabled</code>（默认 True）决定它作为内置 Unit 挂载，顺序固定在 TaskUnit 之前（<code>units/__init__.py:78-81</code>），插件信任闸（<code>GHRAH_SUBJECT_PLUGIN_TRUST</code>）对它不生效——一个&quot;可选、应当受信任闸约束的插件&quot;实际拥有内置 Unit 的权限与生命周期。这是代码自述的偏离，非推断。</li>
 </ul>
-<h3 id="1412-契约包反向依赖-ghrah-plugin">14.12 契约包反向依赖 <code>ghrah-plugin</code></h3>
+<h3 id="1411-契约包反向依赖-ghrah-plugin">14.11 契约包反向依赖 <code>ghrah-plugin</code></h3>
 <ul>
 <li><strong>现状</strong>：<code>ghrah-protocol/pyproject.toml:8</code> 声明依赖 <code>ghrah-plugin</code>；<code>payloads/plugin.py:15</code> import 它，<code>:33</code> 的 <code>PluginNegotiateResultPayload</code> 直接继承其 <code>NegotiationResult</code>。代码注释给的理由是「协商 wire 形状复用同一模型、零字段重复」（<code>payloads/plugin.py:6-8</code>）。</li>
 <li><strong>不成环</strong>：<code>ghrah-plugin</code> 是真正的叶子，不依赖任何 <code>ghrah-*</code> 包（<code>ghrah-plugin/pyproject.toml:7-10</code>），所以这条边目前不会形成循环。</li>
