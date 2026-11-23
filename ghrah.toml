@@ -46,7 +46,7 @@ gate = "basic"
 
 [distro.generic.runtime]
 python = ">=3.15.1"
-node = ">=22.12"
+node = ">=26.0.0"
 
 [distro.generic.instances.subject]
 component = "ghrah-subject"

@@ -171,7 +171,7 @@ for p in ["ghrah-core","ghrah-kernel","ghrah-plugin","ghrah-protocol",
 
 `ghrah.toml` 是声明式组件清单（`schema = 1`，`ghrah.toml:1`–`:4`）；`[distro.generic]` 把上述 10 个组件组合成一个发行集合，入口写在 `roots = ["subject/server"]`（`ghrah.toml:43`–`:44`）。
 
-跨清单的版本声明不一致：仓库根要求 Node `>=26.0.0`（`package.json:16`；`.nvmrc:1` 为 `26`），`ghrah.toml:49` 的发行运行时写 `node = ">=22.12"`，而各 npm 包自己的 `engines` 又写 `>=20.19.0`（如 `ghrah-observer-webui/packages/protocol/package.json:15`）。
+跨清单的 Node 版本下限一致为 `>=26.0.0`：仓库根 `engines`（`package.json:16`；`.nvmrc:1` 为 `26`）、`ghrah.toml:49` 的发行运行时、各 npm 包自己的 `engines`（如 `ghrah-observer-webui/packages/protocol/package.json:15`）三处同值。
 
 ### 2.2 发布白名单
 
@@ -2681,7 +2681,7 @@ flowchart TD
 - 安装命令（CI 与本地同形）：`uv sync --all-packages --frozen`（`.github/workflows/ci.yml:16`、`:70`、`:81`）；后端无独立 requirements，全部依赖走 `pyproject.toml:7-18` 的成员依赖加 `aiohttp`/`agentconf`/`openai`。
 - 根包本身声明了同名依赖，只为把成员拉进同一环境：`ghrah-core[mcp]` 到 `ghrah-taskstore` 七个成员在 `pyproject.toml:8-14`。
 - Node 版本在 CI 由 `node-version-file: .nvmrc` 读取（`.github/workflows/ci.yml:97-100`），即 `.nvmrc` 是执行侧真相，`engines` 是声明侧真相。
-- 三处 Node 下限声明不一致（26 / 22.12 / 20.19.0），见 14.9；实际约束以根 `package.json:16` 为准。
+- 三处 Node 下限声明已对齐为 `>=26.0.0`（根 `package.json:16`、`ghrah.toml:49` 的发行运行时、三个 npm 库包的 `engines`）；`.nvmrc` 为 `26`。
 - `ghrah-subject` 的 console script 与内置 Unit 扩展点：`ghrah-subject/pyproject.toml:25-28` 定义 `ghrah-subject`、`ghrah-subject-server`、`subject` 三个入口；`[project.entry-points."ghrah.subject.units"]` 为空表（`:30-34`），内置 Unit 由 `mount_builtin_units()` 显式构造（`ghrah-subject/src/ghrah/subject/units/__init__.py:21-28`，Unit 清单在 `:66-119`）。
 
 ### 13.2 pnpm 脚本清单
@@ -2894,27 +2894,17 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 
 - 影响：`loading_legacy` 会让人以为被测实现已下线，实际它是能力扫描/装载链的生产依赖（`ghrah.ability.loading.ability_scan:51-63` 引用 `skill_*` 模块）；`tests/api/` 是一个零测试的包，收集期看不出缺口，API 路由层实际覆盖为空。
 
-### 14.9 Node 版本下限在三处声明不一致
-
-| 声明位置 | 值 |
-| --- | --- |
-| `package.json:16`（根） | `>=26.0.0` |
-| `ghrah.toml:47-49`（`[distro.generic.runtime]`） | `node = ">=22.12"` |
-| `ghrah-observer-webui/packages/protocol/package.json:14-15`、`plugin-registry:16-17`、`observer-core:14-15` | `>=20.19.0` |
-
-- 影响：分发声明入口给出的 22.12 与根 `package.json` 的 26 相差一个大版本，两个数字不可能同时作为可运行环境的判据；三个库包的 20.19.0 只对"单独安装该包"成立，也不代表本仓环境。哪一处会被实际执行取决于调用方（`ghrah` 工具链读 `ghrah.toml`，pnpm/CI 读 `.nvmrc`）。
-
-### 14.10 同一个容器键在两个包里各写一份字面量
+### 14.9 同一个容器键在两个包里各写一份字面量
 
 - 现状：`CORE_PORT = "core.port"` / `CORE_CATALOG = "core.catalog"` 在协议包（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），Subject 又在服务键表里重新写了两份同值字面量并加注释说明"名字就是协议包的 `core.port` / `core.catalog`"（`ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278`、`:280`）。两处都有使用方：`units/core_cluster.py:277-282` 用协议常量 provide，`units/ability_control.py`、`units/agent_control.py` 用 Subject 常量 requires。
 - 影响：容器键本应只有一处真相（`keys.py:4` 的 docstring 即如此声明），现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为"依赖未满足 / service not found"。
 
-### 14.11 内置链挂载 TaskStore 与"目标形态是插件"自相矛盾
+### 14.10 内置链挂载 TaskStore 与"目标形态是插件"自相矛盾
 
 - 现状：`TaskStoreConfig` 的 docstring 写明"目标装配形态是插件…当前经 builtin 链挂载属**待纠正偏离**"（`ghrah-subject/src/ghrah/subject/config.py:281-293`），装配处同样标注"待纠正偏离"（`units/__init__.py:73-79`）。
 - 影响：`taskstore.enabled`（默认 True）决定它作为内置 Unit 挂载，顺序固定在 TaskUnit 之前（`units/__init__.py:78-81`），插件信任闸（`GHRAH_SUBJECT_PLUGIN_TRUST`）对它不生效——一个"可选、应当受信任闸约束的插件"实际拥有内置 Unit 的权限与生命周期。这是代码自述的偏离，非推断。
 
-### 14.12 契约包反向依赖 `ghrah-plugin`
+### 14.11 契约包反向依赖 `ghrah-plugin`
 
 - **现状**：`ghrah-protocol/pyproject.toml:8` 声明依赖 `ghrah-plugin`；`payloads/plugin.py:15` import 它，`:33` 的 `PluginNegotiateResultPayload` 直接继承其 `NegotiationResult`。代码注释给的理由是「协商 wire 形状复用同一模型、零字段重复」（`payloads/plugin.py:6-8`）。
 - **不成环**：`ghrah-plugin` 是真正的叶子，不依赖任何 `ghrah-*` 包（`ghrah-plugin/pyproject.toml:7-10`），所以这条边目前不会形成循环。
