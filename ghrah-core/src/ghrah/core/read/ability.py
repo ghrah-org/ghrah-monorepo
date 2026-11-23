@@ -324,20 +324,31 @@ class AbilityReadStore:
                 _ARCHIVE_CODES.get(exc.code, "invalid_package"), exc.message
             ) from exc
         with tempfile.TemporaryDirectory(prefix="ghrah-ability-import-") as workspace:
+            extraction = Path(workspace) / "src"
             try:
-                source_root = extract_package(
-                    archive, Path(workspace) / "src", format=archive_format
-                )
+                source_root = extract_package(archive, extraction, format=archive_format)
             except ArchiveError as exc:
                 raise CatalogError(
                     _ARCHIVE_CODES.get(exc.code, "invalid_package"), exc.message
                 ) from exc
+            installer = AbilityInstaller(root)
+            # 先建后验：扫盘提取成员、补写标准 ability.yaml，再对生成的定义做 ABI 预检。
+            # 归档没有顶层目录时，包身份取上传文件名（解包目录名只是临时的 "src"）。
+            hint = source_name if source_root == extraction else None
             try:
-                validate_source_tree(source_root)
-            except ManifestValidationError as exc:
-                raise CatalogError("invalid_package", str(exc)) from exc
+                prepared = installer.prepare(source_root, name_hint=hint)
+            except InstallerError as exc:
+                raise CatalogError(
+                    _INSTALL_CODES.get(exc.code, "invalid_package"), exc.message
+                ) from exc
+            if not prepared.is_mcp:
+                # MCP 声明的成员来自远端服务器，安装器现场观测；没有本地入口可预检。
+                try:
+                    validate_source_tree(source_root)
+                except ManifestValidationError as exc:
+                    raise CatalogError("invalid_package", str(exc)) from exc
             try:
-                result = AbilityInstaller(root).install(source_root)
+                result = installer.install(source_root)
             except InstallerError as exc:
                 raise CatalogError(
                     _INSTALL_CODES.get(exc.code, "invalid_package"), exc.message

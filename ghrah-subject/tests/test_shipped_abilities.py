@@ -20,16 +20,31 @@ from ghrah.subject.units.shipped_abilities import (
 )
 
 
-def _write_distro(distro_dir: Path, *, version: str = "0.1.0") -> None:
+def _shipped_version() -> str:
+    """取预装包自己的版本：硬编码版本号会在每次升版时把用例拖红。"""
+    from importlib import resources
+
+    raw = (
+        resources.files("ghrah.subject.shipped_abilities")
+        .joinpath("project_agent_manage")
+        .joinpath("ability.yaml")
+        .read_text(encoding="utf-8")
+    )
+    return str(yaml.safe_load(raw)["identity"]["version"])
+
+
+def _write_distro(distro_dir: Path, *, version: str | None = None) -> None:
     distro_dir.mkdir(parents=True, exist_ok=True)
+    required = version or _shipped_version()
     (distro_dir / "distro.toml").write_text(
         "[distro]\n"
         'name = "test"\n'
         "[distro.abilities]\n"
         "required = [\n"
-        f'  {{ name = "ghrah.project_agent_manage", version = "{version}" }},\n'
+        f'  {{ name = "ghrah.project_agent_manage", version = "{required}" }},\n'
         "]\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -44,9 +59,10 @@ async def test_missing_package_is_installed_on_init(tmp_path: Path) -> None:
     )
     unit = ShippedAbilityUnit(config)
     await unit.init(None)
-    slot = install_root / "ghrah" / "project_agent_manage" / "0.1.0"
+    version = _shipped_version()
+    slot = install_root / "ghrah" / "project_agent_manage" / version
     assert slot.is_dir()
-    assert (install_root / "ghrah" / "project_agent_manage" / "0.1.0.lock.yaml").is_file()
+    assert (install_root / "ghrah" / "project_agent_manage" / lock_filename(version)).is_file()
 
 
 @pytest.mark.asyncio
@@ -60,7 +76,7 @@ async def test_already_installed_is_idempotent(tmp_path: Path) -> None:
     )
     unit = ShippedAbilityUnit(config)
     await unit.init(None)
-    lock_path = install_root / "ghrah" / "project_agent_manage" / lock_filename("0.1.0")
+    lock_path = install_root / "ghrah" / "project_agent_manage" / lock_filename(_shipped_version())
     before = lock_path.read_text(encoding="utf-8")
     await unit.init(None)
     assert lock_path.read_text(encoding="utf-8") == before

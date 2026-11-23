@@ -198,7 +198,7 @@ class TestRegisterMountSemantics:
         db = _db(tmp_path)
         guest = tmp_path / "guest-dir"
         guest.mkdir()
-        (guest / "user-file.txt").write_text("user content")
+        (guest / "user-file.txt").write_text("user content", newline="\n")
         before = sorted(p.name for p in guest.iterdir())
 
         async with _Sandbox(root) as sandbox:

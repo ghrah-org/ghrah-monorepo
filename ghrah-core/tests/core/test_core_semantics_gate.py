@@ -45,9 +45,10 @@ def test_gate_detects_new_symbol_occurrence(tmp_path: Path) -> None:
     (root / "ghrah" / "core" / "leak.py").write_text(
         "def payload() -> dict[str, str]:\n    return {'project_id': 'p'}\n",
         encoding="utf-8",
+        newline="\n",
     )
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"schema": 1, "counts": {}}), encoding="utf-8")
+    baseline.write_text(json.dumps({"schema": 1, "counts": {}}), encoding="utf-8", newline="\n")
 
     result = gate["check"](root=root, baseline_path=baseline)
 
@@ -61,11 +62,10 @@ def test_gate_detects_forbidden_import_direction(tmp_path: Path) -> None:
     root = tmp_path / "src"
     (root / "ghrah" / "core").mkdir(parents=True)
     (root / "ghrah" / "core" / "bad.py").write_text(
-        "from ghrah.subject.units import something\n",
-        encoding="utf-8",
+        "from ghrah.subject.units import something\n", encoding="utf-8", newline="\n"
     )
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"schema": 1, "counts": {}}), encoding="utf-8")
+    baseline.write_text(json.dumps({"schema": 1, "counts": {}}), encoding="utf-8", newline="\n")
 
     result = gate["check"](root=root, baseline_path=baseline)
 
@@ -77,7 +77,9 @@ def test_gate_update_then_check_roundtrips(tmp_path: Path) -> None:
     gate = _gate()
     root = tmp_path / "src"
     (root / "pkg").mkdir(parents=True)
-    (root / "pkg" / "mod.py").write_text("value = {'room_id': 'r'}\n", encoding="utf-8")
+    (root / "pkg" / "mod.py").write_text(
+        "value = {'room_id': 'r'}\n", encoding="utf-8", newline="\n"
+    )
     baseline = tmp_path / "baseline.json"
 
     assert gate["main"](["--update", "--root", str(root), "--baseline", str(baseline)]) == 0
@@ -88,7 +90,7 @@ def test_gate_update_then_check_roundtrips(tmp_path: Path) -> None:
 
     # 再增长一处即为违规（只降不升）
     (root / "pkg" / "mod.py").write_text(
-        "x = {'room_id': 'r'}\ny = {'room_ids': []}\n", encoding="utf-8"
+        "x = {'room_id': 'r'}\ny = {'room_ids': []}\n", encoding="utf-8", newline="\n"
     )
     violations = gate["check"](root=root, baseline_path=baseline)["violations"]
     assert any("room_id(s)" in item and "增加" in item for item in violations)
@@ -100,11 +102,12 @@ def test_uv_cli_flags_are_not_subject_identity(tmp_path: Path) -> None:
     root = tmp_path / "src"
     root.mkdir()
     source = root / "cli.py"
-    source.write_text('flags = {"--project", "--no-project"}\n', encoding="utf-8")
+    source.write_text('flags = {"--project", "--no-project"}\n', encoding="utf-8", newline="\n")
     assert "project" not in gate["scan"](root)
     source.write_text(
         'flags = {"--project", "--no-project"}\nproject_id = "p"\nvalue = "project"\n',
         encoding="utf-8",
+        newline="\n",
     )
     counts = gate["scan"](root)
     assert counts["project"]["cli.py"] == 1

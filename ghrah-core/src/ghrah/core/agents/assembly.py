@@ -20,11 +20,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from ghrah.protocol.views.core import AgentAssemblySpec, AgentMemberPermissions
 
 from ghrah.ability.access.startup import CONTROL_HANDLERS
+from ghrah.ability.member import AbilityType, Member, MemberAxes, MemberError, MemberType
 from ghrah.ability.source import BuiltinAbilitySource
 from ghrah.core.config.builders import build_model_overrides_from_dict, build_window_from_dict
 from ghrah.manifest.resolver import ResolvedAbility, ResolvedAgent
@@ -35,6 +36,8 @@ __all__ = [
     "AssemblyError",
     "config_from_snapshot",
     "config_to_snapshot",
+    "member_axes_from_spec",
+    "parse_spec_member",
     "resolve_assembly",
     "resolve_members",
     "surface_from_snapshot",
@@ -140,7 +143,16 @@ def _resolve_member(
     try:
         manifest = source.load_ability(member, version=version)
     except Exception as error:  # noqa: BLE001 — 统一折成装配错误
-        raise AssemblyError(f"member not resolvable: {member}: {error}") from error
+        # 单层身份包（安装槽 <ns>/<name>/，identity 省略 name）在能力来源里按
+        # 旧两段名登记；三段规范名先按原样试，失败再回退一次。
+        parts = member.split(".")
+        fallback = f"{parts[0]}.{parts[-1]}" if len(parts) == 3 and parts[0] == parts[1] else None
+        if fallback is None or fallback == member:
+            raise AssemblyError(f"member not resolvable: {member}: {error}") from error
+        try:
+            manifest = source.load_ability(fallback, version=version)
+        except Exception as retry_error:  # noqa: BLE001
+            raise AssemblyError(f"member not resolvable: {member}: {retry_error}") from retry_error
     declared = manifest.metadata.permissions
     requested = _permissions(request)
     return ResolvedAbility(
@@ -177,13 +189,86 @@ def resolve_assembly(
     if spec.agent_id:
         raise AssemblyError("recovery mode must read the Core snapshot, not resolve a spec")
     config = _build_config(spec, workspace_root)
-    abilities = resolve_members(source, [item.model_dump() for item in spec.members])
+    items = [item.model_dump() for item in spec.members]
+    abilities = resolve_members(source, items)
     surface = (
         SurfaceConfig.model_validate(spec.config.surface.model_dump())
         if spec.config is not None and spec.config.surface is not None
         else None
     )
-    return ResolvedAgent(config=config, abilities=abilities, surface=surface)
+    member_axes = member_axes_from_spec(items)
+    return ResolvedAgent(
+        config=config, abilities=abilities, surface=surface, member_axes=member_axes
+    )
+
+
+def member_axes_from_spec(items: list[dict[str, Any]]) -> dict[str, MemberAxes]:
+    """从装配规格/快照成员里抽出「成员全名 → 两轴」。
+
+    只收集**显式给了 axes** 的条目：手写规格（测试/旧调用方）不带轴时返回空
+    映射，装配层据此走"全部可见成员常驻"的旧口径；Subject 渲染出的规格每条都
+    带轴，于是绑定集合完全由创建时的选择决定。
+
+    整包条目（``whole_container``）在装配前已展开，不应出现在快照里；真出现时
+    跳过，避免用包名当成员名建轴。
+
+    Args:
+        items: 装配输入或实例快照里的成员数组。
+
+    Returns:
+        成员全名到轴的映射；未显式提供轴的规格返回空映射。
+    """
+    if not any(item.get("axes") for item in items):
+        return {}
+    axes: dict[str, MemberAxes] = {}
+    for item in items:
+        if bool(item.get("whole_container")):
+            continue
+        try:
+            entity = parse_spec_member(item)
+        except AssemblyError:
+            continue
+        axes[entity.member] = entity.axes
+    return axes
+
+
+def parse_spec_member(item: dict[str, Any]) -> Member:
+    """把装配规格里的一条成员申请解析成 Core 的成员实体（引用态）。
+
+    规格来自 Subject（``AgentAssemblyMember`` 的字典形态）：只带成员全名、类型、
+    版本与两条轴。包身份由全名切分，跨字段约束（类型、版本层、轴一致性）在这里
+    统一校验——``Member`` 是 Core 内部实体，不进入 wire 契约。
+
+    Args:
+        item: 规格里的一条成员申请。
+
+    Returns:
+        已校验的成员实体；``data`` 为空（引用态）。
+
+    Raises:
+        AssemblyError: 全名缺失，或类型/版本层/轴不成立。
+    """
+    full_name = str(item.get("member") or "")
+    if not full_name:
+        raise AssemblyError("member entry without a name in snapshot")
+    raw_axes = item.get("axes") or {}
+    raw_type = str(item.get("ability_type") or "external")
+    version = item.get("version")
+    # wire 默认 ability_type 是 kernel，而带版本的成员必然来自安装根：显式版本
+    # 优先于默认标记，避免「kernel + version」这种自相矛盾的申请被当成非法。
+    if raw_type == "kernel" and version is not None:
+        raw_type = "external"
+    try:
+        return Member.reference(
+            member=full_name,
+            type=cast("MemberType", str(item.get("type") or "operation")),
+            version=version,
+            ability_type=cast("AbilityType", raw_type),
+            visible=bool(raw_axes.get("visible", True)),
+            bind=bool(raw_axes.get("available", raw_axes.get("bind", True))),
+        )
+    except MemberError as error:
+        raise AssemblyError(f"invalid member entry {full_name!r}: {error}") from error
 
 
 def resolve_members(
@@ -202,21 +287,23 @@ def resolve_members(
     """
     resolved: list[ResolvedAbility] = []
     for item in members:
-        member = str(item.get("member") or "")
-        if not member:
-            raise AssemblyError("member entry without a name in snapshot")
         raw = item.get("permissions")
         request = AgentMemberPermissions.model_validate(raw) if raw is not None else None
         if bool(item.get("whole_container")):
             # 「整包」：按包名展开成全部成员（控制成员也进，由启动核定分流）。
+            package = str(item.get("member") or "")
+            if not package:
+                raise AssemblyError("member entry without a name in snapshot")
             try:
-                manifests = source.load_package_members(member)
+                manifests = source.load_package_members(package)
             except Exception as error:  # noqa: BLE001 — 统一折成装配错误
-                raise AssemblyError(f"package not resolvable: {member}: {error}") from error
+                raise AssemblyError(f"package not resolvable: {package}: {error}") from error
             for manifest in manifests:
                 resolved.append(_resolve_member(source, manifest.full_name, request))
             continue
-        resolved.append(_resolve_member(source, member, request))
+        # 入参先过 Core 的成员实体：全名/类型/版本层/轴在这里统一校验一次。
+        entity = parse_spec_member(item)
+        resolved.append(_resolve_member(source, entity.member, request))
     return resolved
 
 

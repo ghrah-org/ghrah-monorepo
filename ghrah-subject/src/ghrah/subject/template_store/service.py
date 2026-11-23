@@ -32,7 +32,7 @@ _REPLACE_GROUPS = (
     "model",
     "prompt",
     "context_policy",
-    "ability_request",
+    "available_members",
     "permission_request",
     "path_request",
 )
@@ -62,7 +62,8 @@ class AgentTemplateService:
         """
         source: dict[str, Any] = {"metadata": payload.get("metadata")}
         for group in _REPLACE_GROUPS:
-            source[group] = payload.get(group) or ([] if group == "path_request" else {})
+            default: Any = [] if group in {"path_request", "available_members"} else {}
+            source[group] = payload.get(group) or default
         config = AgentTemplateConfig.model_validate(source)
         return await self._store.create(config)
 

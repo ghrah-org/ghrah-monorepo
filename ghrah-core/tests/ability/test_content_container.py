@@ -106,9 +106,11 @@ async def test_content_tree_bytes_context_and_no_operations(container):
     cm = ContextManager(
         agent_name="alice", message_factory=ChatMessageFactory(), ability_content=provider
     )
-    messages = await cm.get_llm_messages()
-    assert "reports/guide" in messages[-1].text
-    assert "使用 assets/template" not in messages[-1].text
+    # 目录不再由 ContextManager 注入（改由工具面按绑定轴注入）；内容端口仍须
+    # 用同一份授予给出"只有摘要、没有正文"的目录。
+    catalog = await provider.catalog_text()
+    assert "reports/guide" in catalog
+    assert "使用 assets/template" not in catalog
     await provider.load_into_context(cm, "reports", "skill/guide")
     attachment = await provider.read_relative("reports", "guide", "references/style.md")
     assert "短段落" in attachment.content
@@ -191,7 +193,7 @@ async def test_scope_clipping_revoke_and_old_references(container):
 async def test_snapshot_survives_source_deletion_and_host_restore(container):
     store, host, client, version, source, runs = container
     before = await client.call("/scheme/ability/reports/skill/guide", "read", {})
-    (source / "skills/guide/SKILL.md").write_text("uncommitted")
+    (source / "skills/guide/SKILL.md").write_text("uncommitted", newline="\n")
     assert await client.call("/scheme/ability/reports/skill/guide", "read", {}) == before
     shutil.rmtree(source)
     other = AbilitySchemeHost(store)
@@ -227,7 +229,9 @@ async def test_content_only_package_needs_no_file_root_and_upgrade_is_explicit(c
     data = yaml.safe_load((source / "ability.yaml").read_text())
     payload = b"new template"
     (source / "skills/guide/assets/template.txt").write_bytes(payload)
-    entry = data["members"]["skills"]["guide"]["assets"]["template"]
+    entry = next(item for item in data["members"] if item["member"].endswith(".guide"))["data"][
+        "assets"
+    ]["template"]
     entry["size"] = len(payload)
     entry["digest"] = "sha256:" + hashlib.sha256(payload).hexdigest()
     updated = capture_ability_version(yaml.safe_dump(data), root=source)
@@ -312,7 +316,9 @@ async def test_committed_snapshot_ignores_source_change_and_corruption_fails(con
     """已提交快照不随来源变化；内容损坏明确失败，不静默回退读旧字节。"""
     store, host, client, version, source, runs = container
     before = await client.call("/scheme/ability/reports/skill/guide/assets/template", "read", {})
-    (source / "skills/guide/assets/template.txt").write_text("uncommitted", encoding="utf-8")
+    (source / "skills/guide/assets/template.txt").write_text(
+        "uncommitted", encoding="utf-8", newline="\n"
+    )
     assert (await client.call("/scheme/ability/reports/skill/guide/assets/template", "read", {}))[
         "content"
     ] == before["content"]
@@ -340,10 +346,10 @@ def test_import_rejects_invalid_content(tmp_path, mutation):
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
     data = yaml.safe_load((source / "ability.yaml").read_text())
-    skills = data["members"]["skills"]
+    guide = next(item for item in data["members"] if item["member"].endswith(".guide"))["data"]
     limits = CaptureLimits()
     if mutation in {"absolute", "parent"}:
-        skills["guide"]["assets"]["template"]["path"] = (
+        guide["assets"]["template"]["path"] = (
             "/etc/passwd" if mutation == "absolute" else "../outside"
         )
     elif mutation == "symlink":
@@ -355,13 +361,13 @@ def test_import_rejects_invalid_content(tmp_path, mutation):
             pytest.skip(f"当前环境不允许创建符号链接: {exc}")
     elif mutation == "dangling":
         body = source / "skills/guide/SKILL.md"
-        body.write_text(body.read_text() + "\n[missing](references/missing.md)\n")
+        body.write_text(body.read_text() + "\n[missing](references/missing.md)\n", newline="\n")
     elif mutation == "skill-unknown-field":
-        skills["guide"]["mystery"] = True
+        guide["mystery"] = True
     elif mutation == "oversize":
         limits = CaptureLimits(file_bytes=1)
     elif mutation == "bad-digest":
-        skills["guide"]["assets"]["template"]["digest"] = "sha256:" + "0" * 64
+        guide["assets"]["template"]["digest"] = "sha256:" + "0" * 64
     with pytest.raises((ValueError, OSError, ManifestValidationError)):
         capture_ability_version(yaml.safe_dump(data), root=source, limits=limits)
 
@@ -370,7 +376,7 @@ def test_version_captures_index_metadata_and_unlinked_resources(tmp_path):
     """索引是成员事实的唯一来源；正文未链接的声明文件也进清单，索引外文件不进。"""
     source = tmp_path / "source"
     shutil.copytree(EXAMPLE, source)
-    (source / "skills/guide/assets/orphan.txt").write_text("orphan", encoding="utf-8")
+    (source / "skills/guide/assets/orphan.txt").write_text("orphan", encoding="utf-8", newline="\n")
     version = capture_ability_version((source / "ability.yaml").read_text(), root=source)
     manifest = json.loads(version.manifest_json)
     assert version.definition().skills["guide"].title == "reporting-guide"
@@ -466,7 +472,9 @@ def test_standard_capture_checks_frontmatter_name_and_rejects_duplicate_yaml(tmp
             (source / "ability.yaml").read_text() + "\nmembers: {}\n", root=source
         )
     body = source / "skills/guide/SKILL.md"
-    body.write_text(body.read_text().replace("name: guide", "name: other"), encoding="utf-8")
+    body.write_text(
+        body.read_text().replace("name: guide", "name: other"), encoding="utf-8", newline="\n"
+    )
     with pytest.raises(ValueError, match="不一致"):
         capture_ability_version((source / "ability.yaml").read_text(), root=source)
 
@@ -546,7 +554,7 @@ def test_portable_capture_rejects_file_replaced_between_stat_and_open(tmp_path, 
     root = tmp_path / "pkg"
     (root / "assets").mkdir(parents=True)
     target = root / "assets" / "template.txt"
-    target.write_text("original", encoding="utf-8")
+    target.write_text("original", encoding="utf-8", newline="\n")
     original = content.os.open
     replaced = False
 
@@ -555,7 +563,7 @@ def test_portable_capture_rejects_file_replaced_between_stat_and_open(tmp_path, 
         if Path(path).name == "template.txt" and not replaced:
             replaced = True
             target.unlink()
-            target.write_text("replaced", encoding="utf-8")
+            target.write_text("replaced", encoding="utf-8", newline="\n")
         return original(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(content.os, "open", replace_before_open)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from ghrah.protocol.ability_tree import AbilityTreeView
 
 from ghrah.ability.loading.ability_schema import AbilityDefinition
+from ghrah.ability.member import Member
 from ghrah.ability.surface.projection import project_grants
 from ghrah.ability.surface.types import SurfaceEntry
 
@@ -47,6 +48,38 @@ class SurfaceTool:
 
 
 @dataclass(frozen=True)
+class SkillSurfaceEntry:
+    """技能注入项：成员记录 + 目录名（调用方传给 ``load_skill`` 的名字）。
+
+    ``Member`` 是统一的成员实体；目录名是**场景包装**——技能摘要注入用的是
+    ``<alias>/<key>``，而成员全名是 ``<package>.<key>``，两者不能混用。
+    """
+
+    member: Member
+    name: str
+
+    def __post_init__(self) -> None:
+        if self.member.type != "skill":
+            raise ValueError("技能注入项必须是 skill 成员")
+
+    @property
+    def catalog_name(self) -> str:
+        """目录里显示的名字（也是加载入口的名字）。"""
+        return self.name
+
+    @property
+    def description(self) -> str:
+        """一行描述（来自成员记录的定义数据）。"""
+        return str(self.member.data.get("description") or "")
+
+    @property
+    def read_path(self) -> str | None:
+        """正文的读取地址（ability 根相对路径；外部件带版本段）。"""
+        path = self.member.data.get("path")
+        return str(path) if path else None
+
+
+@dataclass(frozen=True)
 class SurfaceCatalog:
     """一个项目、Agent、run 的只读目录快照；所有成员已通过共用授权投影。"""
 
@@ -55,6 +88,23 @@ class SurfaceCatalog:
     run_id: str
     revision: int
     tools: tuple[SurfaceTool, ...]
+    skills: tuple[SkillSurfaceEntry, ...] = ()
+
+
+def _skill_entries(
+    definition: AbilityDefinition, alias: str, nodes: tuple[Any, ...]
+) -> list[SkillSurfaceEntry]:
+    """按授予事实挑出技能成员：正文可见才进目录（``body_allowed``）。"""
+    members = {item.key: item for item in definition.to_members() if item.type == "skill"}
+    entries: list[SkillSurfaceEntry] = []
+    for node in nodes:
+        if not node.body_allowed:
+            continue
+        member = members.get(node.key)
+        if member is None:
+            continue
+        entries.append(SkillSurfaceEntry(member=member, name=f"{alias}/{node.key}"))
+    return entries
 
 
 def catalog_from_view(
@@ -90,7 +140,23 @@ def catalog_from_view(
                 ),
             )
         )
-    return SurfaceCatalog(view.project_id, view.agent_id, view.run_id, view.revision, tuple(tools))
+    # 技能按包节点独立收集：纯技能包没有 operation，不能挂在工具循环里，
+    # 否则这类包的技能永远进不了目录。
+    skills: list[SkillSurfaceEntry] = []
+    for node in view.abilities:
+        if node.availability == "unavailable":
+            continue
+        skills.extend(
+            _skill_entries(definitions[node.version_digest], node.alias, tuple(node.skills))
+        )
+    return SurfaceCatalog(
+        view.project_id,
+        view.agent_id,
+        view.run_id,
+        view.revision,
+        tuple(tools),
+        tuple(skills),
+    )
 
 
 async def read_agent_catalog(agent: str, run: str, *, store: AbilityAccessStore) -> SurfaceCatalog:

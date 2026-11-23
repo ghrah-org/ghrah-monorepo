@@ -287,14 +287,14 @@ onMounted(refresh);
 
       <div class="templates-block">
         <h4>{{ t("config.template.factPackages") }}</h4>
-        <p v-if="selected.ability_request.packages.length === 0" class="templates-muted">
+        <p v-if="selected.available_members.length === 0" class="templates-muted">
           {{ t("config.template.noPackages") }}
         </p>
         <ul v-else class="templates-packages">
-          <li v-for="item in selected.ability_request.packages" :key="item.package">
-            <strong>{{ item.package }}</strong>
-            <span v-if="item.whole_container"> · {{ t("config.template.wholeContainer") }}</span>
-            <span v-else> · {{ item.operations.map((op) => op.key).join(", ") || "—" }} </span>
+          <li v-for="item in selected.available_members" :key="item.member">
+            <strong>{{ item.member }}</strong>
+            <span> · {{ item.type }}</span>
+            <span v-if="item.version"> · v{{ item.version }}</span>
           </li>
         </ul>
       </div>

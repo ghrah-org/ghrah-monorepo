@@ -40,11 +40,14 @@ def _make_tree(tmp_path: Path) -> Path:
     (root / "pkg" / "app.py").write_text(
         "def alpha():\n    return 1\n\ndef beta():\n    return ALPHA_CASE 2\n",
         encoding="utf-8",
+        newline="\n",
     )
-    (root / "pkg" / "util.py").write_text("value = alpha\n", encoding="utf-8")
-    (root / "README.md").write_text("alpha in readme\n", encoding="utf-8")
-    (root / ".git" / "hidden.py").write_text("alpha in git dir\n", encoding="utf-8")
-    (root / "node_modules" / "dep.py").write_text("alpha in node_modules\n", encoding="utf-8")
+    (root / "pkg" / "util.py").write_text("value = alpha\n", encoding="utf-8", newline="\n")
+    (root / "README.md").write_text("alpha in readme\n", encoding="utf-8", newline="\n")
+    (root / ".git" / "hidden.py").write_text("alpha in git dir\n", encoding="utf-8", newline="\n")
+    (root / "node_modules" / "dep.py").write_text(
+        "alpha in node_modules\n", encoding="utf-8", newline="\n"
+    )
     (root / "binary.py").write_bytes(b"alpha\x00binary")
     return root
 
@@ -209,7 +212,9 @@ class TestPythonFallback:
         )
         root = _make_tree(tmp_path)
         big = root / "big.txt"
-        big.write_text("\n".join(f"alpha line {i}" for i in range(10)), encoding="utf-8")
+        big.write_text(
+            "\n".join(f"alpha line {i}" for i in range(10)), encoding="utf-8", newline="\n"
+        )
         ability = SearchFilesAbility()
         result = await ability.execute(
             *_make_context(tool_args={"pattern": "alpha", "path": str(root), "max_results": 3})

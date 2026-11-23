@@ -2,11 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ability 定义面模型：``ability.yaml`` v1 的类型化契约与解析入口。
+"""Ability 定义面模型：``ability.yaml`` 的类型化契约与解析入口。
 
-v1 只有两段：作者手写的头段（``format`` / ``schema_version`` / ``identity`` /
-``title`` / ``description`` / ``origin`` / ``mcp``）与生成器写入的成员索引
-``members``（``operations`` / ``skills``）。约束要点：
+定义只有两段：作者手写的头段（``format`` / ``schema_version`` / ``identity`` /
+``title`` / ``description`` / ``origin`` / ``mcp``）与生成器写入的成员表
+``members``。成员表有两种 wire 形状，解析期**双读**：
+
+- ``schema_version: '1'``：``members`` 是两段映射（``operations`` / ``skills``）；
+- ``schema_version: '2'``：``members`` 是成员记录**列表**，每项就是
+  :class:`ghrah.ability.member.Member` 的 wire 形状（``namespace`` / ``name`` /
+  ``member`` / ``type`` / ``version`` / ``ability_type`` / ``axes`` / ``data``）。
+
+两种形状解析后都归一成同一套运行时成员表；生成器只写 v2。约束要点：
 
 - 全部子模型 ``extra="forbid"``：未知字段拒绝，不做隐式吸收；
 - 定义只承载契约事实：身份、成员 schema 与执行约束；
@@ -23,10 +30,13 @@ v1 只有两段：作者手写的头段（``format`` / ``schema_version`` / ``id
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from ghrah.ability.member import AbilityType, Member, MemberError
 
 try:  # libyaml 可用时用 C loader；不可用则退回纯 Python（慢 ~8 倍，但语义一致）
     from yaml import CSafeLoader as _SafeLoader
@@ -42,8 +52,10 @@ __all__ = [
     "LOCK_FILE_NAME",
     "SKILL_BODY_DIR",
     "SKILL_FILE_NAME",
+    "SUPPORTED_SCHEMA_VERSIONS",
     "V1_SCHEMA_VERSION",
     "V1_SEMVER_PATTERN",
+    "V2_SCHEMA_VERSION",
     "AbilityDefinition",
     "AbilityIdentity",
     "ContentResource",
@@ -51,12 +63,21 @@ __all__ = [
     "OperationDefinition",
     "SkillBody",
     "SkillDefinition",
+    "build_definition",
+    "definition_from_data",
+    "definition_from_payload",
     "load_yaml",
     "parse_definition",
 ]
 
 V1_SCHEMA_VERSION = "1"
-"""现行定义格式版本：两段式，成员写在 ``members`` 下（可多个 skill）。"""
+"""旧定义格式版本：成员写在 ``members.operations`` / ``members.skills`` 两段里。"""
+
+V2_SCHEMA_VERSION = "2"
+"""现行定义格式版本：``members`` 是成员记录列表（每项一个 :class:`Member`）。"""
+
+SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({V1_SCHEMA_VERSION, V2_SCHEMA_VERSION})
+"""解析期接受的格式版本。生成器只写 v2；v1 仅为存量安装根保留只读入口。"""
 
 V1_SEMVER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$")
 """v1 ``identity.version`` 的 SemVer core 三段；每段最多 9 位，无前导零。
@@ -203,6 +224,101 @@ def _require_object_schema(where: str, schema: Any) -> dict[str, Any]:
     return schema
 
 
+def _member_relative_path(member: Member, source: str) -> str:
+    """把成员的 ``data.path`` 剥成包内相对路径（v1 索引的 ``entry`` / ``body.path``）。"""
+    try:
+        return member.package_relative_path()
+    except MemberError as exc:
+        raise ManifestValidationError(f"{source}: {exc}") from exc
+
+
+def _members_list_to_tables(items: list[Any], identity: Any, source: str) -> dict[str, Any]:
+    """把 v2 的成员记录列表还原成 v1 的两段映射。
+
+    只做一次结构适配：之后的字段级校验（schema 形状、entry 约定、body 约定）
+    全部沿用两段式那一套，避免"成员列表"与"两段映射"各自长出第二套规则。
+
+    Args:
+        items: ``members`` 列表原文。
+        identity: 顶层的 ``identity`` 映射（用于核对包身份与版本）。
+        source: 报错前缀。
+
+    Returns:
+        ``{"operations": {...}, "skills": {...}}``，形状与 v1 索引一致。
+
+    Raises:
+        ManifestValidationError: 成员记录非法、与头段身份不一致，或路径不在包前缀下。
+    """
+    if not isinstance(identity, Mapping):
+        raise ManifestValidationError(f"{source}: 成员列表要求 identity 是映射")
+    namespace = identity.get("namespace")
+    version = identity.get("version")
+    name = identity.get("name") or namespace
+    operations: dict[str, Any] = {}
+    skills: dict[str, Any] = {}
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        try:
+            member = Member.from_wire(item, source=f"{source}.members[{index}]")
+        except MemberError as exc:
+            raise ManifestValidationError(str(exc)) from exc
+        if member.member in seen:
+            raise ManifestValidationError(f"{source}: 成员重复 {member.member!r}")
+        seen.add(member.member)
+        if member.namespace != namespace or member.name != name:
+            raise ManifestValidationError(
+                f"{source}: 成员 {member.member!r} 的包身份与头段 identity 不一致"
+                f"（{member.namespace}.{member.name} != {namespace}.{name}）"
+            )
+        if member.ability_type == "external" and member.version != version:
+            raise ManifestValidationError(
+                f"{source}: 成员 {member.member!r} 的 version {member.version!r} "
+                f"与头段 identity.version {version!r} 不一致"
+            )
+        if member.ability_type == "kernel" and namespace != "ghrah":
+            raise ManifestValidationError(
+                f"{source}: ability_type=kernel 只用于内置件（namespace 必须是 ghrah）"
+            )
+        data = dict(member.data)
+        if not data:
+            raise ManifestValidationError(
+                f"{source}: 成员 {member.member!r} 缺少 data（ability.yaml 里必须是完整定义）"
+            )
+        key = member.key
+        if member.type == "skill":
+            skills[key] = {
+                "title": data["title"],
+                "description": data["description"],
+                "tags": data.get("tags") or [],
+                "body": {
+                    "path": _member_relative_path(member, source),
+                    "media_type": data["media_type"],
+                },
+                "assets": data.get("assets") or {},
+                "references": data.get("references") or {},
+                "scripts": data.get("scripts") or {},
+            }
+            continue
+        operation: dict[str, Any] = {
+            "title": data["title"],
+            "description": data["description"],
+            "input_schema": data["input_schema"],
+            "output_schema": data["output_schema"],
+            "effects": data.get("effects") or [],
+            "resources": data.get("resources") or {},
+            "execution": data.get("execution") or dict(DEFAULT_EXECUTION),
+            "expose": bool(data.get("expose", True)),
+            "tags": data.get("tags") or [],
+            "permissions": data.get("permissions") or {},
+        }
+        if member.type == "mcp":
+            operation["mcp"] = {"server": data["server"], "tool": data["tool"]}
+        else:
+            operation["entry"] = _member_relative_path(member, source)
+        operations[key] = operation
+    return {"operations": operations, "skills": skills}
+
+
 def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
     """把 v1 的 ``members`` 两段式展开成运行时成员表。
 
@@ -222,11 +338,10 @@ def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
             未知字段或 ``entry`` 不等于 ``operations/<键>.py``。
     """
     version = data.get("schema_version")
-    if version != V1_SCHEMA_VERSION or not isinstance(version, str):
+    if not isinstance(version, str) or version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ManifestValidationError(
-            f"{source}: 只支持 v1 定义（schema_version: '1'），"
-            f"当前是 {version!r}；旧格式 0.1-draft / 0.2 已退役，"
-            "请按 v1 两段式重写（M0 规范冻结 §3.11），不提供迁移旁路"
+            f"{source}: 只支持 schema_version '1'（两段式）或 '2'（成员记录列表），"
+            f"当前是 {version!r}；旧格式 0.1-draft / 0.2 已退役，不提供迁移旁路"
         )
     unknown_top = set(data) - _V1_TOP_LEVEL_KEYS
     if unknown_top:
@@ -234,10 +349,12 @@ def _from_members(data: dict[str, Any], source: str) -> dict[str, Any]:
             f"{source}: 顶层未知字段 {sorted(unknown_top)}（契约拒绝未知字段）"
         )
     if "members" not in data:
-        raise ManifestValidationError(f"{source}: v1 定义缺少 members")
+        raise ManifestValidationError(f"{source}: 定义缺少 members")
     members = data.get("members")
+    if isinstance(members, list):
+        members = _members_list_to_tables(members, data.get("identity"), source)
     if not isinstance(members, dict):
-        raise ManifestValidationError(f"{source}: members 必须是映射")
+        raise ManifestValidationError(f"{source}: members 必须是列表或映射")
     unknown_members = set(members) - {"operations", "skills"}
     if unknown_members:
         raise ManifestValidationError(
@@ -370,6 +487,46 @@ def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
             跨字段校验失败。
     """
     data = load_yaml(raw)
+    return definition_from_data(data, source=source)
+
+
+def build_definition(
+    header: Mapping[str, Any], members: Mapping[str, Any], *, source: str
+) -> AbilityDefinition:
+    """用头段 + 运行时成员表构造定义。
+
+    生成器在写盘前用它做自检：**写出的文本必须能被解析器读回**，因此这里与
+    :func:`parse_definition` 走同一条校验路径，不另写一套。
+
+    Args:
+        header: 头段映射（``format`` / ``schema_version`` / ``identity`` / …）。
+        members: 运行时成员表 ``{"operations": {...}, "skills": {...}}``。
+        source: 报错前缀。
+
+    Returns:
+        已校验的定义模型。
+    """
+    data = dict(header)
+    data["members"] = {
+        "operations": dict(members.get("operations") or {}),
+        "skills": dict(members.get("skills") or {}),
+    }
+    return definition_from_data(data, source=source)
+
+
+def definition_from_data(data: Any, *, source: str) -> AbilityDefinition:
+    """从已解析的映射构造定义（解析入口与生成器共用同一条校验路径）。
+
+    Args:
+        data: ``load_yaml`` 的结果（顶层应为映射）。
+        source: 报错前缀。
+
+    Returns:
+        已校验的定义模型。
+
+    Raises:
+        ManifestValidationError: 顶层不是映射、格式版本不支持、契约不满足。
+    """
     if not isinstance(data, dict):
         raise ManifestValidationError(f"{source}: {DEFINITION_FILE_NAME} 不是映射")
     data = _from_members(data, source)
@@ -377,10 +534,10 @@ def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
         definition = AbilityDefinition.model_validate(data)
     except ValidationError as exc:
         raise ManifestValidationError(f"{source}: {exc}") from exc
-    if definition.schema_version != V1_SCHEMA_VERSION:
+    if definition.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ManifestValidationError(
             f"{source}: 不支持的 schema_version {definition.schema_version!r}，"
-            f"只支持 {V1_SCHEMA_VERSION!r}"
+            f"只支持 {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
         )
     if not V1_SEMVER_PATTERN.fullmatch(definition.identity.version):
         raise ManifestValidationError(
@@ -392,6 +549,33 @@ def parse_definition(raw: str, *, source: str) -> AbilityDefinition:
         if operation.entry is not None and operation.entry.path != f"operations/{key}.py":
             raise ManifestValidationError(f"{source}.{key}: entry 必须是 operations/{key}.py")
     return definition
+
+
+def definition_from_payload(raw: Mapping[str, Any], *, source: str) -> AbilityDefinition:
+    """从任一「成员表形态」构造定义。
+
+    兼容三种输入：原始 wire v1（``members`` 两段映射）、原始 wire v2
+    （``members`` 成员记录列表），以及已经归一过的定义字典
+    （``operations`` / ``skills`` 顶层表）。读取接口（目录、详情、画像、
+    MCP 探测）统一走这里，避免各处各写一遍 ``model_validate``。
+
+    Args:
+        raw: 已解析的定义映射。
+        source: 报错前缀。
+
+    Returns:
+        已校验的 :class:`AbilityDefinition`。
+
+    Raises:
+        ManifestValidationError: 任一形态不合法。
+    """
+    data = dict(raw)
+    if "members" in data:
+        return definition_from_data(data, source=source)
+    try:
+        return AbilityDefinition.model_validate(data)
+    except ValidationError as exc:
+        raise ManifestValidationError(f"{source}: {exc}") from exc
 
 
 class AbilityIdentity(BaseModel):
@@ -551,7 +735,8 @@ class AbilityDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format: Literal["ghrah.ability-definition"]
-    schema_version: Literal["1"]
+    schema_version: Literal["1", "2"]
+    """wire 格式版本；解析期双读，生成器只写 ``"2"``。"""
     identity: AbilityIdentity
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -599,6 +784,99 @@ class AbilityDefinition(BaseModel):
         elif self.mcp is not None or any(o.mcp is not None for o in self.operations.values()):
             raise ValueError("origin: source 时不得声明 mcp")
         return self
+
+    def to_members(self, *, ability_type: AbilityType = "external") -> list[Member]:
+        """把成员表展开成统一的成员记录列表。
+
+        每条记录的 ``data.path`` 是**相对 ability 根**的路径：``external`` 带
+        ``<ns>/<name>/<version>/`` 前缀，``kernel`` 只带 ``<ns>/<name>/``（内置树
+        没有版本层，解析时再去掉 namespace 段）。
+
+        Args:
+            ability_type: 所属包类型。
+
+        Returns:
+            按成员键升序的记录列表（operation / skill / mcp 混排）。
+
+        Raises:
+            ManifestValidationError: source 成员缺少 ``entry``。
+        """
+        namespace = self.identity.namespace
+        name = self.identity.name or namespace
+        package = namespace if name == namespace else f"{namespace}.{name}"
+        version = None if ability_type == "kernel" else self.identity.version
+        prefix = (
+            f"{namespace}/{name}/" if ability_type == "kernel" else f"{namespace}/{name}/{version}/"
+        )
+        members: list[Member] = []
+        for key in sorted(self.operations):
+            operation = self.operations[key]
+            data: dict[str, Any] = {
+                "title": operation.title,
+                "description": operation.description,
+                "input_schema": dict(operation.input_schema),
+                "output_schema": dict(operation.output_schema),
+                "tags": list(operation.tags),
+                "effects": list(operation.effects),
+                "permissions": dict(operation.permissions),
+                "resources": dict(operation.resources),
+                "execution": operation.execution.model_dump(mode="json"),
+                "expose": operation.expose,
+            }
+            if operation.mcp is not None:
+                kind = "mcp"
+                data["server"] = operation.mcp.server
+                data["tool"] = operation.mcp.tool
+            else:
+                if operation.entry is None:
+                    raise ManifestValidationError(
+                        f"{self.container_name}: 成员 {key!r} 缺少 entry（source 包必须有实现文件）"
+                    )
+                kind = "operation"
+                data["path"] = f"{prefix}{operation.entry.path}"
+            members.append(
+                Member(
+                    namespace=namespace,
+                    name=name,
+                    member=f"{package}.{key}",
+                    type=kind,  # type: ignore[arg-type]
+                    version=version,
+                    ability_type=ability_type,
+                    data=data,
+                )
+            )
+        for key in sorted(self.skills):
+            skill = self.skills[key]
+            members.append(
+                Member(
+                    namespace=namespace,
+                    name=name,
+                    member=f"{package}.{key}",
+                    type="skill",
+                    version=version,
+                    ability_type=ability_type,
+                    data={
+                        "title": skill.title,
+                        "description": skill.description,
+                        "tags": list(skill.tags),
+                        "path": f"{prefix}{skill.body.path}",
+                        "media_type": skill.body.media_type,
+                        "assets": {
+                            name_: resource.model_dump(mode="json", exclude_none=True)
+                            for name_, resource in skill.assets.items()
+                        },
+                        "references": {
+                            name_: resource.model_dump(mode="json", exclude_none=True)
+                            for name_, resource in skill.references.items()
+                        },
+                        "scripts": {
+                            name_: resource.model_dump(mode="json", exclude_none=True)
+                            for name_, resource in skill.scripts.items()
+                        },
+                    },
+                )
+            )
+        return members
 
     @property
     def container_name(self) -> str:

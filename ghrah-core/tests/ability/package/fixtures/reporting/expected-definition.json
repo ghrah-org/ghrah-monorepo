@@ -1,6 +1,6 @@
 {
   "format": "ghrah.ability-definition",
-  "schema_version": "1",
+  "schema_version": "2",
   "identity": {
     "namespace": "fixtures",
     "name": "reporting",

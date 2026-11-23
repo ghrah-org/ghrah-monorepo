@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -211,6 +212,48 @@ class AgentInstanceStore:
             incarnation_id=incarnation_id,
             created_at=created_at,
             updated_at=now,
+        )
+
+    async def set_member_bindings(
+        self, agent_id: str, bound: Collection[str]
+    ) -> AgentInstanceRecord | None:
+        """改写某实例成员快照的绑定轴；其余字段（含配置与表面）原样保留。
+
+        绑定状态的权威就是这张表：成员条目里的 ``axes.bind`` 承载
+        "绑定为工具"（历史快照可能写 ``axes.available``，两键同时同步），
+        ``visible`` 不动。成员不在快照里时忽略——绑定不能凭空创造成员。
+
+        Args:
+            agent_id: 实例标识。
+            bound: 应处于绑定状态的成员全名集合。
+
+        Returns:
+            更新后的记录；实例不存在时返回 ``None``。
+        """
+        record = await self.get(agent_id)
+        if record is None:
+            return None
+        wanted = set(bound)
+        members: list[dict[str, Any]] = []
+        for item in record.members:
+            entry = dict(item)
+            axes = dict(entry.get("axes") or {})
+            name = str(entry.get("member") or "")
+            bound_now = name in wanted
+            axes["bind"] = bound_now
+            if "available" in axes:
+                # 旧快照键：同步，避免两处说法不一致。
+                axes["available"] = bound_now
+            entry["axes"] = axes
+            members.append(entry)
+        return await self.save(
+            agent_id=agent_id,
+            name=record.name,
+            config=record.config,
+            members=members,
+            surface=record.surface,
+            mcp_refs=record.mcp_refs,
+            incarnation_id=record.incarnation_id,
         )
 
     async def get(self, agent_id: str) -> AgentInstanceRecord | None:

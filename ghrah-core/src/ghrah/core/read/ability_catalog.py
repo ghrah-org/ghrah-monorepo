@@ -44,13 +44,12 @@ from ghrah.protocol.ability_control import (
 from ghrah.ability.access import AccessError
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.loading.ability_schema import (
+    DEFAULT_EXECUTION,
     V1_SEMVER_PATTERN,
     AbilityDefinition,
-    ContentResource,
-    ExecutionSpec,
-    OperationDefinition,
-    SkillDefinition,
+    definition_from_payload,
 )
+from ghrah.ability.member import AbilityType, Member
 from ghrah.ability.package.installer import AbilityInstaller, InstallerError
 
 _IDENTITY = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -70,16 +69,32 @@ def valid_identity_segment(value: str) -> bool:
     return bool(_IDENTITY.fullmatch(value))
 
 
-def _member_count(definition: AbilityDefinition) -> int:
-    return len(definition.operations) + len(definition.skills)
+def _member_keys(
+    definition: AbilityDefinition, *, ability_type: AbilityType = "external"
+) -> tuple[list[str], list[str]]:
+    """成员键清单（工具/技能分列、升序）；走统一成员记录，不直读定义表。"""
+    operations: list[str] = []
+    skills: list[str] = []
+    for member in definition.to_members(ability_type=ability_type):
+        if member.type == "skill":
+            skills.append(member.key)
+        else:
+            operations.append(member.key)
+    return operations, skills
+
+
+def _member_count(definition: AbilityDefinition, *, ability_type: AbilityType = "external") -> int:
+    operations, skills = _member_keys(definition, ability_type=ability_type)
+    return len(operations) + len(skills)
 
 
 def _definition_from_payload(payload: dict[str, Any]) -> AbilityDefinition | None:
+    """已安装负载里的定义：兼容 v1 / v2 原始 wire 与归一后的字典。"""
     raw = payload.get("definition")
     if not isinstance(raw, dict):
         return None
     try:
-        return AbilityDefinition.model_validate(raw)
+        return definition_from_payload(raw, source="installed definition")
     except Exception:
         return None
 
@@ -94,6 +109,7 @@ def _builtin_rows() -> dict[tuple[str, str], AbilityPackageVersionRow]:
     for definition in load_ability_definitions().values():
         identity = definition.identity
         key = (identity.full_name, identity.version)
+        operations, skills = _member_keys(definition, ability_type="kernel")
         rows[key] = AbilityPackageVersionRow(
             namespace=identity.namespace,
             name=identity.name,
@@ -101,10 +117,10 @@ def _builtin_rows() -> dict[tuple[str, str], AbilityPackageVersionRow]:
             title=definition.title,
             origin="builtin",
             version=identity.version,
-            member_count=_member_count(definition),
+            member_count=len(operations) + len(skills),
             lock_state="builtin",
-            operations=sorted(definition.operations),
-            skills=sorted(definition.skills),
+            operations=operations,
+            skills=skills,
         )
     return rows
 
@@ -161,6 +177,9 @@ def _installed_rows(
             identity_name = definition.identity.name if definition is not None else record.name
             title = definition.title if definition is not None else None
             count = _member_count(definition) if definition is not None else None
+            member_operations, member_skills = (
+                _member_keys(definition) if definition is not None else ([], [])
+            )
             problem = _problem(
                 record.problem,
                 None if item else show_problem,
@@ -177,8 +196,8 @@ def _installed_rows(
                 member_count=count,
                 lock_state=record.lock_state,
                 problem=problem,
-                operations=sorted(definition.operations) if definition is not None else [],
-                skills=sorted(definition.skills) if definition is not None else [],
+                operations=member_operations,
+                skills=member_skills,
             )
     return True, rows
 
@@ -244,13 +263,16 @@ def _detail_from_definition(
     shadowed: bool,
     latest: bool = False,
 ) -> AbilityPackageVersionDetail:
+    """版本详情：成员清单同样走统一成员记录。"""
+    ability_type: AbilityType = "kernel" if origin == "builtin" else "external"
+    operations, skills = _member_keys(definition, ability_type=ability_type)
     return AbilityPackageVersionDetail(
         version=definition.identity.version,
         origin=origin,  # type: ignore[arg-type]
         title=definition.title,
         description=definition.description,
-        operations=sorted(definition.operations),
-        skills=sorted(definition.skills),
+        operations=operations,
+        skills=skills,
         lock_state=lock_state,
         problem=problem,
         verify=verify,
@@ -381,11 +403,12 @@ def _identity_of(definition: dict[str, Any]) -> tuple[str | None, str | None, st
 
 
 def _dict_member_count(definition: dict[str, Any]) -> int | None:
-    operations = definition.get("operations")
-    skills = definition.get("skills")
-    if not isinstance(operations, dict) or not isinstance(skills, dict):
+    """已提交定义的成员数：原始 wire（v1/v2）与归一字典都能算出。"""
+    try:
+        parsed = definition_from_payload(definition, source="instance definition")
+    except Exception:
         return None
-    return len(operations) + len(skills)
+    return _member_count(parsed)
 
 
 async def build_instances_view(store: Any, operator: Any) -> AbilityInstancesView:
@@ -611,7 +634,7 @@ async def _load_relation(
         full_name = None
         title = None
         try:
-            definition = AbilityDefinition.model_validate(row["definition"])
+            definition = definition_from_payload(row["definition"], source="instance definition")
             full_name = definition.identity.full_name
             title = definition.title
         except Exception:
@@ -854,86 +877,83 @@ def _content_view(
     )
 
 
-def _named_resource_views(
-    resources: Mapping[str, ContentResource],
-) -> list[AbilityNamedResourceView]:
-    """技能附件视图，按附件键升序。"""
+def _named_resource_views(resources: Mapping[str, Any]) -> list[AbilityNamedResourceView]:
+    """技能附件视图，按附件键升序（输入是成员记录里的 ``data.<role>``）。"""
     return [
         AbilityNamedResourceView(
             key=key,
-            path=_relative_content_path(resource.path),
-            media_type=resource.media_type,
-            size=resource.size,
-            digest=resource.digest,
+            path=_relative_content_path(str(resource["path"])),
+            media_type=str(resource["media_type"]),
+            size=resource.get("size"),
+            digest=resource.get("digest"),
         )
         for key, resource in sorted(resources.items())
     ]
 
 
-def _execution_view(execution: ExecutionSpec) -> AbilityExecutionView:
-    """执行约束视图；只读镜像定义面。"""
+def _execution_view(execution: Mapping[str, Any]) -> AbilityExecutionView:
+    """执行约束视图；只读镜像定义面的 ``data.execution``。"""
     return AbilityExecutionView(
-        mode=execution.mode,
-        timeout_ms=execution.timeout_ms,
-        cancellation=execution.cancellation,
-        on_revoke=execution.on_revoke,
-        retry=execution.retry,
+        mode=execution["mode"],
+        timeout_ms=int(execution["timeout_ms"]),
+        cancellation=execution["cancellation"],
+        on_revoke=execution["on_revoke"],
+        retry=execution["retry"],
     )
 
 
-def _operation_member_view(key: str, operation: OperationDefinition) -> AbilityOperationMemberView:
+def _operation_member_view(member: Member) -> AbilityOperationMemberView:
     """一个可执行成员的只读裁切；``entry`` 是包内相对路径。"""
+    data = member.data
     mcp = None
-    if operation.mcp is not None:
-        mcp = AbilityMcpMemberView(server=operation.mcp.server, tool=operation.mcp.tool)
+    if member.type == "mcp":
+        mcp = AbilityMcpMemberView(server=str(data["server"]), tool=str(data["tool"]))
     entry = None
-    if operation.entry is not None:
-        entry = _content_view(
-            operation.entry.path,
-            operation.entry.media_type,
-            operation.entry.size,
-            operation.entry.digest,
-        )
+    if "path" in data:
+        entry = _content_view(member.package_relative_path(), "text/x-python")
     return AbilityOperationMemberView(
-        key=key,
-        title=operation.title,
-        description=operation.description,
-        input_schema=operation.input_schema,
-        output_schema=operation.output_schema,
-        effects=list(operation.effects),
-        tags=list(operation.tags),
-        resources=operation.resources,
-        permissions=operation.permissions,
-        expose=operation.expose,
-        execution=_execution_view(operation.execution),
+        key=member.key,
+        title=str(data["title"]),
+        description=str(data["description"]),
+        input_schema=dict(data["input_schema"]),
+        output_schema=dict(data["output_schema"]),
+        effects=list(data.get("effects") or []),
+        tags=list(data.get("tags") or []),
+        resources=dict(data.get("resources") or {}),
+        permissions=dict(data.get("permissions") or {}),
+        expose=bool(data.get("expose", True)),
+        execution=_execution_view(data.get("execution") or DEFAULT_EXECUTION),
         mcp=mcp,
         entry=entry,
     )
 
 
-def _skill_member_view(key: str, skill: SkillDefinition) -> AbilitySkillMemberView:
+def _skill_member_view(member: Member) -> AbilitySkillMemberView:
     """一个技能成员的只读裁切；正文与附件都是包内相对路径。"""
+    data = member.data
     return AbilitySkillMemberView(
-        key=key,
-        title=skill.title,
-        description=skill.description,
-        tags=list(skill.tags),
-        body=_content_view(skill.body.path, skill.body.media_type),
-        assets=_named_resource_views(skill.assets),
-        references=_named_resource_views(skill.references),
-        scripts=_named_resource_views(skill.scripts),
+        key=member.key,
+        title=str(data["title"]),
+        description=str(data["description"]),
+        tags=list(data.get("tags") or []),
+        body=_content_view(member.package_relative_path(), str(data["media_type"])),
+        assets=_named_resource_views(data.get("assets") or {}),
+        references=_named_resource_views(data.get("references") or {}),
+        scripts=_named_resource_views(data.get("scripts") or {}),
     )
 
 
 def _member_views(
-    definition: AbilityDefinition,
+    definition: AbilityDefinition, *, ability_type: AbilityType = "external"
 ) -> tuple[list[AbilityOperationMemberView], list[AbilitySkillMemberView]]:
-    """成员视图，工具与技能都按键升序。"""
-    operations = [
-        _operation_member_view(key, definition.operations[key])
-        for key in sorted(definition.operations)
-    ]
-    skills = [_skill_member_view(key, definition.skills[key]) for key in sorted(definition.skills)]
+    """成员视图：先统一转成成员记录再投影，工具与技能都按键升序。"""
+    operations: list[AbilityOperationMemberView] = []
+    skills: list[AbilitySkillMemberView] = []
+    for member in definition.to_members(ability_type=ability_type):
+        if member.type == "skill":
+            skills.append(_skill_member_view(member))
+        else:
+            operations.append(_operation_member_view(member))
     return operations, skills
 
 
@@ -989,7 +1009,7 @@ def _builtin_profile(
 ) -> AbilityPackageVersionProfileView:
     """内置版本的画像：不校验、不探测，不返回 MCP 快照。"""
     try:
-        operations, skills = _member_views(definition)
+        operations, skills = _member_views(definition, ability_type="kernel")
     except (TypeError, ValueError) as exc:
         raise CatalogError("unavailable", f"内置能力定义不可投影：{exc}") from exc
     return AbilityPackageVersionProfileView(

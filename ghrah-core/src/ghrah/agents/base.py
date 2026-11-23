@@ -1579,6 +1579,16 @@ class ActorAgent:
             messages.insert(
                 insert_at, ChatMessage.system(DISCLOSURE_GUIDANCE, source="system:runtime")
             )
+        # 技能成员走消息面、工具成员走工具面：同一份成员记录按 type 分流。
+        # 目录摘要变化时才注入（含清空），摘要不变不重复占上下文。
+        if self._tool_surface is not None:
+            try:
+                reminder = await self._tool_surface.skill_reminder()
+            except Exception:
+                logger.warning("Skill catalog injection failed; skipping", exc_info=True)
+                reminder = None
+            if reminder:
+                messages = [*messages, ChatMessage.user(reminder, source="system:runtime")]
         llm_response: LLMResponseProtocol = await llm.generate(messages)
         llm_responses: list[LLMResponseProtocol] = [llm_response]
 

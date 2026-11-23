@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import errno
 import hashlib
-import json
 import os
 import re
 import tempfile
@@ -17,7 +16,15 @@ from typing import Any
 
 import yaml
 
-from ghrah.ability.loading.ability_schema import AbilityIdentity, load_yaml, parse_definition
+from ghrah.ability.loading.ability_schema import (
+    SUPPORTED_SCHEMA_VERSIONS,
+    V2_SCHEMA_VERSION,
+    AbilityIdentity,
+    build_definition,
+    definition_from_data,
+    load_yaml,
+    parse_definition,
+)
 from ghrah.ability.loading.manifest_fields import ManifestValidationError
 from ghrah.ability.package.digest import file_digest, tree_digest
 from ghrah.ability.package.installed_store import is_link
@@ -85,8 +92,11 @@ def _header(data: Any) -> dict[str, Any]:
         raise InstallerError("invalid_definition", "MCP 包身份非法") from None
     if identity.namespace != "mcp" or not identity.name:
         raise InstallerError("invalid_definition", "MCP 包必须使用 mcp 命名空间及显式名称")
-    if data.get("format") != "ghrah.ability-definition" or data.get("schema_version") != "1":
-        raise InstallerError("invalid_definition", "MCP 包只支持 v1 定义")
+    if (
+        data.get("format") != "ghrah.ability-definition"
+        or data.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS
+    ):
+        raise InstallerError("invalid_definition", "MCP 包只支持 v1 / v2 定义")
     if any(
         not isinstance(data.get(key), str) or not data[key].strip()
         for key in ("title", "description")
@@ -204,7 +214,16 @@ def _snapshot(header: dict[str, Any], tools: list[dict[str, Any]]) -> str:
             },
             "expose": True,
         }
-    data = {**header, "members": {"operations": dict(sorted(operations.items())), "skills": {}}}
+    snapshot_header = {**header, "schema_version": V2_SCHEMA_VERSION}
+    try:
+        definition = build_definition(
+            snapshot_header,
+            {"operations": dict(sorted(operations.items())), "skills": {}},
+            source="MCP snapshot",
+        )
+    except ManifestValidationError:
+        raise InstallerError("invalid_tools", "MCP 工具契约无效") from None
+    data = {**snapshot_header, "members": [member.to_wire() for member in definition.to_members()]}
     raw = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=4096)
     try:
         parse_definition(raw, source="MCP snapshot")
@@ -271,6 +290,12 @@ def _publish(installer: AbilityInstaller, raw: str) -> InstallResult:
         )
 
 
+def _members_wire(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """把任意 wire 形状的定义归一成成员记录列表，用于新旧快照比较。"""
+    definition = definition_from_data(dict(data), source="MCP snapshot")
+    return [member.to_wire() for member in definition.to_members()]
+
+
 async def refresh_mcp(
     installer: AbilityInstaller, name: str, *, source: Any = None, connector: Any = None
 ) -> InstallResult:
@@ -305,7 +330,7 @@ async def refresh_mcp(
             )
             raise
         new = load_yaml(raw)
-        if json.dumps(new["members"], sort_keys=True) != json.dumps(old["members"], sort_keys=True):
+        if _members_wire(new) != _members_wire(old):
             parts = list(map(int, item.version.split(".")))
             parts[2] += 1
             if parts[2] > 999999999:

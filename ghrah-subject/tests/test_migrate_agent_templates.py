@@ -92,8 +92,8 @@ def workspace(tmp_path: Path) -> tuple[Path, Path]:
     """构造 source 目录、ability 根与目标 db 路径。"""
     agents = tmp_path / "manifests" / "agents" / "writing"
     agents.mkdir(parents=True)
-    (agents / "weekly.yaml").write_text(_V2, encoding="utf-8")
-    (agents / "legacy.yaml").write_text(_V1, encoding="utf-8")
+    (agents / "weekly.yaml").write_text(_V2, encoding="utf-8", newline="\n")
+    (agents / "legacy.yaml").write_text(_V1, encoding="utf-8", newline="\n")
     root = tmp_path / "abilities"
     (root / "demo.tools").mkdir(parents=True)
     (root / "demo.tools" / "ability.yaml").write_text(
@@ -101,6 +101,7 @@ def workspace(tmp_path: Path) -> tuple[Path, Path]:
             ["format: ghrah.ability-definition", ""]
         ),
         encoding="utf-8",
+        newline="\n",
     )
     core = root / "ghrah.core"
     core.mkdir()
@@ -110,6 +111,7 @@ def workspace(tmp_path: Path) -> tuple[Path, Path]:
         "identity:\n  namespace: ghrah\n  name: core\n"
         "members:\n  operations:\n    load_skill: {}\n    conversation: {}\n    end_task: {}\n",
         encoding="utf-8",
+        newline="\n",
     )
     return tmp_path / "manifests" / "agents", root
 
@@ -129,11 +131,20 @@ def test_builds_config_and_reports_gaps(workspace: tuple[Path, Path]) -> None:
     assert config.model.model_overrides == {"temperature": 0.3}
     assert config.prompt.system_prompt == "先列事实"
     assert config.context_policy.max_iterations == 12
-    packages = {item.package: item for item in config.ability_request.packages}
     # type=load_skill → ghrah.core 的单个操作；控制成员 conversation 不入申请
-    assert [op.key for op in packages["ghrah.core"].operations] == ["load_skill"]
+    core_members = [
+        item
+        for item in config.available_members
+        if item.namespace == "ghrah" and item.name == "core"
+    ]
+    assert [item.key for item in core_members] == ["load_skill"]
     # ref 指向成员 → 拆成包 + 操作
-    assert [op.key for op in packages["demo.tools"].operations] == ["read_file"]
+    tool_members = [
+        item
+        for item in config.available_members
+        if item.namespace == "demo" and item.name == "tools"
+    ]
+    assert [item.key for item in tool_members] == ["read_file"]
     # 解析不到的成员进报告，不静默丢弃
     assert [item["ref"] for item in report.unresolved_members] == ["demo.pkg.missing_member"]
 

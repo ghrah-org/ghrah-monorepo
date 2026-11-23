@@ -138,7 +138,7 @@ class TestExternalWorkspaceRegistration:
         internal_root = tmp_path / "subject-root"
         external_workspace = tmp_path / "project-source"
         external_workspace.mkdir()
-        (external_workspace / "source.txt").write_text("user content")
+        (external_workspace / "source.txt").write_text("user content", newline="\n")
         executor = SandboxExecutor(workspace_root=str(internal_root))
         manager = WorkspaceManager(root_path=str(internal_root), sandbox=executor)
         await manager.start()

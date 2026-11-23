@@ -110,7 +110,7 @@ async def test_list_skips_junk_and_tolerates_missing_sidecar(tmp_path: Path) -> 
     directory.mkdir()
     orphan = hashlib.sha256(b"orphan").hexdigest()
     (directory / orphan).write_bytes(b"orphan")
-    (directory / "not-a-sha.txt").write_text("junk", encoding="utf-8")
+    (directory / "not-a-sha.txt").write_text("junk", encoding="utf-8", newline="\n")
     (directory / f".{orphan}.tmp-dead").write_bytes(b"tmp")
     store = ArtifactStore(directory)
     [record] = await store.list()
@@ -125,6 +125,8 @@ async def test_list_skips_junk_and_tolerates_missing_sidecar(tmp_path: Path) -> 
 def test_project_store_factory(tmp_path: Path) -> None:
     root = tmp_path / "project"
     (root / "db").mkdir(parents=True)
-    (root / ".ghrah-project.json").write_text('{"project_id": "p1"}', encoding="utf-8")
+    (root / ".ghrah-project.json").write_text(
+        '{"project_id": "p1"}', encoding="utf-8", newline="\n"
+    )
     store = project_artifact_store(str(root))
     assert store.directory == root / "artifacts"

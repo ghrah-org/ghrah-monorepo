@@ -168,7 +168,7 @@ def test_spawn_wire_and_manifest_references():
 
 def test_cli_preview_apply_and_refused_overwrite(tmp_path):
     source = tmp_path / "old.yaml"
-    source.write_text("name: example-concise\n")
+    source.write_text("name: example-concise\n", newline="\n")
     output = tmp_path / "new.json"
     cmd = [
         sys.executable,
@@ -197,7 +197,7 @@ def test_cli_preview_apply_and_refused_overwrite(tmp_path):
 
 def test_failure_never_creates_output(tmp_path):
     source = tmp_path / "old.json"
-    source.write_text('{"name":"missing"}')
+    source.write_text('{"name":"missing"}', newline="\n")
     output = tmp_path / "new.json"
     failed = subprocess.run(
         [

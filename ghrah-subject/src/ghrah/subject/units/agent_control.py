@@ -355,6 +355,7 @@ def build_agent_control_router(
                     "template_id": change.template_id,
                     "revision": change.revision,
                     "desired_state": change.desired_state,
+                    "initial_bindings": change.initial_bindings,
                 },
             },
         )

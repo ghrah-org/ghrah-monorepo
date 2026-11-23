@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from ghrah.ability.package.lock import lock_filename, read_lock
@@ -177,6 +178,32 @@ def test_import_zip_installs_package(tmp_path: Path) -> None:
     assert bus.calls and bus.calls[0][0] == EventType.ABILITY_PACKAGE_CHANGED.value
     assert bus.calls[0][1]["name"] == "demo"
     del catalog
+
+
+def test_import_zip_builds_missing_ability_yaml(tmp_path: Path) -> None:
+    """页面上传的包只有 operations/：安装时扫盘提取成员并补写标准 ability.yaml。"""
+    install_root = tmp_path / "ability"
+    install_root.mkdir()
+    client, _ = make_client(install_root)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("operations/ping.py", PING_SOURCE.encode("utf-8"))
+
+    response = client.post(
+        "/api/v1/ability-packages/import",
+        files={"file": ("acme.tools.zip", buffer.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["namespace"], body["name"]) == ("acme", "tools")
+    assert body["version"] == "0.1.0"
+    assert body["operation_count"] == 1
+    installed = install_root / "acme" / "tools" / "0.1.0" / "ability.yaml"
+    document = yaml.safe_load(installed.read_text(encoding="utf-8"))
+    assert document["schema_version"] == "2"
+    assert [item["member"] for item in document["members"]] == ["acme.tools.ping"]
 
 
 def test_import_rejects_unknown_extension(tmp_path: Path) -> None:

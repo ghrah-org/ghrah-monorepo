@@ -25,10 +25,15 @@ _REPLACE_RETRY_DELAY_S = 0.05
 
 
 def atomic_write_text(path: str | Path, content: str) -> None:
-    """原子写文本文件（UTF-8）：同目录 tmp + fsync + os.replace。
+    """原子写文本文件（UTF-8 + LF）：同目录 tmp + fsync + os.replace。
 
     崩溃时不会留下半写目标文件；Windows 上目标被短暂锁定时重试
     ``_REPLACE_RETRIES`` 次（间隔 ``_REPLACE_RETRY_DELAY_S`` 秒）。
+
+    换行固定为 LF：文本产物要能跨平台逐字节复现（同一条内容在 Windows 与
+    Linux 上写出的文件必须一致），否则能力包文本源、快照与夹具在 Windows 上
+    会被 CRLF 污染。调用方显式给出的 ``\\r\\n`` 原样保留（``newline="\\n"``
+    只关闭自动翻译）。
 
     Args:
         path: 目标文件路径（父目录不存在时自动创建）。
@@ -41,7 +46,7 @@ def atomic_write_text(path: str | Path, content: str) -> None:
     )
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())

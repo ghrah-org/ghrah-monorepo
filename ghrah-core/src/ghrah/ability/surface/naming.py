@@ -36,8 +36,10 @@ TOOL_NAME_MAX: int = 64
 TOOL_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 """工具名合法字符集。"""
 
-META_TOOL_NAMES: frozenset[str] = frozenset({"search_tools", "describe_tool", "execute_tool"})
-"""内置 core 包占用的三个元工具名。"""
+META_TOOL_NAMES: frozenset[str] = frozenset(
+    {"search_tools", "describe_tool", "execute_tool", "bind_member", "unbind_member"}
+)
+"""内置 core 包占用的元工具名（发现、描述、执行、绑定、解绑）。"""
 
 RUN_SCRIPT_TOOL_NAME: str = "run_script"
 """表面层占用的脚本调用工具名；内置 core 包也不得占用。"""

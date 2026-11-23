@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from ghrah.subject.project.store import ProjectStore
 from ghrah.subject.template_store import (
+    AgentTemplateAbilityRequest,
     AgentTemplateConfig,
     AgentTemplateService,
     TemplateConflictError,
@@ -154,7 +155,7 @@ async def test_create_applies_defaults_and_writes_one_row(store: TemplateStore) 
         "model",
         "prompt",
         "context_policy",
-        "ability_request",
+        "available_members",
         "permission_request",
         "path_request",
     }
@@ -279,31 +280,44 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
     record = await store.create(
         _config(
             metadata={"tags": ["b", "a", "b"]},
-            ability_request={
-                "surface": {"mode": "static", "static": ["z", "a", "z"]},
-                "packages": [
-                    {
-                        "package": "writing.beta",
-                        "origin": "builtin",
-                        "operations": [
-                            {"key": "publish"},
-                            {"key": "draft", "visible": False, "available": False},
-                        ],
-                        "skills": [
-                            {
-                                "key": "style",
-                                "scripts": [
-                                    {"key": "lint", "exec": True},
-                                    {"key": "fix"},
-                                ],
-                            },
-                            {"key": "format"},
-                        ],
-                    },
-                    {"package": "writing.alpha", "origin": "mcp", "whole_container": True},
-                ],
-                "mcp_refs": ["conn.b", "conn.a"],
-            },
+            available_members=[
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.publish",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                },
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.draft",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                },
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.style",
+                    "type": "skill",
+                    "ability_type": "kernel",
+                },
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.format",
+                    "type": "skill",
+                    "ability_type": "kernel",
+                },
+                {
+                    "namespace": "writing",
+                    "name": "alpha",
+                    "member": "writing.alpha.search",
+                    "type": "operation",
+                    "version": "2.0.0",
+                    "ability_type": "external",
+                },
+            ],
             permission_request={
                 "auto_approve": ["ghrah.fs.write_file", "ghrah.fs.read_file"],
                 "safe_extra_commands": ["ls", "cat"],
@@ -329,15 +343,18 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
         )
     )
     assert record.metadata.tags == ["a", "b"]
-    assert record.ability_request.surface.static == ["a", "z"]
-    assert [item.package for item in record.ability_request.packages] == [
-        "writing.alpha",
-        "writing.beta",
+    members = {item.member: item for item in record.available_members}
+    assert list(members) == [
+        "writing.alpha.search",
+        "writing.beta.draft",
+        "writing.beta.format",
+        "writing.beta.publish",
+        "writing.beta.style",
     ]
-    beta = record.ability_request.packages[1]
-    assert [item.key for item in beta.operations] == ["draft", "publish"]
-    assert [item.key for item in beta.skills] == ["format", "style"]
-    assert [item.key for item in beta.skills[1].scripts] == ["lint", "fix"]
+    assert members["writing.beta.draft"].ability_type == "kernel"
+    assert members["writing.beta.style"].type == "skill"
+    assert members["writing.alpha.search"].version == "2.0.0"
+    assert members["writing.alpha.search"].ability_type == "external"
     assert record.permission_request.auto_approve == [
         "ghrah.fs.read_file",
         "ghrah.fs.write_file",
@@ -353,12 +370,65 @@ async def test_normalizes_lists_and_member_order(store: TemplateStore) -> None:
     ]
 
 
+async def test_stored_members_use_six_field_records(store: TemplateStore, tmp_path: Path) -> None:
+    """落库形态是成员数组：只有身份 + 类型 + 版本 + 来源，没有 data/axes/scripts。"""
+    await store.create(
+        _config(
+            available_members=[
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.draft",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                }
+            ]
+        )
+    )
+    with _inspect(tmp_path / DB_FILE) as db:
+        raw = json.loads(db.execute("SELECT available_members FROM agent_templates").fetchone()[0])
+    assert raw == [
+        {
+            "namespace": "writing",
+            "name": "beta",
+            "member": "writing.beta.draft",
+            "type": "operation",
+            "version": None,
+            "ability_type": "kernel",
+        }
+    ]
+
+
+def test_legacy_packages_payload_expands_to_three_segment_members() -> None:
+    """旧包级视图在读入期展开成三段成员；不再有 axes/scripts 与回写聚合。"""
+    request = AgentTemplateAbilityRequest.model_validate(
+        {
+            "packages": [
+                {
+                    "package": "writing.beta",
+                    "origin": "installed",
+                    "version": "1.2.3",
+                    "operations": [{"key": "publish", "visible": False, "available": False}],
+                    "skills": [{"key": "style", "scripts": [{"key": "lint"}]}],
+                }
+            ]
+        }
+    )
+    assert [item.member for item in request.available_members] == [
+        "writing.beta.publish",
+        "writing.beta.style",
+    ]
+    publish = request.available_members[0]
+    assert (publish.version, publish.ability_type) == ("1.2.3", "external")
+    assert request.available_members[1].type == "skill"
+
+
 async def test_json_columns_are_canonical(store: TemplateStore, tmp_path: Path) -> None:
     """七个 JSON 列都按 v1 策略以 ``sort_keys`` + 紧凑分隔符落库。"""
     await store.create(_config(metadata={"tags": ["b", "a"]}))
     with _inspect(tmp_path / DB_FILE) as db:
         row = db.execute(
-            "SELECT metadata, model, prompt, context_policy, ability_request, "
+            "SELECT metadata, model, prompt, context_policy, available_members, "
             "permission_request, path_request FROM agent_templates"
         ).fetchone()
     for text in row:
@@ -382,46 +452,57 @@ async def test_json_columns_are_canonical(store: TemplateStore, tmp_path: Path) 
         {"context_policy": {"overrides": {"unknown": 1}}},
         {"context_policy": {"overrides": {"persistence": {"unknown": True}}}},
         {
-            "ability_request": {
-                "packages": [
-                    {
-                        "package": "writing.beta",
-                        "origin": "builtin",
-                        "whole_container": True,
-                        "operations": [{"key": "draft"}],
-                    }
-                ]
-            }
+            "available_members": [
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.draft",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                    "axes": {"visible": True},
+                }
+            ]
         },
         {
-            "ability_request": {
-                "packages": [
-                    {
-                        "package": "writing.beta",
-                        "origin": "builtin",
-                        "operations": [{"key": "a", "visible": False, "available": True}],
-                    }
-                ]
-            }
+            "available_members": [
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.a",
+                    "type": "widget",
+                    "ability_type": "kernel",
+                }
+            ]
         },
         {
-            "ability_request": {
-                "packages": [
-                    {
-                        "package": "writing.beta",
-                        "origin": "builtin",
-                        "operations": [{"key": "a"}, {"key": "a"}],
-                    }
-                ]
-            }
+            "available_members": [
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.a",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                },
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.a",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                },
+            ]
         },
         {
-            "ability_request": {
-                "packages": [
-                    {"package": "writing.beta", "origin": "builtin"},
-                    {"package": "writing.beta", "origin": "mcp"},
-                ]
-            }
+            "available_members": [
+                {
+                    "namespace": "writing",
+                    "name": "beta",
+                    "member": "writing.beta.a",
+                    "type": "operation",
+                    "ability_type": "kernel",
+                    "version": "1.0.0",
+                }
+            ]
         },
         {
             "path_request": [

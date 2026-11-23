@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -34,6 +35,18 @@ SVG = b"<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>"
 TEXT = b"hello world"
 
 
+def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    """建符号链接；平台不支持时跳过当前用例。
+
+    Windows 未开启开发者模式或非管理员会抛 ``WinError 1314``，此时「链接逃逸
+    被拒」这类语义无法验证，跳过而不是失败。
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - 平台相关
+        pytest.skip(f"当前平台不支持创建符号链接：{exc}")
+
+
 def _tree(tmp_path: Path, name: str = "project") -> tuple[Path, Path]:
     """造项目根 + 工作区树，返回 (project_root, workspace_root)。"""
     project_root = tmp_path / name
@@ -46,7 +59,7 @@ def _tree(tmp_path: Path, name: str = "project") -> tuple[Path, Path]:
     (ws_root / "index.html").write_bytes(b"<html><script>alert(1)</script></html>")
     outside = tmp_path / f"{name}-outside.txt"
     outside.write_bytes(b"secret")
-    (ws_root / "escape.txt").symlink_to(outside)
+    _symlink_or_skip(ws_root / "escape.txt", outside)
     return project_root, ws_root
 
 

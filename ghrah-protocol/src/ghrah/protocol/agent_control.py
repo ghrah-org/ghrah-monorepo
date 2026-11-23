@@ -33,7 +33,6 @@ __all__ = [
     "AgentSpecPatch",
     "AgentSpecificationSummary",
     "AgentSummaryView",
-    "AgentTemplateAbilityRequestView",
     "AgentTemplateArchiveRequest",
     "AgentTemplateContextOverridesView",
     "AgentTemplateContextPolicyView",
@@ -42,8 +41,7 @@ __all__ = [
     "AgentTemplateListView",
     "AgentTemplateMetadataView",
     "AgentTemplateModelView",
-    "AgentTemplateOperationView",
-    "AgentTemplatePackageView",
+    "AgentTemplateMemberView",
     "AgentTemplatePathRequestView",
     "AgentTemplatePersistenceView",
     "AgentTemplatePermissionRequestView",
@@ -52,8 +50,6 @@ __all__ = [
     "AgentTemplateReferencesView",
     "AgentTemplateRevisionSummaryView",
     "AgentTemplateRevisionsView",
-    "AgentTemplateScriptView",
-    "AgentTemplateSkillView",
     "AgentTemplateSummaryView",
     "AgentTemplateSurfaceView",
     "AgentTemplateUpdateRequest",
@@ -156,13 +152,19 @@ class AgentAdminView(TreeModel):
 
 
 class AgentCreateRequest(TreeModel):
-    """按模板创建 Agent；配置不进请求体，默认停止。"""
+    """按模板创建 Agent；配置不进请求体，默认停止。
+
+    ``initial_bindings`` 是创建时选中的成员全名（``<package>.<key>``）：只有这些
+    成员在启动后被绑定进模型上下文，其余模板成员仍可被搜索与调用。省略表示
+    "按模板成员的默认轴全部绑定"。
+    """
 
     expected_revision: int = Field(ge=0)
     name: str = Field(min_length=1)
     template_id: str = Field(min_length=1)
     revision: int = Field(ge=1)
     desired_state: Literal["running", "stopped"] = "stopped"
+    initial_bindings: list[str] | None = None
 
 
 class AgentSpecPatch(TreeModel):
@@ -269,64 +271,31 @@ class AgentTemplateSurfaceView(TreeModel):
     max_static: int | None = Field(default=None, ge=1)
 
 
-class AgentTemplateOperationView(TreeModel):
-    """operation 轴申请；``visible=false && available=true`` 非法。"""
+class AgentTemplateMemberView(TreeModel):
+    """模板里选中的一个成员。
 
-    key: str = Field(min_length=1)
-    visible: bool = True
-    available: bool = True
-
-    @model_validator(mode="after")
-    def _check_axes(self) -> AgentTemplateOperationView:
-        if not self.visible and self.available:
-            raise ValueError("visible=false 的 operation 不能同时 available=true")
-        return self
-
-
-class AgentTemplateScriptView(TreeModel):
-    """skill 下的脚本申请（``exec`` 才是可执行性）。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    exec: bool = False
-
-
-class AgentTemplateSkillView(TreeModel):
-    """skill 申请；skill 没有 ``available``。"""
-
-    key: str = Field(min_length=1)
-    visible: bool = True
-    scripts: list[AgentTemplateScriptView] = Field(default_factory=list)
-
-
-class AgentTemplatePackageView(TreeModel):
-    """包级申请；整包与成员二选一。
-
-    ``version`` 只对外部安装的能力件有意义（安装根下 ``<ns>/<name>/<version>/``）；
-    内核件随源码发布，取 ``None``。模板必须记住用户选的是哪个版本：同一包多版本
-    并存时，不记版本会找不到成员或找错版本。
+    ``member`` 固定为三段 ``<namespace>.<ability_name>.<member_name>``；模板只
+    定位身份（类型/版本/来源随行），定义数据在启动 Agent 时扫能力定义取得。
     """
 
-    package: str = Field(min_length=1)
-    origin: Literal["builtin", "installed", "mcp"]
+    namespace: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    member: str = Field(min_length=1)
+    type: Literal["operation", "skill", "mcp"] = "operation"
     version: str | None = None
-    whole_container: bool = False
-    operations: list[AgentTemplateOperationView] = Field(default_factory=list)
-    skills: list[AgentTemplateSkillView] = Field(default_factory=list)
+    ability_type: Literal["kernel", "external"] = "external"
 
     @model_validator(mode="after")
-    def _check_container(self) -> AgentTemplatePackageView:
-        if self.whole_container and (self.operations or self.skills):
-            raise ValueError("whole_container=true 时不能同时申请 operations/skills")
+    def _check_shape(self) -> AgentTemplateMemberView:
+        parts = self.member.split(".")
+        if len(parts) != 3 or parts[0] != self.namespace or parts[1] != self.name:
+            raise ValueError(
+                "member 必须是 <namespace>.<ability_name>.<member_name>"
+                f"（={self.namespace}.{self.name}.<key>），当前是 {self.member!r}"
+            )
+        if self.ability_type == "kernel" and self.version is not None:
+            raise ValueError("kernel 成员没有版本层，version 必须为 null")
         return self
-
-
-class AgentTemplateAbilityRequestView(TreeModel):
-    """能力申请（模板层只做形状校验，不判断成员是否存在）。"""
-
-    surface: AgentTemplateSurfaceView = Field(default=AgentTemplateSurfaceView())
-    packages: list[AgentTemplatePackageView] = Field(default_factory=list)
-    mcp_refs: list[str] = Field(default_factory=list)
 
 
 class AgentTemplatePermissionRequestView(TreeModel):
@@ -408,7 +377,7 @@ class AgentTemplateDetailView(TreeModel):
     model: AgentTemplateModelView
     prompt: AgentTemplatePromptView
     context_policy: AgentTemplateContextPolicyView
-    ability_request: AgentTemplateAbilityRequestView
+    available_members: list[AgentTemplateMemberView] = Field(default_factory=list)
     permission_request: AgentTemplatePermissionRequestView
     path_request: list[AgentTemplatePathRequestView] = Field(default_factory=list)
     created_at: str
@@ -457,7 +426,7 @@ class AgentTemplateCreateRequest(TreeModel):
     model: AgentTemplateModelView | None = None
     prompt: AgentTemplatePromptView | None = None
     context_policy: AgentTemplateContextPolicyView | None = None
-    ability_request: AgentTemplateAbilityRequestView | None = None
+    available_members: list[AgentTemplateMemberView] | None = None
     permission_request: AgentTemplatePermissionRequestView | None = None
     path_request: list[AgentTemplatePathRequestView] = Field(default_factory=list)
 
@@ -474,7 +443,7 @@ class AgentTemplateUpdateRequest(TreeModel):
     model: AgentTemplateModelView | None = None
     prompt: AgentTemplatePromptView | None = None
     context_policy: AgentTemplateContextPolicyView | None = None
-    ability_request: AgentTemplateAbilityRequestView | None = None
+    available_members: list[AgentTemplateMemberView] | None = None
     permission_request: AgentTemplatePermissionRequestView | None = None
     path_request: list[AgentTemplatePathRequestView] | None = None
 

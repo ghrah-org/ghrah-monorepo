@@ -66,7 +66,9 @@ def test_backend_identity_changes_with_its_operation_code(tmp_path: Path) -> Non
 
     operation = copy / "operations" / "execute_command.py"
     operation.write_text(
-        operation.read_text(encoding="utf-8") + "\n# implementation drift\n", encoding="utf-8"
+        operation.read_text(encoding="utf-8") + "\n# implementation drift\n",
+        encoding="utf-8",
+        newline="\n",
     )
     after = capture_ability_version(
         (copy / "ability.yaml").read_text(encoding="utf-8"), root=copy
@@ -82,7 +84,7 @@ def test_identity_of_another_backend_does_not_follow_shell_code(tmp_path: Path) 
 
     operation = shell_copy / "operations" / "execute_command.py"
     operation.write_text(
-        operation.read_text(encoding="utf-8") + "\n# shell drift\n", encoding="utf-8"
+        operation.read_text(encoding="utf-8") + "\n# shell drift\n", encoding="utf-8", newline="\n"
     )
     after_cluster = _capture("cluster")[0]
 
@@ -111,7 +113,9 @@ def test_external_source_package_identity_follows_operation_code(tmp_path: Path)
 
     operation = copy / "operations" / "render.py"
     operation.write_text(
-        operation.read_text(encoding="utf-8") + "\n# implementation drift\n", encoding="utf-8"
+        operation.read_text(encoding="utf-8") + "\n# implementation drift\n",
+        encoding="utf-8",
+        newline="\n",
     )
     after = capture_ability_version((copy / "ability.yaml").read_text(encoding="utf-8"), root=copy)
 

@@ -75,12 +75,12 @@ def _package(
         },
     }
     (package / "ability.yaml").write_text(
-        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8", newline="\n"
     )
     if body is not None:
         target = package / "skills" / member / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(body, encoding="utf-8")
+        target.write_text(body, encoding="utf-8", newline="\n")
     return package
 
 
@@ -256,7 +256,9 @@ class TestInitializeAndDrift:
         provider.initialize()
 
         assert provider.scan().skills[0].drifted is False
-        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text(
+            "# 改过\n", encoding="utf-8", newline="\n"
+        )
         assert provider.scan().skills[0].drifted is True
 
     def test_body_change_shows_drift(self, tmp_path: Path) -> None:
@@ -264,7 +266,9 @@ class TestInitializeAndDrift:
         provider = _provider(tmp_path)
         provider.initialize()
 
-        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text(
+            "# 改过\n", encoding="utf-8", newline="\n"
+        )
 
         assert provider.scan().skills[0].drifted is True
 
@@ -272,7 +276,9 @@ class TestInitializeAndDrift:
         package = _package(tmp_path, "db-query")
         provider = _provider(tmp_path)
         provider.initialize()
-        (package / "skills" / "db-query" / "SKILL.md").write_text("# 改过\n", encoding="utf-8")
+        (package / "skills" / "db-query" / "SKILL.md").write_text(
+            "# 改过\n", encoding="utf-8", newline="\n"
+        )
 
         record = provider.relock("db-query")
 
@@ -289,7 +295,7 @@ class TestInitializeAndDrift:
         package = _package(tmp_path, "db-query")
         provider = _provider(tmp_path)
         provider.initialize()
-        (package / LOCK_FILE_NAME).write_text(": not yaml", encoding="utf-8")
+        (package / LOCK_FILE_NAME).write_text(": not yaml", encoding="utf-8", newline="\n")
 
         result = provider.scan()
 
@@ -304,6 +310,7 @@ class TestInitializeAndDrift:
         (package / LOCK_FILE_NAME).write_text(
             yaml.safe_dump({"lock_schema": 1, "full_name": "db-query"}),
             encoding="utf-8",
+            newline="\n",
         )
 
         skill = provider.scan().skills[0]
@@ -324,7 +331,7 @@ class TestInitializeAndDrift:
         package = _package(tmp_path, "db-query")
         provider = _provider(tmp_path)
         provider.initialize()
-        (package / "notes.txt").write_text("附加文件\n", encoding="utf-8")
+        (package / "notes.txt").write_text("附加文件\n", encoding="utf-8", newline="\n")
 
         verification = provider.verify("db-query")
 

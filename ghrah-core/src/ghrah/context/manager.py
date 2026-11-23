@@ -1748,21 +1748,13 @@ class ContextManager:
             if records:
                 self._pending_compaction.extend(records)
 
-        # 技能目录摘要：窗口管理之后追加——不被压缩裁掉，且始终位于队列末尾
+        # 技能目录摘要由工具面在 `_action` 里按成员视图注入（带摘要去重与
+        # "完整替换"口径），这里只做内容端口授权的即时校验，不再另发一份目录：
+        # 两处都注入会让每轮多一段重复的技能清单。
         if self._ability_content is not None:
             validate_context = getattr(self._ability_content, "validate_context", None)
             if validate_context is not None:
                 validate_context(self._agent_name)
-            text = await self._ability_content.catalog_text()
-            catalog = (
-                self._message_factory.create_message(
-                    role="user", text=text, source="ability:catalog"
-                )
-                if text and self._message_factory is not None
-                else None
-            )
-            if catalog is not None:
-                messages = [*messages, catalog]
 
         return messages
 

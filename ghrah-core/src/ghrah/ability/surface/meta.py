@@ -32,6 +32,27 @@ class ExecuteInput(DescribeInput):
     arguments: dict[str, Any] = Field(description="Arguments matching the target input schema.")
 
 
+class BindInput(BaseModel):
+    """按工具名或技能目录名绑定/解绑成员；成员必须已被授予且可见。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(
+        min_length=1,
+        description=(
+            "Exact tool name returned by search_tools, or a skill catalog name "
+            "such as `alias/skill` from the skill catalog."
+        ),
+    )
+
+
+class BindOutput(BaseModel):
+    """绑定操作的回执：目标工具名与当前绑定成员列表。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    bound: list[str]
+
+
 class SearchItem(BaseModel):
     """可返回给模型的一行搜索摘要。"""
 

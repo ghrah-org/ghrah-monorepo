@@ -95,7 +95,7 @@ class TestAtomicWriteText:
 
     def test_overwrite_existing(self, tmp_path: Path) -> None:
         target = tmp_path / "f.txt"
-        target.write_text("old", encoding="utf-8")
+        target.write_text("old", encoding="utf-8", newline="\n")
         atomic_write_text(target, "new")
         assert target.read_text(encoding="utf-8") == "new"
 
@@ -104,11 +104,18 @@ class TestAtomicWriteText:
         atomic_write_text(target, "{}")
         assert [p.name for p in tmp_path.iterdir()] == ["marker.json"]
 
+    def test_writes_lf_bytes_on_every_platform(self, tmp_path: Path) -> None:
+        """文本产物跨平台逐字节一致：Windows 上也不得把 \\n 翻成 CRLF。"""
+        target = tmp_path / "body.md"
+        atomic_write_text(target, "---\nname: guide\n---\n\nbody\n")
+        assert b"\r\n" not in target.read_bytes()
+        assert target.read_bytes() == b"---\nname: guide\n---\n\nbody\n"
+
     def test_replace_retries_on_locked_target(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         target = tmp_path / "f.txt"
-        target.write_text("old", encoding="utf-8")
+        target.write_text("old", encoding="utf-8", newline="\n")
         calls = {"n": 0}
         real_replace = os.replace
 

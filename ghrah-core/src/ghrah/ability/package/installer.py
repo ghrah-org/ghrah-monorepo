@@ -65,6 +65,7 @@ from ghrah.ability.package.installed_store import (
     is_link,
     parse_full_name,
 )
+from ghrah.ability.package.intake import IntakeError, IntakeResult, normalize_source
 from ghrah.ability.package.lock import (
     LOCK_SUFFIX,
     InstallLock,
@@ -367,8 +368,29 @@ class AbilityInstaller:
 
     # ------------------------------------------------------------------ install
 
+    def prepare(self, source: str | Path, *, name_hint: str | None = None) -> IntakeResult:
+        """扫盘提取成员并把标准 ``ability.yaml`` 写回源包根目录。
+
+        Args:
+            source: 解包后的源包根目录。
+            name_hint: 目录名不足以表达身份时的兜底名字（上传文件名）。
+
+        Returns:
+            规范化结果；``definition`` 可直接用于后续安装。
+
+        Raises:
+            InstallerError: 源包不是能力包（既无 operations 也无 skills）或成员不合格。
+        """
+        try:
+            return normalize_source(source, name_hint=name_hint)
+        except IntakeError as exc:
+            raise InstallerError(exc.code, exc.message) from exc
+
     def install(self, source: str | Path) -> InstallResult:
-        """把 v1 源包目录安装进 ``<root>/<namespace>/<name>/<version>/``。
+        """把源包目录安装进 ``<root>/<namespace>/<name>/<version>/``。
+
+        上传导入应当先调 :meth:`prepare` 做入库规范化（扫盘提取成员、补写标准
+        ``ability.yaml``）；本方法本身**不 import 包代码**，只按既有定义校验并拷贝。
 
         Args:
             source: 源包或 MCP 声明目录（含 ``ability.yaml``）；归档须先解包。

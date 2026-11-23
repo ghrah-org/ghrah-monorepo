@@ -33,7 +33,7 @@ def test_project_paths_initialize_and_safe_rollback(tmp_path: Path) -> None:
 def test_initialize_rejects_non_empty_root(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    (root / "owned.txt").write_text("keep", encoding="utf-8")
+    (root / "owned.txt").write_text("keep", encoding="utf-8", newline="\n")
     with pytest.raises(ValueError, match="must be empty"):
         ProjectPaths.from_locator(str(root)).initialize("p1")
     assert (root / "owned.txt").read_text(encoding="utf-8") == "keep"

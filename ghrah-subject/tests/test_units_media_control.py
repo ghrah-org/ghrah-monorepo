@@ -197,7 +197,7 @@ def test_get_errors_404_400_and_unknown_project(tmp_path: Path) -> None:
 
 def test_path_traversal_attempts_never_touch_files(tmp_path: Path) -> None:
     client, root = _app(tmp_path)
-    (root / "secret.txt").write_text("secret", encoding="utf-8")
+    (root / "secret.txt").write_text("secret", encoding="utf-8", newline="\n")
     for attempt in ("../secret.txt", "..%2Fsecret.txt", "./" + "a" * 64, "../" + "a" * 64):
         response = client.get(f"{_upload_url()}/{quote(attempt, safe='')}")
         # 路由不匹配（404）或非法 id（400）都行，关键是绝不返回文件内容

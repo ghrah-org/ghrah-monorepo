@@ -1,5 +1,5 @@
 format: ghrah.ability-definition
-schema_version: '1'
+schema_version: '2'
 identity:
   namespace: ghrah
   name: mcp
@@ -7,62 +7,69 @@ identity:
 title: MCP
 description: Invoke a tool on an MCP server declared by a loaded skill.
 members:
-  operations:
-    mcp_call:
-      title: MCP Call
-      description: Call a tool on an MCP server. The tools available to you are listed in the MCP catalog of the skill you loaded; 'server' and 'tool' are case-sensitive.
-      entry: operations/mcp_call.py
-      input_schema:
-        additionalProperties: false
-        properties:
-          server:
-            description: MCP server name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
-            type: string
-          tool:
-            description: Tool name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
-            type: string
-          arguments:
-            additionalProperties: true
-            description: Tool arguments matching the tool's input schema. Call load_skill with server= and tool= to read the exact schema before guessing.
-            type: object
-          skill:
-            default: ''
-            description: Optional. The skill full name that declares this server. Only needed when several loaded skills could own the same server name.
-            type: string
-        required:
-        - server
-        - tool
-        type: object
-      output_schema:
-        additionalProperties: false
-        properties:
-          content:
-            description: Tool result rendered for the model
-            type: string
-          server:
-            description: MCP server that handled the call
-            type: string
-          tool:
-            description: Tool name on that server
-            type: string
-        required:
-        - content
-        - server
-        - tool
-        type: object
-      tags:
-      - mcp
+- namespace: ghrah
+  name: mcp
+  member: ghrah.mcp.mcp_call
+  type: operation
+  version: null
+  ability_type: kernel
+  axes:
+    visible: true
+    bind: true
+  data:
+    title: MCP Call
+    description: Call a tool on an MCP server. The tools available to you are listed in the MCP catalog of the skill you loaded; 'server' and 'tool' are case-sensitive.
+    input_schema:
+      additionalProperties: false
+      properties:
+        server:
+          description: MCP server name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
+          type: string
+        tool:
+          description: Tool name exactly as listed in the skill's MCP catalog. Case-sensitive; copy it verbatim.
+          type: string
+        arguments:
+          additionalProperties: true
+          description: Tool arguments matching the tool's input schema. Call load_skill with server= and tool= to read the exact schema before guessing.
+          type: object
+        skill:
+          default: ''
+          description: Optional. The skill full name that declares this server. Only needed when several loaded skills could own the same server name.
+          type: string
+      required:
+      - server
       - tool
-      effects:
-      - net:request
-      permissions:
-        net_access: true
-      resources: {}
-      execution:
-        mode: request
-        timeout_ms: 300000
-        cancellation: unsupported
-        on_revoke: drain
-        retry: never
-      expose: true
-  skills: {}
+      type: object
+    output_schema:
+      additionalProperties: false
+      properties:
+        content:
+          description: Tool result rendered for the model
+          type: string
+        server:
+          description: MCP server that handled the call
+          type: string
+        tool:
+          description: Tool name on that server
+          type: string
+      required:
+      - content
+      - server
+      - tool
+      type: object
+    tags:
+    - mcp
+    - tool
+    effects:
+    - net:request
+    permissions:
+      net_access: true
+    resources: {}
+    execution:
+      mode: request
+      timeout_ms: 300000
+      cancellation: unsupported
+      on_revoke: drain
+      retry: never
+    expose: true
+    path: ghrah/mcp/operations/mcp_call.py

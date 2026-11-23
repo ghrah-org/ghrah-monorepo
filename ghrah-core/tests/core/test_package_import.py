@@ -224,7 +224,7 @@ async def test_missing_manifest_is_rejected(tmp_path: Path) -> None:
     install_root.mkdir()
     source = tmp_path / "src"
     source.mkdir()
-    (source / "readme.txt").write_text("no manifest", encoding="utf-8")
+    (source / "readme.txt").write_text("no manifest", encoding="utf-8", newline="\n")
     archive = zip_package(source, tmp_path / "bad.zip")
     catalog = build_core_catalog(install_root=str(install_root))
     try:
@@ -256,7 +256,7 @@ async def test_unknown_format_is_rejected(tmp_path: Path) -> None:
     install_root = tmp_path / "ability"
     install_root.mkdir()
     archive = tmp_path / "package.txt"
-    archive.write_text("not an archive", encoding="utf-8")
+    archive.write_text("not an archive", encoding="utf-8", newline="\n")
     catalog = build_core_catalog(install_root=str(install_root))
     try:
         with pytest.raises(ApiError) as failure:
@@ -280,8 +280,11 @@ async def test_real_zip_extension_with_wrong_bytes_is_invalid(tmp_path: Path) ->
     assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
 
 
-def test_import_rejects_schema_that_does_not_match_module(tmp_path: Path) -> None:
-    """手写 schema 与模块 pydantic 不一致：安装期就拒，不留到建 agent。"""
+def test_import_rebuilds_schema_from_module(tmp_path: Path) -> None:
+    """手写 schema 与模块 pydantic 不一致：导入按模块重建，不再拒绝。
+
+    「先建后验」把这类不一致当成**可修复**：成员以磁盘为准，声明被重写。
+    """
     source = write_package(
         tmp_path / "src",
         schema_override={
@@ -291,20 +294,90 @@ def test_import_rejects_schema_that_does_not_match_module(tmp_path: Path) -> Non
             "additionalProperties": False,
         },
     )
-    archive = zip_package(source, tmp_path / "bad-schema.zip")
+    archive = zip_package(source, tmp_path / "stale-schema.zip")
     catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
 
-    prefix = "_ghrah_ability_precheck_"
-    before = {name for name in sys.modules if name.startswith(prefix)}
-    with pytest.raises(ApiError) as failure:
-        asyncio.run(catalog.package_import(archive_path=str(archive), source_name="bad-schema.zip"))
+    try:
+        view = asyncio.run(
+            catalog.package_import(archive_path=str(archive), source_name="stale-schema.zip")
+        )
+        profile = asyncio.run(
+            catalog.package_version_profile(namespace="acme", name="demo", version="1.0.0")
+        )
+    finally:
+        asyncio.run(catalog.aclose())
 
-    assert failure.value.problem.code is ProblemCode.INVALID_PACKAGE
-    assert "Input" in (failure.value.problem.detail or "")
-    assert not (tmp_path / "ability" / "acme").exists()
-    # 失败路径同样不能把预检父包 / 成员留在 sys.modules 里。
-    after = {name for name in sys.modules if name.startswith(prefix)}
-    assert after == before
+    assert view.operation_count == 1
+    schema = profile.operations[0].input_schema
+    properties = schema.get("properties") or {}
+    assert "host" in properties, "input_schema 必须按模块重建"
+    assert "other" not in properties
+
+
+def test_import_builds_definition_from_upload_name(tmp_path: Path) -> None:
+    """只有 operations/ 的平铺归档：身份取自上传文件名，成员扫盘得出。"""
+    source = tmp_path / "src"
+    (source / "operations").mkdir(parents=True)
+    (source / "operations" / "ping.py").write_bytes(OP_SOURCE.format(marker="alpha").encode())
+    archive = zip_package(source, tmp_path / "no-manifest.zip", top=None)
+    install_root = tmp_path / "ability"
+    catalog = build_core_catalog(install_root=str(install_root))
+
+    async def run() -> tuple[object, dict]:
+        try:
+            view = await catalog.package_import(
+                archive_path=str(archive), source_name="acme.tools.zip"
+            )
+            installed = install_root / "acme" / "tools" / "0.1.0" / "ability.yaml"
+            document = yaml.safe_load(installed.read_text(encoding="utf-8"))
+            return view, document
+        finally:
+            await catalog.aclose()
+
+    view, document = asyncio.run(run())
+    assert (view.namespace, view.name, view.version) == ("acme", "tools", "0.1.0")
+    assert document["schema_version"] == "2"
+    assert [item["member"] for item in document["members"]] == ["acme.tools.ping"]
+
+
+def test_import_builds_definition_from_top_directory(tmp_path: Path) -> None:
+    """套一层顶层目录且没有 ability.yaml：身份取自目录名。"""
+    source = tmp_path / "acme.tools"
+    (source / "operations").mkdir(parents=True)
+    (source / "operations" / "ping.py").write_bytes(OP_SOURCE.format(marker="beta").encode())
+    archive = zip_package(source, tmp_path / "top-dir.zip", top="acme.tools")
+    install_root = tmp_path / "ability"
+    catalog = build_core_catalog(install_root=str(install_root))
+
+    async def run() -> object:
+        try:
+            return await catalog.package_import(
+                archive_path=str(archive), source_name="top-dir.zip"
+            )
+        finally:
+            await catalog.aclose()
+
+    view = asyncio.run(run())
+    assert (view.namespace, view.name) == ("acme", "tools")
+    assert (install_root / "acme" / "tools" / "0.1.0" / "operations" / "ping.py").is_file()
+
+
+def test_import_rejects_archive_without_any_member(tmp_path: Path) -> None:
+    """既没有 operations/ 也没有 skills/：解包阶段就拒绝。"""
+    source = tmp_path / "src"
+    source.mkdir(parents=True)
+    (source / "README.md").write_bytes(b"# nothing\n")
+    archive = zip_package(source, tmp_path / "empty.zip", top=None)
+    catalog = build_core_catalog(install_root=str(tmp_path / "ability"))
+
+    async def run() -> None:
+        try:
+            await catalog.package_import(archive_path=str(archive), source_name="empty.zip")
+        finally:
+            await catalog.aclose()
+
+    with pytest.raises(ApiError):
+        asyncio.run(run())
 
 
 def test_import_allows_skill_member_without_abi_precheck(tmp_path: Path) -> None:

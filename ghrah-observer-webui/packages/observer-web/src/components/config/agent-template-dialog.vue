@@ -104,17 +104,7 @@ const form = reactive({
   systemPrompt: props.template?.prompt.system_prompt ?? "",
   maxIterations: props.template?.context_policy.max_iterations ?? -1,
   communicationTimeout: props.template?.context_policy.communication_timeout ?? 300,
-  rows: (props.template?.ability_request.packages ?? []).map((item) => ({
-    optionValue: item.version === null ? item.package : `${item.package}@${item.version}`,
-    package: item.package,
-    version: item.version ?? null,
-    fetchVersion: item.version ?? "",
-    wholeContainer: item.whole_container,
-    available: item.operations.map((op) => op.key),
-    selected: item.operations.map((op) => op.key),
-    availableSkills: item.skills.map((skill) => skill.key),
-    selectedSkills: item.skills.map((skill) => skill.key),
-  })) as PackageRow[],
+  rows: rowsFromMembers(props.template?.available_members ?? []) as PackageRow[],
 });
 
 const abilityCache = new Map<string, { operations: string[]; skills: string[] }>();
@@ -341,35 +331,63 @@ function originOf(fullName: string): "builtin" | "installed" {
   return packages.value.find((option) => option.fullName === fullName)?.origin ?? "builtin";
 }
 
-function buildPackages(): NonNullable<AgentTemplateCreateRequest["ability_request"]>["packages"] {
-  return form.rows
-    .filter((row) => row.package !== "")
-    .map((row) => ({
-      package: row.package,
-      origin: originOf(row.package),
-      // 存储层不留整包：即便勾了整包也按成员落库（后端还会再展开一次兜底）。
-      whole_container: false,
-      // 内核件随源码发布、没有版本层；能力件钉住用户选的那个版本。
-      version: originOf(row.package) === "builtin" ? null : row.version,
-      operations: (row.wholeContainer ? row.available : row.selected).map((key) => ({
-        key,
-        visible: true,
-        available: true,
-      })),
-      skills: (row.wholeContainer ? row.availableSkills : row.selectedSkills).map((key) => ({
-        key,
-        visible: true,
-        scripts: [],
-      })),
-    }));
+type TemplateMember = NonNullable<AgentTemplateCreateRequest["available_members"]>[number];
+
+function memberOf(row: PackageRow, key: string, type: "operation" | "skill"): TemplateMember {
+  const [namespace, name] = row.package.split(".");
+  const abilityName = name || namespace;
+  const kernel = originOf(row.package) === "builtin";
+  return {
+    namespace,
+    name: abilityName,
+    // 三段全名：namespace.ability_name.member_name。
+    member: `${namespace}.${abilityName}.${key}`,
+    type,
+    version: kernel ? null : row.version,
+    ability_type: kernel ? "kernel" : "external",
+  };
 }
 
-function buildAbilityRequest(): AgentTemplateCreateRequest["ability_request"] {
-  return {
-    surface: { mode: "auto", static: [], max_static: null },
-    packages: buildPackages(),
-    mcp_refs: [],
-  };
+function buildMembers(): TemplateMember[] {
+  const members: TemplateMember[] = [];
+  for (const row of form.rows.filter((item) => item.package !== "")) {
+    const keys = row.wholeContainer ? row.available : row.selected;
+    for (const key of keys) members.push(memberOf(row, key, "operation"));
+    const skillKeys = row.wholeContainer ? row.availableSkills : row.selectedSkills;
+    for (const key of skillKeys) members.push(memberOf(row, key, "skill"));
+  }
+  return members;
+}
+
+function rowsFromMembers(members: readonly TemplateMember[]): PackageRow[] {
+  const grouped = new Map<string, PackageRow>();
+  for (const member of members) {
+    const fullName = `${member.namespace}.${member.name}`;
+    let row = grouped.get(fullName);
+    if (row === undefined) {
+      row = {
+        optionValue: member.version === null ? fullName : `${fullName}@${member.version}`,
+        package: fullName,
+        version: member.version ?? null,
+        fetchVersion: member.version ?? "",
+        wholeContainer: false,
+        available: [],
+        selected: [],
+        availableSkills: [],
+        selectedSkills: [],
+      } satisfies PackageRow;
+      grouped.set(fullName, row);
+    }
+    const key = member.member.split(".").at(-1) ?? member.member;
+    if (member.type === "skill") {
+      row.availableSkills.push(key);
+      row.selectedSkills.push(key);
+    } else {
+      row.available.push(key);
+      row.selected.push(key);
+    }
+  }
+  return [...grouped.values()];
 }
 
 function buildCreatePayload(): AgentTemplateCreateRequest {
@@ -391,7 +409,7 @@ function buildCreatePayload(): AgentTemplateCreateRequest {
       window: null,
       overrides: null,
     },
-    ability_request: buildAbilityRequest(),
+    available_members: buildMembers(),
     permission_request: null,
     path_request: [],
   };
@@ -413,7 +431,7 @@ function buildUpdatePayload(): AgentTemplateUpdateRequest {
       window: null,
       overrides: null,
     },
-    ability_request: buildAbilityRequest(),
+    available_members: buildMembers(),
     permission_request: null,
     path_request: null,
   };

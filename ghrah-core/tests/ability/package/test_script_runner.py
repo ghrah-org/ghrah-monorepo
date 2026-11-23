@@ -353,7 +353,7 @@ async def test_script_outside_package_root_is_denied_before_spawn(tmp_path) -> N
     assert installed is not None
     script = installed.root / "skills" / "guide" / "scripts" / "export.py"
     outside = tmp_path / "outside.py"
-    outside.write_text(SUCCESS, encoding="utf-8")
+    outside.write_text(SUCCESS, encoding="utf-8", newline="\n")
     script.unlink()
     symlink_or_skip(script, outside)
     calls: list[Any] = []
