@@ -42,6 +42,7 @@ from ghrah.communication.delivery_queue import (
     pending_turn_input_ids,
     release_turn_inputs,
     release_unowned_inline_waits,
+    settle_stranded_deliveries,
     settle_terminal_turns,
     settle_turn_deliveries,
     settle_turn_opener,
@@ -257,6 +258,8 @@ _DELIVERY_INDEXES = (
     "WHERE state!='completed'",
     "CREATE INDEX IF NOT EXISTS mm_bound_inflight ON mm_deliveries(turn_id) "
     "WHERE turn_id IS NOT NULL AND state IN ('pending','processing')",
+    "CREATE INDEX IF NOT EXISTS mm_unbound_processing ON mm_deliveries(state) "
+    "WHERE state='processing' AND turn_id IS NULL",
 )
 
 
@@ -310,6 +313,7 @@ class MessageManager:
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._closing = False
+        self._repair_retry_at = 0.0
 
     @property
     def db_path(self) -> Path:
@@ -353,6 +357,7 @@ class MessageManager:
             raise RuntimeError("Message database already has an active manager") from exc
         self._owner = owner
         self._closing = False
+        self._repair_retry_at = 0.0
         try:
             if prepare_context:
                 async with SqliteBackend(self._path) as backend:
@@ -458,10 +463,11 @@ class MessageManager:
                     else ""
                 )
                 # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用。
-                # 这里按「已消费即完成」收尾，保留说明性 error 供排查。
+                # 旧路径按「已消费即完成」收尾；已裁定执行丢失的检查点仍可显式续跑。
                 await db.execute(
                     "UPDATE mm_deliveries SET state='completed', error=? "
                     "WHERE state='interrupted' AND consumed_node_id IS NOT NULL "
+                    "AND COALESCE(error,'') NOT IN ('turn_missing','worker_lost') "
                     "AND NOT EXISTS (SELECT 1 FROM mm_delivery_results r "
                     "WHERE r.delivery_id=mm_deliveries.delivery_id)" + preserve_aborted,
                     ("recovered: consumed before durable completion",),
@@ -1578,6 +1584,13 @@ class MessageManager:
         ).fetchall()
         return len(rows) == 2
 
+    async def _dispatch_turn_schema(self, db: aiosqlite.Connection) -> bool:
+        if not self._session_receivers:
+            return await has_turns(db)
+        if not await self._has_turn_schema(db):
+            raise RuntimeError("Durable turn schema is required for atomic delivery")
+        return True
+
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
         async with self._lock:
@@ -1975,12 +1988,14 @@ class MessageManager:
     async def _dispatch_loop(self) -> None:
         while not self._closing:
             self._wake.clear()
+            delay = self._poll_interval
             try:
                 await self._scan()
             except Exception:
+                delay = max(1.0, delay)
                 logger.exception("MessageManager pending scan failed")
             try:
-                await asyncio.wait_for(self._wake.wait(), self._poll_interval)
+                await asyncio.wait_for(self._wake.wait(), delay)
             except TimeoutError:
                 pass
 
@@ -1990,12 +2005,12 @@ class MessageManager:
             await self.recover_completions()
             async with self._lock:
                 db = self._require_db()
-                with_turns = await has_turns(db)
-                repair = await needs_delivery_repair(db, with_turns=with_turns)
+                with_turns = await self._dispatch_turn_schema(db)
+                repair = time.monotonic() >= self._repair_retry_at and await needs_delivery_repair(
+                    db, with_turns=with_turns, workers=self._workers
+                )
             if repair:
-                async with self._transaction() as db:
-                    await settle_terminal_turns(db)
-                    await release_unowned_inline_waits(db)
+                await self._repair_deliveries()
             saw_worker = False
             for agent_id, receiver in tuple(self._receivers.items()):
                 if agent_id in self._paused_agents:
@@ -2024,15 +2039,40 @@ class MessageManager:
             )
             return saw_worker
 
+    async def _repair_deliveries(self) -> None:
+        try:
+            async with self._transaction() as db:
+                with_turns = await self._dispatch_turn_schema(db)
+                await settle_terminal_turns(db)
+                settled = await settle_stranded_deliveries(
+                    db,
+                    with_turns=with_turns,
+                    workers=self._workers,
+                    now=datetime.now(UTC).isoformat(),
+                )
+                await release_unowned_inline_waits(db)
+        except sqlite3.Error:
+            if self._dispatcher is None:
+                raise
+            self._repair_retry_at = time.monotonic() + max(1.0, self._poll_interval)
+            logger.warning("Could not recover stranded message deliveries", exc_info=True)
+            return
+        for row, closure in settled:
+            self._notify_reply_waiters(row["message_id"])
+            publisher = self._turn_closure_publishers.get(row["recipient_id"])
+            if closure is not None and publisher is not None:
+                await publisher(closure)
+
     async def _run(self, agent_id: str, receiver: Receiver) -> None:
         delivery_id: str | None = None
         closure = None
         publish_closure = self._turn_closure_publishers.get(agent_id)
         try:
             async with self._transaction() as db:
+                with_turns = await self._dispatch_turn_schema(db)
                 row = await (
                     await db.execute(
-                        self._next_delivery_sql(await has_turns(db)),
+                        self._next_delivery_sql(with_turns),
                         (agent_id,),
                     )
                 ).fetchone()
@@ -2082,23 +2122,16 @@ class MessageManager:
                         return
                 turn_id = None
                 if target_session is not None and resume_node is None:
-                    if await self._has_turn_schema(db):
-                        now = datetime.now(UTC).isoformat()
-                        await turn.normalize_open_turns(
-                            db, agent_name=agent_id, session_id=target_session, now=now
-                        )
-                        turn_id = uuid4().hex
-                        await turn.insert_turn_placeholder(
-                            db,
-                            turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
-                            opened_at=now,
-                        )
-                    else:
-                        # 链库尚未迁移时降级为无轮次投递，避免领取失败后反复重试。
-                        logger.warning(
-                            "Turn schema is missing; delivery %s runs without a turn",
-                            delivery_id,
-                        )
+                    now = datetime.now(UTC).isoformat()
+                    await turn.normalize_open_turns(
+                        db, agent_name=agent_id, session_id=target_session, now=now
+                    )
+                    turn_id = uuid4().hex
+                    await turn.insert_turn_placeholder(
+                        db,
+                        turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
+                        opened_at=now,
+                    )
                 await db.execute(
                     "UPDATE mm_deliveries SET state='processing', "
                     "attempts=attempts+1, resume_requested=0, turn_id=? "
@@ -2174,7 +2207,7 @@ class MessageManager:
         *,
         session_unavailable: bool = False,
     ) -> turn.TurnClosure | None:
-        # close 期间也必须保存中断；若磁盘失败，processing 留待下次 open 恢复。
+        # close 期间也必须保存中断；失败时由调度或下次 open 兜底。
         try:
             async with self._lock:
                 if self._db is None:

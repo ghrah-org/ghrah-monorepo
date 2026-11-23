@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Collection
 from typing import Any
 
 import aiosqlite
 
-from ghrah.context.turn import TERMINAL_STATUSES
+from ghrah.context import turn
 
 _TURN_INPUT_WHERE = """
 turn_id=? AND delivery_id IS NOT ? AND state='pending' AND consumed_node_id IS NULL
@@ -20,6 +22,10 @@ _UNOWNED_INLINE_WAIT = (
     "state='waiting' AND EXISTS (SELECT 1 FROM mm_deliveries d "
     "WHERE d.delivery_id=parent_delivery_id AND d.state!='processing' "
     "AND NOT (d.state='pending' AND d.resume_requested=1))"
+)
+_BOUND_INFLIGHT = "d.turn_id IS NOT NULL AND d.state IN ('pending','processing')"
+_UNFINISHED_WITHOUT_RESULT = (
+    "NOT EXISTS (SELECT 1 FROM mm_delivery_results r WHERE r.delivery_id=d.delivery_id)"
 )
 
 
@@ -35,13 +41,14 @@ async def has_turns(db: aiosqlite.Connection) -> bool:
 
 def blocker_reason_sql(with_turns: bool) -> str:
     """调度器与读面共用的前序阻塞判定，别名固定为 prior、t、r。"""
+    missing_turn = "prior.turn_id IS NOT NULL AND prior.state IN ('pending','processing')"
     turn_rules = (
-        "WHEN prior.turn_id IS NOT NULL AND t.turn_id IS NULL THEN 'turn_missing' "
+        f"WHEN {missing_turn} AND t.turn_id IS NULL THEN 'turn_missing' "
         "WHEN t.status IN ('open','waiting_hitl') THEN 'turn_active' "
         "WHEN prior.turn_id IS NOT NULL AND prior.state='pending' "
         "AND prior.consumed_node_id IS NULL THEN 'turn_terminal_pending_input' "
         if with_turns
-        else "WHEN prior.turn_id IS NOT NULL THEN 'turn_missing' "
+        else f"WHEN {missing_turn} THEN 'turn_missing' "
     )
     return (
         "CASE WHEN r.delivery_id IS NOT NULL AND prior.state!='completed' "
@@ -232,28 +239,92 @@ async def release_unowned_inline_waits(
 
 def _terminal_turn_candidates_sql() -> str:
     """用少量绑定中投递驱动查询，避免从历史轮次反查全库。"""
-    statuses = TERMINAL_STATUSES
+    statuses = turn.TERMINAL_STATUSES
     placeholders = ",".join("?" for _ in statuses)
     return (
-        "FROM mm_deliveries d INDEXED BY mm_bound_inflight "
+        "FROM mm_deliveries d "
         "CROSS JOIN turns t ON d.turn_id=t.turn_id "
-        "WHERE d.turn_id IS NOT NULL AND d.state IN ('pending','processing') "
+        f"WHERE {_BOUND_INFLIGHT} "
         f"AND t.status IN ({placeholders}) AND ("
         "(d.delivery_id IS NOT t.opener_delivery_id AND d.state='pending') OR "
-        "(d.delivery_id=t.opener_delivery_id AND d.resume_requested=0)) AND NOT EXISTS "
-        "(SELECT 1 FROM mm_delivery_results r WHERE r.delivery_id=d.delivery_id)"
+        "(d.delivery_id=t.opener_delivery_id AND d.resume_requested=0)) "
+        f"AND {_UNFINISHED_WITHOUT_RESULT}"
     )
 
 
-async def needs_delivery_repair(db: aiosqlite.Connection, *, with_turns: bool) -> bool:
+def _stranded_deliveries_sql(with_turns: bool) -> str:
+    """只取无本地 worker 且可证明失去执行权的待修投递。"""
+    columns = "d.delivery_id, d.recipient_id, d.message_id, d.turn_id, d.last_node_id"
+    unowned = (
+        "d.resume_requested=0 AND d.recipient_id NOT IN (SELECT value FROM json_each(?)) "
+        f"AND {_UNFINISHED_WITHOUT_RESULT}"
+    )
+    join = "LEFT JOIN turns t ON t.turn_id=d.turn_id " if with_turns else ""
+    has_turn = "t.turn_id IS NOT NULL" if with_turns else "0"
+    stranded = (
+        "AND (t.turn_id IS NULL OR (d.state='processing' "
+        "AND t.status IN ('open','waiting_hitl') AND t.opener_delivery_id=d.delivery_id "
+        "AND t.agent_name=d.recipient_id AND t.session_id=d.target_session_id)) "
+        if with_turns
+        else ""
+    )
+    return (
+        f"SELECT {columns}, {has_turn} AS has_turn FROM mm_deliveries d "
+        f"{join}WHERE {_BOUND_INFLIGHT} {stranded}AND {unowned} "
+        f"UNION ALL SELECT {columns}, 0 AS has_turn FROM mm_deliveries d "
+        f"WHERE d.state='processing' AND d.turn_id IS NULL AND {unowned}"
+    )
+
+
+async def needs_delivery_repair(
+    db: aiosqlite.Connection, *, with_turns: bool, workers: Collection[str]
+) -> bool:
     """空闲时在只读路径检查是否需要开启收敛写事务。"""
     terminal = f" OR EXISTS (SELECT 1 {_terminal_turn_candidates_sql()})" if with_turns else ""
+    statuses = turn.TERMINAL_STATUSES if with_turns else ()
+    busy = json.dumps(list(workers))
     async with db.execute(
-        f"SELECT EXISTS (SELECT 1 FROM mm_inline_waits WHERE {_UNOWNED_INLINE_WAIT}){terminal}",
-        TERMINAL_STATUSES if with_turns else (),
+        f"SELECT EXISTS (SELECT 1 FROM mm_inline_waits WHERE {_UNOWNED_INLINE_WAIT})"
+        f"{terminal} OR EXISTS ({_stranded_deliveries_sql(with_turns)})",
+        (*statuses, busy, busy),
     ) as cursor:
         row = await cursor.fetchone()
     return bool(row and row[0])
+
+
+async def settle_stranded_deliveries(
+    db: aiosqlite.Connection, *, with_turns: bool, workers: Collection[str], now: str
+) -> list[tuple[aiosqlite.Row, turn.TurnClosure | None]]:
+    """在写事务中复核并中断遗留投递，保留轮次引用和消费凭证。"""
+    busy = json.dumps(list(workers))
+    rows = await db.execute_fetchall(_stranded_deliveries_sql(with_turns), (busy, busy))
+    settled = []
+    for row in rows:
+        missing = row["turn_id"] is not None and not row["has_turn"]
+        await db.execute(
+            "UPDATE mm_deliveries SET state='interrupted', error=?, blocked_reason=NULL "
+            "WHERE delivery_id=?",
+            ("turn_missing" if missing else "worker_lost", row["delivery_id"]),
+        )
+        closure = None
+        if row["has_turn"]:
+            closed = await turn.close_turn(
+                db,
+                turn_id=row["turn_id"],
+                status="interrupted",
+                closing_kind="cancelled",
+                end_node_id=row["last_node_id"],
+                closed_at=now,
+            )
+            await settle_turn_deliveries(
+                db,
+                turn_id=row["turn_id"],
+                opener_delivery_id=row["delivery_id"],
+                terminal_state="interrupted",
+            )
+            closure = turn.ordinary_closure(closed)
+        settled.append((row, closure))
+    return settled
 
 
 async def settle_terminal_turns(db: aiosqlite.Connection) -> None:
@@ -263,7 +334,7 @@ async def settle_terminal_turns(db: aiosqlite.Connection) -> None:
     rows = await db.execute_fetchall(
         "SELECT DISTINCT t.turn_id, t.opener_delivery_id, t.status "
         + _terminal_turn_candidates_sql(),
-        TERMINAL_STATUSES,
+        turn.TERMINAL_STATUSES,
     )
     for row in rows:
         status = row["status"]

@@ -186,19 +186,28 @@ async def test_claim_failure_terminates_delivery_without_hot_loop(runtime, monke
     assert (await mm.get_deliveries(request.message_id))[0].attempts == attempts_before
 
 
-async def test_claim_degrades_without_turn_schema(runtime):
-    """链库未迁移时降级为无轮次投递，不阻塞也不反复重试。"""
+async def test_atomic_claim_requires_turn_schema(runtime):
+    """缺少轮次表时保留待收投递，迁移完成后按正常轮次领取。"""
     agent, backend, mm = runtime
+    await mm.close()
+    await mm.open(start_dispatcher=False)
+    await mm.bind_atomic(agent)
     with sqlite3.connect(backend.db_path) as db:
         db.executescript(
             "DROP TABLE IF EXISTS hitl_requests; DROP TABLE IF EXISTS turns; "
             "DROP INDEX IF EXISTS idx_nodes_turn;"
         )
     request = await send(mm)
+    with pytest.raises(RuntimeError, match="Durable turn schema is required"):
+        await mm.dispatch_pending()
+    (pending,) = await mm.get_deliveries(request.message_id)
+    assert (pending.state, pending.attempts, pending.turn_id) == (DeliveryState.PENDING, 0, None)
+    async with SqliteBackend(backend.db_path) as migrated:
+        await migrated.initialize()
     await asyncio.wait_for(mm.dispatch_pending(), 3)
     (delivery,) = await mm.get_deliveries(request.message_id)
     assert delivery.state == DeliveryState.COMPLETED
-    assert delivery.turn_id is None
+    assert delivery.turn_id is not None
 
 
 async def test_consumed_session_loss_closes_turn_interrupted(runtime, monkeypatch):

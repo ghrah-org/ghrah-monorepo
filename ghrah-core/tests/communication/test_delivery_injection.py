@@ -88,7 +88,14 @@ async def test_queue_and_injection_reads_batch_and_idle_scan_does_not_write(runt
     await db.set_trace_callback(statements.append)
     try:
         await mm._scan()
-        assert all(not sql.startswith("BEGIN IMMEDIATE") for sql in statements)
+        assert not any(
+            sql.startswith(("BEGIN IMMEDIATE", "INSERT", "UPDATE", "DELETE")) for sql in statements
+        )
+        (probe,) = (sql for sql in statements if sql.startswith("SELECT EXISTS (SELECT 1 FROM"))
+        plan = await db.execute_fetchall("EXPLAIN QUERY PLAN " + probe)
+        details = [row[3] for row in plan]
+        assert sum("mm_bound_inflight" in detail for detail in details) == 2, details
+        assert any("mm_unbound_processing" in detail for detail in details), details
 
         turn_id = await agent._context_manager.open_turn()
         for index in range(16):
@@ -459,7 +466,7 @@ async def test_special_turn_blockers_match_scheduler_and_recovery(runtime, missi
     async with mm._transaction() as db:
         if missing:
             await db.execute(
-                "UPDATE mm_deliveries SET state='failed', turn_id='missing' WHERE delivery_id=?",
+                "UPDATE mm_deliveries SET turn_id='missing' WHERE delivery_id=?",
                 (injected.deliveries[0].delivery_id,),
             )
         else:
@@ -473,8 +480,12 @@ async def test_special_turn_blockers_match_scheduler_and_recovery(runtime, missi
         candidate = await (await db.execute(mm._next_delivery_sql(), ("agent",))).fetchone()
         assert candidate is None
     await mm.dispatch_pending()
-    if not missing:
-        released = (await mm.get_deliveries(injected.message_id))[0]
+    (released,) = await mm.get_deliveries(injected.message_id)
+    if missing:
+        assert (released.state, released.error) == (DeliveryState.INTERRUPTED, "turn_missing")
+        assert released.turn_id == "missing"
+        assert await mm.get_queue_blocker(later.deliveries[0].delivery_id) is None
+    else:
         assert (released.turn_id, released.delivery_policy) == (None, "queue")
 
 

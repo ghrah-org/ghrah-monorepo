@@ -522,6 +522,39 @@ async def test_interrupted_predecessor_releases_after_reopen(tmp_path):
         assert await manager.get_replies(first.message_id) == ()
 
 
+@pytest.mark.parametrize("turn_id", [None, "missing"])
+async def test_stranded_callback_delivery_recovers_without_context_schema(tmp_path, turn_id):
+    """纯回调模式可以恢复无主投递，后续消息仍可正常领取。"""
+    manager = make_manager(tmp_path / "messages.sqlite")
+    await manager.open(start_dispatcher=False)
+    try:
+        first = await send_request(manager, "stranded")
+        later = await send_request(manager, "later")
+        deliveries = await manager.get_deliveries(first.message_id)
+        prior = next(item for item in deliveries if item.recipient_id == "b")
+        async with manager._transaction() as db:
+            await db.execute(
+                "UPDATE mm_deliveries SET state='processing', turn_id=?, attempts=1 "
+                "WHERE delivery_id=?",
+                (turn_id, prior.delivery_id),
+            )
+
+        async def receive(message):
+            assert message.id == later.message_id
+            return AgentMessage.create_reply(message, "next", MessageType.CHAT)
+
+        manager.bind("b", receive)
+        await manager.dispatch_pending()
+        deliveries = await manager.get_deliveries(first.message_id)
+        stopped = next(item for item in deliveries if item.delivery_id == prior.delivery_id)
+        assert stopped.state == DeliveryState.INTERRUPTED
+        assert stopped.error == ("worker_lost" if turn_id is None else "turn_missing")
+        assert (stopped.attempts, stopped.turn_id) == (1, turn_id)
+        assert (await manager.get_replies(later.message_id))[0].content == "next"
+    finally:
+        await manager.close()
+
+
 @pytest.mark.parametrize("source_version", [6, 7])
 async def test_reopen_rebuilds_message_indexes(tmp_path, source_version):
     """补建 v6 和现有 v7 库的索引，保留待投递记录及投递策略约束。"""
@@ -537,6 +570,7 @@ async def test_reopen_rebuilds_message_indexes(tmp_path, source_version):
         "mm_inline_waits_waiting",
         "mm_room_projection_pending",
         "mm_session_order",
+        "mm_unbound_processing",
     }
     if source_version == 6:
         indexes.add("idx_deliveries_turn")

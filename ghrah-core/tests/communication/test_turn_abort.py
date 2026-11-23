@@ -461,6 +461,144 @@ async def test_abort_without_local_settler_releases_next_delivery(rollback_runti
     assert (await mm.get_replies(later.message_id))[0].content == "done"
 
 
+@pytest.mark.parametrize("has_result", [False, True])
+async def test_missing_turn_releases_queue_and_preserves_result(rollback_runtime, has_result):
+    _, backend, mm, _ = rollback_runtime
+    first = await send(mm, "lost turn")
+    later = await send(mm, "later")
+    delivery_id = first.deliveries[0].delivery_id
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE mm_deliveries SET state='processing', attempts=1, turn_id='missing' "
+            "WHERE delivery_id=?",
+            (delivery_id,),
+        )
+        if has_result:
+            await db.execute(
+                "INSERT INTO mm_delivery_results (delivery_id,content,recorded_at) VALUES (?,?,0)",
+                (delivery_id, "saved result"),
+            )
+
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    (settled,) = await mm.get_deliveries(first.message_id)
+    assert settled.attempts == 1
+    assert settled.turn_id == "missing"
+    if has_result:
+        assert settled.state.value == "completed"
+        (reply,) = await mm.get_replies(first.message_id)
+        assert reply.content == "saved result"
+    else:
+        assert (settled.state.value, settled.error) == ("interrupted", "turn_missing")
+        assert await mm.get_replies(first.message_id) == ()
+    assert (await mm.get_replies(later.message_id))[0].content == "done"
+    before = snapshot(backend.db_path)
+    await mm.dispatch_pending()
+    assert snapshot(backend.db_path) == before
+
+
+async def test_worker_failure_write_rollback_is_recovered_in_place(rollback_runtime, monkeypatch):
+    agent, backend, mm, _ = rollback_runtime
+    entered, fail = asyncio.Event(), asyncio.Event()
+    original = agent._action
+    checkpointed = False
+
+    async def fail_after_checkpoint(data):
+        nonlocal checkpointed
+        if not checkpointed:
+            checkpointed = True
+            return {"results": []}
+        entered.set()
+        await fail.wait()
+        raise RuntimeError("model failed")
+
+    monkeypatch.setattr(agent, "_action", fail_after_checkpoint)
+    monkeypatch.setattr(agent.config, "max_iterations", 2)
+    opener = await send(mm, "opener")
+    await mm._scan()
+    await asyncio.wait_for(entered.wait(), 3)
+    (claimed,) = await mm.get_deliveries(opener.message_id)
+    assert claimed.consumed_node_id is not None
+    assert claimed.last_node_id is not None
+    later = await send(mm, "later")
+    assert (await new_approval(agent._context_manager)).persisted
+    async with backend.transaction() as db:
+        await db.execute(
+            "INSERT INTO mm_inline_waits VALUES (?,?,'waiting')",
+            (later.message_id, claimed.delivery_id),
+        )
+        await db.execute(
+            "CREATE TRIGGER fail_delivery_failure BEFORE UPDATE OF state ON mm_deliveries "
+            "WHEN OLD.state='processing' AND NEW.state='failed' "
+            "BEGIN SELECT RAISE(ABORT, 'cannot record failure'); END"
+        )
+
+    # 执行仍持有 worker 时，扫描不得改动活动轮次或其等待状态。
+    await mm._scan()
+    assert (await mm.get_deliveries(opener.message_id))[0] == claimed
+    assert (await backend.load_turn("agent", claimed.turn_id))["status"] == "waiting_hitl"
+    worker = mm._workers["agent"]
+    fail.set()
+    await asyncio.wait_for(asyncio.shield(worker), 3)
+    monkeypatch.setattr(agent, "_action", original)
+    assert (await mm.get_deliveries(opener.message_id))[0] == claimed
+    async with backend.transaction() as db:
+        await db.execute("DROP TRIGGER fail_delivery_failure")
+
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    (interrupted,) = await mm.get_deliveries(opener.message_id)
+    assert (interrupted.state.value, interrupted.error) == ("interrupted", "worker_lost")
+    assert (interrupted.turn_id, interrupted.attempts) == (claimed.turn_id, 1)
+    assert interrupted.consumed_node_id == claimed.consumed_node_id
+    assert interrupted.last_node_id == claimed.last_node_id
+    closed = await backend.load_turn("agent", claimed.turn_id)
+    assert (closed["status"], closed["end_node_id"]) == ("interrupted", claimed.last_node_id)
+    assert (await backend.load_hitl_request("agent", "promise"))["status"] == "cancelled"
+    async with backend.transaction() as db:
+        assert (await db.execute_fetchall("SELECT state FROM mm_inline_waits"))[0][0] == "released"
+    assert await mm.get_replies(opener.message_id) == ()
+    assert (await mm.get_replies(later.message_id))[0].content == "done"
+    await mm.close()
+    await mm.open(start_dispatcher=False)
+    assert (await mm.get_deliveries(opener.message_id))[0] == interrupted
+
+
+async def test_missing_inflight_index_allows_terminal_repair(rollback_runtime):
+    agent, backend, mm, _ = rollback_runtime
+    opener = await send(mm, "interrupted")
+    later = await send(mm, "later")
+    delivery_id = opener.deliveries[0].delivery_id
+    turn_id = await agent._context_manager.open_turn(opener_delivery_id=delivery_id)
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE mm_deliveries SET state='processing', turn_id=? WHERE delivery_id=?",
+            (turn_id, delivery_id),
+        )
+        await db.execute("UPDATE turns SET status='aborted' WHERE turn_id=?", (turn_id,))
+        await db.execute("DROP INDEX mm_bound_inflight")
+
+    await asyncio.wait_for(mm.dispatch_pending(), 3)
+    (settled,) = await mm.get_deliveries(opener.message_id)
+    assert (settled.state.value, settled.error) == ("interrupted", "aborted_by_user")
+    assert (await mm.get_replies(later.message_id))[0].content == "done"
+
+
+async def test_stranded_repair_leaves_a_direct_turn_without_matching_opener(rollback_runtime):
+    agent, backend, mm, _ = rollback_runtime
+    request = await send(mm, "foreign opener")
+    direct_turn = await agent._context_manager.open_turn()
+    async with backend.transaction() as db:
+        await db.execute(
+            "UPDATE mm_deliveries SET state='processing', turn_id=? WHERE delivery_id=?",
+            (direct_turn, request.deliveries[0].delivery_id),
+        )
+
+    await mm.dispatch_pending()
+    row = await backend.load_turn("agent", direct_turn)
+    assert (row["status"], row["opener_delivery_id"]) == ("open", None)
+    (unchanged,) = await mm.get_deliveries(request.message_id)
+    assert unchanged.state.value == "processing"
+
+
 async def test_consecutive_failures_do_not_pick_previous_diagnosis(rollback_runtime, monkeypatch):
     """连续两次异常：第二次诊断挂在恢复分支上，最近正确节点不得是上一次的 incomplete。"""
     agent, backend, mm, port = rollback_runtime
