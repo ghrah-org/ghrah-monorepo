@@ -4,9 +4,9 @@
 | --- | --- |
 | 文档编号 | GHRAH-INDEX-000 |
 | 文档状态 | 现行（authoritative，本目录的入口） |
-| 校准基线 | 端口索引按 `2ac183b`（2026-11-15）校准，其余条目沿用 `08983d7`（2026-11-13） |
+| 校准基线 | 端口索引按 `a742fcf`（2026-11-23）重新校准；能力/成员数据底座按同一提交校准 |
 | 读者 | 所有人：先读这一页，再决定读哪份 |
-| 上一次全量重写 | 2026-11-13（`ghrah-08` 按能力端口全量重写） |
+| 上一次全量重写 | 2026-11-23（`ARCHITECTURE.md` 全面重写并重新生成 HTML；新增 `ghrah-13`） |
 
 ## 修订记录
 
@@ -23,12 +23,13 @@
 | 2.7 | 2026-11-19 | 新增两份范式声明：`ghrah-11`（member 定义规范：定位、五层数据格式、命名归一、两轴语义、控制成员、不变式）与 `ghrah-12`（ability 包结构与定义规范：内核件/能力件/MCP 三类目录、lock 结构、构建-安装-装载职责、可移植性规则） |
 | 2.8 | 2026-11-20 | member 两轴改为 `visible` / `bind`（绑定要求可见）；`ghrah-11` §5 重写并补运行期绑定与 wire 过渡说明；`ghrah-10` 增 `initial_bindings` 创建参数与 `INST-11` 绑定/解绑 |
 | 2.9 | 2026-11-20 | 启动按成员类型分流注入：operation 进工具面静态集、skill 进每轮目录（均按 `bind` 过滤）、控制成员走 control 通道；`bind_member` 支持技能目录名；`ghrah-11` §5 补技能分流 |
+| 3.0 | 2026-11-23 | 模板成员改为 `available_members`（三段全名，只存身份六字段）；创建线补齐成员定义数据写入实例快照；技能目录注入 `read` 地址、`load_skill` 接受裸键/地址；新增 `ghrah-13`（能力与成员数据底座：SQLite 权威、启动提交、快照恢复、迁移）；`ARCHITECTURE.md` 全面重写并重新生成 HTML，删除 Scheme 树权威等旧特性设计 |
 
 ## 1. 这个目录是什么
 
 `docs/` 是本仓技术文档的总入口，平台与能力子系统说明集中于此；包级手册可由本索引链接到包内文档。当前分三层：
 
-- **平台层**：[ARCHITECTURE.md](ARCHITECTURE.md)——13 章 + 3 个附录，讲 6 个 Python 包、TS 侧、协议、上下文、插件、HITL、部署全景。**它是全仓的事实基线。**
+- **平台层**：[ARCHITECTURE.md](ARCHITECTURE.md)——16 章 + 2 个附录，讲 7 个 Python 包、TS 侧、协议、接口化端口、上下文、能力与数据底座、模板与实例化、插件、HITL、部署全景。**它是全仓的事实基线。**
 - **能力子系统层**：本索引 + `ghrah-01` ~ `ghrah-08` 共 9 份——把 ARCHITECTURE §6 那一章展开到"改得动代码"的粒度：逐字段契约、开发手册、排障、历史判决、跨模块调用边界。
 - **Scheme 包文档层**：[ghrah-scheme](../ghrah-scheme/README.md) 及其六篇基础技术文档和文件资源切片指南——说明资源树、权限关系、当前控制平面 API，以及逻辑／Scheme／UI 并行开发方法。目标模型与现状明确分开，不将新设计冒充已完成迁移。
 
@@ -53,19 +54,20 @@
 | 编号 | 文档 | 回答什么问题 | 什么时候读 |
 | --- | --- | --- | --- |
 | GHRAH-DESIGN-001 | [ghrah-01-ability-design-and-implementation.md](ghrah-01-ability-design-and-implementation.md) | 定义面/目录池/扫描/投影/工具面/执行/Hook/权限/HITL/装配的全量契约与不变式 | 第一次接触能力系统；改契约或改装配；评审"能力怎么被找到/被调用" |
-| GHRAH-GUIDE-002 | [ghrah-02-ability-package-guide.md](ghrah-02-ability-package-guide.md) | 怎么新增一个成员：目录规则、`ability.yaml` 逐字段、实现模板、四件套常量、权限写法、测试点 | 要加能力/改能力行为/给能力加审批 |
+| GHRAH-GUIDE-002 | [ghrah-02-ability-package-guide.md](ghrah-02-ability-package-guide.md) | **历史**：旧格式作者指南（`0.1-draft` + 包维度）。头部「现状速查」给出当前可执行入口 | 仅在追溯旧写法时读；新作者读 `ghrah-11`/`ghrah-12`/`ghrah-13` 与 ability-builder 技能 |
 | GHRAH-DESIGN-003 | [ghrah-03-drive-loop.md](ghrah-03-drive-loop.md) | 一次任务从收到到结束的八个阶段、一次 LLM 调用 + 工具执行、压缩、异常回滚、硬序约束 | 调 Agent 行为；排查"这轮为什么没执行/执行两次/上下文被截断" |
-| GHRAH-DESIGN-004 | [ghrah-04-skill-system.md](ghrah-04-skill-system.md) | 技能（能力包的成员类型）、两套实现并存的成因、扫描根、`SKILL.md`、lock 与漂移、会话注入、`load_skill` | 写技能包；排查"技能没进模型上下文"；处理 lock 漂移 |
-| GHRAH-OPS-005 | [ghrah-05-build-startup-and-troubleshooting.md](ghrah-05-build-startup-and-troubleshooting.md) | 13 步启动链、命令面、端口、日志落点、数据落盘、启动期硬失败原文、前端、排障手册 | 起服务；服务起不来；日志找不到；端口/宿主配置 |
-| GHRAH-MAP-006 | [ghrah-06-code-map.md](ghrah-06-code-map.md) | 仓库结构与包边界、文件职责速查、一次能力调用的七步链、协议层与前端下发、依赖方向、新文件放哪 | 找文件；判断改动该落在哪个包；避免循环依赖 |
-| GHRAH-ADR-007 | [ghrah-07-history-and-decisions.md](ghrah-07-history-and-decisions.md) | 旧件逐份判决、8 条关键决策（D-1~D-8）、5 条教训、未处理的文档债务 | 想知道"某概念为什么没了"；评审新设计前避免重走弯路 |
-| GHRAH-DESIGN-008 | [模块接口与端口设计说明（历史）](ghrah-08-interface-port.md) | 旧端口的 50 项接口与项目绑定模型 | 追溯旧端口设计。现行接口与接入方式见[模块接口端口](ARCHITECTURE.md#4-模块接口端口跨模块唯一通道) |
-| GHRAH-DESIGN-009 | [Agent 模板管理设计说明](ghrah-09-agent-template-management-design.md) | 模板表结构、七类模板接口的入参出参与状态码、整包展开与版本钉住、能力目录查询接口、逐功能时序与类图 | 改模板库/模板表单/模板接口；评审"模板字段能不能加、并发写会怎样失败" |
+| GHRAH-DESIGN-004 | [ghrah-04-skill-system.md](ghrah-04-skill-system.md) | 技能成员（定义/构建/安装/启动提交/每轮目录注入）、`SKILL.md` frontmatter、目录 `read` 地址、`load_skill` 三种写法 | 写技能包；排查"技能没进模型上下文"；技能正文读不到 |
+| GHRAH-OPS-005 | [ghrah-05-build-startup-and-troubleshooting.md](ghrah-05-build-startup-and-troubleshooting.md) | `ghrah` CLI 命令面、实例布局、启动链、数据落盘（三库）、日志、启动期硬失败原文、排障手册 | 起服务；服务起不来；日志找不到；数据在哪个库 |
+| GHRAH-MAP-006 | [ghrah-06-code-map.md](ghrah-06-code-map.md) | 仓库结构与包边界、按层的能力地图、启动与调用两段链、协议层与前端下发、依赖方向、新文件放哪 | 找文件；判断改动该落在哪个包；避免循环依赖 |
+| GHRAH-ADR-007 | [ghrah-07-history-and-decisions.md](ghrah-07-history-and-decisions.md) | 旧件逐份判决、D-1~D-8 状态位、D-9~D-16 新裁定、二次推翻的教训、未处理的文档债务 | 想知道"某概念为什么没了"；评审新设计前避免重走弯路 |
+| GHRAH-DESIGN-008 | [模块接口与端口设计说明（历史）](ghrah-08-interface-port.md) | 旧端口的 50 项接口与项目绑定模型；头部有「现行差异摘要」（57+8、`Interface`、`CoreCatalogPort`、25 条边界基线） | 追溯旧端口设计。现行接口与接入方式见[模块接口端口](ARCHITECTURE.md#4-接口化端口跨模块唯一通道) |
+| GHRAH-DESIGN-009 | [Agent 模板管理设计说明](ghrah-09-agent-template-management-design.md) | 模板表结构（`available_members` 成员数组）、七类模板接口的入参出参与状态码、成员去重与版本钉住、列迁移、能力目录查询接口、逐功能时序与类图 | 改模板库/模板表单/模板接口；评审"模板字段能不能加、并发写会怎样失败" |
 | GHRAH-DESIGN-010 | [Agent 实例化设计说明](ghrah-10-agent-instantiation-design.md) | 记录/快照/授权三处权威划分、实例生命周期接口、装配输入 v3 契约、模板→成员渲染规则、重启恢复 | 改创建/启停/删除链路；排查"实例配置从哪来、重启后为什么这样恢复" |
-| GHRAH-SPEC-011 | [member 定义规范](ghrah-11-member-spec.md) | member 的定位与五层形态（定义面/模板/装配/授权/工具面）、命名与归一规则、三种类型、两轴与 `expose` 的区别、控制成员、12 条不变式 | 写能力包成员、改模板或装配输入、判断"这个名字该不该出现/这个轴能不能这么填" |
+| GHRAH-SPEC-011 | [member 定义规范](ghrah-11-member-spec.md) | member 的定位与五层形态（定义面/模板/装配/授权/工具面）、三段全名与退化包兼容、三种类型、两轴与 `expose` 的区别、控制成员、技能目录与 `load_skill`、14 条不变式 | 写能力包成员、改模板或装配输入、判断"这个名字该不该出现/这个轴能不能这么填" |
 | GHRAH-SPEC-012 | [ability 包结构与定义规范](ghrah-12-ability-package-layout.md) | 内核件/能力件/MCP 三类目录结构与逐层含义、`ability.yaml` 与 lock 结构、构建/安装/装载职责、可移植性规则、10 条不变式与错误码 | 新建能力包、做发行版预装、排查"包装不进去/装进去起不来/索引漂移" |
+| GHRAH-DESIGN-013 | [能力与成员数据底座设计说明](ghrah-13-ability-data-store.md) | SQLite 三处权威（能力关系库/实例快照/模板库）、启动提交与运行期只读、授权与绑定变更、目录与内容读取、失败语义、迁移与不变式 | 改存储 schema、改授权/绑定写路径、排查"授权从哪来/重启为何这样恢复/内容为什么读不到" |
 
-`02` 与 `04` 都以 `01` 的契约为前提，`06` 为 `01`、`03`、`04`、`05` 提供代码位置索引。`07` 与 `08` 用于追溯历史。`ARCHITECTURE.md` §6 概述 Core 运行时，子系统文档提供实现细节。文档互有出入时，以代码为准。
+`04` 以 `01` 的契约为前提，`06` 为 `01`、`03`、`04`、`05` 提供代码位置索引；`11`/`12`/`13` 是成员、包结构与数据底座三份规范，`01`/`04` 的细节以它们为准。`07` 与 `08` 用于追溯历史。`ARCHITECTURE.md` §8/§9/§10 概述能力、数据底座与模板/实例化，子系统文档提供实现细节。文档互有出入时，以代码为准。
 
 ### 2.3 Scheme 包文档层
 
@@ -82,9 +84,9 @@
 | 你是谁 | 建议顺序 |
 | --- | --- |
 | 刚接手，要把系统跑起来 | `ghrah-05` §1–§2 → `ghrah-06` §2–§4 → `ARCHITECTURE.md` §1–§2 |
-| 要新增一个工具（能力） | `ghrah-02` 全文 → `ghrah-01` §4–§9 → `ghrah-06` §8 |
+| 要新增一个工具（能力） | `ghrah-12` §2–§7 → `ghrah-01` §3–§5 → `ghrah-06` §8 |
+| 要写技能包 | `ghrah-04` §2–§5 → `ghrah-12` §2.3 → ability-builder 的 `SKILL.md` |
 | 要改执行/权限语义 | `ghrah-01` §9–§13 → `ghrah-03` §5 → `ghrah-07` §3（D-7：治理层缺席） |
-| 要写技能包 | `ghrah-04` §3–§7 → `ghrah-02` §4.2（`skills` 字段） |
 | 排查线上问题 | `ghrah-05` §8 排障手册 → `ghrah-05` §4 日志 → `ghrah-03` §8 异常与降级 |
 | 做架构评审 | `ghrah-01` §13（不变式与已知偏差）→ `ghrah-06` §7（依赖方向）→ `ghrah-07` 全文 |
 | 只想确认"某份旧文档还能不能信" | `ghrah-07` §2 逐份判定 → [archive/README.md](archive/README.md) |
@@ -119,6 +121,7 @@
 | Agent 创建/启停/删除链路、装配输入 v3 或渲染规则 | `ghrah-10` §3–§6 |
 | member 的名字、类型、轴、权限申请或工具面命名 | `ghrah-11` 全文 |
 | 能力包目录结构、`ability.yaml`、lock、安装/构建规则 | `ghrah-12` 全文 |
+| 能力/成员/授权/模板/实例的存储 schema、写路径或迁移 | `ghrah-13` 全文、`ARCHITECTURE.md` §7 数据底座、§8 能力系统 |
 | 推翻了某条既有决策 | `ghrah-07` §3 追加 `D-n` 并标"已否决"，**不要**直接删旧条目 |
 
 ## 6. 归档
@@ -131,12 +134,10 @@
 
 以下问题**已知且未处理**，读文档时自行打折，明细见 `ghrah-07` §5：
 
-- `ARCHITECTURE.md` 只有 §6 做过 10-28 重构后的逐行校准；§1–§5、§7–§13 仍是 2026-10-27 的状态，引用具体行号前回源码核对。`ARCHITECTURE.html` 更旧。
-- `ARCHITECTURE.md` §14 记录的 **12 条偏离是现状，不是待办计划**；本轮只做了核实与记录，没有改代码。改代码前先读该章，避免把已知问题当新发现。
-- `ghrah-01` / `ghrah-02` / `ghrah-03` / `ghrah-04` 未在本轮校准（基线仍是 2026-10-29）。本轮只重写了 `ghrah-08` 与 `ARCHITECTURE.md` 全文，并同步了 `ghrah-05` / `ghrah-06` / `ghrah-07` 中与能力端口直接冲突的段落。
-- `ARCHITECTURE.html` 是生成物，不要手改；改 `.md` 后重跑 `scripts/gen_architecture_html.py`。
-- `ghrah-06` §5.1 的文件数与行数是本轮实测快照（39 个 py / 5646 行）；包结构变化后需重测，不要按旧数引用。
-- `scheme/loading/ability_catalog.py:20` 的 docstring 提到不存在的 `load_all_builtin_manifests.cache_clear()`，与同文件 `:405`「无缓存」自相矛盾。
-- 技能侧**两套实现并存**：`ghrah-core/src/ghrah/skills/` 与 `ghrah.scheme.loading` 各一套，`ghrah-subject` 的 `SkillUnit` 仍用旧的那套（写 schema=1 lock，Core 读 schema=2 时不认）。见 `ghrah-04` §3、§12。
-- `ghrah-observer-webui` 已有可注入的 Scheme 能力面板和契约替身，但尚未挂载到生产页面或接通认证传输；不能据此声称现有产品 UI 已能查看和操作能力树。
-- `ghrah-core/tests/` 下的 `abilities/`、`manifest/`、`scheme/`、`skills/` 四个目录名是遗留；前三者内容已改指 `ghrah.scheme`，`skills/` 仍在测旧的 `ghrah.skills` 包。
+- `ARCHITECTURE.md` 已于 2026-11-23 按当前实现全面重写（16 章 + 2 附录），但行号只作当前指针；引用具体行号前回源码核对。
+- `ARCHITECTURE.md` §16 记录的偏离是**现状**，不是待办计划；改代码前先读该章，避免把已知问题当新发现。
+- `ghrah-01` / `ghrah-04` / `ghrah-05` / `ghrah-06` 已于 2026-11-23 重写；`ghrah-02` 整体降级为历史（头部有红旗与现行入口）；`ghrah-03` / `ghrah-07` / `ghrah-08` 做过定点校准与状态位。
+- `ARCHITECTURE.html` 是生成物，不要手改；改 `.md` 后重跑 `scripts/gen_architecture_html.py`（无 `--check` 模式）。
+- 技能侧只有一套实现：`ghrah-core/src/ghrah/ability/`；`ghrah/skills/` 与 `SkillUnit` 已退役，见 `ghrah-04`。
+- 旧目录名（`ghrah-core/tests/{abilities,manifest,scheme,skills}/`）仍在，内容多为迁移遗留；按内容找测试。
+- `CORE_COMMANDS`（22 条）与 `CoreUnit._COMMANDS`（31 条）存在 7 条装配/模型命令的集合漂移；`MANIFEST_COMMANDS` 10 条无 owner。见 `ARCHITECTURE.md` §16。

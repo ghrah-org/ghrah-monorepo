@@ -7,7 +7,23 @@
 
 > 本文保留 `08983d7` 时的接口清单和项目绑定模型，供追溯。Subject 现按项目创建独立的 `CorePort`，
 > 另行提供全局 `CoreCatalogPort`。现行接口、作用域和装配见
-> [模块接口端口](ARCHITECTURE.md#4-模块接口端口跨模块唯一通道)。
+> [模块接口端口](ARCHITECTURE.md#4-接口化端口跨模块唯一通道)。
+
+## 0. 现行差异摘要（读本文前必读）
+
+> **本文正文不再是可执行清单。** §4 的「50 条」、§6 的 `project(project_id)` / `_call_global`、§7 的 7 步装配都已被现行实现取代，照抄会写出不可运行的 Subject 代码。
+
+| 主题 | 本文（`08983d7`） | 现行（`a742fcf`） |
+| --- | --- | --- |
+| 接口数量 | `CORE_INTERFACES` 50 条 | **57 条**（10 分组）+ `CORE_CATALOG_INTERFACES` **8 条** |
+| 类型名 | `Capability` | `Interface`（`ghrah-protocol/src/ghrah/protocol/interface.py`） |
+| 全局面 | 2 条「全局能力」走 `_call_global` | 独立 `CoreCatalogPort` + `CORE_CATALOG` 容器键 |
+| 作用域 | `CoreFacade.project(project_id)` + 调用时注入 `project_id` | 端口实例构造期固定作用域，`CorePorts.for_project(project_id)` 懒建；方法签名不含 `project_id` |
+| 装配 | `build_core_port(...)` 7 步 | 两个装配入口：`build_core_port` + `build_core_catalog`（`ghrah-core/src/ghrah/core/wiring.py`） |
+| 新增接口 | — | `abilities.write_grant` / `write_revoke`、`agents.config` / `create_assembly` / `start_assembly` / `stop_assembly` / `update_assembly` / `delete_assembly` / `update_model`、`shell.validate_allow` / `shell.builtin_rules`、`abilities.package_version_profile` / `package_mcp_probe` / `package_import` |
+| 边界基线 | 35 条 | **25 条**（`ghrah-subject/tests/module_boundary_baseline.json`） |
+
+下文 §2、§8、§9、§10 的机制解释仍有教学价值；§4 清单、§5.3 行号表、§6 作用域、§7.1 装配步骤、§14 维护表按「历史快照」阅读。
 
 ## 变更履历
 
@@ -164,6 +180,8 @@ wiring       → 全部
 如果 `CorePort` 定义在 `ghrah-core` 里，Subject 就必须 `from ghrah.core... import CorePort`——边界当场失效。所以端口协议、视图、错误基类、注入键只能住在第三方包；模块只提供实现。这条是**结构约束，不是风格偏好**。
 
 # 4 Core 接口面（50 项）
+
+> **拦截提示**：本节清单是 `08983d7` 的快照，现行是 57 条作用域接口 + 8 条目录接口，缺 `agents.*_assembly`、`abilities.write_grant/write_revoke`、`package_import` 等 14 条。要查现行清单读 `ghrah-core/src/ghrah/core/api/interfaces.py` 或 `ARCHITECTURE.md` §4。
 
 口径：以下 50 条是 `CORE_INTERFACES` 的登记项数（`len(CORE_INTERFACES) == 50`），分组数与端口上的属性数一致，均为 10。
 
@@ -355,6 +373,8 @@ class MailboxOperations(Protocol):
 `AckView` 的存在理由就是这条约束：`invoke` 不接受 `None` 作为出参，而端口层有一批"没有返回值"的写操作，因此需要最小信封承接后丢弃（`ghrah-protocol/src/ghrah/protocol/views/common.py:85`）。
 
 # 6 项目作用域模型
+
+> **拦截提示**：本节描述的 `CoreFacade.project(project_id)` 与 `_call_global` 均已不存在。现行是「端口实例构造期固定作用域」+ 独立 `CoreCatalogPort`，见 `ARCHITECTURE.md` §4。
 
 ## 6.1 未绑定端口是唯一实例，绑定视图按需生成
 
