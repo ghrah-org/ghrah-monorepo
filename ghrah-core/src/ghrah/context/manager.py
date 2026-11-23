@@ -834,12 +834,13 @@ class ContextManager:
         options: dict[str, Any],
         deadline_at: str | None,
     ) -> hitl.HITLWriteResult:
-        """登记待审批请求。持久化不可用时继续内存审批。"""
+        """在持久轮次内登记审批，返回事务提交后的结果。"""
         self.check_turn_revoked()
         active = self._active_turn
-        if active is None or not isinstance(self._persistence, SqliteBackend):
-            logger.warning("No durable active turn for HITL request %s", promise_id)
+        if not isinstance(self._persistence, SqliteBackend):
             return hitl.HITLWriteResult()
+        if active is None:
+            return hitl.HITLWriteResult(error="no_active_turn")
         try:
             async with self._persistence.transaction() as db:
                 await turn.require_active(db, active.turn_id)
@@ -867,12 +868,12 @@ class ContextManager:
                         session_id=row["session_id"],
                         delivery_id=row["delivery_id"],
                     )
-            logger.warning("Turn %s is unavailable for HITL request %s", active.turn_id, promise_id)
+            raise turn.TurnRevokedError("turn is no longer active")
         except turn.TurnRevokedError:
             raise
         except Exception:
             logger.warning("Failed to persist HITL request %s", promise_id, exc_info=True)
-        return hitl.HITLWriteResult()
+        return hitl.HITLWriteResult(error="unconfirmed")
 
     async def resolve_hitl_request(
         self,
@@ -890,6 +891,26 @@ class ContextManager:
     async def expire_hitl_request(self, promise_id: str) -> hitl.HITLWriteResult:
         """标记审批到期，返回竞争中先提交的终态。"""
         return await self._finish_hitl_request(promise_id, "expired", None, {})
+
+    async def read_hitl_request(self, promise_id: str) -> hitl.HITLWriteResult:
+        """用独立只读连接读取已提交的审批，避免观察到写事务中的状态。"""
+        backend = self._persistence
+        if not isinstance(backend, SqliteBackend):
+            return hitl.HITLWriteResult()
+        try:
+            async with SqliteBackend(backend.db_path, read_only=True) as reader:
+                row = await reader.load_hitl_request(self._agent_name, promise_id)
+            if row is not None:
+                return hitl.HITLWriteResult(
+                    persisted=True,
+                    turn_id=row["turn_id"],
+                    status=row["status"],
+                    resolution=json.loads(row["resolution"]),
+                )
+        except Exception:
+            logger.warning("Failed to read HITL request %s", promise_id, exc_info=True)
+            return hitl.HITLWriteResult(error="unconfirmed")
+        return hitl.HITLWriteResult()
 
     async def _finish_hitl_request(
         self, promise_id: str, status: hitl.HitlOutcome, resolved_by: str | None, resolution: Any
@@ -912,7 +933,7 @@ class ContextManager:
                 return result
         except Exception:
             logger.warning("Failed to update HITL request %s", promise_id, exc_info=True)
-            return hitl.HITLWriteResult()
+            return hitl.HITLWriteResult(error="unconfirmed")
 
     @property
     def persistence(self) -> PersistenceBackend | None:

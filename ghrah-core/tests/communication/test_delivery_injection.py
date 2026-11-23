@@ -281,7 +281,12 @@ async def test_waiting_hitl_injection_consumes_only_after_approval(runtime, monk
     assert incoming.deliveries[0].turn_id == cm.active_turn_id
     assert (await backend.load_turn("agent", cm.active_turn_id))["status"] == "waiting_hitl"
     assert (await mm.get_deliveries(incoming.message_id))[0].consumed_node_id is None
-    executor.receive_hitl_response("tool", "call", True)
+    pending = (await backend.list_pending_hitl("agent", cm.active_session_id))[0]
+    decision = await cm.resolve_hitl_request(
+        pending["promise_id"], approved=True, resolved_by=None, resolution=None
+    )
+    assert decision.changed
+    assert executor.receive_hitl_response("tool", "call", True)
     await mm.dispatch_pending()
     first = (await mm.get_deliveries(opener.message_id))[0]
     second = (await mm.get_deliveries(incoming.message_id))[0]

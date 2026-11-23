@@ -17,7 +17,7 @@ HitlOutcome = Literal["approved", "rejected", "expired"]
 
 @dataclass(frozen=True)
 class HITLWriteResult:
-    """持久审批的结果，供执行侧区分已解决、未持久化与成功转换。"""
+    """持久审批操作的结果。持久记录缺失与写入未确认分别表达。"""
 
     persisted: bool = False
     changed: bool = False
@@ -26,6 +26,7 @@ class HITLWriteResult:
     resolution: Any = None
     session_id: str | None = None
     delivery_id: str | None = None
+    error: Literal["no_active_turn", "unconfirmed"] | None = None
 
 
 async def insert_pending(

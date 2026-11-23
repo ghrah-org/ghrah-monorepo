@@ -1957,21 +1957,11 @@ class CoreUnit:
     async def _handle_hitl_response(
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any] | None:
-        """hitl_response — 审批响应解析（promise 优先，三元组回退）。
+        """按 promise 或兼容三元组定位审批，持久裁定提交后才唤醒执行器。
 
-        promise 路径：凭 promise_id 从 unit 级注册表翻译回
-        (agent_name, ability_name, tool_call_id) 再 resolve——真实链路
-        Observer 只回传 promise_id。三元组路径：直接按单体字段集定位
-        （存量调用方兼容）。两路皆 miss 时显式失败（不 resolve 任何
-        future，不伪装成功）；拒绝时把 UI 收集的 reason 并入
-        HITLResult.result 透传给 LLM。resolve 成功后发布
-        hitl_resolved 事件（Observer 据此清除审批卡片）。
-
-        多 cluster 穿透：promise 注册表是 unit 级单例，promise 归属唯一
-        持有它的 CoreUnit；本 unit 未持有且无三元组回退时返回 ``None``
-        穿透给下一个 CoreUnit（宿主 serial「返回 None = 不是我的」约定），
-        而非以错误回执短路命令链——否则先挂载的 cluster 会拦截其它
-        cluster 的审批响应。全部 miss 时由宿主兜底 Unknown command。
+        注册表用于定位进程内等待者。无法在本单元定位的 promise 返回 ``None``，
+        由宿主继续分发到其它 CoreUnit。已持久化的终态按幂等回执返回。
+        人工拒绝理由随裁定传递给执行器。
         """
         supervisor = self._require_supervisor()
         hp = HITLResponsePayload.model_validate(payload)
@@ -2008,11 +1998,17 @@ class CoreUnit:
         turn_id = None
         durably_resolved = False
         cm = getattr(agent_handle, "_context_manager", None)
-        if active_promise and isinstance(cm, ContextManager):
+        if isinstance(cm, ContextManager) and isinstance(cm.persistence, SqliteBackend):
+            if active_promise is None:
+                return self._err("No pending HITL request matches the response")
             stored = await cm.resolve_hitl_request(
                 active_promise, approved=hp.approved, resolved_by=None, resolution=result
             )
-            if stored.persisted and not stored.changed:
+            if stored.error is not None:
+                return self._err("Could not confirm persistent HITL decision")
+            if not stored.persisted:
+                return self._err("HITL request not found")
+            if not stored.changed:
                 return self._ok({"resolved": False, "status": "already_resolved"})
             turn_id = stored.turn_id
             durably_resolved = stored.changed
@@ -2042,7 +2038,7 @@ class CoreUnit:
                 EventType.HITL_RESOLVED.value,
                 {
                     "agent_name": agent_name,
-                    "promise_id": promise_id,
+                    "promise_id": active_promise,
                     "ability_name": ability_name,
                     "tool_call_id": tool_call_id,
                     "status": "approved" if hp.approved else "rejected",
