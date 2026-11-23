@@ -14,17 +14,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sqlite3
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Collection, Mapping
+from contextlib import AbstractAsyncContextManager
 from contextvars import Context, ContextVar
-from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
-from enum import StrEnum
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-from uuid import uuid4
 
 import aiosqlite
 
@@ -32,32 +28,37 @@ from ghrah.agents.runner import detached_runner_context
 from ghrah.chat.content import TextBlock, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
 from ghrah.communication.delivery_queue import (
-    QUEUED_SQL,
-    blocker_joins,
-    blocker_reason_sql,
-    display_state,
     find_blocker,
     has_turns,
-    needs_delivery_repair,
     pending_turn_input_ids,
     release_turn_inputs,
-    release_unowned_inline_waits,
-    settle_stranded_deliveries,
-    settle_terminal_turns,
-    settle_turn_deliveries,
-    settle_turn_opener,
 )
-from ghrah.context import recovery, turn
+from ghrah.communication.sqlite_message_store import SqliteMessageStore
+from ghrah.communication.storage import (
+    DeliveryClaimCancelled,
+    DeliveryClaimError,
+    DeliveryExecution,
+    DeliveryProgress,
+    DeliveryRecord,
+    DeliveryRepairError,
+    DeliveryState,
+    DeliveryStore,
+    FinalDeliveryResult,
+    MessageKind,
+    MessageRecord,
+    MessageSubmission,
+    PreparedMessage,
+)
+from ghrah.context import turn
 from ghrah.context.iteration_commit import clear_durable_iteration_scope
 from ghrah.context.manager import DeliverySessionUnavailableError
 from ghrah.context.persistence.changes import ContextChanges
-from ghrah.context.persistence.serialization import deserialize_action_results
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.message import AgentMessage, MessageType
 
 if TYPE_CHECKING:
     from ghrah.agents.base import ActorAgent
     from ghrah.context.manager import ContextManager
+    from ghrah.context.persistence import PersistenceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -68,103 +69,10 @@ Receiver = Callable[[AgentMessage], Awaitable[AgentMessage]]
 TurnClosurePublisher = Callable[[turn.TurnClosure], Awaitable[None]]
 
 
-class MessageKind(StrEnum):
-    """请求自动产生一次最终回复；通知和回复不自动产生新回复。"""
-
-    REQUEST = "request"
-    NOTIFICATION = "notification"
-    RESPONSE = "response"
-
-
-class DeliveryState(StrEnum):
-    """投递状态；完成表示接收回调正常返回并持久保存结果。"""
-
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-    BLOCKED = "blocked"
-
-
-@dataclass(frozen=True)
-class MessageRecord:
-    """不可变消息及其持久接收者集合。"""
-
-    message_id: str
-    project_id: str
-    sender_id: str
-    recipient_ids: tuple[str, ...]
-    content: str
-    kind: MessageKind
-    reply_to: str | None
-    accepted_at: float
-    origin_node_id: str | None = None
-    sender_session_id: str | None = None
-    metadata: dict = field(default_factory=dict)
-    external_sender: bool = False
-    deliveries: tuple[DeliveryRecord, ...] = field(default=(), compare=False)
-
-
-@dataclass(frozen=True)
-class DeliveryRecord:
-    """单个接收者的投递状态和失败信息。"""
-
-    delivery_id: str
-    message_id: str
-    recipient_id: str
-    state: DeliveryState
-    attempts: int
-    error: str | None
-    consumed_node_id: str | None = None
-    consumed_session_id: str | None = None
-    result_ready: bool = False
-    result_node_id: str | None = None
-    target_session_id: str | None = None
-    blocked_reason: str | None = None
-    last_node_id: str | None = None
-    resume_requested: bool = False
-    turn_id: str | None = None
-    delivery_policy: str = "queue"
-    parked: bool = False
-    parked_reason: str | None = None
-    queue_block_reason: str | None = field(default=None, compare=False)
-    display_state: str = field(default="", compare=False)
-    queue_position: int = field(default=0, compare=False)
-    policy_applied: bool = field(default=False, compare=False)
-
-
-@dataclass(frozen=True)
-class DeliveryProgress:
-    """持久中断进度；恢复阻塞原因来自当前 Core checkpoint 校验。"""
-
-    delivery: DeliveryRecord
-    branch_id: str | None
-    iteration: int | None
-    resume_block_reason: str | None
-
-
-@dataclass(frozen=True)
-class PreparedMessage:
-    """本轮待提交出站消息；此对象不表示已持久受理。"""
-
-    message_id: str
-    sender_id: str
-    recipient_ids: tuple[str, ...]
-    content: str
-    kind: MessageKind
-    idempotency_key: str
-    sender_session_id: str | None = None
-    target_sessions: tuple[tuple[str, str], ...] = ()
-    metadata: dict = field(default_factory=dict)
-
-
 @dataclass
 class _AtomicDelivery:
     manager: MessageManager
-    backend: SqliteBackend
-    delivery_id: str
-    agent_id: str
+    execution: DeliveryExecution
     drafts: list[PreparedMessage]
     context_manager: ContextManager
     active: bool = True
@@ -174,93 +82,17 @@ class _AtomicDelivery:
     inline_updates: dict[str, bool] = field(default_factory=dict)
     consumed_deliveries: set[str] = field(default_factory=set)
 
+    @property
+    def delivery_id(self) -> str:
+        return self.execution.delivery_id
 
+    @property
+    def agent_id(self) -> str:
+        return self.execution.agent_id
+
+
+_CLAIM: ContextVar[DeliveryExecution | None] = ContextVar("ghrah_delivery_claim", default=None)
 _ATOMIC: ContextVar[_AtomicDelivery | None] = ContextVar("ghrah_atomic_delivery", default=None)
-
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS mm_meta (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    project_id TEXT NOT NULL,
-    version INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS mm_messages (
-    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL UNIQUE,
-    sender_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('request', 'notification', 'response')),
-    reply_to TEXT REFERENCES mm_messages(message_id),
-    idempotency_key TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    accepted_at REAL NOT NULL,
-    origin_node_id TEXT,
-    sender_session_id TEXT,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    external_sender INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (sender_id, idempotency_key)
-);
-CREATE TABLE IF NOT EXISTS mm_deliveries (
-    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    delivery_id TEXT NOT NULL UNIQUE,
-    message_id TEXT NOT NULL REFERENCES mm_messages(message_id),
-    recipient_id TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (
-        state IN ('pending', 'processing', 'completed', 'failed', 'interrupted')
-    ),
-    attempts INTEGER NOT NULL DEFAULT 0,
-    error TEXT,
-    consumed_node_id TEXT,
-    consumed_session_id TEXT,
-    target_session_id TEXT,
-    blocked_reason TEXT,
-    last_node_id TEXT,
-    resume_requested INTEGER NOT NULL DEFAULT 0,
-    turn_id TEXT,
-    delivery_policy TEXT NOT NULL DEFAULT 'queue' CHECK (delivery_policy IN ('inject','queue')),
-    parked INTEGER NOT NULL DEFAULT 0,
-    parked_reason TEXT,
-    UNIQUE (message_id, recipient_id)
-);
-CREATE INDEX IF NOT EXISTS mm_inbox ON mm_deliveries(recipient_id, seq);
-CREATE INDEX IF NOT EXISTS mm_replies ON mm_messages(reply_to, seq);
-CREATE TABLE IF NOT EXISTS mm_room_projections (
-    message_id TEXT PRIMARY KEY REFERENCES mm_messages(message_id),
-    completed INTEGER NOT NULL DEFAULT 0,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    error TEXT
-);
-CREATE INDEX IF NOT EXISTS mm_room_projection_pending ON mm_room_projections(completed)
-    WHERE completed=0;
-CREATE TABLE IF NOT EXISTS mm_inline_waits (
-    message_id TEXT PRIMARY KEY REFERENCES mm_messages(message_id),
-    parent_delivery_id TEXT NOT NULL REFERENCES mm_deliveries(delivery_id),
-    state TEXT NOT NULL CHECK(state IN ('waiting','consumed','released'))
-);
-CREATE INDEX IF NOT EXISTS mm_inline_waits_waiting ON mm_inline_waits(parent_delivery_id)
-    WHERE state='waiting';
-CREATE TABLE IF NOT EXISTS mm_delivery_results (
-    delivery_id TEXT PRIMARY KEY REFERENCES mm_deliveries(delivery_id),
-    content TEXT NOT NULL,
-    result_node_id TEXT,
-    recorded_at REAL NOT NULL,
-    content_blocks TEXT
-);
-"""
-_DELIVERY_INDEXES = (
-    "CREATE INDEX IF NOT EXISTS idx_deliveries_turn ON mm_deliveries(turn_id)",
-    "CREATE INDEX IF NOT EXISTS mm_session_order ON mm_deliveries"
-    "(recipient_id,target_session_id,seq)",
-    "CREATE INDEX IF NOT EXISTS mm_delivery_candidates ON mm_deliveries"
-    "(recipient_id,target_session_id,seq) "
-    "WHERE state='pending' AND blocked_reason IS NULL AND parked=0",
-    "CREATE INDEX IF NOT EXISTS mm_delivery_unfinished ON mm_deliveries(seq,delivery_id) "
-    "WHERE state!='completed'",
-    "CREATE INDEX IF NOT EXISTS mm_bound_inflight ON mm_deliveries(turn_id) "
-    "WHERE turn_id IS NOT NULL AND state IN ('pending','processing')",
-    "CREATE INDEX IF NOT EXISTS mm_unbound_processing ON mm_deliveries(state) "
-    "WHERE state='processing' AND turn_id IS NULL",
-)
 
 
 class MessageManager:
@@ -280,6 +112,7 @@ class MessageManager:
         poll_interval: float = 0.1,
         session_routing: bool = False,
         allow_persisted_agents: bool = False,
+        _store: SqliteMessageStore | None = None,
     ) -> None:
         if (
             not project_id.strip()
@@ -287,11 +120,14 @@ class MessageManager:
             or (not agent_ids and not allow_persisted_agents)
             or any(not item.strip() for item in agent_ids)
         ):
-            raise ValueError("project_id and explicit non-empty agent_ids are required")
+            raise ValueError("Scope and explicit non-empty agent_ids are required")
         if not 0 < poll_interval < float("inf"):
             raise ValueError("poll_interval must be positive and finite")
-        self._path = Path(db_path).resolve()
-        self._project_id = project_id
+        path = Path(db_path).resolve()
+        if _store is not None and (_store.db_path != path or _store.scope_id != project_id):
+            raise ValueError("Message store path/scope mismatch")
+        self._sqlite = _store or SqliteMessageStore(path, project_id)
+        self._delivery_store: DeliveryStore = self._sqlite
         self._agent_ids = frozenset(agent_ids)
         self._poll_interval = poll_interval
         self._session_routing = session_routing
@@ -300,9 +136,7 @@ class MessageManager:
         self._room_projector: Callable[[MessageRecord], Awaitable[None]] | None = None
         self._projection_lock = asyncio.Lock()
         self._session_receivers: set[str] = set()
-        self._db: aiosqlite.Connection | None = None
-        self._owner: sqlite3.Connection | None = None
-        self._lock = asyncio.Lock()
+        self._lock = self._sqlite.lock
         self._scan_lock = asyncio.Lock()
         self._receivers: dict[str, Receiver] = {}
         self._turn_closure_publishers: dict[str, TurnClosurePublisher] = {}
@@ -318,12 +152,20 @@ class MessageManager:
     @property
     def db_path(self) -> Path:
         """返回与 Core 原子提交共用的数据库路径。"""
-        return self._path
+        return self._sqlite.db_path
+
+    def context_backend(self, agent_config: object) -> PersistenceBackend:
+        """为受管 Agent 创建可参与同域事务的链存储。"""
+        return self._sqlite.context_backend(agent_config)
+
+    def validate_context_backend(self, backend: object) -> None:
+        """检查 Agent 的链存储能否参加消息事务。"""
+        self._sqlite.validate_context_backend(backend)
 
     @property
     def project_id(self) -> str:
         """返回持久消息所属项目。"""
-        return self._project_id
+        return self._sqlite.scope_id
 
     @property
     def agent_ids(self) -> frozenset[str]:
@@ -346,137 +188,10 @@ class MessageManager:
 
     async def open(self, *, start_dispatcher: bool = True, prepare_context: bool = False) -> None:
         """打开服务；上次进程未完成的投递转为中断，禁止隐式重跑。"""
-        if self._db is not None:
-            raise RuntimeError("MessageManager is already open")
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        owner = sqlite3.connect(str(self._path) + ".owner", timeout=0, isolation_level=None)
-        try:
-            owner.execute("BEGIN EXCLUSIVE")
-        except sqlite3.OperationalError as exc:
-            owner.close()
-            raise RuntimeError("Message database already has an active manager") from exc
-        self._owner = owner
+        await self._sqlite.open(prepare_context=prepare_context)
         self._closing = False
         self._repair_retry_at = 0.0
         try:
-            if prepare_context:
-                async with SqliteBackend(self._path) as backend:
-                    await backend.initialize()
-            self._db = await aiosqlite.connect(self._path)
-            self._db.row_factory = aiosqlite.Row
-            await self._db.execute("PRAGMA journal_mode=WAL")
-            await self._db.execute("PRAGMA synchronous=NORMAL")
-            await self._db.execute("PRAGMA foreign_keys=ON")
-            await self._db.execute("PRAGMA busy_timeout=5000")
-            await self._db.executescript(_SCHEMA)
-            async with self._transaction() as db:
-                row = await (await db.execute("SELECT * FROM mm_meta")).fetchone()
-                if row is None:
-                    await db.execute("INSERT INTO mm_meta VALUES (1, ?, 7)", (self._project_id,))
-                elif row["project_id"] != self._project_id or row["version"] not in (
-                    1,
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7,
-                ):
-                    raise ValueError("Message database project/schema mismatch")
-                for table, column in (
-                    ("mm_messages", "origin_node_id"),
-                    ("mm_deliveries", "consumed_node_id"),
-                    ("mm_deliveries", "consumed_session_id"),
-                    ("mm_messages", "sender_session_id"),
-                    ("mm_deliveries", "target_session_id"),
-                    ("mm_deliveries", "blocked_reason"),
-                    ("mm_deliveries", "last_node_id"),
-                ):
-                    columns = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
-                    if column not in {item[1] for item in columns}:
-                        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
-                columns = await (await db.execute("PRAGMA table_info(mm_deliveries)")).fetchall()
-                if "resume_requested" not in {item[1] for item in columns}:
-                    await db.execute(
-                        "ALTER TABLE mm_deliveries ADD COLUMN resume_requested "
-                        "INTEGER NOT NULL DEFAULT 0"
-                    )
-                columns = await (await db.execute("PRAGMA table_info(mm_messages)")).fetchall()
-                names = {item[1] for item in columns}
-                if "metadata" not in names:
-                    await db.execute(
-                        "ALTER TABLE mm_messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"
-                    )
-                if "external_sender" not in names:
-                    await db.execute(
-                        "ALTER TABLE mm_messages ADD COLUMN external_sender "
-                        "INTEGER NOT NULL DEFAULT 0"
-                    )
-                columns = await (
-                    await db.execute("PRAGMA table_info(mm_delivery_results)")
-                ).fetchall()
-                if "content_blocks" not in {item[1] for item in columns}:
-                    await db.execute(
-                        "ALTER TABLE mm_delivery_results ADD COLUMN content_blocks TEXT"
-                    )
-                projection_columns = await (
-                    await db.execute("PRAGMA table_info(mm_room_projections)")
-                ).fetchall()
-                if "attempts" not in {item[1] for item in projection_columns}:
-                    await db.execute(
-                        "ALTER TABLE mm_room_projections ADD COLUMN attempts "
-                        "INTEGER NOT NULL DEFAULT 0"
-                    )
-                delivery_columns = await (
-                    await db.execute("PRAGMA table_info(mm_deliveries)")
-                ).fetchall()
-                names = {column[1] for column in delivery_columns}
-                for name, definition in (
-                    ("turn_id", "TEXT"),
-                    (
-                        "delivery_policy",
-                        "TEXT NOT NULL DEFAULT 'queue' "
-                        "CHECK (delivery_policy IN ('inject','queue'))",
-                    ),
-                    ("parked", "INTEGER NOT NULL DEFAULT 0"),
-                    ("parked_reason", "TEXT"),
-                ):
-                    if name not in names:
-                        await db.execute(
-                            f"ALTER TABLE mm_deliveries ADD COLUMN {name} {definition}"
-                        )
-                for statement in _DELIVERY_INDEXES:
-                    await db.execute(statement)
-                await db.execute("UPDATE mm_meta SET version=7 WHERE singleton=1")
-                # 已持久终态的首条投递先按该终态收敛，再归一进程遗留的处理状态。
-                await settle_terminal_turns(db)
-                await db.execute(
-                    "UPDATE mm_deliveries SET state='interrupted', error=? "
-                    "WHERE state='processing'",
-                    ("Previous process stopped before durable completion",),
-                )
-                with_turns = await self._has_turn_schema(db)
-                preserve_aborted = (
-                    " AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id=mm_deliveries.turn_id "
-                    "AND t.status='aborted')"
-                    if with_turns
-                    else ""
-                )
-                # 已被消费但没有落最终结果的投递：agent 已经执行过，重跑可能重复副作用。
-                # 旧路径按「已消费即完成」收尾；已裁定执行丢失的检查点仍可显式续跑。
-                await db.execute(
-                    "UPDATE mm_deliveries SET state='completed', error=? "
-                    "WHERE state='interrupted' AND consumed_node_id IS NOT NULL "
-                    "AND COALESCE(error,'') NOT IN ('turn_missing','worker_lost') "
-                    "AND NOT EXISTS (SELECT 1 FROM mm_delivery_results r "
-                    "WHERE r.delivery_id=mm_deliveries.delivery_id)" + preserve_aborted,
-                    ("recovered: consumed before durable completion",),
-                )
-                if with_turns:
-                    await recovery.mark_crash_scenes(db)
-                    await turn.normalize_open_turns(db, now=datetime.now(UTC).isoformat())
-                    await settle_terminal_turns(db)
-                await release_unowned_inline_waits(db)
             await self.refresh_agent_ids()
             await self.recover_completions()
             if start_dispatcher:
@@ -506,6 +221,7 @@ class MessageManager:
     async def close(self) -> None:
         """停止调度并等待取消收敛；处理中断记录保留到下次显式重试。"""
         self._closing = True
+        self._sqlite.stop_accepting()
         tasks = [*self._workers.values()]
         if self._dispatcher is not None:
             tasks.append(self._dispatcher)
@@ -518,13 +234,7 @@ class MessageManager:
         self._turn_closure_publishers.clear()
         self._session_receivers.clear()
         self._dispatcher = None
-        async with self._lock:
-            if self._db is not None:
-                await self._db.close()
-                self._db = None
-        if self._owner is not None:
-            self._owner.close()
-            self._owner = None
+        await self._sqlite.close()
 
     def bind(self, agent_id: str, receiver: Receiver, *, _session_aware: bool = False) -> None:
         """将稳定 agent ID 绑定到在线接收回调，并唤醒待收扫描。"""
@@ -571,17 +281,20 @@ class MessageManager:
         if agent_id in self._receivers:
             raise ValueError(f"Agent already bound: {agent_id}")
         cm = agent._context_manager
-        backend = cm.persistence
-        if not isinstance(backend, SqliteBackend) or backend.db_path.resolve() != self._path:
-            raise ValueError("Atomic receive requires a same-file SqliteBackend")
+        self.validate_context_backend(cm.persistence)
         if agent._runner.busy or cm.in_iteration:
             raise RuntimeError("Cannot bind atomic receive while agent is running")
         await cm.persist()
 
         async def receive(message: AgentMessage) -> AgentMessage:
-            scope = _AtomicDelivery(
-                self, backend, message.metadata["delivery_id"], agent_id, [], cm
-            )
+            execution = _CLAIM.get()
+            if (
+                execution is None
+                or execution.agent_id != agent_id
+                or execution.delivery_id != message.metadata.get("delivery_id")
+            ):
+                raise RuntimeError("Atomic receive requires a claimed delivery")
+            scope = _AtomicDelivery(self, execution, [], cm)
             resume_from = message.metadata.get("resume_from_node_id")
             if resume_from is not None:
                 scope.consumed = True
@@ -657,33 +370,7 @@ class MessageManager:
             db = self._require_db()
             return await has_turns(db) and await turn.has_active_turn(db, agent_id)
 
-    @staticmethod
-    async def converge_turn_deliveries(
-        db: aiosqlite.Connection,
-        *,
-        turn_id: str,
-        opener_delivery_id: str | None,
-        opener_state: str,
-        opener_error: str,
-        terminal_state: str,
-    ) -> int:
-        """在轮次宿主事务内收敛开轮投递并释放未消费注入。"""
-        await settle_turn_opener(
-            db,
-            turn_id=turn_id,
-            opener_delivery_id=opener_delivery_id,
-            state=opener_state,
-            error=opener_error,
-        )
-        if opener_delivery_id is not None:
-            await release_unowned_inline_waits(db, parent_delivery_id=opener_delivery_id)
-        released = await settle_turn_deliveries(
-            db,
-            turn_id=turn_id,
-            opener_delivery_id=opener_delivery_id,
-            terminal_state=terminal_state,
-        )
-        return len(released)
+    converge_turn_deliveries = staticmethod(SqliteMessageStore.converge_turn_deliveries)
 
     async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
         """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""
@@ -737,19 +424,8 @@ class MessageManager:
 
     async def cancel(self, delivery_id: str) -> None:
         """取消尚未领取的排队投递，保留显式重试入口。"""
-        async with self._transaction() as db:
-            cursor = await db.execute(
-                "UPDATE mm_deliveries SET state='interrupted', error='cancelled_by_user', "
-                "blocked_reason=NULL WHERE delivery_id=? AND state='pending' AND turn_id IS NULL "
-                "AND consumed_node_id IS NULL AND NOT EXISTS "
-                "(SELECT 1 FROM mm_delivery_results r "
-                "WHERE r.delivery_id=mm_deliveries.delivery_id) RETURNING message_id",
-                (delivery_id,),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                raise ValueError("delivery_not_cancelable")
-        self._notify_reply_waiters(row["message_id"])
+        message_id = await self._delivery_store.cancel_delivery(delivery_id)
+        self._notify_reply_waiters(message_id)
         self._wake.set()
 
     async def prepare_send(
@@ -790,28 +466,22 @@ class MessageManager:
             raise ValueError("Response identity is reserved")
         for target in targets:
             self._check_identity(target)
-        async with self._lock:
-            source_session, routes = await self._resolve_sessions(
-                self._require_db(),
-                scope.agent_id,
-                targets,
-                idempotency_key,
-                scope.context_manager.active_session_id
+        prepared = await self._delivery_store.prepare_outbound(
+            MessageSubmission(
+                sender_id=scope.agent_id,
+                recipient_ids=targets,
+                content=content,
+                kind=MessageKind(kind),
+                idempotency_key=idempotency_key,
+                session_routing=self._session_routing,
+                sender_session_id=scope.context_manager.active_session_id
                 if self._session_routing or target_sessions is not None
                 else None,
-                target_sessions,
+                target_sessions=target_sessions,
+                metadata=metadata,
             )
-        draft = PreparedMessage(
-            uuid4().hex,
-            scope.agent_id,
-            targets,
-            content,
-            MessageKind(kind),
-            idempotency_key,
-            source_session,
-            tuple(sorted(routes.items())),
-            dict(metadata or {}),
         )
+        draft = prepared.draft
         for previous in scope.drafts:
             if previous.idempotency_key == idempotency_key:
                 if previous.metadata != draft.metadata:
@@ -823,40 +493,13 @@ class MessageManager:
                 ):
                     raise ValueError("Idempotency key conflicts with a prepared payload")
                 if (previous.sender_session_id, previous.target_sessions) != (
-                    source_session,
-                    tuple(sorted(routes.items())),
+                    draft.sender_session_id,
+                    draft.target_sessions,
                 ):
                     raise ValueError("Idempotency key conflicts with prepared sessions")
                 return previous
-        async with self._lock:
-            row = await (
-                await self._require_db().execute(
-                    "SELECT message_id FROM mm_messages WHERE sender_id=? AND idempotency_key=?",
-                    (scope.agent_id, idempotency_key),
-                )
-            ).fetchone()
-            if row is not None:
-                existing = await self._read_message(self._require_db(), row[0])
-                if existing.metadata != draft.metadata:
-                    raise ValueError("Idempotency key conflicts with accepted metadata")
-                if (existing.recipient_ids, existing.content, existing.kind) != (
-                    targets,
-                    content,
-                    draft.kind,
-                ):
-                    raise ValueError("Idempotency key conflicts with an accepted payload")
-                return PreparedMessage(
-                    existing.message_id,
-                    scope.agent_id,
-                    targets,
-                    content,
-                    draft.kind,
-                    idempotency_key,
-                    source_session,
-                    tuple(sorted(routes.items())),
-                    dict(metadata or {}),
-                )
-        scope.drafts.append(draft)
+        if not prepared.already_accepted:
+            scope.drafts.append(draft)
         return draft
 
     async def send(
@@ -899,95 +542,22 @@ class MessageManager:
         kind = MessageKind(kind)
         if kind == MessageKind.RESPONSE:
             raise ValueError("Responses are generated from completed requests")
-        async with self._transaction() as db:
-            if _external_sender:
-                source_session = None
-                existing = await (
-                    await db.execute(
-                        "SELECT message_id FROM mm_messages "
-                        "WHERE sender_id=? AND idempotency_key=?",
-                        (sender_id, idempotency_key),
-                    )
-                ).fetchone()
-                routes = {}
-                if existing:
-                    rows = await (
-                        await db.execute(
-                            "SELECT recipient_id, target_session_id FROM mm_deliveries "
-                            "WHERE message_id=?",
-                            (existing[0],),
-                        )
-                    ).fetchall()
-                    routes = {row[0]: row[1] for row in rows}
-                else:
-                    for target in targets:
-                        session = (target_sessions or {}).get(
-                            target
-                        ) or await self._default_session(db, target)
-                        await self._validate_session(
-                            db,
-                            target,
-                            session,
-                            allow_unavailable=delivery_policy == "inject" and not await_reply,
-                        )
-                        routes[target] = session
-            else:
-                source_session, routes = await self._resolve_sessions(
-                    db,
-                    sender_id,
-                    targets,
-                    idempotency_key,
-                    sender_session_id,
-                    target_sessions,
-                    allow_unavailable=delivery_policy == "inject" and not await_reply,
-                )
-            message_id = await self._insert_message(
-                db,
-                sender_id,
-                targets,
-                content,
-                kind,
-                idempotency_key,
-                None,
-                sender_session_id=source_session,
-                target_sessions=routes,
+        accepted = await self._delivery_store.accept_message(
+            MessageSubmission(
+                sender_id=sender_id,
+                recipient_ids=targets,
+                content=content,
+                kind=kind,
+                idempotency_key=idempotency_key,
+                session_routing=self._session_routing,
+                sender_session_id=sender_session_id,
+                target_sessions=target_sessions,
                 metadata=metadata,
                 external_sender=_external_sender,
                 delivery_policy=delivery_policy,
                 await_reply=await_reply,
             )
-            accepted = await self._read_message(db, message_id)
-            with_turns = delivery_policy == "inject" and await has_turns(db)
-            binding = (
-                "d.delivery_policy='inject' AND t.turn_id IS NOT NULL "
-                "AND t.opener_delivery_id IS NOT d.delivery_id"
-                if with_turns
-                else "0"
-            )
-            rows = await db.execute_fetchall(
-                "SELECT d.*, r.delivery_id AS result_id, r.result_node_id, "
-                "r.delivery_id IS NOT NULL AS result_ready, "
-                "CASE WHEN d.state='pending' AND d.turn_id IS NULL THEN ("
-                "SELECT COUNT(*) FROM mm_deliveries q WHERE q.recipient_id=d.recipient_id "
-                "AND q.target_session_id IS d.target_session_id AND q.seq<=d.seq "
-                f"AND {QUEUED_SQL}) ELSE 0 END AS queue_position, "
-                f"({binding}) AS policy_applied "
-                "FROM mm_deliveries d LEFT JOIN mm_delivery_results r "
-                "ON r.delivery_id=d.delivery_id "
-                + ("LEFT JOIN turns t ON t.turn_id=d.turn_id " if with_turns else "")
-                + "WHERE d.message_id=? ORDER BY d.seq",
-                (message_id,),
-            )
-            snapshots = tuple(
-                replace(
-                    self._delivery_record(row),
-                    display_state=display_state(dict(row)),
-                    queue_position=row["queue_position"],
-                    policy_applied=bool(row["policy_applied"]),
-                )
-                for row in rows
-            )
-            accepted = replace(accepted, deliveries=snapshots)
+        )
         self._wake.set()
         return accepted
 
@@ -1211,7 +781,7 @@ class MessageManager:
     async def get_message(self, message_id: str) -> MessageRecord:
         """查询持久消息及来源与去向。"""
         async with self._lock:
-            return await self._read_message(self._require_db(), message_id)
+            return await self._sqlite._read_message(self._require_db(), message_id)
 
     async def get_deliveries(self, message_id: str) -> tuple[DeliveryRecord, ...]:
         """查询各接收者的独立状态；未知消息报错。"""
@@ -1228,100 +798,37 @@ class MessageManager:
             ).fetchall()
         if not rows:
             raise KeyError(message_id)
-        return tuple(self._delivery_record(row) for row in rows if row["delivery_id"] is not None)
+        return tuple(
+            self._sqlite.delivery_record(row) for row in rows if row["delivery_id"] is not None
+        )
 
     async def get_queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
         """查询同会话尚未收敛的前序投递，并报告轮次或结果收尾的阻塞原因。"""
         async with self._lock:
             row = await find_blocker(self._require_db(), delivery_id)
-        return self._delivery_record(row) if row is not None else None
-
-    @staticmethod
-    def _delivery_record(row: aiosqlite.Row) -> DeliveryRecord:
-        return DeliveryRecord(
-            row["delivery_id"],
-            row["message_id"],
-            row["recipient_id"],
-            DeliveryState.BLOCKED if row["blocked_reason"] else DeliveryState(row["state"]),
-            row["attempts"],
-            row["error"],
-            row["consumed_node_id"],
-            row["consumed_session_id"],
-            row["result_id"] is not None,
-            row["result_node_id"],
-            row["target_session_id"],
-            row["blocked_reason"],
-            row["last_node_id"],
-            bool(row["resume_requested"]),
-            row["turn_id"],
-            row["delivery_policy"],
-            bool(row["parked"]),
-            row["parked_reason"],
-            row["queue_block_reason"] if "queue_block_reason" in row.keys() else None,
-        )
+        return self._sqlite.delivery_record(row) if row is not None else None
 
     async def get_replies(self, message_id: str) -> tuple[MessageRecord, ...]:
         """按原请求查询各响应者持久回复，不依赖内存 Future。"""
         async with self._lock:
             db = self._require_db()
-            await self._read_message(db, message_id)
+            await self._sqlite._read_message(db, message_id)
             rows = await (
                 await db.execute(
                     "SELECT message_id FROM mm_messages WHERE reply_to=? ORDER BY seq",
                     (message_id,),
                 )
             ).fetchall()
-            return tuple([await self._read_message(db, row[0]) for row in rows])
+            return tuple([await self._sqlite._read_message(db, row[0]) for row in rows])
 
     async def retry(self, delivery_id: str) -> None:
         """显式重试失败或中断投递；调用方须确认重复副作用风险。"""
-        async with self._transaction() as db:
-            cursor = await db.execute(
-                "UPDATE mm_deliveries SET state='pending', error=NULL, turn_id=NULL "
-                "WHERE delivery_id=? AND state IN ('failed', 'interrupted') "
-                "AND consumed_node_id IS NULL "
-                "AND blocked_reason IS NULL "
-                "AND NOT EXISTS (SELECT 1 FROM mm_delivery_results r "
-                "WHERE r.delivery_id=mm_deliveries.delivery_id)",
-                (delivery_id,),
-            )
-            if cursor.rowcount != 1:
-                raise ValueError("Delivery is missing or not retryable")
+        await self._delivery_store.retry_delivery(delivery_id)
         self._wake.set()
 
     async def get_progress(self, delivery_id: str) -> DeliveryProgress:
         """查询消费与最后提交节点，说明当前是否可申请续跑。"""
-        async with self._lock:
-            db = self._require_db()
-            row = await (
-                await db.execute(
-                    "SELECT d.*, r.delivery_id AS result_id, r.result_node_id "
-                    "FROM mm_deliveries d LEFT JOIN mm_delivery_results r "
-                    "ON r.delivery_id=d.delivery_id WHERE d.delivery_id=?",
-                    (delivery_id,),
-                )
-            ).fetchone()
-            if row is None:
-                raise KeyError(delivery_id)
-            result = await (
-                await db.execute(
-                    "SELECT 1 FROM mm_delivery_results WHERE delivery_id=?", (delivery_id,)
-                )
-            ).fetchone()
-            checkpoint, reason = await self._resume_checkpoint(db, row)
-        delivery = self._delivery_record(row)
-        if result is not None:
-            reason = "final_result_already_saved"
-        elif row["blocked_reason"]:
-            reason = row["blocked_reason"]
-        elif row["state"] not in ("failed", "interrupted"):
-            reason = "delivery_not_interrupted"
-        return DeliveryProgress(
-            delivery,
-            checkpoint["created_on_branch_id"] if checkpoint else None,
-            checkpoint["iteration"] if checkpoint else None,
-            reason,
-        )
+        return await self._delivery_store.delivery_progress(delivery_id)
 
     async def resume_interrupted(
         self,
@@ -1337,119 +844,19 @@ class MessageManager:
         """
         if acknowledge_side_effect_risk is not True:
             raise ValueError("Explicit acknowledgement of side-effect risk is required")
-        async with self._transaction() as db:
-            row = await (
-                await db.execute("SELECT * FROM mm_deliveries WHERE delivery_id=?", (delivery_id,))
-            ).fetchone()
-            if row is None:
-                raise KeyError(delivery_id)
-            if row["state"] not in ("failed", "interrupted") or row["blocked_reason"]:
-                raise ValueError("Delivery is not an unblocked interrupted execution")
-            if row["last_node_id"] != expected_last_node_id:
-                raise ValueError("Expected checkpoint does not match delivery progress")
-            result = await (
-                await db.execute(
-                    "SELECT 1 FROM mm_delivery_results WHERE delivery_id=?", (delivery_id,)
-                )
-            ).fetchone()
-            if result is not None:
-                raise ValueError("Final result already saved; recover completion instead")
-            checkpoint, reason = await self._resume_checkpoint(db, row)
-            if reason:
-                raise ValueError(f"Cannot resume: {reason}")
-            assert checkpoint is not None
-            worker = self._workers.get(row["recipient_id"])
-            if worker is not None and not worker.done():
-                raise ValueError("Recipient still has an active worker")
-            if request_ids := self._checkpoint_inline_requests(checkpoint):
-                # 与续跑申请同事务认领回复，普通邮箱领取也必须通过写事务。
-                await db.execute(
-                    "UPDATE mm_inline_waits SET state='waiting' WHERE parent_delivery_id=? "
-                    "AND state='released' AND message_id IN (SELECT value FROM json_each(?))",
-                    (delivery_id, json.dumps(request_ids)),
-                )
-            await db.execute(
-                "UPDATE mm_deliveries SET state='pending', resume_requested=1, error=NULL "
-                "WHERE delivery_id=?",
-                (delivery_id,),
-            )
-        self._wake.set()
 
-    @staticmethod
-    def _checkpoint_inline_requests(checkpoint: aiosqlite.Row) -> list[str]:
-        if not json.loads(checkpoint["metadata"] or "{}").get("pending_tool_replies"):
-            return []
-        results = deserialize_action_results(json.loads(checkpoint["action_results"])) or []
-        return list(
-            {
-                pending["message_id"]
-                for entry in results
-                if (result := entry["action_result"]) is not None
-                and (pending := result.data.get("await_reply")) is not None
-            }
+        def recipient_busy(agent_id: str) -> bool:
+            worker = self._workers.get(agent_id)
+            return worker is not None and not worker.done()
+
+        await self._delivery_store.request_resume(
+            delivery_id, expected_last_node_id=expected_last_node_id, recipient_busy=recipient_busy
         )
-
-    async def _resume_checkpoint(
-        self, db: aiosqlite.Connection, delivery: aiosqlite.Row
-    ) -> tuple[aiosqlite.Row | None, str | None]:
-        if delivery["consumed_node_id"] is None:
-            return None, "input_not_consumed"
-        if delivery["last_node_id"] is None:
-            return None, "last_checkpoint_unknown"
-        node = await (
-            await db.execute(
-                "SELECT n.*, b.head_node_id, b.lifecycle AS branch_lifecycle, "
-                "s.lifecycle AS session_lifecycle, s.active_branch_id "
-                "FROM nodes n JOIN branches b ON b.branch_id=n.created_on_branch_id "
-                "AND b.session_id=n.session_id JOIN sessions s ON s.session_id=n.session_id "
-                "WHERE n.id=?",
-                (delivery["last_node_id"],),
-            )
-        ).fetchone()
-        if node is None or (node["agent_name"], node["session_id"]) != (
-            delivery["recipient_id"],
-            delivery["consumed_session_id"],
-        ):
-            return node, "checkpoint_missing_or_foreign"
-        if node["session_lifecycle"] != "open" or node["branch_lifecycle"] != "open":
-            return node, "session_or_branch_closed"
-        if (
-            node["head_node_id"] != node["id"]
-            or node["active_branch_id"] != node["created_on_branch_id"]
-        ):
-            return node, "session_head_changed"
-        if request_ids := self._checkpoint_inline_requests(node):
-            async with db.execute(
-                "SELECT COUNT(*) FROM mm_inline_waits w WHERE w.parent_delivery_id=? "
-                "AND w.message_id IN (SELECT value FROM json_each(?)) "
-                "AND w.state IN ('waiting','released') AND NOT EXISTS ("
-                "SELECT 1 FROM mm_messages m JOIN mm_deliveries d ON d.message_id=m.message_id "
-                "WHERE m.reply_to=w.message_id AND d.recipient_id=? AND ("
-                "d.state!='pending' OR d.turn_id IS NOT NULL OR d.consumed_node_id IS NOT NULL "
-                "OR EXISTS (SELECT 1 FROM mm_delivery_results r "
-                "WHERE r.delivery_id=d.delivery_id)))",
-                (delivery["delivery_id"], json.dumps(request_ids), delivery["recipient_id"]),
-            ) as cursor:
-                available = await cursor.fetchone()
-            assert available is not None
-            if available[0] != len(request_ids):
-                return node, "inline_reply_unavailable"
-        return node, None
+        self._wake.set()
 
     async def resume_delivery(self, delivery_id: str) -> None:
         """目标会话恢复开放后解除阻塞，保留原归属，不自动改投其他会话。"""
-        async with self._transaction() as db:
-            row = await (
-                await db.execute("SELECT * FROM mm_deliveries WHERE delivery_id=?", (delivery_id,))
-            ).fetchone()
-            if row is None or not row["blocked_reason"] or row["consumed_node_id"] is not None:
-                raise ValueError("Delivery is not a resumable blocked input")
-            await self._validate_session(db, row["recipient_id"], row["target_session_id"])
-            await db.execute(
-                "UPDATE mm_deliveries SET state='pending', blocked_reason=NULL, error=NULL "
-                "WHERE delivery_id=?",
-                (delivery_id,),
-            )
+        await self._delivery_store.unblock_delivery(delivery_id)
         self._wake.set()
 
     async def dispatch_pending(self) -> None:
@@ -1465,21 +872,14 @@ class MessageManager:
 
     async def recover_completions(self) -> int:
         """补齐已持久最终结果的收尾，不重新执行 agent；返回补齐数量。"""
-        async with self._lock:
-            rows = await (
-                await self._require_db().execute(
-                    "SELECT d.delivery_id FROM mm_deliveries d "
-                    "CROSS JOIN mm_delivery_results r ON d.delivery_id=r.delivery_id "
-                    "WHERE d.state != 'completed' ORDER BY d.seq"
-                )
-            ).fetchall()
+        deliveries = await self._delivery_store.unfinished_completions()
         completed = 0
-        for row in rows:
+        for delivery_id in deliveries:
             try:
-                completed += int(await self._finish_result(row[0]))
+                completed += int(await self._finish_result(delivery_id))
             except Exception as exc:
-                await self._record_failure(row[0], DeliveryState.FAILED, str(exc))
-                logger.warning("Completion recovery failed: %s", row[0], exc_info=True)
+                await self._record_failure(delivery_id, DeliveryState.FAILED, str(exc))
+                logger.warning("Completion recovery failed: %s", delivery_id, exc_info=True)
         if completed:
             self._wake.set()
         return completed
@@ -1570,273 +970,12 @@ class MessageManager:
             raise ValueError(f"Unknown agent ID: {agent_id}")
 
     def _require_db(self) -> aiosqlite.Connection:
-        if self._db is None or self._closing:
-            raise RuntimeError("MessageManager is not open")
-        return self._db
+        return self._sqlite.require_connection()
 
-    async def _has_turn_schema(self, db: aiosqlite.Connection) -> bool:
-        """判断链库是否已完成轮次与审批迁移。"""
-        rows = await (
-            await db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name IN ('turns', 'hitl_requests')"
-            )
-        ).fetchall()
-        return len(rows) == 2
+    def _transaction(self) -> AbstractAsyncContextManager[aiosqlite.Connection]:
+        return self._sqlite.transaction()
 
-    async def _dispatch_turn_schema(self, db: aiosqlite.Connection) -> bool:
-        if not self._session_receivers:
-            return await has_turns(db)
-        if not await self._has_turn_schema(db):
-            raise RuntimeError("Durable turn schema is required for atomic delivery")
-        return True
-
-    @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with self._lock:
-            db = self._require_db()
-            try:
-                await db.execute("BEGIN IMMEDIATE")
-                yield db
-                await db.commit()
-            except BaseException:
-                await db.rollback()
-                raise
-
-    async def _insert_message(
-        self,
-        db: aiosqlite.Connection,
-        sender: str,
-        recipients: tuple[str, ...],
-        content: str,
-        kind: MessageKind,
-        key: str,
-        reply_to: str | None,
-        message_id: str | None = None,
-        origin_node_id: str | None = None,
-        sender_session_id: str | None = None,
-        target_sessions: Mapping[str, str] | None = None,
-        metadata: Mapping[str, object] | None = None,
-        external_sender: bool = False,
-        delivery_policy: Literal["inject", "queue"] = "queue",
-        await_reply: bool = True,
-    ) -> str:
-        routes = dict(target_sessions or {})
-        parts = [list(recipients), content, kind.value, reply_to]
-        if sender_session_id is not None or routes:
-            parts.extend([sender_session_id, sorted(routes.items())])
-        if metadata or external_sender:
-            parts.extend([dict(metadata or {}), external_sender])
-        if delivery_policy != "queue" or not await_reply:
-            parts.append({"delivery_policy": delivery_policy, "await_reply": await_reply})
-        payload = json.dumps(parts, ensure_ascii=False)
-        row = await (
-            await db.execute(
-                "SELECT message_id, payload FROM mm_messages "
-                "WHERE sender_id=? AND idempotency_key=?",
-                (sender, key),
-            )
-        ).fetchone()
-        if row is not None:
-            if row["payload"] != payload:
-                raise ValueError("Idempotency key conflicts with an existing payload")
-            return str(row["message_id"])
-        message_id = message_id or uuid4().hex
-        await db.execute(
-            "INSERT INTO mm_messages "
-            "(message_id, sender_id, content, kind, reply_to, "
-            "idempotency_key, payload, accepted_at, origin_node_id, sender_session_id, "
-            "metadata, external_sender) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                message_id,
-                sender,
-                content,
-                kind.value,
-                reply_to,
-                key,
-                payload,
-                time.time(),
-                origin_node_id,
-                sender_session_id,
-                json.dumps(dict(metadata or {}), ensure_ascii=False),
-                int(external_sender),
-            ),
-        )
-        for target in recipients:
-            session = routes.get(target)
-            blocked = None
-            if session is not None and await self._session_status(db, target, session) != "open":
-                blocked = "target_session_unavailable"
-            delivery_id = uuid4().hex
-            await db.execute(
-                "INSERT INTO mm_deliveries "
-                "(delivery_id, message_id, recipient_id, state, target_session_id, blocked_reason, "
-                "delivery_policy) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
-                (delivery_id, message_id, target, session, blocked, delivery_policy),
-            )
-            if (
-                delivery_policy == "inject"
-                and not await_reply
-                and kind == MessageKind.REQUEST
-                and reply_to is None
-                and (metadata or {}).get("message_type")
-                not in ("tool_result", "result", "error", "broadcast")
-                and not (metadata or {}).get("inline_reply")
-                and not (metadata or {}).get("return_reply")
-                and not (metadata or {}).get("execute_ability")
-                and blocked is None
-                and session is not None
-                and await has_turns(db)
-            ):
-                await db.execute(
-                    "UPDATE mm_deliveries SET turn_id=(SELECT turn_id FROM turns "
-                    "WHERE agent_name=? AND session_id=? AND status IN ('open','waiting_hitl')) "
-                    "WHERE delivery_id=? AND state='pending' AND turn_id IS NULL "
-                    "AND consumed_node_id IS NULL AND blocked_reason IS NULL AND parked=0",
-                    (target, session, delivery_id),
-                )
-        if (metadata or {}).get("room_projection"):
-            await db.execute(
-                "INSERT OR IGNORE INTO mm_room_projections(message_id) VALUES (?)", (message_id,)
-            )
-        return message_id
-
-    async def _read_message(self, db: aiosqlite.Connection, message_id: str) -> MessageRecord:
-        row = await (
-            await db.execute("SELECT * FROM mm_messages WHERE message_id=?", (message_id,))
-        ).fetchone()
-        if row is None:
-            raise KeyError(message_id)
-        recipients = await (
-            await db.execute(
-                "SELECT recipient_id FROM mm_deliveries WHERE message_id=? ORDER BY recipient_id",
-                (message_id,),
-            )
-        ).fetchall()
-        return MessageRecord(
-            message_id,
-            self._project_id,
-            row["sender_id"],
-            tuple(item[0] for item in recipients),
-            row["content"],
-            MessageKind(row["kind"]),
-            row["reply_to"],
-            row["accepted_at"],
-            row["origin_node_id"],
-            row["sender_session_id"],
-            json.loads(row["metadata"]),
-            bool(row["external_sender"]),
-        )
-
-    async def _session_status(
-        self, db: aiosqlite.Connection, agent_id: str, session_id: str
-    ) -> str | None:
-        exists = await (
-            await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'")
-        ).fetchone()
-        if exists is None:
-            return None
-        row = await (
-            await db.execute(
-                "SELECT lifecycle FROM sessions WHERE agent_name=? AND session_id=?",
-                (agent_id, session_id),
-            )
-        ).fetchone()
-        return row[0] if row else None
-
-    async def _validate_session(
-        self,
-        db: aiosqlite.Connection,
-        agent_id: str,
-        session_id: str | None,
-        *,
-        allow_unavailable: bool = False,
-    ) -> None:
-        status = await self._session_status(db, agent_id, session_id) if session_id else None
-        if status is None or (status != "open" and not allow_unavailable):
-            raise ValueError(f"Session is missing, not open or owned by another agent: {agent_id}")
-
-    async def _default_session(self, db: aiosqlite.Connection, agent_id: str) -> str:
-        exists = await (
-            await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chain_meta'")
-        ).fetchone()
-        row = (
-            await (
-                await db.execute(
-                    "SELECT active_session_id FROM chain_meta WHERE agent_name=?", (agent_id,)
-                )
-            ).fetchone()
-            if exists
-            else None
-        )
-        if row is None:
-            raise ValueError(f"Persisted default session required for agent: {agent_id}")
-        return str(row[0])
-
-    async def _resolve_sessions(
-        self,
-        db: aiosqlite.Connection,
-        sender: str,
-        targets: tuple[str, ...],
-        key: str,
-        sender_session: str | None,
-        target_sessions: Mapping[str, str] | None,
-        *,
-        allow_unavailable: bool = False,
-    ) -> tuple[str | None, dict[str, str]]:
-        supplied = dict(target_sessions or {})
-        if set(supplied) - set(targets):
-            raise ValueError("target_sessions contains a non-recipient")
-        existing = await (
-            await db.execute(
-                "SELECT message_id, sender_session_id FROM mm_messages "
-                "WHERE sender_id=? AND idempotency_key=?",
-                (sender, key),
-            )
-        ).fetchone()
-        if existing is not None:
-            rows = await (
-                await db.execute(
-                    "SELECT recipient_id, target_session_id FROM mm_deliveries WHERE message_id=?",
-                    (existing[0],),
-                )
-            ).fetchall()
-            frozen = {row[0]: row[1] for row in rows if row[1] is not None}
-            if sender_session is not None and sender_session != existing[1]:
-                raise ValueError("Idempotency key conflicts with sender session")
-            if any(frozen.get(target) != session for target, session in supplied.items()):
-                raise ValueError("Idempotency key conflicts with target session")
-            return existing[1], frozen
-        if not self._session_routing and sender_session is None and target_sessions is None:
-            return None, {}
-        source = sender_session or await self._default_session(db, sender)
-        await self._validate_session(db, sender, source)
-        routes = {}
-        for target in targets:
-            session = supplied.get(target) or await self._default_session(db, target)
-            await self._validate_session(db, target, session, allow_unavailable=allow_unavailable)
-            routes[target] = session
-        return source, routes
-
-    @staticmethod
-    def _next_delivery_sql(with_turns: bool = True) -> str:
-        reason = blocker_reason_sql(with_turns)
-        return (
-            "WITH queue_heads AS (SELECT MIN(d.seq) AS seq FROM mm_deliveries d "
-            "WHERE d.recipient_id=? "
-            "AND d.state='pending' AND ((d.turn_id IS NULL AND d.consumed_node_id IS NULL) "
-            "OR (d.resume_requested=1 AND d.consumed_node_id IS NOT NULL)) "
-            "AND d.blocked_reason IS NULL AND d.parked=0 GROUP BY d.target_session_id) "
-            "SELECT d.* FROM queue_heads h JOIN mm_deliveries d ON d.seq=h.seq "
-            "WHERE NOT EXISTS (SELECT 1 FROM mm_messages reply JOIN mm_inline_waits w "
-            "ON w.message_id=reply.reply_to WHERE reply.message_id=d.message_id "
-            "AND w.state='waiting') AND NOT EXISTS (SELECT 1 FROM mm_deliveries prior "
-            + blocker_joins(with_turns)
-            + "WHERE prior.recipient_id=d.recipient_id AND prior.seq<d.seq "
-            "AND prior.target_session_id IS d.target_session_id AND prior.parked=0 "
-            f"AND ({reason}) IS NOT NULL) ORDER BY d.seq LIMIT 1"
-        )
+    _next_delivery_sql = staticmethod(SqliteMessageStore._next_delivery_sql)
 
     async def _commit_atomic(self, scope: _AtomicDelivery, changes: ContextChanges) -> None:
         scope.committing = True
@@ -1846,141 +985,24 @@ class MessageManager:
             scope.committing = False
 
     async def _apply_atomic(self, scope: _AtomicDelivery, changes: ContextChanges) -> None:
-        if changes.agent_name != scope.agent_id or len(changes.nodes) != 1:
-            raise ValueError("Atomic iteration must contain one node owned by the recipient")
-        node = changes.nodes[0]
-        async with self._transaction() as db:
-            delivery = await (
-                await db.execute(
-                    "SELECT * FROM mm_deliveries WHERE delivery_id=?", (scope.delivery_id,)
-                )
-            ).fetchone()
-            if delivery is None:
-                raise KeyError(scope.delivery_id)
-            if delivery["turn_id"]:
-                await turn.require_active(db, delivery["turn_id"])
-            if delivery["state"] != DeliveryState.PROCESSING.value:
-                raise RuntimeError("Delivery is no longer processing")
-            if delivery["target_session_id"] is not None:
-                if node.session_id != delivery["target_session_id"]:
-                    raise RuntimeError("Atomic node does not match frozen delivery session")
-                await self._validate_session(db, scope.agent_id, node.session_id)
-            head = await (
-                await db.execute(
-                    "SELECT head_node_id FROM branches WHERE branch_id=? AND session_id=?",
-                    (node.created_on_branch_id, node.session_id),
-                )
-            ).fetchone()
-            branch = changes.branches[0] if len(changes.branches) == 1 else None
-            new_fork = False
-            if head is None and branch is not None and branch.fork_point_node_id == node.parent_id:
-                parent = await (
-                    await db.execute(
-                        "SELECT 1 FROM branches WHERE branch_id=? AND session_id=?",
-                        (branch.parent_branch_id, node.session_id),
-                    )
-                ).fetchone()
-                new_fork = parent is not None
-            if not new_fork and (head is None or head[0] != node.parent_id):
-                raise RuntimeError("Context branch head changed before atomic commit")
-            compact = node.metadata.get("node_kind") == "compact"
-            if compact and (
-                node.messages_delta or node.ability_names != ["compact"] or scope.drafts
-            ):
-                raise ValueError(
-                    "Compact commit must not consume input or publish outbound messages"
-                )
-            if compact and scope.consumed_deliveries:
-                raise ValueError("Compact commit must not consume injected input")
-            input_ids = {message.metadata.get("delivery_id") for message in node.messages_delta}
-            if scope.consumed_deliveries:
-                if not delivery["turn_id"] or scope.consumed_deliveries - input_ids:
-                    raise RuntimeError("Injected input is no longer consumable")
-                cursor = await db.execute(
-                    "UPDATE mm_deliveries SET consumed_node_id=?, "
-                    "consumed_session_id=?, last_node_id=? "
-                    "WHERE delivery_id IN (SELECT value FROM json_each(?)) "
-                    "AND state='pending' AND consumed_node_id IS NULL AND turn_id=? "
-                    "AND recipient_id=? AND target_session_id=? AND delivery_policy='inject' "
-                    "AND COALESCE(blocked_reason,'')='' AND parked=0",
-                    (
-                        node.id,
-                        node.session_id,
-                        node.id,
-                        json.dumps(list(scope.consumed_deliveries)),
-                        delivery["turn_id"],
-                        scope.agent_id,
-                        node.session_id,
-                    ),
-                )
-                if cursor.rowcount != len(scope.consumed_deliveries):
-                    raise RuntimeError("Injected input is no longer consumable")
-            if delivery["turn_id"] and node.turn_id != delivery["turn_id"]:
-                raise RuntimeError("Atomic node does not match the delivery turn")
-            await scope.backend.apply_changes_in_transaction(db, changes)
-            if delivery["consumed_node_id"] is None and not compact:
-                if not any(
-                    message.metadata.get("delivery_id") == scope.delivery_id
-                    for message in node.messages_delta
-                ):
-                    raise RuntimeError("First atomic iteration must include the input delivery")
-                await db.execute(
-                    "UPDATE mm_deliveries SET consumed_node_id=?, consumed_session_id=? "
-                    "WHERE delivery_id=?",
-                    (node.id, node.session_id, scope.delivery_id),
-                )
-            if delivery["turn_id"]:
-                await turn.backfill_start(db, node)
-            for draft in scope.drafts:
-                await self._insert_message(
-                    db,
-                    draft.sender_id,
-                    draft.recipient_ids,
-                    draft.content,
-                    draft.kind,
-                    draft.idempotency_key,
-                    None,
-                    draft.message_id,
-                    node.id,
-                    draft.sender_session_id,
-                    dict(draft.target_sessions),
-                    draft.metadata,
-                )
-                if draft.metadata.get("inline_reply"):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO mm_inline_waits VALUES (?, ?, 'waiting')",
-                        (draft.message_id, scope.delivery_id),
-                    )
-            for request_id, consumed in scope.inline_updates.items():
-                cursor = await db.execute(
-                    "UPDATE mm_inline_waits SET state=? "
-                    "WHERE message_id=? AND parent_delivery_id=? AND state='waiting'",
-                    ("consumed" if consumed else "released", request_id, scope.delivery_id),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError("Inline wait is no longer reserved by this execution")
-                if consumed:
-                    await db.execute(
-                        "UPDATE mm_deliveries SET state='completed', consumed_node_id=?, "
-                        "consumed_session_id=?, last_node_id=? WHERE message_id IN "
-                        "(SELECT message_id FROM mm_messages WHERE reply_to=?) AND recipient_id=? "
-                        "AND state='pending' AND turn_id IS NULL AND consumed_node_id IS NULL",
-                        (node.id, node.session_id, node.id, request_id, scope.agent_id),
-                    )
-            await db.execute(
-                "UPDATE mm_deliveries SET last_node_id=? WHERE delivery_id=?",
-                (node.id, scope.delivery_id),
-            )
+        committed = await self._delivery_store.commit_iteration(
+            scope.execution,
+            changes,
+            drafts=tuple(scope.drafts),
+            consumed_deliveries=frozenset(scope.consumed_deliveries),
+            inline_updates=dict(scope.inline_updates),
+        )
         scope.drafts.clear()
         scope.inline_updates.clear()
         scope.consumed_deliveries.clear()
-        scope.consumed = delivery["consumed_node_id"] is not None or not compact
-        scope.last_node_id = node.id
+        scope.consumed = committed.input_consumed
+        scope.last_node_id = committed.node_id
         self._wake.set()
 
     @staticmethod
     def _task_context() -> Context:
         context = detached_runner_context()
+        context.run(_CLAIM.set, None)
         context.run(_ATOMIC.set, None)
         context.run(clear_durable_iteration_scope)
         return context
@@ -2003,13 +1025,12 @@ class MessageManager:
         """扫描并报告是否遇到 worker，供同步调度复查刚释放的队列。"""
         async with self._scan_lock:
             await self.recover_completions()
-            async with self._lock:
-                db = self._require_db()
-                with_turns = await self._dispatch_turn_schema(db)
-                repair = time.monotonic() >= self._repair_retry_at and await needs_delivery_repair(
-                    db, with_turns=with_turns, workers=self._workers
-                )
-            if repair:
+            probe = await self._delivery_store.probe_delivery_recovery(
+                self._workers.keys(),
+                require_turns=bool(self._session_receivers),
+                check_repair=time.monotonic() >= self._repair_retry_at,
+            )
+            if probe.needs_repair:
                 await self._repair_deliveries()
             saw_worker = False
             for agent_id, receiver in tuple(self._receivers.items()):
@@ -2018,18 +1039,10 @@ class MessageManager:
                 if agent_id in self._workers:
                     saw_worker = True
                     continue
-                async with self._lock:
-                    row = await (
-                        await self._require_db().execute(
-                            self._next_delivery_sql(with_turns),
-                            (agent_id,),
-                        )
-                    ).fetchone()
-                if (
-                    row is not None
-                    and row["state"] == DeliveryState.PENDING.value
-                    and self._receivers.get(agent_id) is receiver
-                ):
+                candidate = await self._delivery_store.has_claimable_delivery(
+                    agent_id, with_turns=probe.with_turns
+                )
+                if candidate and self._receivers.get(agent_id) is receiver:
                     self._workers[agent_id] = asyncio.create_task(
                         self._run(agent_id, receiver), context=self._task_context()
                     )
@@ -2041,103 +1054,39 @@ class MessageManager:
 
     async def _repair_deliveries(self) -> None:
         try:
-            async with self._transaction() as db:
-                with_turns = await self._dispatch_turn_schema(db)
-                await settle_terminal_turns(db)
-                settled = await settle_stranded_deliveries(
-                    db,
-                    with_turns=with_turns,
-                    workers=self._workers,
-                    now=datetime.now(UTC).isoformat(),
-                )
-                await release_unowned_inline_waits(db)
-        except sqlite3.Error:
+            recovered = await self._delivery_store.repair_deliveries(
+                self._workers.keys(), require_turns=bool(self._session_receivers)
+            )
+        except DeliveryRepairError:
             if self._dispatcher is None:
                 raise
             self._repair_retry_at = time.monotonic() + max(1.0, self._poll_interval)
             logger.warning("Could not recover stranded message deliveries", exc_info=True)
             return
-        for row, closure in settled:
-            self._notify_reply_waiters(row["message_id"])
-            publisher = self._turn_closure_publishers.get(row["recipient_id"])
-            if closure is not None and publisher is not None:
-                await publisher(closure)
+        for item in recovered:
+            self._notify_reply_waiters(item.message_id)
+            publisher = self._turn_closure_publishers.get(item.recipient_id)
+            if item.turn_closure is not None and publisher is not None:
+                await publisher(item.turn_closure)
 
     async def _run(self, agent_id: str, receiver: Receiver) -> None:
         delivery_id: str | None = None
+        execution: DeliveryExecution | None = None
         closure = None
         publish_closure = self._turn_closure_publishers.get(agent_id)
         try:
-            async with self._transaction() as db:
-                with_turns = await self._dispatch_turn_schema(db)
-                row = await (
-                    await db.execute(
-                        self._next_delivery_sql(with_turns),
-                        (agent_id,),
-                    )
-                ).fetchone()
-                if (
-                    row is None
-                    or row["state"] != DeliveryState.PENDING.value
-                    or (
-                        not row["resume_requested"]
-                        and (row["turn_id"] is not None or row["consumed_node_id"] is not None)
-                    )
-                ):
-                    return
-                delivery_id = row["delivery_id"]
-                record = await self._read_message(db, row["message_id"])
-                target_session = row["target_session_id"]
-                resume_node = None
-                if row["resume_requested"]:
-                    resume_node, reason = await self._resume_checkpoint(db, row)
-                    if reason or agent_id not in self._session_receivers:
-                        await db.execute(
-                            "UPDATE mm_deliveries SET state='interrupted', "
-                            "resume_requested=0, error=? "
-                            "WHERE delivery_id=?",
-                            (reason or "atomic_receiver_required", delivery_id),
-                        )
-                        await release_unowned_inline_waits(db, parent_delivery_id=delivery_id)
-                        return
-                    target_session = resume_node["session_id"]
-                if target_session is None and self._session_routing:
-                    await db.execute(
-                        "UPDATE mm_deliveries SET blocked_reason='legacy_session_unassigned' "
-                        "WHERE delivery_id=?",
-                        (delivery_id,),
-                    )
-                    return
-                if target_session is not None:
-                    reason = None
-                    if agent_id not in self._session_receivers:
-                        reason = "receiver_cannot_route_session"
-                    elif await self._session_status(db, agent_id, target_session) != "open":
-                        reason = "target_session_unavailable"
-                    if reason:
-                        await db.execute(
-                            "UPDATE mm_deliveries SET blocked_reason=? WHERE delivery_id=?",
-                            (reason, delivery_id),
-                        )
-                        return
-                turn_id = None
-                if target_session is not None and resume_node is None:
-                    now = datetime.now(UTC).isoformat()
-                    await turn.normalize_open_turns(
-                        db, agent_name=agent_id, session_id=target_session, now=now
-                    )
-                    turn_id = uuid4().hex
-                    await turn.insert_turn_placeholder(
-                        db,
-                        turn.ActiveTurn(turn_id, agent_id, target_session, delivery_id, "mm"),
-                        opened_at=now,
-                    )
-                await db.execute(
-                    "UPDATE mm_deliveries SET state='processing', "
-                    "attempts=attempts+1, resume_requested=0, turn_id=? "
-                    "WHERE delivery_id=?",
-                    (turn_id, delivery_id),
-                )
+            claim = await self._delivery_store.claim_delivery(
+                agent_id,
+                session_aware=agent_id in self._session_receivers,
+                session_routing=self._session_routing,
+                require_turns=bool(self._session_receivers),
+            )
+            if claim is None:
+                return
+            execution = claim.execution
+            delivery_id = execution.delivery_id
+            record = claim.message
+            resume = claim.resume
             message = AgentMessage(
                 id=record.message_id,
                 sender=record.sender_id.removeprefix("human:")
@@ -2152,43 +1101,50 @@ class MessageManager:
                     **record.metadata,
                     "external_sender": record.external_sender,
                     "message_manager": True,
-                    "project_id": self._project_id,
+                    "project_id": self._sqlite.scope_id,
                     "agent_id": agent_id,
                     "message_id": record.message_id,
                     "delivery_id": delivery_id,
                     "message_kind": record.kind.value,
-                    "turn_id": turn_id,
+                    "turn_id": claim.execution.turn_id,
                     "reply_to": record.reply_to,
                     "sender_session_id": record.sender_session_id,
-                    "target_session_id": target_session,
-                    "resume_from_node_id": resume_node["id"] if resume_node else None,
-                    "resume_session_id": resume_node["session_id"] if resume_node else None,
-                    "resume_branch_id": resume_node["created_on_branch_id"]
-                    if resume_node
-                    else None,
+                    "target_session_id": claim.target_session_id,
+                    "resume_from_node_id": resume.node_id if resume else None,
+                    "resume_session_id": resume.session_id if resume else None,
+                    "resume_branch_id": resume.branch_id if resume else None,
                 },
             )
-            result = await receiver(message)
+            token = _CLAIM.set(claim.execution)
+            try:
+                result = await receiver(message)
+            finally:
+                _CLAIM.reset(token)
             if not isinstance(result, AgentMessage):
                 raise TypeError("Receiver must return AgentMessage")
             if result.type == MessageType.ERROR:
                 raise RuntimeError(result.content)
-            closure = await self._complete_delivery(delivery_id, result)
+            closure = await self._complete_delivery(claim.execution, result)
         except turn.TurnRevokedError:
             logger.debug("Delivery lost its turn execution right: %s", delivery_id)
         except Exception as exc:
+            if isinstance(exc, DeliveryClaimError):
+                delivery_id = exc.delivery_id
             if delivery_id is not None:
                 closure = await self._record_failure(
                     delivery_id,
                     DeliveryState.FAILED,
                     str(exc),
                     session_unavailable=isinstance(exc, DeliverySessionUnavailableError),
+                    execution=execution,
                 )
             logger.warning("Message delivery failed: %s", delivery_id, exc_info=True)
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, DeliveryClaimCancelled):
+                delivery_id = exc.delivery_id
             if delivery_id is not None:
                 closure = await self._record_failure(
-                    delivery_id, DeliveryState.INTERRUPTED, "Worker stopped"
+                    delivery_id, DeliveryState.INTERRUPTED, "Worker stopped", execution=execution
                 )
             raise
         finally:
@@ -2206,188 +1162,37 @@ class MessageManager:
         error: str,
         *,
         session_unavailable: bool = False,
+        execution: DeliveryExecution | None = None,
     ) -> turn.TurnClosure | None:
-        # close 期间也必须保存中断；失败时由调度或下次 open 兜底。
         try:
-            async with self._lock:
-                if self._db is None:
-                    return None
-                db = self._db
-                try:
-                    await db.execute("BEGIN IMMEDIATE")
-                    delivery = await (
-                        await db.execute(
-                            "SELECT turn_id, last_node_id, consumed_node_id, message_id "
-                            "FROM mm_deliveries WHERE delivery_id=?",
-                            (delivery_id,),
-                        )
-                    ).fetchone()
-                    if delivery is not None and delivery["turn_id"]:
-                        async with db.execute(
-                            "SELECT status, opener_delivery_id FROM turns WHERE turn_id=?",
-                            (delivery["turn_id"],),
-                        ) as cursor:
-                            stored = await cursor.fetchone()
-                        if stored is not None and stored["status"] == "aborted":
-                            await self.converge_turn_deliveries(
-                                db,
-                                turn_id=delivery["turn_id"],
-                                opener_delivery_id=stored["opener_delivery_id"],
-                                opener_state="interrupted",
-                                opener_error="aborted_by_user",
-                                terminal_state="interrupted",
-                            )
-                            await db.commit()
-                            self._notify_reply_waiters(delivery["message_id"])
-                            return None
-                    blocked = (
-                        session_unavailable
-                        and delivery is not None
-                        and delivery["consumed_node_id"] is None
-                    )
-                    if blocked:
-                        await db.execute(
-                            "UPDATE mm_deliveries SET state='pending', turn_id=NULL, "
-                            "blocked_reason='target_session_unavailable', error=?, "
-                            "resume_requested=0 WHERE delivery_id=?",
-                            (error, delivery_id),
-                        )
-                    else:
-                        # 领取事务回滚后投递仍为 pending；必须在这里终结，
-                        # 否则调度器会反复领取同一行形成热循环。
-                        await db.execute(
-                            "UPDATE mm_deliveries SET state=?, error=?, resume_requested=0 "
-                            "WHERE delivery_id=? AND (state IN ('processing', 'pending') OR "
-                            "(state IN ('failed', 'interrupted') AND EXISTS "
-                            "(SELECT 1 FROM mm_delivery_results r "
-                            "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
-                            (state.value, error, delivery_id),
-                        )
-                    closed = None
-                    if delivery is not None and delivery["turn_id"]:
-                        # session 不可用不是业务失败：即使输入已消费（投递按既有
-                        # 语义记 failed），轮次也收敛为 interrupted，避免终态语义混淆。
-                        failed = (
-                            state == DeliveryState.FAILED
-                            and not blocked
-                            and not session_unavailable
-                        )
-                        closed = await turn.close_turn(
-                            db,
-                            turn_id=delivery["turn_id"],
-                            status="failed" if failed else "interrupted",
-                            closing_kind="error" if failed else "cancelled",
-                            end_node_id=delivery["last_node_id"],
-                            closed_at=datetime.now(UTC).isoformat(),
-                        )
-                        await settle_turn_deliveries(
-                            db,
-                            turn_id=delivery["turn_id"],
-                            opener_delivery_id=delivery_id,
-                            terminal_state="failed" if failed else "interrupted",
-                        )
-                    await release_unowned_inline_waits(db, parent_delivery_id=delivery_id)
-                    await db.commit()
-                    if delivery is not None:
-                        self._notify_reply_waiters(delivery["message_id"])
-                    return turn.ordinary_closure(closed)
-                except BaseException:
-                    await db.rollback()
-                    raise
+            saved = await self._delivery_store.record_failure(
+                delivery_id,
+                state,
+                error,
+                session_unavailable=session_unavailable,
+                execution=execution,
+            )
+        except turn.TurnRevokedError:
+            return None
         except Exception:
             logger.exception("Could not persist delivery failure: %s", delivery_id)
             return None
+        if saved is None:
+            return None
+        self._notify_reply_waiters(saved.message_id)
+        return saved.turn_closure
 
     async def _complete_delivery(
-        self, delivery_id: str, result: AgentMessage, result_node_id: str | None = None
+        self, execution: DeliveryExecution, result: AgentMessage, result_node_id: str | None = None
     ) -> turn.TurnClosure | None:
         if result.type == MessageType.ERROR:
             raise ValueError("Error responses cannot be recorded as successful final results")
-        if result_node_id is None:
-            # 原子接收可能已经完成两段持久收尾，回调返回时只需确认其结果。
-            async with (
-                self._lock,
-                self._require_db().execute(
-                    "SELECT r.content FROM mm_deliveries d "
-                    "JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
-                    "WHERE d.delivery_id=? AND d.state='completed'",
-                    (delivery_id,),
-                ) as cursor,
-            ):
-                completed = await cursor.fetchone()
-            if completed is not None:
-                if completed["content"] != result.content:
-                    raise ValueError("Final result conflicts with the durable result")
-                return None
-        # 最终结果一旦落库，后续操作只重试事务，不再调用模型或工具。
-        async with self._transaction() as db:
-            delivery = await (
-                await db.execute("SELECT * FROM mm_deliveries WHERE delivery_id=?", (delivery_id,))
-            ).fetchone()
-            if delivery is None:
-                raise KeyError(delivery_id)
-            existing = await (
-                await db.execute(
-                    "SELECT * FROM mm_delivery_results WHERE delivery_id=?", (delivery_id,)
-                )
-            ).fetchone()
-            if existing is not None:
-                if existing["content"] != result.content or (
-                    result_node_id is not None and existing["result_node_id"] != result_node_id
-                ):
-                    raise ValueError("Final result conflicts with the durable result")
-            else:
-                if delivery["turn_id"]:
-                    await turn.require_active(db, delivery["turn_id"])
-                if delivery["state"] != DeliveryState.PROCESSING.value:
-                    raise RuntimeError("Only processing deliveries may record a final result")
-                if delivery["consumed_node_id"] is not None and result_node_id is None:
-                    raise ValueError("Atomic final result requires a context node reference")
-                if result_node_id is not None:
-                    node = await (
-                        await db.execute(
-                            "SELECT agent_name, session_id FROM nodes WHERE id=?", (result_node_id,)
-                        )
-                    ).fetchone()
-                    if node is None or (node[0], node[1]) != (
-                        delivery["recipient_id"],
-                        delivery["consumed_session_id"],
-                    ):
-                        raise ValueError(
-                            "Final result node does not belong to the consumed session"
-                        )
-                await db.execute(
-                    "INSERT INTO mm_delivery_results "
-                    "(delivery_id, content, result_node_id, recorded_at, content_blocks) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        delivery_id,
-                        result.content,
-                        result_node_id,
-                        time.time(),
-                        json.dumps(result.content_blocks)
-                        if result.content_blocks is not None
-                        else None,
-                    ),
-                )
-            closed = None
-            if delivery["turn_id"] and existing is None:
-                closed = await turn.close_turn(
-                    db,
-                    turn_id=delivery["turn_id"],
-                    status="closed",
-                    closing_kind="completed",
-                    end_node_id=result_node_id or delivery["last_node_id"],
-                    closed_at=datetime.now(UTC).isoformat(),
-                )
-                await settle_turn_deliveries(
-                    db,
-                    turn_id=delivery["turn_id"],
-                    opener_delivery_id=delivery_id,
-                    terminal_state="completed",
-                )
-        await self._finish_result(delivery_id)
-        return turn.ordinary_closure(closed)
+        saved = await self._delivery_store.save_final_result(
+            execution, FinalDeliveryResult(result.content, result_node_id, result.content_blocks)
+        )
+        if saved.needs_completion:
+            await self._finish_result(execution.delivery_id)
+        return saved.turn_closure
 
     async def _finish_atomic(self, scope: _AtomicDelivery, result: AgentMessage) -> None:
         scope.context_manager.check_turn_revoked()
@@ -2395,84 +1200,12 @@ class MessageManager:
             raise RuntimeError("Atomic final result requires a durably consumed input")
         if scope.drafts:
             raise RuntimeError("Cannot finish with uncommitted outbound messages")
-        await self._complete_delivery(scope.delivery_id, result, scope.last_node_id)
+        await self._complete_delivery(scope.execution, result, scope.last_node_id)
 
     async def _finish_result(self, delivery_id: str) -> bool:
-        async with self._transaction() as db:
-            row = await (
-                await db.execute(
-                    "SELECT d.state, d.message_id, d.recipient_id, d.target_session_id, "
-                    "d.consumed_session_id, d.turn_id, d.last_node_id, "
-                    "r.content, r.result_node_id, r.content_blocks "
-                    "FROM mm_deliveries d JOIN mm_delivery_results r "
-                    "ON r.delivery_id=d.delivery_id WHERE d.delivery_id=?",
-                    (delivery_id,),
-                )
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("No durable final result to complete")
-            if row["state"] == DeliveryState.COMPLETED.value:
-                return False
-            if row["turn_id"] and await has_turns(db):
-                closed = await turn.close_turn(
-                    db,
-                    turn_id=row["turn_id"],
-                    status="closed",
-                    closing_kind="completed",
-                    end_node_id=row["result_node_id"] or row["last_node_id"],
-                    closed_at=datetime.now(UTC).isoformat(),
-                )
-                if closed is not None:
-                    await settle_turn_deliveries(
-                        db,
-                        turn_id=row["turn_id"],
-                        opener_delivery_id=delivery_id,
-                        terminal_state="completed",
-                    )
-            message = await self._read_message(db, row["message_id"])
-            if message.kind == MessageKind.REQUEST:
-                reply_id = await self._insert_message(
-                    db,
-                    row["recipient_id"],
-                    (message.sender_id,),
-                    row["content"],
-                    MessageKind.RESPONSE,
-                    f"response:{delivery_id}",
-                    message.message_id,
-                    origin_node_id=row["result_node_id"],
-                    sender_session_id=row["target_session_id"] or row["consumed_session_id"],
-                    target_sessions=(
-                        {message.sender_id: message.sender_session_id}
-                        if message.sender_session_id is not None
-                        else None
-                    ),
-                    metadata={
-                        **(
-                            {"content_blocks": json.loads(row["content_blocks"])}
-                            if row["content_blocks"]
-                            else {}
-                        ),
-                        **{
-                            k: v
-                            for k, v in message.metadata.items()
-                            if k in ("room_id", "room_ids")
-                        },
-                        **(
-                            {"room_projection": True}
-                            if message.metadata.get("room_id") or message.metadata.get("room_ids")
-                            else {}
-                        ),
-                    },
-                )
-                if message.external_sender or message.metadata.get("return_reply"):
-                    await db.execute(
-                        "UPDATE mm_deliveries SET state='completed' WHERE message_id=?", (reply_id,)
-                    )
-            await db.execute(
-                "UPDATE mm_deliveries SET state='completed', error=NULL WHERE delivery_id=?",
-                (delivery_id,),
-            )
-            await release_unowned_inline_waits(db, parent_delivery_id=delivery_id)
-        self._notify_reply_waiters(row["message_id"])
+        message_id = await self._delivery_store.finish_delivery(delivery_id)
+        if message_id is None:
+            return False
+        self._notify_reply_waiters(message_id)
         self._wake.set()
         return True

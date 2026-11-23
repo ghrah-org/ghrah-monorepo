@@ -100,7 +100,8 @@ async def test_scoped_ports_do_not_share_data(tmp_path: Path) -> None:
 
 
 async def test_missing_data_root_returns_empty_semantics(tmp_path: Path) -> None:
-    port = _port("scope-empty", tmp_path / "not-created.db")
+    path = tmp_path / "not-created.db"
+    port = _port("scope-empty", path)
     try:
         catalog = await port.sessions.catalog(agent_id="agent-x")
         assert catalog.sessions == []
@@ -109,6 +110,8 @@ async def test_missing_data_root_returns_empty_semantics(tmp_path: Path) -> None
         assert missing_node.value.problem.code is ProblemCode.NOT_FOUND
         summary = await port.mailbox.summary(agent_id="agent-x")
         assert summary.availability in {"available", "empty"}
+        assert not path.exists()
+        assert not path.with_suffix(".db.owner").exists()
     finally:
         await port.aclose()
 

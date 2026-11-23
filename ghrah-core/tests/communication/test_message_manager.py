@@ -19,6 +19,7 @@ from _helpers import ScriptedLLM
 from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication.message_manager import DeliveryState, MessageKind, MessageManager
+from ghrah.context.turn import TurnRevokedError
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage, MessageType
 
@@ -302,6 +303,46 @@ async def test_reply_and_completion_commit_atomically(tmp_path):
         assert (await manager.get_deliveries(request.message_id))[
             0
         ].state == DeliveryState.COMPLETED
+
+
+async def test_old_claim_cannot_save_result_or_interrupt_a_new_claim(tmp_path):
+    manager = make_manager(tmp_path / "messages.sqlite")
+    await manager.open(start_dispatcher=False)
+    try:
+        request = await send_request(manager)
+        claim = manager._delivery_store.claim_delivery
+        routing = {"session_aware": False, "session_routing": False, "require_turns": False}
+        first = await claim("b", **routing)
+        assert first is not None
+        delivery_id = first.execution.delivery_id
+        await manager._record_failure(
+            delivery_id,
+            DeliveryState.INTERRUPTED,
+            "previous worker stopped",
+            execution=first.execution,
+        )
+        await manager.retry(delivery_id)
+        current = await claim("b", **routing)
+        assert current is not None
+        assert current.execution.delivery_id == delivery_id
+        assert current.execution.attempt == first.execution.attempt + 1
+
+        result = AgentMessage(sender="b", recipient="a", content="final result")
+        with pytest.raises(TurnRevokedError, match="no longer owns the claim"):
+            await manager._complete_delivery(first.execution, result)
+        await manager._record_failure(
+            delivery_id, DeliveryState.INTERRUPTED, "late failure", execution=first.execution
+        )
+        (processing, _) = await manager.get_deliveries(request.message_id)
+        assert processing.state == DeliveryState.PROCESSING and not processing.result_ready
+        assert await manager.get_replies(request.message_id) == ()
+
+        await manager._complete_delivery(current.execution, result)
+        await manager._complete_delivery(current.execution, result)
+        (reply,) = await manager.get_replies(request.message_id)
+        assert reply.content == "final result"
+    finally:
+        await manager.close()
 
 
 async def test_actual_process_exit_keeps_pending_and_marks_processing_interrupted(tmp_path):

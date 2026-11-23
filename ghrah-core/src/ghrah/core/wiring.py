@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from ghrah.communication.sqlite_message_store import SqliteMessageStore
 from ghrah.core.api.catalog import CoreCatalog
 from ghrah.core.api.facade import CoreFacade
 from ghrah.core.api.handlers import build_catalog_handlers, build_handlers
@@ -55,19 +56,19 @@ async def _close_all(*closers: Callable[[], Awaitable[None]]) -> None:
         raise ExceptionGroup("failed to close Core port", errors)
 
 
-def _default_manager_factory(db_path: str, scope_id: str) -> ManagerFactory:
+def _default_manager_factory(store: SqliteMessageStore) -> ManagerFactory:
     """构造消息管理器工厂（Agent 动态注册，无需预先知道名单）。"""
 
     async def factory() -> Any:
         from ghrah.communication import MessageManager
 
-        path = Path(db_path)
         manager = MessageManager(
-            path,
-            project_id=scope_id,
+            store.db_path,
+            project_id=store.scope_id,
             agent_ids=(),
             session_routing=True,
             allow_persisted_agents=True,
+            _store=store,
         )
         await manager.open(prepare_context=True)
         return manager
@@ -75,20 +76,13 @@ def _default_manager_factory(db_path: str, scope_id: str) -> ManagerFactory:
     return factory
 
 
-def _default_config_factory(db_path: str, scope_id: str) -> ConfigFactory:
+def _default_config_factory(store: SqliteMessageStore) -> ConfigFactory:
     """构造默认的单元配置工厂：只绑定作用域与链库，其余用单元默认值。"""
 
     def factory() -> CoreUnitConfig:
-        from ghrah.context.persistence.sqlite_backend import SqliteBackend
-
-        path = Path(db_path)
-
-        def persistence_factory(_agent_config: object) -> SqliteBackend:
-            return SqliteBackend(db_path=path)
-
         return CoreUnitConfig(
-            project_id=scope_id,
-            persistence_factory=persistence_factory,
+            project_id=store.scope_id,
+            persistence_factory=store.context_backend,
         )
 
     return factory
@@ -131,13 +125,14 @@ def build_core_port(
     Raises:
         RuntimeError: 能力清单与处理器集合不一致
     """
-    chain = ChainReadStore(db_path=Path(db_path))
-    mailbox = MailboxReadStore(db_path=Path(db_path), scope_id=scope_id)
+    store = SqliteMessageStore(db_path, scope_id)
+    chain = ChainReadStore(db_path=store.db_path)
+    mailbox = MailboxReadStore(db_path=store.db_path, scope_id=scope_id)
     registry = RuntimeRegistry(
         scope_id=scope_id,
-        config_factory=config_factory or _default_config_factory(db_path, scope_id),
+        config_factory=config_factory or _default_config_factory(store),
         **({"unit_factory": unit_factory} if unit_factory is not None else {}),
-        manager_factory=manager_factory or _default_manager_factory(db_path, scope_id),
+        manager_factory=manager_factory or _default_manager_factory(store),
         manifest_resolver=manifest_resolver,
         config_hook=config_hook,
         emit=emit,
@@ -155,7 +150,7 @@ def build_core_port(
         reclaim_stale=True,
     )
     registry.set_ability_store_factory(abilities.store)
-    turns = TurnReadStore(db_path=Path(db_path))
+    turns = TurnReadStore(db_path=store.db_path)
     runtime = CoreRuntime(build_handlers(chain, mailbox, abilities, registry, turns))
     return CoreFacade(
         runtime=runtime,

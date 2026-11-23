@@ -20,6 +20,7 @@ from ghrah.ability.execution.executor import LocalAbilityExecutor
 from ghrah.ability.execution.hooks import HookResult
 from ghrah.ability.execution.invocation import MemberReference, OperationCall
 from ghrah.communication.message_manager import _ATOMIC, _AtomicDelivery
+from ghrah.communication.storage import DeliveryExecution
 from ghrah.context import ContextManager, turn
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -219,7 +220,7 @@ async def test_late_atomic_writes_are_rejected_without_partial_effects(rollback_
         sessions=(candidate.get_active_session(),),
         branches=(candidate.get_active_session_branch(),),
     )
-    scope = _AtomicDelivery(mm, backend, opener_id, "agent", [], cm)
+    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
     result = await port.turns.abort(agent_id="agent", turn_id=turn_id)
     assert result.aborted and result.incomplete_node_id is None
     before = snapshot(backend.db_path)
@@ -227,7 +228,7 @@ async def test_late_atomic_writes_are_rejected_without_partial_effects(rollback_
         await mm._apply_atomic(scope, changes)
     with pytest.raises(turn.TurnRevokedError):
         await mm._complete_delivery(
-            opener_id, AgentMessage(sender="agent", recipient="user", content="late")
+            scope.execution, AgentMessage(sender="agent", recipient="user", content="late")
         )
     with pytest.raises(turn.TurnRevokedError):
         await cm.commit_compact_node_async([])
@@ -404,7 +405,7 @@ async def test_cross_process_abort_revokes_atomic_commit(rollback_runtime):
         sessions=(candidate.get_active_session(),),
         branches=(candidate.get_active_session_branch(),),
     )
-    scope = _AtomicDelivery(mm, backend, opener_id, "agent", [], cm)
+    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
     before = snapshot(backend.db_path)
     with pytest.raises(turn.TurnRevokedError):
         await mm._apply_atomic(scope, changes)
@@ -807,10 +808,10 @@ async def test_close_event_follows_winner_of_result_abort_race(
     publish = AsyncMock()
     monkeypatch.setattr(agent._event_publisher, "publish", publish)
 
-    async def pause_completion(delivery_id, result, result_node_id=None):
+    async def pause_completion(execution, result, result_node_id=None):
         entered.set()
         await resume.wait()
-        return await complete(delivery_id, result, result_node_id)
+        return await complete(execution, result, result_node_id)
 
     async def pause_finish_result(delivery_id):
         entered.set()

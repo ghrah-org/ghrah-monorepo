@@ -74,6 +74,31 @@ async def test_mm_turn_closes_with_opener_and_nodes(runtime):
     assert cm.active_turn_id is None
 
 
+async def test_claim_failure_rolls_back_turn_before_agent_runs(runtime):
+    agent, backend, mm = runtime
+    session_id = agent._context_manager.active_session_id
+    async with mm._transaction() as db:
+        await db.execute(
+            "CREATE TRIGGER reject_claim BEFORE UPDATE OF state ON mm_deliveries "
+            "WHEN NEW.state='processing' BEGIN SELECT RAISE(ABORT, 'claim failed'); END"
+        )
+    request = await send(mm)
+    await mm.dispatch_pending()
+    (failed,) = await mm.get_deliveries(request.message_id)
+    assert failed.state == DeliveryState.FAILED and failed.error == "claim failed"
+    assert (failed.attempts, failed.turn_id, failed.consumed_node_id) == (0, None, None)
+    assert await backend.list_turns("agent", session_id, None, 50) == []
+    assert agent._context_manager.active_turn_id is None
+    assert await mm.get_replies(request.message_id) == ()
+
+    async with mm._transaction() as db:
+        await db.execute("DROP TRIGGER reject_claim")
+    await mm.retry(failed.delivery_id)
+    await mm.dispatch_pending()
+    (completed,) = await mm.get_deliveries(request.message_id)
+    assert completed.state == DeliveryState.COMPLETED and completed.attempts == 1
+
+
 async def test_failed_zero_node_turn_releases_queue(runtime):
     agent, backend, mm = runtime
     head = agent._context_manager.active_head.id

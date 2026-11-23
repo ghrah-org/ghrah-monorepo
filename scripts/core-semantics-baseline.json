@@ -43,7 +43,6 @@
       "ghrah/ability/permissions/fs_permissions.py": 2,
       "ghrah/ability/scheme/host.py": 7,
       "ghrah/chat/format/__init__.py": 1,
-      "ghrah/communication/message_manager.py": 1,
       "ghrah/core/read/ability_catalog.py": 5,
       "ghrah/core/unit.py": 2
     },
@@ -62,7 +61,9 @@
       "ghrah/ability/surface/search.py": 2,
       "ghrah/agents/base.py": 4,
       "ghrah/communication/mailbox_reader.py": 4,
-      "ghrah/communication/message_manager.py": 9,
+      "ghrah/communication/message_manager.py": 6,
+      "ghrah/communication/sqlite_message_store.py": 2,
+      "ghrah/communication/storage.py": 1,
       "ghrah/core/read/ability.py": 2,
       "ghrah/core/read/ability_admin.py": 1,
       "ghrah/core/read/ability_catalog.py": 8,
@@ -74,8 +75,9 @@
     "room_id(s)": {
       "ghrah/ability/builtin/cluster/operations/send.py": 7,
       "ghrah/agents/base.py": 4,
-      "ghrah/communication/message_manager.py": 6,
+      "ghrah/communication/message_manager.py": 2,
       "ghrah/communication/router.py": 1,
+      "ghrah/communication/sqlite_message_store.py": 4,
       "ghrah/communication/supervisor.py": 6,
       "ghrah/core/room_protocol.py": 11
     },

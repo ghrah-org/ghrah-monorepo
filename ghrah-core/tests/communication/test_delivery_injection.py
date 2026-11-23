@@ -298,10 +298,13 @@ async def test_waiting_hitl_injection_consumes_only_after_approval(runtime, monk
     assert any(m.metadata.get("delivery_id") == incoming_id for m in node.messages_delta)
 
 
-@pytest.mark.parametrize("fault", ["closed", "head_changed", "input_changed", "missing_opener"])
+@pytest.mark.parametrize(
+    "fault", ["closed", "head_changed", "input_changed", "missing_opener", "new_attempt"]
+)
 async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
     from ghrah.chat.message import ChatMessage
     from ghrah.communication.message_manager import _AtomicDelivery
+    from ghrah.communication.storage import DeliveryExecution
     from ghrah.context.persistence import ContextChanges
 
     agent, backend, mm = runtime
@@ -326,7 +329,7 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
         messages.insert(0, ChatMessage.user("opener", metadata={"delivery_id": opener_id}))
     cm.add_messages(messages)
     node = cm.commit_iteration()
-    scope = _AtomicDelivery(mm, backend, opener_id, "agent", [], cm)
+    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
     scope.consumed_deliveries.add(input_id)
     async with mm._transaction() as db:
         if fault == "closed":
@@ -339,6 +342,10 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
         elif fault == "input_changed":
             await db.execute(
                 "UPDATE mm_deliveries SET turn_id=NULL WHERE delivery_id=?", (input_id,)
+            )
+        elif fault == "new_attempt":
+            await db.execute(
+                "UPDATE mm_deliveries SET attempts=attempts+1 WHERE delivery_id=?", (opener_id,)
             )
     changes = ContextChanges(
         agent_name="agent",
@@ -355,6 +362,7 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
 
 async def test_compact_commits_without_loading_or_consuming_injections(runtime):
     from ghrah.communication.message_manager import _AtomicDelivery
+    from ghrah.communication.storage import DeliveryExecution
     from ghrah.context.persistence import ContextChanges
 
     agent, backend, mm = runtime
@@ -370,7 +378,7 @@ async def test_compact_commits_without_loading_or_consuming_injections(runtime):
             (turn_id, opener_id),
         )
     compact = cm.commit_compact_node([])
-    scope = _AtomicDelivery(mm, backend, opener_id, "agent", [], cm)
+    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
     scope.consumed_deliveries.add(incoming.deliveries[0].delivery_id)
     changes = ContextChanges(
         agent_name="agent",

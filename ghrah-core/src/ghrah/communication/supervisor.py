@@ -29,7 +29,6 @@ from ghrah.communication.errors import (
 from ghrah.communication.message_manager import MessageKind, MessageManager
 from ghrah.communication.registry import AgentRegistry
 from ghrah.communication.router import MessageRouter
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.turn import RollbackTarget
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.exceptions import CommunicationTimeoutError
@@ -299,9 +298,7 @@ class SupervisorActor:
             ):
                 raise RegistryError("Agent ID is not declared in MessageManager")
             if persistence_factory is None:
-
-                def persistence_factory(config: AgentConfig) -> SqliteBackend:
-                    return SqliteBackend(self.message_manager.db_path)
+                persistence_factory = self.message_manager.context_backend
 
         if self._registry.exists(config.name):
             raise RegistryError(f"Agent already registered: {config.name}")
@@ -355,12 +352,9 @@ class SupervisorActor:
         # 有快照则 restore；仅无快照时初始化。任一步失败均 fail closed。
         try:
             if self.message_manager is not None:
-                backend = actor_handle._context_manager.persistence
-                if (
-                    not isinstance(backend, SqliteBackend)
-                    or backend.db_path.resolve() != self.message_manager.db_path
-                ):
-                    raise ValueError("Persistent messaging requires same-file SqliteBackend")
+                self.message_manager.validate_context_backend(
+                    actor_handle._context_manager.persistence
+                )
             recovery_mode = await self._prepare_agent_persistence(
                 actor_handle, config.effective_agent_id
             )

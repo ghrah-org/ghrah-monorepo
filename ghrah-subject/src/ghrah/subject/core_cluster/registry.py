@@ -548,9 +548,6 @@ def default_core_unit_factory(
                 raise ValueError("Project message database owner conflict")
             path = ProjectPaths.from_locator(locator).action_chain_db_path
             if existing is None:
-                async with SqliteBackend(path) as backend:
-                    # 打开连接即完成 schema 初始化；无需加载任何 checkpoint。
-                    await backend.has_checkpoint("bootstrap")
                 manager = MessageManager(
                     path,
                     project_id=project_id,
@@ -558,7 +555,7 @@ def default_core_unit_factory(
                     session_routing=True,
                     allow_persisted_agents=True,
                 )
-                await manager.open()
+                await manager.open(prepare_context=True)
                 if room_projector is not None:
                     manager.configure_room_projector(room_projector)
                 existing = (locator, manager, set())
