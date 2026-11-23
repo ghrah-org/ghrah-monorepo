@@ -35,6 +35,87 @@
 
 ## 1. 系统定位与设计原则
 
+### 1.1 全景架构图
+
+下图按当前代码绘制，自上而下是依赖方向：上层调用下层，同一层之间不互相调用。点击卡片可跳到对应章节。
+
+```arch
+@title ghrah 总体架构
+@layer 接入层 ghrah-observer-webui
+@group 观察端 | Vue 3 SPA · 16 个 Pinia store
+@card Web 控制台 | Agent / Session / ActionChain 可视化 #124-16-个-pinia-store
+@card 命令面 + 事件面 | WS 发命令 · 收 core:* 事件 #122-命令面与事件面
+@card 读通量 | agents → sessions → branches → history #123-四层读通量瀑布
+@card REST 管理面 | 模板 / 媒体 / 产物 三组 #125-rest-三组
+@group 配套包
+@card protocol | TS 契约镜像 · 161 快照 #37-wire-与-ts-的对齐
+@card observer-core | client · stores · 同步 #124-16-个-pinia-store
+@card VSCode 扩展 | 打开 dashboard webview #127-四库包与-vscode-扩展
+@card mock-server | 本地开发用的契约替身 #127-四库包与-vscode-扩展
+@layer 效果半区 ghrah-subject
+@group 对外接口 | 由 unit 挂载
+@card WS /ws | 命令 + 事件 · EventBus 环形 1000 #55-ws-端点健康检查与-eventbus
+@card REST /api/v1 | health · meta · 业务路由 #55-ws-端点健康检查与-eventbus
+@group 业务域 | 项目组织与外部世界
+@card Project | Root 布局 · ProjectStore v6 #111-projectroot-布局projectstore-v6agentrecord
+@card Room | 消息发布 · 投影日志 · 四道闸 #112-room权威投影与四道闸
+@card Task | subject_tasks + 归因内核 #113-task两套存储零跨写
+@card Workspace | 登记语义 · 零物理写 #114-workspace登记语义零物理写
+@card 附件 / 产物 | media_control · artifact_control #115-附件与产物
+@group 管理面 | REST unit
+@card 能力管理 | 包 / 版本 / 授权 / 导入 #35-rest-资源模块
+@card 模板管理 | agent_templates · TPL-01..08 #101-模板库agent_templatesavailable_members
+@card Agent 管理 | 创建 / 启停 / 删除 / 模型 #103-七条装配接口
+@group 运行时宿主
+@card Unit 挂载 | coexistence 6 · full 20 #52-builtin-unit-全表
+@card 命令路由 | 79 条命令 #54-命令面79-条
+@card Core 装配 | 每项目一个 CorePort #43-作用域模型
+@card 启动授权 | GrantPolicy → 启动核定 #93-启动提交链
+@card 恢复对账 | 三层期望 · reconcile #142-subject-对账一次性执行--命令触发
+@layer 契约层 ghrah-protocol
+@group 进程内端口 | 两个 Protocol
+@card CorePort | 57 条作用域接口 · 10 分组 #42-清单规模57--8
+@card CoreCatalogPort | 8 条无作用域目录接口 #42-清单规模57--8
+@card Interface 三件套 | Registry · Runtime · invoke 四步 #32-接口骨架与一次调用的四步
+@group wire 契约
+@card Envelope + Payloads | CommandType 108 · payloads 180 #33-wire-面计数
+@card 错误族 | Problem 16 码 #45-错误族
+@card REST 资源模块 | ability_tree / ability_control / agent_control #35-rest-资源模块
+@layer 认知半区 ghrah-core
+@group Agent 运行时
+@card ActorAgent | 驱动循环 · 每轮刷新工具面与技能目录 #66-三个入口supervisor--actoragent--agentbuilder
+@card Supervisor | spawn / terminate / 集群成员 #66-三个入口supervisor--actoragent--agentbuilder
+@card 装配 | AgentAssemblySpec v3 → 实例 #104-创建线
+@group 上下文系统
+@card ActionChain | 节点 / 会话 / 分支 #71-对象模型与不变量
+@card SessionRuntime | 单 Session 内存聚合 #72-sessionruntime
+@card ContextManager | 七步提交 · 压缩 · 窗口 #73-contextmanager-的七步提交
+@card SqliteBackend | 7 表 v3 · 单写侧 #74-sqlitebackend7-表-v3read_onlybegin-immediate
+@group 能力系统
+@card 定义面 | ability.yaml v2 · members 数组 #81-定义面-v2members-数组与-datapath
+@card 执行 | executor · Hook · HITL #84-执行localabilityexecutor-八步
+@card 工具面 | static / progressive · 5 个元工具 #86-工具面toolsurfaceruntime
+@card 技能面 | skill_reminder · read 地址 #86-工具面toolsurfaceruntime
+@card 内置包 | 6 包 · 28 成员 #82-内置包与预装包
+@group 接口实现
+@card CoreUnit | 31 条命令 #61-coreunit-与-34-字段配置
+@card CoreFacade | 57 条接口的收敛点 #64-corefacade--corecatalog-与-57--8
+@card RuntimeRegistry | 每项目 CoreUnit 的注册与注入 #63-runtimeregistry-的注入点
+@layer 数据底座
+@group 链 + 能力关系库 | 每 Project db/action-chains.sqlite3
+@card 链 7 表 | 节点 / 会话 / 分支 / 消息 #74-sqlitebackend7-表-v3read_onlybegin-immediate
+@card ability_* 8 表 | 版本 · 内容 · 授权 · 绑定 · 变更 #92-能力关系库-schema-v5
+@group 实例快照库 | 每 Project db/agents.sqlite3
+@card agent_instances | 配置 · 成员定义态 · axes #91-三库三权威
+@group 全局业务库 | data/subject.db
+@card agent_templates | available_members #101-模板库agent_templatesavailable_members
+@card 项目 / Room / Task | ProjectStore v6 等 #111-projectroot-布局projectstore-v6agentrecord
+@group 外部依赖
+@card LLM 端点 | agentconf 库解析 #61-coreunit-与-34-字段配置
+@card 安装根 | <ns>/<name>/<version>/ · 启动期提交来源 #83-扫描漂移与启动提交
+@card MCP 服务器 | mcp_call · 快照包 #82-内置包与预装包
+@note 可选组件（未发布、不在主链上）：ghrah-kernel · ghrah-plugin · ghrah-taskstore · ghrah-scheme
+```
 ### 1.1 两半区、契约与可选组件
 
 ghrah 是一个多 Agent 运行时。它被切成两个半区，两半区之间只共享契约，不共享内存：
@@ -51,11 +132,11 @@ ghrah 是一个多 Agent 运行时。它被切成两个半区，两半区之间�
 
 「可选」是装配事实而不是措辞：`ghrah-kernel`、`ghrah-plugin`、`ghrah-taskstore`、`ghrah-scheme` 都没有发布通道（`publish.yml` 白名单只含 core / protocol / subject 与两个 npm 包、一个 VSCode 扩展）；`ghrah-scheme` 还是显式 extra，默认安装不引入。`ghrah-kernel` 的 `[agent]` extra 才依赖 `ghrah-core`，基础安装只依赖 `cbor2`。
 
-### 1.2 数据底座：项目内三库
+### 1.3 数据底座：项目内三库
 
 系统的持久化底座是「三库三权威」：两个库在每个 Project Root 内，一个是全局库。`db/action-chains.sqlite3` 的 `ability_*` 表存能力关系与授权，`db/agents.sqlite3` 的 `agent_instances` 存实例配置与成员快照，全局 `subject.db.agent_templates` 存模板成员申请；三者写路径互不重叠，详见 §9。运行期只读这些库与已提交字节，安装目录只是启动期的提交来源。
 
-### 1.3 五条设计原则
+### 1.4 五条设计原则
 
 | 原则 | 含义 | 在代码里的落点 |
 | --- | --- | --- |
@@ -67,24 +148,22 @@ ghrah 是一个多 Agent 运行时。它被切成两个半区，两半区之间�
 
 「接口」是本文的统一叫法。旧文档里的能力清单类型已经并入 `Interface`；唯一保留的 `capability` 字样是错误载荷字段 `Problem.capability`，它是 wire 兼容名，不代表还有第二套概念（§3、§4）。
 
-### 1.4 宏观形状
+### 1.5 三条调用路径
 
-```mermaid
-flowchart LR
-  OBS[Observer<br/>Vue SPA / VSCode] -->|WS /ws + REST /api/v1| SUB[Subject units]
-  SUB -->|CORE_PORT 57 条接口| PORT[CoreFacade]
-  SUB -->|CORE_CATALOG 8 条接口| CAT[CoreCatalog]
-  PORT --> CORE[CoreUnit / 上下文 / 能力执行]
-  CAT --> CORE
-  CORE --> DB1[(action-chains.sqlite3<br/>链 + ability_*)]
-  CORE --> DB2[(agents.sqlite3<br/>agent_instances)]
-  SUB --> DB3[(subject.db<br/>projects / agent_templates)]
-  SUB --> DB4[(Project Root<br/>tasks / rooms / 附件 / 产物)]
+上图是静态分层；一次真实交互只走三条路径，各自的契约类型不同：
+
+```arch
+@title 一次交互经过的三条路径
+@layer 路径一 Observer → Subject | wire 契约（跨网络）
+@wide WS /ws 发命令 · 收 core:* 事件；REST /api/v1 走管理面 #122-命令面与事件面
+@layer 路径二 Subject → Core | 进程内端口契约（不经过网络）
+@wide CorePort 57 条（按项目作用域）· CoreCatalogPort 8 条（无作用域） #43-作用域模型
+@layer 路径三 Core → 持久层 | 单写侧
+@wide ContextManager 写链 · AbilityAccessStore 写授权 · AgentInstanceStore 写快照 #131-权威清单
+@note 读侧一律经端口回读：LedgerUnit 读链只调 port.sessions.history，不自开数据库 #132-链历史只经-coreport
 ```
 
-三条路径要分清：Observer 到 Subject 是 **wire 契约**（WS + REST）；Subject 到 Core 是 **进程内端口契约**（`CorePort` / `CoreCatalogPort`，不经过网络）；Core 到持久层是**单写侧**（§13）。`ghrah-scheme` 不在主链上，运行期不读它的树。
-
-### 1.5 术语：接口 vs 能力包
+### 1.6 术语：接口 vs 能力包
 
 | 术语 | 指什么 | 不指什么 |
 | --- | --- | --- |
@@ -193,6 +272,30 @@ TS 生成物 5 个，全部由 `scripts/export_ability_contracts.py` 从 Python 
 `ghrah-kernel`、`ghrah-plugin`、`ghrah-taskstore`、`ghrah-scheme`、`@ghrah/plugin-registry`、`@ghrah/mock-server` 不在白名单内。后果：`ghrah-protocol` 发布物会传递依赖一个没有发布通道的 `ghrah-plugin`（§16.7）。
 
 ## 3. 协议层：ghrah-protocol
+
+```arch
+@title 协议层的两块契约
+@layer 端口契约 | 模块之间怎么互相调用（进程内）
+@group 三个抽象
+@card Interface | 名字 + 请求信封 + 出参 #32-接口骨架与一次调用的四步
+@card InterfaceRegistry | 57 + 8 条的登记表 #32-接口骨架与一次调用的四步
+@card InterfaceRuntime | 查表 → 校验 → 转交 → 校出参 #32-接口骨架与一次调用的四步
+@group 两个端口 Protocol
+@card CorePort | 作用域接口 · 每项目一个实例 #42-清单规模57--8
+@card CoreCatalogPort | 无作用域目录接口 #42-清单规模57--8
+@card 视图 DTO | views/core.py · AgentAssemblySpec 等 #33-wire-面计数
+@layer wire 契约 | Observer 与 Subject 之间怎么说话（跨网络）
+@group 消息形状
+@card Envelope | 信封 + CommandType 108 #33-wire-面计数
+@card Payloads | 180 个载荷符号 #33-wire-面计数
+@card 路由分组 | 7 persist · 10 manifest（无 owner） #34-路由分组常量
+@group 错误与 REST
+@card Problem | 16 个错误码 · capability 字段兼容保留 #45-错误族
+@card REST 资源模块 | ability_tree · ability_control · agent_control #35-rest-资源模块
+@group TS 对齐
+@card packages/protocol | 5 个生成物 · 161 快照 #37-wire-与-ts-的对齐
+@note 没有全局 wire 版本常量：每个 payload 自带 format 字面量 #36-没有全局-wire-版本
+```
 
 ### 3.1 两条契约：端口契约 vs wire 契约
 
@@ -309,6 +412,32 @@ Observer 的 HTTP 契约按资源拆成四个 Python 模块，TS 侧由生成器
 
 ## 4. 接口化端口（跨模块唯一通道）
 
+```arch
+@title 接口化端口：声明 → 装配 → 调用
+@layer 声明 | ghrah-protocol
+@group CORE_INTERFACES · 57 条 | 10 个分组
+@card abilities | 13 条 · 含 write_grant / write_revoke #42-清单规模57--8
+@card agents | 16 条 · 含 config / 5 条装配 / update_model #42-清单规模57--8
+@card sessions | 8 条 #42-清单规模57--8
+@card mailbox | 6 条 #42-清单规模57--8
+@card branches | 5 条 #42-清单规模57--8
+@card deliveries · messages | 3 + 3 条 #42-清单规模57--8
+@card nodes · rooms · manifests | 1 + 1 + 1 条 #42-清单规模57--8
+@group CORE_CATALOG_INTERFACES · 8 条 | 无作用域
+@card 包目录 | packages / package_detail / version_profile #42-清单规模57--8
+@card shell | validate_allow · builtin_rules #42-清单规模57--8
+@card 导入 | package_import · package_mcp_probe #42-清单规模57--8
+@layer 装配 | 每项目一次
+@group 组装顺序
+@card RuntimeRegistry | 构造校验：接口与处理器必须齐全 #44-装配与生命周期
+@card build_core_port | 装配作用域门面 #44-装配与生命周期
+@card build_core_catalog | 装配目录门面 #44-装配与生命周期
+@card CorePorts.for_project | 按项目懒建 · 作用域构造期固定 #43-作用域模型
+@layer 调用 | 一条接口的四步
+@wide 查表 → 校验入参 → 转交处理器 → 校验出参并强制 JSON #32-接口骨架与一次调用的四步
+@note 边界闸门：AST ratchet 基线 25 条，只降不升 #46-边界-ratchet25-条基线
+```
+
 ### 4.1 为什么用端口而不是 HTTP 语义
 
 两个半区在**同一进程**内通信，没有网络。HTTP 语义在进程内的成本是纯编码开销：路径模板编译与匹配、请求头解析、状态码映射；它的表达力没有一项是 HTTP 独有的。
@@ -419,6 +548,31 @@ Observer 的 HTTP 契约按资源拆成四个 Python 模块，TS 侧由生成器
 端口协议、视图、错误基类、注入键住在 `ghrah-protocol`，实现住在 `ghrah-core` / `ghrah-subject`。这样 Subject 只 import 契约包就能调用 Core，mypy 也能在「实现缺方法」时失败。若把协议放进 core，Subject 必须 import core，边界立刻崩塌。
 
 ## 5. Subject 运行时（效果半区）
+
+```arch
+@title Subject 运行时：unit 如何挂载并对外服务
+@layer 单元模型
+@card SubjectUnit | 四契约 · 四条硬约束 #51-单元四契约与硬约束
+@card mount_unit | 插件化挂载 · 逐个等 ACTIVE #53-挂载三步与-ctx-四语义
+@card ctx | provide / get / on / serial #53-挂载三步与-ctx-四语义
+@layer coexistence 6 个 | 默认就挂
+@card sandbox | 工作区沙箱 #52-builtin-unit-全表
+@card ledger | 链历史只读投影 · 经 CORE_PORT #52-builtin-unit-全表
+@card workspace | 工作区登记 #52-builtin-unit-全表
+@card taskstore · task · desired_state | 归因内核 + 任务 + 期望态 #52-builtin-unit-全表
+@layer full 再加 14 个 | 含可选 room_filter
+@card 对外端点 | websocket_observer_endpoint #55-ws-端点健康检查与-eventbus
+@card Core 装配 | core_cluster_registry · 每项目一个 CoreUnit #53-挂载三步与-ctx-四语义
+@card 预装能力 | shipped_abilities #52-builtin-unit-全表
+@card REST 管理 | project / ability / agent_template / agent / agentconf / media / artifact control #35-rest-资源模块
+@card 业务域 | project · room · recovery #111-projectroot-布局projectstore-v6agentrecord
+@card 可选 | room_filter #112-room权威投影与四道闸
+@layer 对外服务
+@card WS /ws | 命令 79 条 + 事件 #54-命令面79-条
+@card REST /api/v1 | health · meta · 业务路由 #55-ws-端点健康检查与-eventbus
+@card CORS / token | GHRAH_SUBJECT_OBSERVER_HTTP_API_* #55-ws-端点健康检查与-eventbus
+@note 启动链 10 步：见 #56-启动链10-步
+```
 
 ### 5.1 单元四契约与硬约束
 
@@ -537,6 +691,27 @@ Observer 的 HTTP 契约按资源拆成四个 Python 模块，TS 侧由生成器
 
 ## 6. Core 认知半区
 
+```arch
+@title Core 认知半区：一个项目一个 CoreUnit
+@layer 入口
+@card CoreUnit | 31 条命令的分发器 #61-coreunit-与-34-字段配置
+@card CoreUnitConfig | 34 个注入字段 #61-coreunit-与-34-字段配置
+@card RuntimeRegistry | 按项目创建 / 缓存 / 停止单元 #63-runtimeregistry-的注入点
+@layer 接口实现
+@card CoreFacade | 57 条接口的收敛点 #64-corefacade--corecatalog-与-57--8
+@card CoreCatalog | 8 条目录接口 #64-corefacade--corecatalog-与-57--8
+@card handlers | 10 个分组模块 #64-corefacade--corecatalog-与-57--8
+@layer 运行时部件
+@card Supervisor | 集群成员 · spawn / terminate #66-三个入口supervisor--actoragent--agentbuilder
+@card ActorAgent | 驱动循环 #66-三个入口supervisor--actoragent--agentbuilder
+@card AgentBuilder | 装配 Agent 实例 #66-三个入口supervisor--actoragent--agentbuilder
+@card 能力关系库 | ability_store · 启动期建库 #63-runtimeregistry-的注入点
+@card 实例快照库 | agent_instances_path #63-runtimeregistry-的注入点
+@layer 反向通道
+@wide Core → Subject：HostCommandBridge / ScopedHostCommandPort #65-core--subject-反向通道
+@note 已知漂移：_COMMANDS 31 条 vs CORE_COMMANDS 22 条 #62-命令面31-条-vs-22-条的漂移
+```
+
 ### 6.1 `CoreUnit` 与 34 字段配置
 
 `CoreUnit`（`ghrah-core/src/ghrah/core/unit.py`）是 Core 的挂载形态。它不 import Subject 与 Ouroboros，只按鸭子类型提供 `meta` / `init` / `start` / `stop` / `handle_command` / `handle_event`；事件经 `UnitEventPublisher` 以 `core:{event_type}` 发出，避免与 Subject / Observer 域事件冲突。
@@ -608,6 +783,25 @@ Observer 的 HTTP 契约按资源拆成四个 Python 模块，TS 侧由生成器
 Agent 的**自动拉起不在 Core**：Core 只负责「被要求时拉起/停止」，重启后该不该跑由 Subject 的期望态对账决定（§14）。这是「进程活着 ≠ agent 该活着」的分工。
 
 ## 7. 上下文系统：ActionChain / Session / Branch
+
+```arch
+@title 上下文系统：对象 → 内存聚合 → 提交 → 持久化
+@layer 对象模型 | 三种节点
+@card ActionSession | 会话 #71-对象模型与不变量
+@card ActionBranch | 分支 · Head 唯一持有者 #71-对象模型与不变量
+@card ContextNode | 一次迭代的记录 #71-对象模型与不变量
+@layer 内存聚合
+@card SessionRuntime | create / restore / commit_node / 拓扑校验 #72-sessionruntime
+@layer 提交路径 | 唯一写侧
+@card ContextManager | 七步提交 · 迭代状态 · 窗口 #73-contextmanager-的七步提交
+@card 压缩 | 决策 / 提交 / 观测 三段 #75-压缩三段
+@layer 持久化
+@card SqliteBackend | 7 表 v3 · BEGIN IMMEDIATE · read_only 开关 #74-sqlitebackend7-表-v3read_onlybegin-immediate
+@card PersistenceBackend | 协议 + 另外两个后端 #74-sqlitebackend7-表-v3read_onlybegin-immediate
+@layer 读侧
+@wide ChainReadStore(*, agent_id) · head / history / branches #76-读侧-chainreadstore
+@note 恢复与校验是同一段代码，没有第二条路径 #71-对象模型与不变量
+```
 
 ### 7.1 对象模型与不变量
 
@@ -727,6 +921,26 @@ Agent 的**自动拉起不在 Core**：Core 只负责「被要求时拉起/停�
 持久层分区键是 `agent_id`（稳定 id），不是显示名。`project_id` 在更外层由端口实例承担，不出现在读侧签名里——这是作用域模型的一部分（§4.3）。
 
 ## 8. 能力系统
+
+```arch
+@title 能力系统：定义 → 执行 → 工具面 / 技能面
+@layer 定义面
+@card ability.yaml v2 | members 成员记录数组 #81-定义面-v2members-数组与-datapath
+@card 内置包 | 6 包 · 28 成员 #82-内置包与预装包
+@card 预装包 | ghrah.project_agent_manage #82-内置包与预装包
+@layer 启动提交 | 装载的唯一入口
+@wide capture → commit_version → select_instance → write_grant #83-扫描漂移与启动提交
+@layer 成员与执行
+@card Member | 身份六字段 · axes{visible, bind} #87-成员实体member
+@card LocalAbilityExecutor | 八步 · 并行 · 取消 #84-执行localabilityexecutor-八步
+@card Hook | 三层 · 无短路 #85-hook-三层hitl-与熔断
+@card HITL | promise_id · 超时熔断 #85-hook-三层hitl-与熔断
+@layer 模型可见面
+@card 工具面 | ToolSurfaceRuntime · static / progressive #86-工具面toolsurfaceruntime
+@card 元工具 | search · describe · execute · bind · unbind #86-工具面toolsurfaceruntime
+@card 技能面 | skill_reminder · 每轮注入 · read 地址 #86-工具面toolsurfaceruntime
+@note 硬边界：运行期不读安装目录 #88-运行期不读安装目录
+```
 
 ### 8.1 定义面 v2：`members` 数组与 `data.path`
 
@@ -853,6 +1067,25 @@ HITL 的固定步骤：
 
 ## 9. 成员、授权与数据底座
 
+```arch
+@title 数据底座：三库三权威
+@layer 能力关系库 | 每 Project db/action-chains.sqlite3 · schema v5
+@card ability_versions | 已提交定义 · 按 digest 不可变 #92-能力关系库-schema-v5
+@card ability_content | 正文 / 附件 / 脚本的字节 blob #92-能力关系库-schema-v5
+@card ability_instances | 包级版本槽 #92-能力关系库-schema-v5
+@card ability_agents · grants | Agent 修订 · 逐 Agent 授权 #92-能力关系库-schema-v5
+@card ability_tools | 常驻工具选择（启动核定 / 管理面写） #96-绑定双写
+@card ability_changes | 变更审计 #92-能力关系库-schema-v5
+@card ability_registrations | 启动独占占位 #93-启动提交链
+@layer 实例快照库 | 每 Project db/agents.sqlite3
+@card agent_instances | config · members（定义态 + axes） #91-三库三权威
+@layer 全局业务库 | data/subject.db
+@card agent_templates | available_members · 只申请 #91-三库三权威
+@layer 读取路径 | 只读库，不碰安装目录
+@wide surface_snapshot → view → resolve / resolve_address → read_chunk → authorize #94-读取路径
+@note 绑定轴权威在快照 axes.bind；ability_tools 是工具投影 #96-绑定双写
+```
+
 ### 9.1 三库三权威
 
 | 库 | 位置 | 权威内容 | 不负责 |
@@ -950,6 +1183,26 @@ HITL 的固定步骤：
 | 退化身份包两段名 | `identity.name` 省略时，定义面给两段成员名（`research.research`），模板/快照给三段；Core 在解析、安装记录、绑定集合比较三处按等价形态兼容。这是兼容层，不是新约定 |
 
 ## 10. Agent 模板与实例化
+
+```arch
+@title 模板 → 装配 → 实例 → 恢复
+@layer 模板库 | subject.db.agent_templates
+@card available_members | 身份六字段 · 三段全名 #101-模板库agent_templatesavailable_members
+@card 六组配置 | model · prompt · context_policy · 权限 · 路径 #101-模板库agent_templatesavailable_members
+@card 列迁移 | ability_request → available_members（启动时幂等） #106-迁移
+@layer 渲染 | Subject
+@card render_assembly | 模板 + initial_bindings → AgentAssemblySpec v3 #102-渲染agentassemblyspec-v3
+@card AgentAssemblyMember | 引用态 · 不含 data #102-渲染agentassemblyspec-v3
+@layer 装配接口 | CorePort · 7 条
+@card create_assembly | 补齐定义 → 写快照 → 启动 #103-七条装配接口
+@card start / stop / update / delete | 生命周期 #103-七条装配接口
+@card update_model · config | 模型与配置读取 #103-七条装配接口
+@layer 创建线 | Core
+@wide resolve_assembly → resolve_member_entities（补齐 data）→ agent_instances #104-创建线
+@layer 恢复 | 重启
+@wide 读快照成员 → 按身份重解析定义 → 按快照 axes 还原绑定 → 授权重核关系库 #105-恢复
+@note 不变式：记录存在 ⇒ 快照存在；授权只在关系库 #104-创建线
+```
 
 ### 10.1 模板库：`agent_templates.available_members`
 

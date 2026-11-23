@@ -42,6 +42,21 @@ _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 _SLUG_STRIP_RE = re.compile(r"[^\w\u4e00-\u9fff\- ]+")
 
+# 架构图块（```arch）的行语法：
+#   @title <图标题>
+#   @layer <层名>            —— 开始一个新层（层内可并列多个组，直到下一个 @layer）
+#   @group <组名>[ | <说明>] —— 层内开始一个组（卡片容器）
+#   @card <名字> | <说明> [#锚点] —— 组内一个卡片，可带跳转锚点
+#   @wide <名字> | <说明> [#锚点] —— 横跨整层的长条卡片
+#   @note <一句话>          —— 图底部的注释行（可用于说明可选组件等）
+_ARCH_LAYER_RE = re.compile(r"^@layer\s+(.+)$")
+_ARCH_GROUP_RE = re.compile(r"^@group\s+(.+)$")
+_ARCH_CARD_RE = re.compile(r"^(@card|@wide)\s+(.+)$")
+_ARCH_TITLE_RE = re.compile(r"^@title\s+(.+)$")
+_ARCH_NOTE_RE = re.compile(r"^@note\s+(.+)$")
+_ARCH_PARTS_RE = re.compile(r"\s*\|\s*")
+_ARCH_ANCHOR_RE = re.compile(r"#([\w\u4e00-\u9fff\-]+)\s*$")
+
 _CSS = """
 :root{
   --bg:#eef1f6; --panel:#fff; --ink:#151b2c; --ink-2:#4b5563; --ink-3:#8b93a1;
@@ -62,6 +77,8 @@ code{font-family:"Consolas","Menlo",ui-monospace,monospace;font-size:12.5px;
   transition:transform .22s ease}
 body.nav-collapsed .sidebar{transform:translateX(-100%)}
 body.nav-collapsed .main{margin-left:0}
+body.arch-print .sidebar,body.arch-print .toggle{display:none}
+body.arch-print .main{margin-left:0;max-width:none;padding:16px}
 .brand{padding:20px;border-bottom:1px solid var(--line)}
 .brand .mk{width:30px;height:30px;border-radius:9px;margin-bottom:9px;
   background:linear-gradient(135deg,#1b2c6e 0%,#2b5fd9 100%);
@@ -97,6 +114,41 @@ pre code{background:none;color:inherit;padding:0;font-size:inherit}
 pre.diagram{background:#f7f9fc;color:var(--ink);border:1px solid var(--line)}
 pre.diagram::before{content:"图（Mermaid 源）";display:block;font-size:11.5px;
   color:var(--ink-3);margin-bottom:8px;font-family:inherit}
+.arch{margin:22px 0 26px;background:var(--panel);border:1px solid var(--line);
+  border-radius:16px;padding:18px 18px 20px;box-shadow:0 8px 26px rgba(27,44,110,.07);
+  overflow-x:auto}
+.arch-title{text-align:center;font-size:16px;font-weight:700;color:var(--navy);
+  margin:0 0 12px}
+.arch-layer{border:1px solid #d6dcea;border-radius:14px;padding:12px;margin-top:12px;
+  background:linear-gradient(180deg,#f4f7fc 0%,#fbfcfe 100%)}
+.arch-layer:first-of-type{margin-top:0}
+.arch-layer-title{text-align:center;font-size:14.5px;font-weight:700;color:var(--navy);
+  margin:0 0 10px}
+.arch-layer-title .n{display:inline-block;min-width:20px;height:20px;line-height:20px;
+  margin-right:7px;border-radius:6px;background:var(--accent-weak);color:var(--accent);
+  font-size:12px;vertical-align:1px}
+.arch-row{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch}
+.arch-group{flex:1 1 240px;min-width:220px;border:1px solid #dfe4ee;border-radius:12px;
+  background:#fff;padding:12px;display:flex;flex-direction:column;gap:8px}
+.arch-group-title{text-align:center;font-size:13.5px;font-weight:700;color:var(--ink);
+  margin:0}
+.arch-group-desc{text-align:center;font-size:12px;color:var(--ink-3);margin:-4px 0 2px}
+.arch-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.arch-cards.one{grid-template-columns:1fr}
+/* 只有一张普通卡片的组：不要拉伸成整行，保持与多卡片一致的宽度。 */
+.arch-group.solo .arch-cards{grid-template-columns:repeat(auto-fit,minmax(150px,260px));
+  justify-content:center}
+.arch-group.solo .arch-card{grid-column:auto}
+.arch-card{display:block;border:1px solid #e3e7f0;border-radius:10px;background:#f8fafd;
+  padding:8px 10px;text-align:center;color:inherit}
+.arch-card:hover{border-color:var(--accent);background:var(--accent-weak);
+  text-decoration:none}
+.arch-card .nm{display:block;font-size:13px;font-weight:600;color:var(--ink);
+  line-height:1.4}
+.arch-card .ds{display:block;font-size:11.5px;line-height:1.5;color:var(--ink-2);
+  margin-top:3px}
+.arch-wide{grid-column:1 / -1}
+.arch-note{font-size:12px;color:var(--ink-3);text-align:center;margin:10px 0 0}
 table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px;
   background:var(--panel);border-radius:var(--radius);overflow:hidden}
 th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
@@ -127,6 +179,15 @@ _JS = """
     });
   }
   var heads=[].slice.call(document.querySelectorAll('h2[id],h3[id]'));
+  if(location.search.indexOf('arch=1')>=0){
+    // 分享/截图模式：只看图。保留全部 arch 图，去掉正文其余部分。
+    document.body.classList.add('arch-print');
+    [].slice.call(document.querySelectorAll('.main > *')).forEach(function(el){
+      if(el.tagName==='FIGURE' && el.classList.contains('arch')){return;}
+      el.parentNode.removeChild(el);
+    });
+    return;
+  }
   if(heads.length && 'IntersectionObserver' in window){
     var links={};
     items.forEach(function(a){ links[a.getAttribute('href')]=a; });
@@ -223,6 +284,136 @@ def _cells(line: str) -> list[str]:
     return [part.strip().replace("\\|", "|") for part in parts]
 
 
+def _arch_split(text: str) -> tuple[str, str, str]:
+    """拆解 `名字 | 说明 #锚点`，缺省部分返回空串。
+
+    说明段已做过 ``strip``，锚点的 ``#`` 可能落在段首，因此锚点既认「段首」
+    也认「空白之后」，避免把 ``#xxx`` 当成可见文字渲染出来。
+    """
+
+    parts = _ARCH_PARTS_RE.split(text.strip(), maxsplit=1)
+    name = parts[0].strip()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    def take_anchor(segment: str) -> tuple[str, str]:
+        """取段末的 ``#id`` 作锚点；它之前必须是空白或段首，避免误吃说明里的普通 #。"""
+
+        found = None
+        for candidate in _ARCH_ANCHOR_RE.finditer(segment):
+            found = candidate
+        if found is not None and (found.start() == 0 or segment[found.start() - 1].isspace()):
+            return segment[: found.start()].rstrip(), found.group(1)
+        return segment, ""
+
+    rest, anchor = take_anchor(rest)
+    if not anchor:
+        # 没有说明段的卡片（如 @wide）把锚点写在名字后面，名字段也要认。
+        name, anchor = take_anchor(name)
+    return name, rest, anchor
+
+
+def _arch_card(kind: str, text: str) -> str:
+    """渲染一个卡片；带锚点的卡片可点击跳到对应章节。"""
+
+    name, desc, anchor = _arch_split(text)
+    label = f'<span class="nm">{_inline(name)}</span>'
+    detail = f'<span class="ds">{_inline(desc)}</span>' if desc else ""
+    body = label + detail
+    wide = " arch-wide" if kind == "@wide" else ""
+    if anchor:
+        return f'<a class="arch-card{wide}" href="#{html.escape(anchor)}">{body}</a>'
+    return f'<div class="arch-card{wide}">{body}</div>'
+
+
+def _render_arch(block: list[str]) -> str:
+    """把 ``arch`` 图块渲染为分层卡片图（纯 HTML/CSS，无脚本、无外链）。
+
+    Args:
+        block: 围栏内的行（不含围栏本身）。
+
+    Returns:
+        图的 HTML 片段。
+    """
+
+    title = "架构图"
+    note = ""
+    layers: list[tuple[str, list[tuple[str, str, list[tuple[str, str]]]]]] = []
+    current_layer: list[tuple[str, str, list[tuple[str, str]]]] | None = None
+    current_group: tuple[str, str, list[tuple[str, str]]] | None = None
+
+    def open_group(name: str, desc: str) -> None:
+        nonlocal current_group, current_layer
+        if current_layer is None:
+            current_layer = []
+            layers.append(("", current_layer))
+        current_group = (name, desc, [])
+        current_layer.append(current_group)
+
+    for raw in block:
+        line = raw.strip()
+        if not line:
+            continue
+        found = _ARCH_TITLE_RE.match(line)
+        if found:
+            title = found.group(1).strip()
+            continue
+        found = _ARCH_NOTE_RE.match(line)
+        if found:
+            note = found.group(1).strip()
+            continue
+        found = _ARCH_LAYER_RE.match(line)
+        if found:
+            current_layer = []
+            layers.append((found.group(1).strip(), current_layer))
+            current_group = None
+            continue
+        found = _ARCH_GROUP_RE.match(line)
+        if found:
+            name, desc, _ = _arch_split(found.group(1))
+            open_group(name, desc)
+            continue
+        found = _ARCH_CARD_RE.match(line)
+        if found:
+            kind, rest = found.group(1), found.group(2)
+            if current_group is None:
+                open_group("", "")
+            current_group[2].append((kind, rest))  # type: ignore[index]
+            continue
+        raise SystemExit(f"arch 图块有不认识的行：{line!r}")
+
+    out = [f'<figure class="arch"><figcaption class="arch-title">{_inline(title)}</figcaption>']
+    for index, (layer_name, groups) in enumerate(layers, start=1):
+        heading = ""
+        if layer_name:
+            heading = (
+                f'<div class="arch-layer-title"><span class="n">{index}</span>'
+                f"{_inline(layer_name)}</div>"
+            )
+        out.append(f'<section class="arch-layer">{heading}<div class="arch-row">')
+        for name, desc, cards in groups:
+            body = ""
+            if cards:
+                # 长条卡片（@wide）独占一行；只有一张普通卡片时收窄居中，避免拉伸成整行。
+                items = "".join(_arch_card(kind, text) for kind, text in cards)
+                body = f'<div class="arch-cards">{items}</div>'
+            solo = " solo" if len(cards) == 1 and cards[0][0] != "@wide" else ""
+            title_html = f'<div class="arch-group-title">{_inline(name)}</div>' if name else ""
+            desc_html = f'<div class="arch-group-desc">{_inline(desc)}</div>' if desc else ""
+            out.append(f'<div class="arch-group{solo}">{title_html}{desc_html}{body}</div>')
+        out.append("</div></section>")
+    if note:
+        # 注释行同样支持段末 #锚点：剥掉文字并渲染成可点击链接。
+        note_text, _, note_anchor = _arch_split(note)
+        link = (
+            f' <a href="#{html.escape(note_anchor)}">详见 §{note_anchor.split("-")[0]}</a>'
+            if note_anchor
+            else ""
+        )
+        out.append(f'<div class="arch-note">{_inline(note_text)}{link}</div>')
+    out.append("</figure>")
+    return "\n".join(out)
+
+
 def render(markdown: str) -> tuple[str, list[tuple[int, str, str]]]:
     """把 Markdown 渲染为正文 HTML 与目录。
 
@@ -258,6 +449,9 @@ def render(markdown: str) -> tuple[str, list[tuple[int, str, str]]]:
                 block.append(lines[index])
                 index += 1
             index += 1
+            if language == "arch":
+                out.append(_render_arch(block))
+                continue
             css = "diagram" if language == "mermaid" else ""
             klass = f' class="{css}"' if css else ""
             out.append(f"<pre{klass}><code>{html.escape(chr(10).join(block))}</code></pre>")

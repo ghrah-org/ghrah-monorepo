@@ -24,6 +24,8 @@ code{font-family:"Consolas","Menlo",ui-monospace,monospace;font-size:12.5px;
   transition:transform .22s ease}
 body.nav-collapsed .sidebar{transform:translateX(-100%)}
 body.nav-collapsed .main{margin-left:0}
+body.arch-print .sidebar,body.arch-print .toggle{display:none}
+body.arch-print .main{margin-left:0;max-width:none;padding:16px}
 .brand{padding:20px;border-bottom:1px solid var(--line)}
 .brand .mk{width:30px;height:30px;border-radius:9px;margin-bottom:9px;
   background:linear-gradient(135deg,#1b2c6e 0%,#2b5fd9 100%);
@@ -59,6 +61,41 @@ pre code{background:none;color:inherit;padding:0;font-size:inherit}
 pre.diagram{background:#f7f9fc;color:var(--ink);border:1px solid var(--line)}
 pre.diagram::before{content:"图（Mermaid 源）";display:block;font-size:11.5px;
   color:var(--ink-3);margin-bottom:8px;font-family:inherit}
+.arch{margin:22px 0 26px;background:var(--panel);border:1px solid var(--line);
+  border-radius:16px;padding:18px 18px 20px;box-shadow:0 8px 26px rgba(27,44,110,.07);
+  overflow-x:auto}
+.arch-title{text-align:center;font-size:16px;font-weight:700;color:var(--navy);
+  margin:0 0 12px}
+.arch-layer{border:1px solid #d6dcea;border-radius:14px;padding:12px;margin-top:12px;
+  background:linear-gradient(180deg,#f4f7fc 0%,#fbfcfe 100%)}
+.arch-layer:first-of-type{margin-top:0}
+.arch-layer-title{text-align:center;font-size:14.5px;font-weight:700;color:var(--navy);
+  margin:0 0 10px}
+.arch-layer-title .n{display:inline-block;min-width:20px;height:20px;line-height:20px;
+  margin-right:7px;border-radius:6px;background:var(--accent-weak);color:var(--accent);
+  font-size:12px;vertical-align:1px}
+.arch-row{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch}
+.arch-group{flex:1 1 240px;min-width:220px;border:1px solid #dfe4ee;border-radius:12px;
+  background:#fff;padding:12px;display:flex;flex-direction:column;gap:8px}
+.arch-group-title{text-align:center;font-size:13.5px;font-weight:700;color:var(--ink);
+  margin:0}
+.arch-group-desc{text-align:center;font-size:12px;color:var(--ink-3);margin:-4px 0 2px}
+.arch-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.arch-cards.one{grid-template-columns:1fr}
+/* 只有一张普通卡片的组：不要拉伸成整行，保持与多卡片一致的宽度。 */
+.arch-group.solo .arch-cards{grid-template-columns:repeat(auto-fit,minmax(150px,260px));
+  justify-content:center}
+.arch-group.solo .arch-card{grid-column:auto}
+.arch-card{display:block;border:1px solid #e3e7f0;border-radius:10px;background:#f8fafd;
+  padding:8px 10px;text-align:center;color:inherit}
+.arch-card:hover{border-color:var(--accent);background:var(--accent-weak);
+  text-decoration:none}
+.arch-card .nm{display:block;font-size:13px;font-weight:600;color:var(--ink);
+  line-height:1.4}
+.arch-card .ds{display:block;font-size:11.5px;line-height:1.5;color:var(--ink-2);
+  margin-top:3px}
+.arch-wide{grid-column:1 / -1}
+.arch-note{font-size:12px;color:var(--ink-3);text-align:center;margin:10px 0 0}
 table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px;
   background:var(--panel);border-radius:var(--radius);overflow:hidden}
 th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
@@ -86,11 +123,12 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
   <nav class="nav">
 <a href="#ghrah-系统架构">ghrah 系统架构</a>
 <a href="#1-系统定位与设计原则">1. 系统定位与设计原则</a>
+<a href="#11-全景架构图" class="lv3">1.1 全景架构图</a>
 <a href="#11-两半区契约与可选组件" class="lv3">1.1 两半区、契约与可选组件</a>
-<a href="#12-数据底座项目内三库" class="lv3">1.2 数据底座：项目内三库</a>
-<a href="#13-五条设计原则" class="lv3">1.3 五条设计原则</a>
-<a href="#14-宏观形状" class="lv3">1.4 宏观形状</a>
-<a href="#15-术语接口-vs-能力包" class="lv3">1.5 术语：接口 vs 能力包</a>
+<a href="#13-数据底座项目内三库" class="lv3">1.3 数据底座：项目内三库</a>
+<a href="#14-五条设计原则" class="lv3">1.4 五条设计原则</a>
+<a href="#15-三条调用路径" class="lv3">1.5 三条调用路径</a>
+<a href="#16-术语接口-vs-能力包" class="lv3">1.6 术语：接口 vs 能力包</a>
 <a href="#2-仓库结构与包边界">2. 仓库结构与包边界</a>
 <a href="#21-七个-python-包" class="lv3">2.1 七个 Python 包</a>
 <a href="#22-ts-workspace" class="lv3">2.2 TS workspace</a>
@@ -247,6 +285,37 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>附录 B</td><td>按角色选读</td><td>不同读者从哪章开始</td></tr>
 </tbody></table>
 <h2 id="1-系统定位与设计原则">1. 系统定位与设计原则</h2>
+<h3 id="11-全景架构图">1.1 全景架构图</h3>
+<p>下图按当前代码绘制，自上而下是依赖方向：上层调用下层，同一层之间不互相调用。点击卡片可跳到对应章节。</p>
+<figure class="arch"><figcaption class="arch-title">ghrah 总体架构</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>接入层 ghrah-observer-webui</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">观察端</div><div class="arch-group-desc">Vue 3 SPA · 16 个 Pinia store</div><div class="arch-cards"><a class="arch-card" href="#124-16-个-pinia-store"><span class="nm">Web 控制台</span><span class="ds">Agent / Session / ActionChain 可视化</span></a><a class="arch-card" href="#122-命令面与事件面"><span class="nm">命令面 + 事件面</span><span class="ds">WS 发命令 · 收 core:* 事件</span></a><a class="arch-card" href="#123-四层读通量瀑布"><span class="nm">读通量</span><span class="ds">agents → sessions → branches → history</span></a><a class="arch-card" href="#125-rest-三组"><span class="nm">REST 管理面</span><span class="ds">模板 / 媒体 / 产物 三组</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">配套包</div><div class="arch-cards"><a class="arch-card" href="#37-wire-与-ts-的对齐"><span class="nm">protocol</span><span class="ds">TS 契约镜像 · 161 快照</span></a><a class="arch-card" href="#124-16-个-pinia-store"><span class="nm">observer-core</span><span class="ds">client · stores · 同步</span></a><a class="arch-card" href="#127-四库包与-vscode-扩展"><span class="nm">VSCode 扩展</span><span class="ds">打开 dashboard webview</span></a><a class="arch-card" href="#127-四库包与-vscode-扩展"><span class="nm">mock-server</span><span class="ds">本地开发用的契约替身</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>效果半区 ghrah-subject</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">对外接口</div><div class="arch-group-desc">由 unit 挂载</div><div class="arch-cards"><a class="arch-card" href="#55-ws-端点健康检查与-eventbus"><span class="nm">WS /ws</span><span class="ds">命令 + 事件 · EventBus 环形 1000</span></a><a class="arch-card" href="#55-ws-端点健康检查与-eventbus"><span class="nm">REST /api/v1</span><span class="ds">health · meta · 业务路由</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">业务域</div><div class="arch-group-desc">项目组织与外部世界</div><div class="arch-cards"><a class="arch-card" href="#111-projectroot-布局projectstore-v6agentrecord"><span class="nm">Project</span><span class="ds">Root 布局 · ProjectStore v6</span></a><a class="arch-card" href="#112-room权威投影与四道闸"><span class="nm">Room</span><span class="ds">消息发布 · 投影日志 · 四道闸</span></a><a class="arch-card" href="#113-task两套存储零跨写"><span class="nm">Task</span><span class="ds">subject_tasks + 归因内核</span></a><a class="arch-card" href="#114-workspace登记语义零物理写"><span class="nm">Workspace</span><span class="ds">登记语义 · 零物理写</span></a><a class="arch-card" href="#115-附件与产物"><span class="nm">附件 / 产物</span><span class="ds">media_control · artifact_control</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">管理面</div><div class="arch-group-desc">REST unit</div><div class="arch-cards"><a class="arch-card" href="#35-rest-资源模块"><span class="nm">能力管理</span><span class="ds">包 / 版本 / 授权 / 导入</span></a><a class="arch-card" href="#101-模板库agent_templatesavailable_members"><span class="nm">模板管理</span><span class="ds">agent_templates · TPL-01..08</span></a><a class="arch-card" href="#103-七条装配接口"><span class="nm">Agent 管理</span><span class="ds">创建 / 启停 / 删除 / 模型</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">运行时宿主</div><div class="arch-cards"><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">Unit 挂载</span><span class="ds">coexistence 6 · full 20</span></a><a class="arch-card" href="#54-命令面79-条"><span class="nm">命令路由</span><span class="ds">79 条命令</span></a><a class="arch-card" href="#43-作用域模型"><span class="nm">Core 装配</span><span class="ds">每项目一个 CorePort</span></a><a class="arch-card" href="#93-启动提交链"><span class="nm">启动授权</span><span class="ds">GrantPolicy → 启动核定</span></a><a class="arch-card" href="#142-subject-对账一次性执行--命令触发"><span class="nm">恢复对账</span><span class="ds">三层期望 · reconcile</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>契约层 ghrah-protocol</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">进程内端口</div><div class="arch-group-desc">两个 Protocol</div><div class="arch-cards"><a class="arch-card" href="#42-清单规模57--8"><span class="nm">CorePort</span><span class="ds">57 条作用域接口 · 10 分组</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">CoreCatalogPort</span><span class="ds">8 条无作用域目录接口</span></a><a class="arch-card" href="#32-接口骨架与一次调用的四步"><span class="nm">Interface 三件套</span><span class="ds">Registry · Runtime · invoke 四步</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">wire 契约</div><div class="arch-cards"><a class="arch-card" href="#33-wire-面计数"><span class="nm">Envelope + Payloads</span><span class="ds">CommandType 108 · payloads 180</span></a><a class="arch-card" href="#45-错误族"><span class="nm">错误族</span><span class="ds">Problem 16 码</span></a><a class="arch-card" href="#35-rest-资源模块"><span class="nm">REST 资源模块</span><span class="ds">ability_tree / ability_control / agent_control</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>认知半区 ghrah-core</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">Agent 运行时</div><div class="arch-cards"><a class="arch-card" href="#66-三个入口supervisor--actoragent--agentbuilder"><span class="nm">ActorAgent</span><span class="ds">驱动循环 · 每轮刷新工具面与技能目录</span></a><a class="arch-card" href="#66-三个入口supervisor--actoragent--agentbuilder"><span class="nm">Supervisor</span><span class="ds">spawn / terminate / 集群成员</span></a><a class="arch-card" href="#104-创建线"><span class="nm">装配</span><span class="ds">AgentAssemblySpec v3 → 实例</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">上下文系统</div><div class="arch-cards"><a class="arch-card" href="#71-对象模型与不变量"><span class="nm">ActionChain</span><span class="ds">节点 / 会话 / 分支</span></a><a class="arch-card" href="#72-sessionruntime"><span class="nm">SessionRuntime</span><span class="ds">单 Session 内存聚合</span></a><a class="arch-card" href="#73-contextmanager-的七步提交"><span class="nm">ContextManager</span><span class="ds">七步提交 · 压缩 · 窗口</span></a><a class="arch-card" href="#74-sqlitebackend7-表-v3read_onlybegin-immediate"><span class="nm">SqliteBackend</span><span class="ds">7 表 v3 · 单写侧</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">能力系统</div><div class="arch-cards"><a class="arch-card" href="#81-定义面-v2members-数组与-datapath"><span class="nm">定义面</span><span class="ds">ability.yaml v2 · members 数组</span></a><a class="arch-card" href="#84-执行localabilityexecutor-八步"><span class="nm">执行</span><span class="ds">executor · Hook · HITL</span></a><a class="arch-card" href="#86-工具面toolsurfaceruntime"><span class="nm">工具面</span><span class="ds">static / progressive · 5 个元工具</span></a><a class="arch-card" href="#86-工具面toolsurfaceruntime"><span class="nm">技能面</span><span class="ds">skill_reminder · read 地址</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">内置包</span><span class="ds">6 包 · 28 成员</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">接口实现</div><div class="arch-cards"><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">CoreUnit</span><span class="ds">31 条命令</span></a><a class="arch-card" href="#64-corefacade--corecatalog-与-57--8"><span class="nm">CoreFacade</span><span class="ds">57 条接口的收敛点</span></a><a class="arch-card" href="#63-runtimeregistry-的注入点"><span class="nm">RuntimeRegistry</span><span class="ds">每项目 CoreUnit 的注册与注入</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">5</span>数据底座</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">链 + 能力关系库</div><div class="arch-group-desc">每 Project db/action-chains.sqlite3</div><div class="arch-cards"><a class="arch-card" href="#74-sqlitebackend7-表-v3read_onlybegin-immediate"><span class="nm">链 7 表</span><span class="ds">节点 / 会话 / 分支 / 消息</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_* 8 表</span><span class="ds">版本 · 内容 · 授权 · 绑定 · 变更</span></a></div></div>
+<div class="arch-group solo"><div class="arch-group-title">实例快照库</div><div class="arch-group-desc">每 Project db/agents.sqlite3</div><div class="arch-cards"><a class="arch-card" href="#91-三库三权威"><span class="nm">agent_instances</span><span class="ds">配置 · 成员定义态 · axes</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">全局业务库</div><div class="arch-group-desc">data/subject.db</div><div class="arch-cards"><a class="arch-card" href="#101-模板库agent_templatesavailable_members"><span class="nm">agent_templates</span><span class="ds">available_members</span></a><a class="arch-card" href="#111-projectroot-布局projectstore-v6agentrecord"><span class="nm">项目 / Room / Task</span><span class="ds">ProjectStore v6 等</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">外部依赖</div><div class="arch-cards"><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">LLM 端点</span><span class="ds">agentconf 库解析</span></a><a class="arch-card" href="#83-扫描漂移与启动提交"><span class="nm">安装根</span><span class="ds">&lt;ns&gt;/&lt;name&gt;/&lt;version&gt;/ · 启动期提交来源</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">MCP 服务器</span><span class="ds">mcp_call · 快照包</span></a></div></div>
+</div></section>
+<div class="arch-note">可选组件（未发布、不在主链上）：ghrah-kernel · ghrah-plugin · ghrah-taskstore · ghrah-scheme</div>
+</figure>
 <h3 id="11-两半区契约与可选组件">1.1 两半区、契约与可选组件</h3>
 <p>ghrah 是一个多 Agent 运行时。它被切成两个半区，两半区之间只共享契约，不共享内存：</p>
 <table>
@@ -261,9 +330,9 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>可选组件</td><td><code>ghrah-scheme</code></td><td>类型化 Scheme 控制平面原型（<code>[scheme]</code> extra）</td><td>能力/技能的运行期权威</td></tr>
 </tbody></table>
 <p>「可选」是装配事实而不是措辞：<code>ghrah-kernel</code>、<code>ghrah-plugin</code>、<code>ghrah-taskstore</code>、<code>ghrah-scheme</code> 都没有发布通道（<code>publish.yml</code> 白名单只含 core / protocol / subject 与两个 npm 包、一个 VSCode 扩展）；<code>ghrah-scheme</code> 还是显式 extra，默认安装不引入。<code>ghrah-kernel</code> 的 <code>[agent]</code> extra 才依赖 <code>ghrah-core</code>，基础安装只依赖 <code>cbor2</code>。</p>
-<h3 id="12-数据底座项目内三库">1.2 数据底座：项目内三库</h3>
+<h3 id="13-数据底座项目内三库">1.3 数据底座：项目内三库</h3>
 <p>系统的持久化底座是「三库三权威」：两个库在每个 Project Root 内，一个是全局库。<code>db/action-chains.sqlite3</code> 的 <code>ability_*</code> 表存能力关系与授权，<code>db/agents.sqlite3</code> 的 <code>agent_instances</code> 存实例配置与成员快照，全局 <code>subject.db.agent_templates</code> 存模板成员申请；三者写路径互不重叠，详见 §9。运行期只读这些库与已提交字节，安装目录只是启动期的提交来源。</p>
-<h3 id="13-五条设计原则">1.3 五条设计原则</h3>
+<h3 id="14-五条设计原则">1.4 五条设计原则</h3>
 <table>
 <thead><tr><th>原则</th><th>含义</th><th>在代码里的落点</th></tr></thead>
 <tbody>
@@ -274,19 +343,21 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>运行期不读安装目录</td><td>定义、正文、授权都从已提交数据读</td><td><code>surface_snapshot</code> / <code>read_chunk</code> 只读关系库与内容 blob（§9）</td></tr>
 </tbody></table>
 <p>「接口」是本文的统一叫法。旧文档里的能力清单类型已经并入 <code>Interface</code>；唯一保留的 <code>capability</code> 字样是错误载荷字段 <code>Problem.capability</code>，它是 wire 兼容名，不代表还有第二套概念（§3、§4）。</p>
-<h3 id="14-宏观形状">1.4 宏观形状</h3>
-<pre class="diagram"><code>flowchart LR
-  OBS[Observer&lt;br/&gt;Vue SPA / VSCode] --&gt;|WS /ws + REST /api/v1| SUB[Subject units]
-  SUB --&gt;|CORE_PORT 57 条接口| PORT[CoreFacade]
-  SUB --&gt;|CORE_CATALOG 8 条接口| CAT[CoreCatalog]
-  PORT --&gt; CORE[CoreUnit / 上下文 / 能力执行]
-  CAT --&gt; CORE
-  CORE --&gt; DB1[(action-chains.sqlite3&lt;br/&gt;链 + ability_*)]
-  CORE --&gt; DB2[(agents.sqlite3&lt;br/&gt;agent_instances)]
-  SUB --&gt; DB3[(subject.db&lt;br/&gt;projects / agent_templates)]
-  SUB --&gt; DB4[(Project Root&lt;br/&gt;tasks / rooms / 附件 / 产物)]</code></pre>
-<p>三条路径要分清：Observer 到 Subject 是 <strong>wire 契约</strong>（WS + REST）；Subject 到 Core 是 <strong>进程内端口契约</strong>（<code>CorePort</code> / <code>CoreCatalogPort</code>，不经过网络）；Core 到持久层是<strong>单写侧</strong>（§13）。<code>ghrah-scheme</code> 不在主链上，运行期不读它的树。</p>
-<h3 id="15-术语接口-vs-能力包">1.5 术语：接口 vs 能力包</h3>
+<h3 id="15-三条调用路径">1.5 三条调用路径</h3>
+<p>上图是静态分层；一次真实交互只走三条路径，各自的契约类型不同：</p>
+<figure class="arch"><figcaption class="arch-title">一次交互经过的三条路径</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>路径一 Observer → Subject | wire 契约（跨网络）</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#122-命令面与事件面"><span class="nm">WS /ws 发命令 · 收 core:* 事件；REST /api/v1 走管理面</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>路径二 Subject → Core | 进程内端口契约（不经过网络）</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#43-作用域模型"><span class="nm">CorePort 57 条（按项目作用域）· CoreCatalogPort 8 条（无作用域）</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>路径三 Core → 持久层 | 单写侧</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#131-权威清单"><span class="nm">ContextManager 写链 · AbilityAccessStore 写授权 · AgentInstanceStore 写快照</span></a></div></div>
+</div></section>
+<div class="arch-note">读侧一律经端口回读：LedgerUnit 读链只调 port.sessions.history，不自开数据库 <a href="#132-链历史只经-coreport">详见 §132</a></div>
+</figure>
+<h3 id="16-术语接口-vs-能力包">1.6 术语：接口 vs 能力包</h3>
 <table>
 <thead><tr><th>术语</th><th>指什么</th><th>不指什么</th></tr></thead>
 <tbody>
@@ -385,6 +456,18 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 </tbody></table>
 <p><code>ghrah-kernel</code>、<code>ghrah-plugin</code>、<code>ghrah-taskstore</code>、<code>ghrah-scheme</code>、<code>@ghrah/plugin-registry</code>、<code>@ghrah/mock-server</code> 不在白名单内。后果：<code>ghrah-protocol</code> 发布物会传递依赖一个没有发布通道的 <code>ghrah-plugin</code>（§16.7）。</p>
 <h2 id="3-协议层ghrah-protocol">3. 协议层：ghrah-protocol</h2>
+<figure class="arch"><figcaption class="arch-title">协议层的两块契约</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>端口契约 | 模块之间怎么互相调用（进程内）</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">三个抽象</div><div class="arch-cards"><a class="arch-card" href="#32-接口骨架与一次调用的四步"><span class="nm">Interface</span><span class="ds">名字 + 请求信封 + 出参</span></a><a class="arch-card" href="#32-接口骨架与一次调用的四步"><span class="nm">InterfaceRegistry</span><span class="ds">57 + 8 条的登记表</span></a><a class="arch-card" href="#32-接口骨架与一次调用的四步"><span class="nm">InterfaceRuntime</span><span class="ds">查表 → 校验 → 转交 → 校出参</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">两个端口 Protocol</div><div class="arch-cards"><a class="arch-card" href="#42-清单规模57--8"><span class="nm">CorePort</span><span class="ds">作用域接口 · 每项目一个实例</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">CoreCatalogPort</span><span class="ds">无作用域目录接口</span></a><a class="arch-card" href="#33-wire-面计数"><span class="nm">视图 DTO</span><span class="ds">views/core.py · AgentAssemblySpec 等</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>wire 契约 | Observer 与 Subject 之间怎么说话（跨网络）</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">消息形状</div><div class="arch-cards"><a class="arch-card" href="#33-wire-面计数"><span class="nm">Envelope</span><span class="ds">信封 + CommandType 108</span></a><a class="arch-card" href="#33-wire-面计数"><span class="nm">Payloads</span><span class="ds">180 个载荷符号</span></a><a class="arch-card" href="#34-路由分组常量"><span class="nm">路由分组</span><span class="ds">7 persist · 10 manifest（无 owner）</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">错误与 REST</div><div class="arch-cards"><a class="arch-card" href="#45-错误族"><span class="nm">Problem</span><span class="ds">16 个错误码 · capability 字段兼容保留</span></a><a class="arch-card" href="#35-rest-资源模块"><span class="nm">REST 资源模块</span><span class="ds">ability_tree · ability_control · agent_control</span></a></div></div>
+<div class="arch-group solo"><div class="arch-group-title">TS 对齐</div><div class="arch-cards"><a class="arch-card" href="#37-wire-与-ts-的对齐"><span class="nm">packages/protocol</span><span class="ds">5 个生成物 · 161 快照</span></a></div></div>
+</div></section>
+<div class="arch-note">没有全局 wire 版本常量：每个 payload 自带 format 字面量 <a href="#36-没有全局-wire-版本">详见 §36</a></div>
+</figure>
 <h3 id="31-两条契约端口契约-vs-wire-契约">3.1 两条契约：端口契约 vs wire 契约</h3>
 <p>这个包里同时住着两套<strong>互不替代</strong>的契约：</p>
 <table>
@@ -484,6 +567,19 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <h3 id="39-契约为什么必须住在第三方包">3.9 契约为什么必须住在第三方包</h3>
 <p>如果 <code>CorePort</code> 定义在 <code>ghrah-core</code>，Subject 就必须 <code>from ghrah.core import CorePort</code>，模块边界当场失效。因此端口协议、视图、错误基类、注入键只能住在第三方包；提供方只提供实现。这是结构约束，不是风格偏好。同理，<code>ApiError</code> 必须在契约包——消费方要 <code>except</code> 它，但不能 import 提供方。</p>
 <h2 id="4-接口化端口跨模块唯一通道">4. 接口化端口（跨模块唯一通道）</h2>
+<figure class="arch"><figcaption class="arch-title">接口化端口：声明 → 装配 → 调用</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>声明 | ghrah-protocol</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">CORE_INTERFACES · 57 条</div><div class="arch-group-desc">10 个分组</div><div class="arch-cards"><a class="arch-card" href="#42-清单规模57--8"><span class="nm">abilities</span><span class="ds">13 条 · 含 write_grant / write_revoke</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">agents</span><span class="ds">16 条 · 含 config / 5 条装配 / update_model</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">sessions</span><span class="ds">8 条</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">mailbox</span><span class="ds">6 条</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">branches</span><span class="ds">5 条</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">deliveries · messages</span><span class="ds">3 + 3 条</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">nodes · rooms · manifests</span><span class="ds">1 + 1 + 1 条</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">CORE_CATALOG_INTERFACES · 8 条</div><div class="arch-group-desc">无作用域</div><div class="arch-cards"><a class="arch-card" href="#42-清单规模57--8"><span class="nm">包目录</span><span class="ds">packages / package_detail / version_profile</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">shell</span><span class="ds">validate_allow · builtin_rules</span></a><a class="arch-card" href="#42-清单规模57--8"><span class="nm">导入</span><span class="ds">package_import · package_mcp_probe</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>装配 | 每项目一次</div><div class="arch-row">
+<div class="arch-group"><div class="arch-group-title">组装顺序</div><div class="arch-cards"><a class="arch-card" href="#44-装配与生命周期"><span class="nm">RuntimeRegistry</span><span class="ds">构造校验：接口与处理器必须齐全</span></a><a class="arch-card" href="#44-装配与生命周期"><span class="nm">build_core_port</span><span class="ds">装配作用域门面</span></a><a class="arch-card" href="#44-装配与生命周期"><span class="nm">build_core_catalog</span><span class="ds">装配目录门面</span></a><a class="arch-card" href="#43-作用域模型"><span class="nm">CorePorts.for_project</span><span class="ds">按项目懒建 · 作用域构造期固定</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>调用 | 一条接口的四步</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#32-接口骨架与一次调用的四步"><span class="nm">查表 → 校验入参 → 转交处理器 → 校验出参并强制 JSON</span></a></div></div>
+</div></section>
+<div class="arch-note">边界闸门：AST ratchet 基线 25 条，只降不升 <a href="#46-边界-ratchet25-条基线">详见 §46</a></div>
+</figure>
 <h3 id="41-为什么用端口而不是-http-语义">4.1 为什么用端口而不是 HTTP 语义</h3>
 <p>两个半区在<strong>同一进程</strong>内通信，没有网络。HTTP 语义在进程内的成本是纯编码开销：路径模板编译与匹配、请求头解析、状态码映射；它的表达力没有一项是 HTTP 独有的。</p>
 <table>
@@ -580,6 +676,21 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <h3 id="47-契约与实现为什么分包">4.7 契约与实现为什么分包</h3>
 <p>端口协议、视图、错误基类、注入键住在 <code>ghrah-protocol</code>，实现住在 <code>ghrah-core</code> / <code>ghrah-subject</code>。这样 Subject 只 import 契约包就能调用 Core，mypy 也能在「实现缺方法」时失败。若把协议放进 core，Subject 必须 import core，边界立刻崩塌。</p>
 <h2 id="5-subject-运行时效果半区">5. Subject 运行时（效果半区）</h2>
+<figure class="arch"><figcaption class="arch-title">Subject 运行时：unit 如何挂载并对外服务</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>单元模型</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#51-单元四契约与硬约束"><span class="nm">SubjectUnit</span><span class="ds">四契约 · 四条硬约束</span></a><a class="arch-card" href="#53-挂载三步与-ctx-四语义"><span class="nm">mount_unit</span><span class="ds">插件化挂载 · 逐个等 ACTIVE</span></a><a class="arch-card" href="#53-挂载三步与-ctx-四语义"><span class="nm">ctx</span><span class="ds">provide / get / on / serial</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>coexistence 6 个 | 默认就挂</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">sandbox</span><span class="ds">工作区沙箱</span></a><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">ledger</span><span class="ds">链历史只读投影 · 经 CORE_PORT</span></a><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">workspace</span><span class="ds">工作区登记</span></a><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">taskstore · task · desired_state</span><span class="ds">归因内核 + 任务 + 期望态</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>full 再加 14 个 | 含可选 room_filter</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#55-ws-端点健康检查与-eventbus"><span class="nm">对外端点</span><span class="ds">websocket_observer_endpoint</span></a><a class="arch-card" href="#53-挂载三步与-ctx-四语义"><span class="nm">Core 装配</span><span class="ds">core_cluster_registry · 每项目一个 CoreUnit</span></a><a class="arch-card" href="#52-builtin-unit-全表"><span class="nm">预装能力</span><span class="ds">shipped_abilities</span></a><a class="arch-card" href="#35-rest-资源模块"><span class="nm">REST 管理</span><span class="ds">project / ability / agent_template / agent / agentconf / media / artifact control</span></a><a class="arch-card" href="#111-projectroot-布局projectstore-v6agentrecord"><span class="nm">业务域</span><span class="ds">project · room · recovery</span></a><a class="arch-card" href="#112-room权威投影与四道闸"><span class="nm">可选</span><span class="ds">room_filter</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>对外服务</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#54-命令面79-条"><span class="nm">WS /ws</span><span class="ds">命令 79 条 + 事件</span></a><a class="arch-card" href="#55-ws-端点健康检查与-eventbus"><span class="nm">REST /api/v1</span><span class="ds">health · meta · 业务路由</span></a><a class="arch-card" href="#55-ws-端点健康检查与-eventbus"><span class="nm">CORS / token</span><span class="ds">GHRAH_SUBJECT_OBSERVER_HTTP_API_*</span></a></div></div>
+</div></section>
+<div class="arch-note">启动链 10 步：见 <a href="#56-启动链10-步">详见 §56</a></div>
+</figure>
 <h3 id="51-单元四契约与硬约束">5.1 单元四契约与硬约束</h3>
 <p><code>ghrah-subject/src/ghrah/subject/unit/base.py</code> 的 <code>SubjectUnit</code> 是鸭子类型契约，一个 unit 只需提供四样东西：</p>
 <table>
@@ -685,6 +796,21 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>10</td><td>可服务判据：<code>/api/v1/health</code> 返回 ok，<code>/api/v1/meta</code> 返回版本，<code>/ws</code> 可连接</td><td><code>units/websocket_observer_endpoint.py</code></td></tr>
 </tbody></table>
 <h2 id="6-core-认知半区">6. Core 认知半区</h2>
+<figure class="arch"><figcaption class="arch-title">Core 认知半区：一个项目一个 CoreUnit</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>入口</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">CoreUnit</span><span class="ds">31 条命令的分发器</span></a><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">CoreUnitConfig</span><span class="ds">34 个注入字段</span></a><a class="arch-card" href="#63-runtimeregistry-的注入点"><span class="nm">RuntimeRegistry</span><span class="ds">按项目创建 / 缓存 / 停止单元</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>接口实现</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#64-corefacade--corecatalog-与-57--8"><span class="nm">CoreFacade</span><span class="ds">57 条接口的收敛点</span></a><a class="arch-card" href="#64-corefacade--corecatalog-与-57--8"><span class="nm">CoreCatalog</span><span class="ds">8 条目录接口</span></a><a class="arch-card" href="#64-corefacade--corecatalog-与-57--8"><span class="nm">handlers</span><span class="ds">10 个分组模块</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>运行时部件</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#66-三个入口supervisor--actoragent--agentbuilder"><span class="nm">Supervisor</span><span class="ds">集群成员 · spawn / terminate</span></a><a class="arch-card" href="#66-三个入口supervisor--actoragent--agentbuilder"><span class="nm">ActorAgent</span><span class="ds">驱动循环</span></a><a class="arch-card" href="#66-三个入口supervisor--actoragent--agentbuilder"><span class="nm">AgentBuilder</span><span class="ds">装配 Agent 实例</span></a><a class="arch-card" href="#63-runtimeregistry-的注入点"><span class="nm">能力关系库</span><span class="ds">ability_store · 启动期建库</span></a><a class="arch-card" href="#63-runtimeregistry-的注入点"><span class="nm">实例快照库</span><span class="ds">agent_instances_path</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>反向通道</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#65-core--subject-反向通道"><span class="nm">Core → Subject：HostCommandBridge / ScopedHostCommandPort</span></a></div></div>
+</div></section>
+<div class="arch-note">已知漂移：_COMMANDS 31 条 vs CORE_COMMANDS 22 条 <a href="#62-命令面31-条-vs-22-条的漂移">详见 §62</a></div>
+</figure>
 <h3 id="61-coreunit-与-34-字段配置">6.1 <code>CoreUnit</code> 与 34 字段配置</h3>
 <p><code>CoreUnit</code>（<code>ghrah-core/src/ghrah/core/unit.py</code>）是 Core 的挂载形态。它不 import Subject 与 Ouroboros，只按鸭子类型提供 <code>meta</code> / <code>init</code> / <code>start</code> / <code>stop</code> / <code>handle_command</code> / <code>handle_event</code>；事件经 <code>UnitEventPublisher</code> 以 <code>core:{event_type}</code> 发出，避免与 Subject / Observer 域事件冲突。</p>
 <p><code>CoreUnitConfig</code> 是 frozen dataclass，共 <strong>34</strong> 个字段，按用途分组：</p>
@@ -744,6 +870,24 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 </tbody></table>
 <p>Agent 的<strong>自动拉起不在 Core</strong>：Core 只负责「被要求时拉起/停止」，重启后该不该跑由 Subject 的期望态对账决定（§14）。这是「进程活着 ≠ agent 该活着」的分工。</p>
 <h2 id="7-上下文系统actionchain--session--branch">7. 上下文系统：ActionChain / Session / Branch</h2>
+<figure class="arch"><figcaption class="arch-title">上下文系统：对象 → 内存聚合 → 提交 → 持久化</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>对象模型 | 三种节点</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#71-对象模型与不变量"><span class="nm">ActionSession</span><span class="ds">会话</span></a><a class="arch-card" href="#71-对象模型与不变量"><span class="nm">ActionBranch</span><span class="ds">分支 · Head 唯一持有者</span></a><a class="arch-card" href="#71-对象模型与不变量"><span class="nm">ContextNode</span><span class="ds">一次迭代的记录</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>内存聚合</div><div class="arch-row">
+<div class="arch-group solo"><div class="arch-cards"><a class="arch-card" href="#72-sessionruntime"><span class="nm">SessionRuntime</span><span class="ds">create / restore / commit_node / 拓扑校验</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>提交路径 | 唯一写侧</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#73-contextmanager-的七步提交"><span class="nm">ContextManager</span><span class="ds">七步提交 · 迭代状态 · 窗口</span></a><a class="arch-card" href="#75-压缩三段"><span class="nm">压缩</span><span class="ds">决策 / 提交 / 观测 三段</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>持久化</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#74-sqlitebackend7-表-v3read_onlybegin-immediate"><span class="nm">SqliteBackend</span><span class="ds">7 表 v3 · BEGIN IMMEDIATE · read_only 开关</span></a><a class="arch-card" href="#74-sqlitebackend7-表-v3read_onlybegin-immediate"><span class="nm">PersistenceBackend</span><span class="ds">协议 + 另外两个后端</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">5</span>读侧</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#76-读侧-chainreadstore"><span class="nm">ChainReadStore(*, agent_id) · head / history / branches</span></a></div></div>
+</div></section>
+<div class="arch-note">恢复与校验是同一段代码，没有第二条路径 <a href="#71-对象模型与不变量">详见 §71</a></div>
+</figure>
 <h3 id="71-对象模型与不变量">7.1 对象模型与不变量</h3>
 <table>
 <thead><tr><th>对象</th><th>位置</th><th>关键字段</th></tr></thead>
@@ -851,6 +995,21 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 </tbody></table>
 <p>持久层分区键是 <code>agent_id</code>（稳定 id），不是显示名。<code>project_id</code> 在更外层由端口实例承担，不出现在读侧签名里——这是作用域模型的一部分（§4.3）。</p>
 <h2 id="8-能力系统">8. 能力系统</h2>
+<figure class="arch"><figcaption class="arch-title">能力系统：定义 → 执行 → 工具面 / 技能面</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>定义面</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#81-定义面-v2members-数组与-datapath"><span class="nm">ability.yaml v2</span><span class="ds">members 成员记录数组</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">内置包</span><span class="ds">6 包 · 28 成员</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">预装包</span><span class="ds">ghrah.project_agent_manage</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>启动提交 | 装载的唯一入口</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#83-扫描漂移与启动提交"><span class="nm">capture → commit_version → select_instance → write_grant</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>成员与执行</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#87-成员实体member"><span class="nm">Member</span><span class="ds">身份六字段 · axes{visible, bind}</span></a><a class="arch-card" href="#84-执行localabilityexecutor-八步"><span class="nm">LocalAbilityExecutor</span><span class="ds">八步 · 并行 · 取消</span></a><a class="arch-card" href="#85-hook-三层hitl-与熔断"><span class="nm">Hook</span><span class="ds">三层 · 无短路</span></a><a class="arch-card" href="#85-hook-三层hitl-与熔断"><span class="nm">HITL</span><span class="ds">promise_id · 超时熔断</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>模型可见面</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#86-工具面toolsurfaceruntime"><span class="nm">工具面</span><span class="ds">ToolSurfaceRuntime · static / progressive</span></a><a class="arch-card" href="#86-工具面toolsurfaceruntime"><span class="nm">元工具</span><span class="ds">search · describe · execute · bind · unbind</span></a><a class="arch-card" href="#86-工具面toolsurfaceruntime"><span class="nm">技能面</span><span class="ds">skill_reminder · 每轮注入 · read 地址</span></a></div></div>
+</div></section>
+<div class="arch-note">硬边界：运行期不读安装目录 <a href="#88-运行期不读安装目录">详见 §88</a></div>
+</figure>
 <h3 id="81-定义面-v2members-数组与-datapath">8.1 定义面 v2：<code>members</code> 数组与 <code>data.path</code></h3>
 <p><code>ability.yaml</code> 的 <code>schema_version</code> 只接受 <code>&#x27;1&#x27;</code> / <code>&#x27;2&#x27;</code>，构建产物恒为 <code>&#x27;2&#x27;</code>。v2 的核心变化是 <code>members</code> 从 <code>{operations, skills}</code> 两个映射变成<strong>成员记录数组</strong>：</p>
 <table>
@@ -957,6 +1116,21 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <h3 id="88-运行期不读安装目录">8.8 运行期不读安装目录</h3>
 <p>这是能力系统的硬边界：<code>surface_snapshot</code> 的输入只有关系库（授权 → 版本 → 定义），<code>read_chunk</code> 的输入只有 <code>ability_content</code> 的字节与 <code>MemberFence</code>；安装目录只在启动提交、包安装与人工排障时被读。<code>ghrah-scheme</code> 的树同样不在运行期主链上：它作为可选控制平面存在（<code>[scheme]</code> extra），不参与能力目录、技能目录、授权与正文读取（<strong>已废弃</strong>其权威地位，包本身仍保留）。</p>
 <h2 id="9-成员授权与数据底座">9. 成员、授权与数据底座</h2>
+<figure class="arch"><figcaption class="arch-title">数据底座：三库三权威</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>能力关系库 | 每 Project db/action-chains.sqlite3 · schema v5</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_versions</span><span class="ds">已提交定义 · 按 digest 不可变</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_content</span><span class="ds">正文 / 附件 / 脚本的字节 blob</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_instances</span><span class="ds">包级版本槽</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_agents · grants</span><span class="ds">Agent 修订 · 逐 Agent 授权</span></a><a class="arch-card" href="#96-绑定双写"><span class="nm">ability_tools</span><span class="ds">常驻工具选择（启动核定 / 管理面写）</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_changes</span><span class="ds">变更审计</span></a><a class="arch-card" href="#93-启动提交链"><span class="nm">ability_registrations</span><span class="ds">启动独占占位</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>实例快照库 | 每 Project db/agents.sqlite3</div><div class="arch-row">
+<div class="arch-group solo"><div class="arch-cards"><a class="arch-card" href="#91-三库三权威"><span class="nm">agent_instances</span><span class="ds">config · members（定义态 + axes）</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>全局业务库 | data/subject.db</div><div class="arch-row">
+<div class="arch-group solo"><div class="arch-cards"><a class="arch-card" href="#91-三库三权威"><span class="nm">agent_templates</span><span class="ds">available_members · 只申请</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>读取路径 | 只读库，不碰安装目录</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#94-读取路径"><span class="nm">surface_snapshot → view → resolve / resolve_address → read_chunk → authorize</span></a></div></div>
+</div></section>
+<div class="arch-note">绑定轴权威在快照 axes.bind；ability_tools 是工具投影 <a href="#96-绑定双写">详见 §96</a></div>
+</figure>
 <h3 id="91-三库三权威">9.1 三库三权威</h3>
 <table>
 <thead><tr><th>库</th><th>位置</th><th>权威内容</th><th>不负责</th></tr></thead>
@@ -1045,6 +1219,24 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>退化身份包两段名</td><td><code>identity.name</code> 省略时，定义面给两段成员名（<code>research.research</code>），模板/快照给三段；Core 在解析、安装记录、绑定集合比较三处按等价形态兼容。这是兼容层，不是新约定</td></tr>
 </tbody></table>
 <h2 id="10-agent-模板与实例化">10. Agent 模板与实例化</h2>
+<figure class="arch"><figcaption class="arch-title">模板 → 装配 → 实例 → 恢复</figcaption>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">1</span>模板库 | subject.db.agent_templates</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#101-模板库agent_templatesavailable_members"><span class="nm">available_members</span><span class="ds">身份六字段 · 三段全名</span></a><a class="arch-card" href="#101-模板库agent_templatesavailable_members"><span class="nm">六组配置</span><span class="ds">model · prompt · context_policy · 权限 · 路径</span></a><a class="arch-card" href="#106-迁移"><span class="nm">列迁移</span><span class="ds">ability_request → available_members（启动时幂等）</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">2</span>渲染 | Subject</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#102-渲染agentassemblyspec-v3"><span class="nm">render_assembly</span><span class="ds">模板 + initial_bindings → AgentAssemblySpec v3</span></a><a class="arch-card" href="#102-渲染agentassemblyspec-v3"><span class="nm">AgentAssemblyMember</span><span class="ds">引用态 · 不含 data</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">3</span>装配接口 | CorePort · 7 条</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card" href="#103-七条装配接口"><span class="nm">create_assembly</span><span class="ds">补齐定义 → 写快照 → 启动</span></a><a class="arch-card" href="#103-七条装配接口"><span class="nm">start / stop / update / delete</span><span class="ds">生命周期</span></a><a class="arch-card" href="#103-七条装配接口"><span class="nm">update_model · config</span><span class="ds">模型与配置读取</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">4</span>创建线 | Core</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#104-创建线"><span class="nm">resolve_assembly → resolve_member_entities（补齐 data）→ agent_instances</span></a></div></div>
+</div></section>
+<section class="arch-layer"><div class="arch-layer-title"><span class="n">5</span>恢复 | 重启</div><div class="arch-row">
+<div class="arch-group"><div class="arch-cards"><a class="arch-card arch-wide" href="#105-恢复"><span class="nm">读快照成员 → 按身份重解析定义 → 按快照 axes 还原绑定 → 授权重核关系库</span></a></div></div>
+</div></section>
+<div class="arch-note">不变式：记录存在 ⇒ 快照存在；授权只在关系库 <a href="#104-创建线">详见 §104</a></div>
+</figure>
 <h3 id="101-模板库agent_templatesavailable_members">10.1 模板库：<code>agent_templates.available_members</code></h3>
 <p>模板权威在全局 <code>subject.db.agent_templates</code>（<code>ghrah-subject/src/ghrah/subject/template_store/store.py</code>，schema v2）：</p>
 <table>
@@ -1676,6 +1868,15 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
     });
   }
   var heads=[].slice.call(document.querySelectorAll('h2[id],h3[id]'));
+  if(location.search.indexOf('arch=1')>=0){
+    // 分享/截图模式：只看图。保留全部 arch 图，去掉正文其余部分。
+    document.body.classList.add('arch-print');
+    [].slice.call(document.querySelectorAll('.main > *')).forEach(function(el){
+      if(el.tagName==='FIGURE' && el.classList.contains('arch')){return;}
+      el.parentNode.removeChild(el);
+    });
+    return;
+  }
   if(heads.length && 'IntersectionObserver' in window){
     var links={};
     items.forEach(function(a){ links[a.getAttribute('href')]=a; });
