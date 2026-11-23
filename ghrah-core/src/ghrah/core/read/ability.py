@@ -341,14 +341,19 @@ class AbilityReadStore:
                 raise CatalogError(
                     _INSTALL_CODES.get(exc.code, "invalid_package"), exc.message
                 ) from exc
+            package_root = prepared.root or source_root
             if not prepared.is_mcp:
                 # MCP 声明的成员来自远端服务器，安装器现场观测；没有本地入口可预检。
                 try:
-                    validate_source_tree(source_root)
+                    validate_source_tree(package_root)
                 except ManifestValidationError as exc:
                     raise CatalogError("invalid_package", str(exc)) from exc
             try:
-                result = installer.install(source_root)
+                if prepared.is_mcp:
+                    # MCP 声明要在当前事件循环里观测服务器，不能再套 asyncio.run。
+                    result = await installer.install_mcp(package_root)
+                else:
+                    result = installer.install(package_root)
             except InstallerError as exc:
                 raise CatalogError(
                     _INSTALL_CODES.get(exc.code, "invalid_package"), exc.message

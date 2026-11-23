@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,7 +62,7 @@ class IntakeError(ValueError):
 
 @dataclass(frozen=True)
 class IntakeResult:
-    """一次规范化结果：磁盘上的 ``ability.yaml`` 已按标准格式写好。
+    """一次规范化结果：``root`` 下的 ``ability.yaml`` 已按标准格式写好。
 
     ``is_mcp`` 为真时**不规范化**：MCP 声明的成员来自远端服务器，安装器会用
     ``install_mcp`` 现场观测并写快照，扫盘与 ABI 预检都不适用。
@@ -71,37 +73,50 @@ class IntakeResult:
     changed: bool
     warnings: tuple[str, ...] = ()
     is_mcp: bool = False
+    root: Path | None = None
+    """可安装的包根；原始结构不规整时会指向重新组装出来的目录。"""
 
 
 def normalize_source(source: str | Path, *, name_hint: str | None = None) -> IntakeResult:
     """扫盘提取成员并把标准 ``ability.yaml`` 写回源包根目录。
 
+    **不检查上传包的文件结构**：成员可以在任意层级（``ability/<name>/``、
+    ``skills/<name>/``、根目录直接放 ``SKILL.md``…）。只要能发现成员，就把它
+    组装成标准布局再安装；结构不规整时会在源目录旁生成一个临时包根。
+
     ``origin: mcp`` 的声明原样放行：它只有 ``ability.yaml``（不含 operations/skills），
     成员由 ``install_mcp`` 连服务器现场生成。
 
     Args:
-        source: 解包后的源包根目录。
+        source: 解包后的源根目录。
         name_hint: 目录名不足以表达身份时的兜底名字（上传文件名）；仅在合成
             头段时使用，已有合法 ``ability.yaml`` 时忽略。
 
     Returns:
-        规范化结果；``definition`` 是渲染文本重新解析出来的运行时定义
-        （MCP 声明为 ``None``，以 ``is_mcp`` 标记）。
+        规范化结果；``root`` 是要安装的包根，``definition`` 是渲染文本重新解析出
+        来的运行时定义（MCP 声明为 ``None``，以 ``is_mcp`` 标记）。
 
     Raises:
-        IntakeError: 目录树里既没有 ``operations/`` 也没有 ``skills/``
-            （不是能力包），或渲染出的定义不合格。
+        IntakeError: 整个解包树里找不到任何成员，或渲染出的定义不合格。
     """
     root = Path(source)
     raw = _read_text(root / _DEFINITION_NAME)
     if raw is not None and _declares_mcp(raw):
-        return IntakeResult(definition=None, rendered=raw, changed=False, is_mcp=True)
+        return IntakeResult(definition=None, rendered=raw, changed=False, is_mcp=True, root=root)
+    warnings: tuple[str, ...] = ()
+    root, relocated_name, origin = _discover_package(root)
+    if origin is not None:
+        warnings = (f"成员不在根目录，已按发现结果组装包根：{origin}",)
     # 先把包内文本源统一成 UTF-8 无 BOM + LF：上传包常见的 CRLF/BOM 不该阻断安装，
     # 也不该让 SKILL.md frontmatter 解析失败。这一步只改文本，不动二进制。
     normalized = _normalize_text_sources(root)
-    header, warnings = _header_for(root, name_hint=name_hint)
+    adopted = _adopt_bare_skill(root, name_hint=name_hint)
+    header, header_warnings = _header_for(root, name_hint=relocated_name or name_hint)
+    warnings = (*warnings, *header_warnings)
     if normalized:
         warnings = (*warnings, f"已把 {len(normalized)} 个文本源统一为 LF")
+    if adopted:
+        warnings = (*warnings, f"顶层裸技能目录已收纳为 skills/{adopted}/")
     try:
         rendered, _members, _warnings = render_document(root, header, lenient=True)
     except BuildError as exc:
@@ -123,6 +138,7 @@ def normalize_source(source: str | Path, *, name_hint: str | None = None) -> Int
         rendered=rendered,
         changed=previous != rendered,
         warnings=warnings,
+        root=root,
     )
 
 
@@ -133,8 +149,158 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+def _member_roots(root: Path) -> list[Path]:
+    """在整棵解包树里找「像包根」的目录：有 ability.yaml / SKILL.md / skills / operations。"""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name.casefold() not in _SKIP_DIRS and name.casefold() != "__macosx"
+        ]
+        here = Path(dirpath)
+        has_definition = _DEFINITION_NAME in filenames
+        has_skill_body = "SKILL.md" in filenames
+        skills_dir = here / "skills"
+        has_skills = skills_dir.is_dir() and any(skills_dir.glob("*/SKILL.md"))
+        operations = here / "operations"
+        has_operations = operations.is_dir() and any(operations.glob("*.py"))
+        if has_definition or has_skill_body or has_skills or has_operations:
+            found.append(here)
+    # 成员目录内部的候选（例如技能目录里的示例 SKILL.md）不算独立包根。
+    pruned: list[Path] = []
+    for candidate in found:
+        nested = any(
+            other != candidate
+            and (
+                candidate.is_relative_to(other / "skills")
+                or candidate.is_relative_to(other / "operations")
+            )
+            for other in found
+        )
+        if not nested:
+            pruned.append(candidate)
+    return pruned
+
+
+def _member_score(candidate: Path) -> int:
+    """候选包根的成员数（技能正文 + operations 脚本），用于挑最完整的一个。"""
+    skills = sum(1 for _ in candidate.glob("skills/*/SKILL.md"))
+    operations = sum(1 for _ in candidate.glob("operations/*.py"))
+    bare = 1 if (candidate / "SKILL.md").is_file() else 0
+    return skills + operations + bare
+
+
+def _stage_tree(source: Path, chosen: Path) -> Path:
+    """把候选包根整棵复制到源目录旁的临时包根，返回新路径。"""
+    staged = source.parent / f".intake-{uuid.uuid4().hex}"
+    shutil.copytree(chosen, staged)
+    return staged
+
+
+def _discover_package(root: Path) -> tuple[Path, str | None, str | None]:
+    """发现包根；结构不规整时组装一个可安装的包根。
+
+    Returns:
+        ``(包根, 合成身份用的名字, 原始相对路径)``。没有搬动时后两项为 ``None``；
+        找不到任何候选时原样返回 ``root``，让后续渲染给出「没有成员」的错误。
+    """
+    candidates = _member_roots(root)
+    if not candidates or root in candidates:
+        return root, None, None
+    with_definition = [c for c in candidates if (c / _DEFINITION_NAME).is_file()]
+    if len(candidates) == 1 or with_definition:
+        chosen = max(with_definition or candidates, key=_member_score)
+        return (
+            _stage_tree(root, chosen),
+            chosen.name,
+            chosen.relative_to(root).as_posix(),
+        )
+    return _assemble_package(root, candidates), None, None
+
+
+def _assemble_package(root: Path, candidates: list[Path]) -> Path:
+    """把分散在多处的成员组装成一个标准包根。"""
+    staged = root.parent / f".intake-{uuid.uuid4().hex}"
+    (staged / "skills").mkdir(parents=True, exist_ok=True)
+    (staged / "operations").mkdir(parents=True, exist_ok=True)
+    for candidate in candidates:
+        if (candidate / "SKILL.md").is_file():
+            meta = _frontmatter(candidate / "SKILL.md")
+            raw_name = meta.get("name")
+            source = raw_name if isinstance(raw_name, str) and raw_name.strip() else candidate.name
+            target = staged / "skills" / _skill_key(source)
+            if target.exists():
+                continue
+            shutil.copytree(candidate, target)
+        elif (candidate / "operations").is_dir():
+            for script in candidate.glob("operations/*.py"):
+                shutil.copy2(script, staged / "operations" / script.name)
+        elif (candidate / "skills").is_dir():
+            for skill_dir in candidate.glob("skills/*"):
+                destination = staged / "skills" / skill_dir.name
+                if skill_dir.is_dir() and not destination.exists():
+                    shutil.copytree(skill_dir, destination)
+        definition = candidate / _DEFINITION_NAME
+        if definition.is_file() and not (staged / _DEFINITION_NAME).exists():
+            shutil.copy2(definition, staged / _DEFINITION_NAME)
+    return staged
+
+
 _TEXT_SUFFIXES = frozenset({".py", ".md", ".yaml", ".yml", ".json", ".txt"})
 _SKIP_DIRS = frozenset({"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+_SKILL_KEY = re.compile(r"[^a-z0-9]+")
+
+
+def _skill_key(value: str) -> str:
+    """技能键规范：小写、非字母数字折成 ``-``、去首尾 ``-``。"""
+    text = _SKILL_KEY.sub("-", value.strip().lower()).strip("-")
+    return text or "skill"
+
+
+def _frontmatter(path: Path) -> dict[str, Any]:
+    """尽力读 ``SKILL.md`` 的 frontmatter；读不出来返回空映射（后续会报具体错）。"""
+    text = _read_text(path) or ""
+    if not text.startswith("---\n"):
+        return {}
+    parts = text.split("\n---\n", 1)
+    if len(parts) != 2:
+        return {}
+    try:
+        data = load_yaml(parts[0][4:])
+    except Exception:  # noqa: BLE001 — 解析失败交给生成器报「frontmatter 非法」
+        return {}
+    return data if isinstance(data, Mapping) else {}
+
+
+def _adopt_bare_skill(root: Path, *, name_hint: str | None = None) -> str | None:
+    """把「顶层直接是 SKILL.md」的裸技能目录收纳成 ``skills/<key>/``。
+
+    常见于从别处拿到的单技能包：根目录就是技能目录（``SKILL.md`` +
+    ``references/`` + ``scripts/`` …）。这类包结构上完全可用，只是不符合
+    我们的 ``skills/<key>/`` 布局，导入时就地搬一层即可。
+
+    Returns:
+        收纳后的技能键；不是裸技能目录时返回 ``None``。
+    """
+    if not (root / "SKILL.md").is_file():
+        return None
+    if (root / "skills").is_dir() or (root / "operations").is_dir():
+        return None
+    meta = _frontmatter(root / "SKILL.md")
+    raw_name = meta.get("name")
+    source = raw_name if isinstance(raw_name, str) and raw_name.strip() else name_hint or root.name
+    key = _skill_key(source)
+    target = root / "skills" / key
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in list(root.iterdir()):
+        if entry.name in {"skills", _DEFINITION_NAME}:
+            continue
+        destination = target / entry.name
+        if destination.exists():  # 极端情况：整目录里已有同名条目，保留原物
+            continue
+        shutil.move(str(entry), str(destination))
+    return key
 
 
 def _normalize_text_sources(root: Path) -> tuple[str, ...]:

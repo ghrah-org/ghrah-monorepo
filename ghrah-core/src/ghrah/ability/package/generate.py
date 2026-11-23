@@ -349,13 +349,40 @@ def _skill_member(
         "references": {},
         "scripts": {},
     }
-    _attach_resources(member, name, entries)
+    _attach_resources(member, name, entries, tolerant=tolerant)
     return member
 
 
-def _attach_resources(member: dict[str, Any], name: str, entries: list[tuple[str, Path]]) -> None:
-    """登记 ``assets`` / ``references`` / ``scripts``（路径、媒体类型、size、digest）。"""
+def _attach_resources(
+    member: dict[str, Any],
+    name: str,
+    entries: list[tuple[str, Path]],
+    *,
+    tolerant: bool = False,
+) -> None:
+    """登记 ``assets`` / ``references`` / ``scripts``（路径、媒体类型、size、digest）。
+
+    ``tolerant`` 供上传导入使用：
+
+    - 非 ``.py`` 脚本（例如别人 skill 里的 ``.mjs``）不登记成可执行脚本，但随包保留；
+    - 三个固定角色之外的目录/文件（``evals/``、``templates/``、技能根下的散文件）
+      一律登记成 ``references``，既让内容可读，也满足安装期「skills/ 下不得有未
+      登记文件」的约束。
+    """
     prefix = f"skills/{name}/"
+    registered: set[str] = set()
+
+    def resource(rel: str, full: Path) -> dict[str, Any]:
+        suffix = full.suffix.lower()
+        data = full.read_bytes()
+        registered.add(rel)
+        return {
+            "path": check_relative_path(rel, what=f"members.skills.{name}.{rel}"),
+            "media_type": _MEDIA_TYPES.get(suffix, "application/octet-stream"),
+            "size": len(data),
+            "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
+        }
+
     for role in ("assets", "references", "scripts"):
         table: dict[str, Any] = {}
         for rel, full in entries:
@@ -364,21 +391,36 @@ def _attach_resources(member: dict[str, Any], name: str, entries: list[tuple[str
                 continue
             rel_in_role = rel[len(role_prefix) :]
             key = derive_resource_key(rel_in_role)
+            if tolerant:
+                key = _tolerant_key(key)
             if not key:
                 raise BuildError(f"skills/{name}/{role}: 资源键为空: {rel}")
             if key in table:
                 raise BuildError(f"skills/{name}/{role}: 资源键冲突 {key!r}")
             if role == "scripts" and not rel.endswith(".py"):
+                if tolerant:
+                    continue
                 raise BuildError(f"脚本只允许 .py: {rel}")
-            suffix = full.suffix.lower()
-            data = full.read_bytes()
-            table[key] = {
-                "path": check_relative_path(rel, what=f"members.skills.{name}.{role}.{key}"),
-                "media_type": _MEDIA_TYPES.get(suffix, "application/octet-stream"),
-                "size": len(data),
-                "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-            }
+            table[key] = resource(rel, full)
         member[role] = dict(sorted(table.items()))
+    if not tolerant:
+        return
+    body_rel = f"{prefix}SKILL.md"
+    for rel, full in entries:
+        if rel == body_rel or not rel.startswith(prefix) or rel in registered:
+            continue
+        table = member["references"]
+        key = _tolerant_key(derive_resource_key(rel[len(prefix) :]))
+        while key in table:  # 资源键冲突时加序号，先到先得
+            key = f"{key}-x"
+        table[key] = resource(rel, full)
+    member["references"] = dict(sorted(member["references"].items()))
+
+
+def _tolerant_key(value: str) -> str:
+    """上传导入的资源键规范：小写、非字母数字折成 ``-``、去首尾 ``-``。"""
+    text = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return text
 
 
 def _validate_permissions(key: str, permissions: dict[str, Any]) -> None:
