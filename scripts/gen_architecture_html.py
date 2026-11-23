@@ -149,6 +149,39 @@ pre.diagram::before{content:"图（Mermaid 源）";display:block;font-size:11.5p
   margin-top:3px}
 .arch-wide{grid-column:1 / -1}
 .arch-note{font-size:12px;color:var(--ink-3);text-align:center;margin:10px 0 0}
+/* 卡片抽屉：点卡片不跳转，在右侧展开对应章节。 */
+.arch-drawer{position:fixed;inset:0 0 0 auto;z-index:60;display:flex;flex-direction:column;
+  width:min(760px,92vw);background:var(--panel);border-left:1px solid var(--line);
+  box-shadow:-18px 0 48px rgba(21,27,44,.18);transform:translateX(104%);
+  transition:transform .24s ease;visibility:hidden}
+.arch-drawer.open{transform:none;visibility:visible}
+.arch-drawer.wide{width:min(1080px,96vw)}
+.arch-drawer-head{display:flex;align-items:flex-start;gap:12px;padding:18px 22px 14px;
+  border-bottom:1px solid var(--line);background:#f8fafd}
+.arch-drawer-head .where{font-size:12px;color:var(--ink-3);margin:0 0 3px}
+.arch-drawer-head h2{font-size:19px;margin:0;border:0;padding:0;color:var(--navy);
+  line-height:1.4;flex:1 1 auto;min-width:0}
+.arch-drawer-head .go{flex:none;font-size:12.5px;margin-top:4px;white-space:nowrap}
+.arch-drawer-x{flex:none;border:1px solid var(--line);background:#fff;border-radius:8px;
+  width:30px;height:30px;line-height:28px;text-align:center;cursor:pointer;color:var(--ink-2);
+  font-size:15px}
+.arch-drawer-x:hover{border-color:var(--accent);color:var(--accent)}
+.arch-drawer-body{overflow:auto;padding:6px 24px 40px;flex:1 1 auto}
+.arch-drawer-body h2,.arch-drawer-body h3,.arch-drawer-body h4{scroll-margin-top:12px}
+.arch-drawer-body .arch{box-shadow:none}
+.arch-drawer-body table{font-size:13px}
+.arch-drawer-foot{border-top:1px solid var(--line);padding:10px 22px;font-size:12px;
+  color:var(--ink-3);background:#f8fafd}
+.arch-mask{position:fixed;inset:0;z-index:55;background:rgba(21,27,44,.28);opacity:0;
+  visibility:hidden;transition:opacity .2s ease,visibility .2s}
+.arch-mask.show{opacity:1;visibility:visible}
+.arch-card{cursor:pointer}
+.arch-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+body.arch-print .arch-drawer,body.arch-print .arch-mask{display:none}
+@media (max-width:900px){
+  .arch-drawer,.arch-drawer.wide{width:100vw}
+  .arch-drawer-body{padding:6px 16px 32px}
+}
 table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px;
   background:var(--panel);border-radius:var(--radius);overflow:hidden}
 th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
@@ -164,7 +197,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 }
 """
 
-_JS = """
+_JS = r"""
 (function(){
   var body=document.body, toggle=document.querySelector('.toggle');
   if(toggle){toggle.addEventListener('click',function(){body.classList.toggle('nav-open');});}
@@ -200,6 +233,110 @@ _JS = """
       });
     },{rootMargin:'-15% 0px -75% 0px'});
     heads.forEach(function(h){io.observe(h);});
+  }
+
+  // ── 卡片抽屉 ──
+  // 架构图里的卡片带 #锚点。点它不跳转，而是在右侧抽屉里展开对应章节
+  // （从该标题到下一个同级或更高级标题之间的内容）。带修饰键 / 中键点击
+  // 保留浏览器默认行为（新标签页打开该锚点）。
+  var main=document.querySelector('.main');
+  if(!main || location.search.indexOf('arch=1')>=0){return;}
+
+  var mask=document.createElement('div');
+  mask.className='arch-mask';
+  mask.setAttribute('aria-hidden','true');
+  var drawer=document.createElement('aside');
+  drawer.className='arch-drawer';
+  drawer.setAttribute('role','dialog');
+  drawer.setAttribute('aria-modal','true');
+  drawer.setAttribute('aria-label','章节详情');
+  drawer.innerHTML=
+    '<div class="arch-drawer-head"><div style="flex:1 1 auto;min-width:0">' +
+    '<p class="where"></p><h2></h2></div>' +
+    '<a class="go" href="#">在页面中定位 ↗</a>' +
+    '<button class="arch-drawer-x" type="button" aria-label="关闭">✕</button></div>' +
+    '<div class="arch-drawer-body"></div>' +
+    '<div class="arch-drawer-foot">Esc 或点击遮罩关闭 · 抽屉内的卡片同样可展开</div>';
+  document.body.appendChild(mask);
+  document.body.appendChild(drawer);
+  var head=drawer.querySelector('.arch-drawer-head');
+  var bodyEl=drawer.querySelector('.arch-drawer-body');
+  var titleEl=drawer.querySelector('h2');
+  var whereEl=drawer.querySelector('.where');
+  var goEl=drawer.querySelector('.go');
+  var lastFocus=null;
+
+  function levelOf(el){return el && /^H[1-4]$/.test(el.tagName) ? +el.tagName.slice(1) : 99;}
+
+  function setOverflow(lock){document.documentElement.style.overflow=lock?'hidden':'';}
+
+  function open(target){
+    while(bodyEl.firstChild){bodyEl.removeChild(bodyEl.firstChild);}
+    // 标题已显示在抽屉头部，正文从标题的下一个节点开始，避免重复。
+    var nodes=[];
+    var el=target.nextElementSibling;
+    while(el && !(el.id && levelOf(el)<=levelOf(target))){
+      nodes.push(el.cloneNode(true));
+      el=el.nextElementSibling;
+    }
+    nodes.forEach(function(n){bodyEl.appendChild(n);});
+    // 克隆内容里的 id 与原文重复：抽屉内一律去掉，锚点跳转仍走原文。
+    [].slice.call(bodyEl.querySelectorAll('[id]')).forEach(function(n){n.removeAttribute('id');});
+    var full=target.textContent.trim();
+    var cut=full.indexOf(' ');
+    whereEl.textContent=cut>0 ? '§'+full.slice(0,cut).replace(/[.。]\s*$/,'') : '';
+    whereEl.style.display=whereEl.textContent ? '' : 'none';
+    titleEl.textContent=cut>0 ? full.slice(cut+1).trim() : full;
+    goEl.href='#'+target.id;
+    drawer.classList.toggle('wide', !!bodyEl.querySelector('.arch'));
+    lastFocus=document.activeElement;
+    mask.classList.add('show');
+    drawer.classList.add('open');
+    setOverflow(true);
+    bodyEl.scrollTop=0;
+    drawer.querySelector('.arch-drawer-x').focus();
+  }
+
+  function close(){
+    if(!drawer.classList.contains('open')){return;}
+    mask.classList.remove('show');
+    drawer.classList.remove('open');
+    setOverflow(false);
+    if(lastFocus && lastFocus.focus){lastFocus.focus();}
+  }
+
+  function cardOf(el){
+    while(el && el!==document && !el.classList.contains('arch-card')){el=el.parentNode;}
+    return el && el!==document && el.classList.contains('arch-card') ? el : null;
+  }
+
+  document.addEventListener('click',function(ev){
+    if(ev.button!==0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey){return;}
+    if(ev.target===mask){close();return;}
+    var card=cardOf(ev.target);
+    if(!card){return;}
+    var href=card.getAttribute('href')||'';
+    if(href.charAt(0)!=='#'){return;}
+    var target=document.getElementById(href.slice(1));
+    if(!target){return;}
+    ev.preventDefault();
+    open(target);
+  });
+  drawer.querySelector('.arch-drawer-x').addEventListener('click',close);
+  goEl.addEventListener('click',function(){close();});
+  document.addEventListener('keydown',function(ev){
+    if(ev.key==='Escape'){close();}
+    if(ev.key==='Enter'){
+      var card=cardOf(ev.target);
+      if(card && card.getAttribute('href')){ev.preventDefault();card.click();}
+    }
+  });
+
+  // 直接以抽屉打开某章节：ARCHITECTURE.html?card=<锚点>（便于分享单张卡片的详情）。
+  var wanted=/[?&]card=([^&]+)/.exec(location.search);
+  if(wanted){
+    var target=document.getElementById(decodeURIComponent(wanted[1]));
+    if(target){open(target);}
   }
 })();
 """
