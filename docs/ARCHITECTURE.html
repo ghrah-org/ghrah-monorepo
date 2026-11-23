@@ -198,16 +198,15 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <a href="#16-已知偏离与技术债">16. 已知偏离与技术债</a>
 <a href="#161-core_commands-与-coreunit_commands-漂移" class="lv3">16.1 CORE_COMMANDS 与 CoreUnit._COMMANDS 漂移</a>
 <a href="#162-manifest_commands-无-owner" class="lv3">16.2 MANIFEST_COMMANDS 无 owner</a>
-<a href="#163-agentabilityrequest-仍有未实现分支" class="lv3">16.3 AgentAbilityRequest 仍有未实现分支</a>
-<a href="#164-projectpaths-缺-agentssqlite3-属性" class="lv3">16.4 ProjectPaths 缺 agents.sqlite3 属性</a>
-<a href="#165-subject_port-只有定义没有协议与提供方" class="lv3">16.5 SUBJECT_PORT 只有定义，没有协议与提供方</a>
-<a href="#166-subject-仍依赖-core边界基线-25-条" class="lv3">16.6 Subject 仍依赖 Core，边界基线 25 条</a>
-<a href="#167-契约包反向依赖-ghrah-plugin" class="lv3">16.7 契约包反向依赖 ghrah-plugin</a>
-<a href="#168-node-版本下限三处不一致" class="lv3">16.8 Node 版本下限三处不一致</a>
-<a href="#169-同一个容器键在两个包里各写一份字面量" class="lv3">16.9 同一个容器键在两个包里各写一份字面量</a>
-<a href="#1610-taskstoreunit-经-builtin-链挂载与目标形态是插件矛盾" class="lv3">16.10 TaskStoreUnit 经 builtin 链挂载与「目标形态是插件」矛盾</a>
-<a href="#1611-observer-两个配置项只有默认值生效" class="lv3">16.11 Observer 两个配置项只有默认值生效</a>
-<a href="#1612-其他残留" class="lv3">16.12 其他残留</a>
+<a href="#163-projectpaths-缺-agentssqlite3-属性" class="lv3">16.3 ProjectPaths 缺 agents.sqlite3 属性</a>
+<a href="#164-subject_port-只有定义没有协议与提供方" class="lv3">16.4 SUBJECT_PORT 只有定义，没有协议与提供方</a>
+<a href="#165-subject-仍依赖-core边界基线-25-条" class="lv3">16.5 Subject 仍依赖 Core，边界基线 25 条</a>
+<a href="#166-契约包反向依赖-ghrah-plugin" class="lv3">16.6 契约包反向依赖 ghrah-plugin</a>
+<a href="#167-node-版本下限三处不一致" class="lv3">16.7 Node 版本下限三处不一致</a>
+<a href="#168-同一个容器键在两个包里各写一份字面量" class="lv3">16.8 同一个容器键在两个包里各写一份字面量</a>
+<a href="#169-taskstoreunit-经-builtin-链挂载与目标形态是插件矛盾" class="lv3">16.9 TaskStoreUnit 经 builtin 链挂载与「目标形态是插件」矛盾</a>
+<a href="#1610-observer-两个配置项只有默认值生效" class="lv3">16.10 Observer 两个配置项只有默认值生效</a>
+<a href="#1611-其他残留" class="lv3">16.11 其他残留</a>
 <a href="#附录-a术语表">附录 A：术语表</a>
 <a href="#附录-b按角色选读">附录 B：按角色选读</a>
   </nav>
@@ -1026,7 +1025,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>关系库 <code>ability_tools</code></td><td>「工具名 → 成员」的常驻工具选择</td><td>启动核定 <code>_bind</code>、管理面 <code>enable_tool</code> / <code>disable_tool</code></td></tr>
 <tr><td>实例快照 <code>agent_instances.members[].axes.bind</code></td><td>重启恢复的绑定事实</td><td><code>bind_member</code> / <code>unbind_member</code> 经 <code>MemberBindingState</code> → <code>AgentInstanceStore.set_member_bindings</code></td></tr>
 </tbody></table>
-<p>工具面的 <code>set_member_bound</code> 同时维护两者：工具成员走 <code>bind_tool</code> / <code>unbind_tool</code>（关系库），技能成员写快照（技能没有工具形态）；旧快照若同时带 <code>available</code> 键会一并同步，避免两种说法不一致。短暂不一致时：常驻集以快照轴为准，授权与工具名以关系库为准。</p>
+<p><code>bind_member</code> / <code>unbind_member</code> 只改实例快照：<code>set_member_bound</code> 更新内部绑定集后经 <code>MemberBindingState.save</code> → <code>AgentInstanceStore.set_member_bindings</code> 写 <code>axes.bind</code>；<code>ability_tools</code> 由启动核定与管理面 <code>enable_tool</code> / <code>disable_tool</code> 维护，元工具不直接写它。旧快照若同时带 <code>available</code> 键会一并同步；常驻集以快照轴为准，授权与工具名以关系库为准。</p>
 <h3 id="97-失败语义与已知限制">9.7 失败语义与已知限制</h3>
 <table>
 <thead><tr><th>情况</th><th>结果</th></tr></thead>
@@ -1546,31 +1545,25 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <li>影响：Observer 侧仍保留 <code>listManifestAbilities</code> 等调用，发出后回执是 <code>Unknown command</code>；<code>manifests</code> store 也因此没有事件源。这是<strong>已废弃</strong>的命令面，不应作为新增功能的基础。</li>
 <li>状态：已废弃命令 + 未清理的客户端调用。</li>
 </ul>
-<h3 id="163-agentabilityrequest-仍有未实现分支">16.3 <code>AgentAbilityRequest</code> 仍有未实现分支</h3>
-<ul>
-<li>现状：<code>agents.create_from_template</code> 的旧模板路径在 <code>core/api/handlers/agents.py::_spec_from_template</code> 检查 <code>AgentAbilityRequest</code>；只要 <code>packages</code> / <code>mcp_refs</code> / <code>surface</code> 任一非空就抛 <code>UNAVAILABLE</code>，错误文本仍提旧字段名。</li>
-<li>影响：这条路径不是当前模板主线（模板走 <code>agent_templates.available_members</code> + 装配接口），但协议模型仍在，容易让调用方以为包维度申请可用。</li>
-<li>状态：<strong>未实施</strong>。新代码不应依赖该分支。</li>
-</ul>
-<h3 id="164-projectpaths-缺-agentssqlite3-属性">16.4 <code>ProjectPaths</code> 缺 <code>agents.sqlite3</code> 属性</h3>
+<h3 id="163-projectpaths-缺-agentssqlite3-属性">16.3 <code>ProjectPaths</code> 缺 <code>agents.sqlite3</code> 属性</h3>
 <ul>
 <li>现状：<code>ProjectPaths</code> 有 <code>task_db_path</code> / <code>room_db_path</code> / <code>action_chain_db_path</code>，但没有 <code>agents.sqlite3</code> 的专用属性；实际路径由 <code>ghrah-subject/src/ghrah/subject/core_cluster/registry.py</code> 手工拼 <code>ProjectPaths.db_dir / &quot;agents.sqlite3&quot;</code>。</li>
 <li>影响：Root 布局的「唯一派生点」原则被打破；新增消费方若按 <code>ProjectPaths</code> 找库会找不到，容易各自再拼一次路径。</li>
 <li>状态：已实现但布局不完整。</li>
 </ul>
-<h3 id="165-subject_port-只有定义没有协议与提供方">16.5 <code>SUBJECT_PORT</code> 只有定义，没有协议与提供方</h3>
+<h3 id="164-subject_port-只有定义没有协议与提供方">16.4 <code>SUBJECT_PORT</code> 只有定义，没有协议与提供方</h3>
 <ul>
 <li>现状：<code>SUBJECT_PORT = &quot;subject.port&quot;</code> 定义并再导出；全仓没有 <code>SubjectPort</code> Protocol，也没有任何 <code>ctx.provide(&quot;subject.port&quot;, ...)</code>。</li>
 <li>影响：该键是不可消费的空声明；读 <code>keys.py</code> 会误以为 Subject 侧能力面已端口化，实际跨模块调用仍只有 Core 一个方向。</li>
 <li>状态：未实施。</li>
 </ul>
-<h3 id="166-subject-仍依赖-core边界基线-25-条">16.6 Subject 仍依赖 Core，边界基线 25 条</h3>
+<h3 id="165-subject-仍依赖-core边界基线-25-条">16.5 Subject 仍依赖 Core，边界基线 25 条</h3>
 <ul>
 <li>现状：<code>ghrah-subject/pyproject.toml</code> 仍声明 <code>ghrah-core&gt;=0.2.0a0</code>；ratchet 基线 25 条（§4.6），含 <code>pyproject.toml::ghrah-core</code>。</li>
 <li>影响：Subject 与 Core 在同一进程内仍以直接 import 耦合；进程内没有物理边界，这条 AST 测试是唯一约束。</li>
 <li>状态：已实现闸门，目标未达成。</li>
 </ul>
-<h3 id="167-契约包反向依赖-ghrah-plugin">16.7 契约包反向依赖 <code>ghrah-plugin</code></h3>
+<h3 id="166-契约包反向依赖-ghrah-plugin">16.6 契约包反向依赖 <code>ghrah-plugin</code></h3>
 <ul>
 <li>现状：<code>ghrah-protocol/pyproject.toml</code> 依赖 <code>ghrah-plugin</code>；<code>payloads/plugin.py</code> 的 <code>PluginNegotiateResultPayload</code> 直接继承其 <code>NegotiationResult</code>。</li>
 <li>不成环：<code>ghrah-plugin</code> 是叶子，不依赖任何 <code>ghrah-*</code>。</li>
@@ -1578,7 +1571,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <li>影响二：<code>ghrah-plugin</code> 的模型变更会直接改变 wire 形状，而它不在契约评审路径上；TS 侧只能手写镜像 <code>payloads/plugin.ts</code>。</li>
 <li>状态：已知例外，未建立禁止边或同步机制。</li>
 </ul>
-<h3 id="168-node-版本下限三处不一致">16.8 Node 版本下限三处不一致</h3>
+<h3 id="167-node-版本下限三处不一致">16.7 Node 版本下限三处不一致</h3>
 <table>
 <thead><tr><th>声明位置</th><th>值</th></tr></thead>
 <tbody>
@@ -1587,37 +1580,34 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>三个库包 <code>package.json</code> 的 <code>engines</code></td><td><code>&gt;=20.19.0</code></td></tr>
 </tbody></table>
 <p>影响：分发声明入口给出的 22.12 与根 <code>package.json</code> 的 26 相差一个大版本；哪个生效取决于调用方（<code>ghrah</code> 工具链读 <code>ghrah.toml</code>，pnpm / CI 读 <code>.nvmrc</code>）。状态：未收敛。</p>
-<h3 id="169-同一个容器键在两个包里各写一份字面量">16.9 同一个容器键在两个包里各写一份字面量</h3>
+<h3 id="168-同一个容器键在两个包里各写一份字面量">16.8 同一个容器键在两个包里各写一份字面量</h3>
 <ul>
 <li>现状：<code>CORE_PORT</code> / <code>CORE_CATALOG</code> 在协议包 <code>ports/keys.py</code>；Subject 的 <code>runtime/service_keys.py</code> 又写了两份同值字面量并注释「名字就是协议包的键」。两处都有使用方：<code>units/core_cluster.py</code> 用协议常量 provide，<code>units/ability_control.py</code> / <code>agent_control.py</code> 用 Subject 常量 requires。</li>
 <li>影响：容器键本应只有一处真相，现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为「依赖未满足」。</li>
 <li>状态：已实现但重复声明。</li>
 </ul>
-<h3 id="1610-taskstoreunit-经-builtin-链挂载与目标形态是插件矛盾">16.10 <code>TaskStoreUnit</code> 经 builtin 链挂载与「目标形态是插件」矛盾</h3>
+<h3 id="169-taskstoreunit-经-builtin-链挂载与目标形态是插件矛盾">16.9 <code>TaskStoreUnit</code> 经 builtin 链挂载与「目标形态是插件」矛盾</h3>
 <ul>
 <li>现状：<code>TaskStoreConfig</code> 与 <code>units/__init__.py</code> 都写明「目标装配形态是插件…当前经 builtin 链挂载属待纠正偏离」。</li>
 <li>影响：<code>taskstore.enabled</code>（默认 True）决定它作为内置 unit 挂载，顺序固定在 TaskUnit 之前；插件信任闸对它不生效——一个「可选、应受信任闸约束的插件」实际拥有内置 unit 的权限与生命周期。</li>
 <li>状态：代码自述偏离，未纠正。</li>
 </ul>
-<h3 id="1611-observer-两个配置项只有默认值生效">16.11 Observer 两个配置项只有默认值生效</h3>
+<h3 id="1610-observer-两个配置项只有默认值生效">16.10 Observer 两个配置项只有默认值生效</h3>
 <ul>
 <li>现状：<code>ObserverServerConfig.from_env()</code> 读 <code>GHRAH_SUBJECT_SERVER_WS_PATH</code>、<code>..._EVENT_REPLAY_CAPACITY</code>；但 <code>serve()</code> 里 <code>create_app(observer_config, ctx=ctx)</code> 第一行 <code>del config</code>，app 由 unit 持有；unit 以 <code>WebSocketObserverEndpointUnit(config)</code> 构造，<code>observer_config=None</code>，<code>init()</code> 回落到默认值，WS 固定 <code>/ws</code>、EventBus 容量固定 1000。</li>
 <li>影响：改这两个环境变量不改变行为，也不报错；<code>HOST</code> / <code>PORT</code> / <code>PING_*</code> / <code>LOG_LEVEL</code> 仍有效，形成「同一前缀部分生效」的误导。</li>
 <li>状态：已实现但配置未接通。</li>
 </ul>
-<h3 id="1612-其他残留">16.12 其他残留</h3>
+<h3 id="1611-其他残留">16.11 其他残留</h3>
 <table>
 <thead><tr><th>项</th><th>现状</th><th>影响</th></tr></thead>
 <tbody>
 <tr><td><code>units/__init__.py</code> docstring</td><td>写 coexistence 7 / full 21（把已删除的模板库 unit 算进去），与实测 6 / 20 不符</td><td>以 §5.2 为准</td></tr>
 <tr><td>恢复报告分项计数</td><td><code>ReconcileReport</code> 定义 <code>agents_restored</code> / <code>agents_initialized</code>，但对账只把 <code>resumed</code> 计入 <code>agents_spawned</code></td><td>两个分项不会命中</td></tr>
 <tr><td><code>memory/</code> 目录</td><td>仅 <code>initialize()</code> 建目录，无读写方</td><td>Root 看起来有记忆落点，实际是空目录</td></tr>
-<tr><td><code>manifests/</code> 目录</td><td>仅 <code>initialize()</code> 建目录；模板已迁 <code>agent_templates</code></td><td>历史布局残留；无生产写入</td></tr>
-<tr><td>Core <code>manifest_ref</code> 派生路径</td><td>Core 仍保留 <code>ManifestStoreProtocol</code> 与 <code>manifest_ref</code> spawn 分支，Subject 已不提供解析实现</td><td><code>manifest_ref</code> spawn 在生产链路不可用；创建线走装配接口</td></tr>
+<tr><td><code>manifests/</code> 目录</td><td>仅 <code>initialize()</code> 建目录；模板已迁 <code>agent_templates</code></td><td>无生产写入</td></tr>
 <tr><td><code>SubjectConfig.core_db_path</code></td><td>返回 <code>Path(db_path).parent / &quot;ghrah.db&quot;</code>，全仓无读写方；registry 的同名局部变量实际取 <code>ProjectPaths.action_chain_db_path</code></td><td>运维按该属性找库会得到一个不存在的文件</td></tr>
-<tr><td><code>mount_id</code></td><td>全仓没有实现与引用</td><td>属<strong>未实施</strong>概念，不要当活字段使用</td></tr>
 <tr><td><code>module_boundary_baseline.json</code> 的 <code>note</code></td><td>引用 <code>plans/</code> 下的本地文档（被 gitignore）</td><td>克隆后无法追溯；违反「项目代码不引用 plans」仓规</td></tr>
-<tr><td>进程内 <code>/v1</code> 控制面与 <code>runtime*.py</code></td><td>已删除（<code>runtime.py</code> / <code>runtime_agents.py</code> / <code>runtime_digest.py</code> / <code>runtime_resources.py</code> / <code>runtime_connection.py</code> 均不在协议包）</td><td>旧文档若引用这些入口即为过期；wire 侧只保留持久化直连的 7 条 persist 命令</td></tr>
 </tbody></table>
 <h2 id="附录-a术语表">附录 A：术语表</h2>
 <table>

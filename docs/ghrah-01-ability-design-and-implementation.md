@@ -539,7 +539,7 @@ members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
 
 `conversation`、`end_task` 属于成员体系但**不进授权账本**：`_split` 把它们分流到 `control` 列表，`_instantiate` 直接实例化；工具面把它们放进 `controls`（`member_reference is None` 且不是 `run_script`）单独通道，撤销与授权投影都裁剪不到它们。规范见 `ghrah-11` §7。
 
-`tool_table_projector(agent, materialization)` 返回无参异步投影器：每轮从库重算可见工具名，只保留本次实际物化过且仍可用的成员；`AccessError` 时返回空元组（宁可少给，不给过期）。绑定变更由 `set_member_bound` 同时落两处：工具走 `bind_tool` / `unbind_tool`，技能目录名写实例快照（`MemberBindingState.save` → `AgentInstanceStore.set_member_bindings`）；持久化失败只告警，不回滚内存视图。
+`tool_table_projector(agent, materialization)` 返回无参异步投影器：每轮从库重算可见工具名，只保留本次实际物化过且仍可用的成员；`AccessError` 时返回空元组（宁可少给，不给过期）。绑定变更由 `set_member_bound` 写实例快照（`MemberBindingState.save` → `AgentInstanceStore.set_member_bindings`），工具成员与技能成员走同一入口；`ability_tools` 由启动核定与管理面 `enable_tool`/`disable_tool` 维护，元工具不直接写它。持久化失败只告警，不回滚内存视图。
 
 ## 13 不变式与已知偏差
 

@@ -929,7 +929,7 @@ HITL 的固定步骤：
 | 关系库 `ability_tools` | 「工具名 → 成员」的常驻工具选择 | 启动核定 `_bind`、管理面 `enable_tool` / `disable_tool` |
 | 实例快照 `agent_instances.members[].axes.bind` | 重启恢复的绑定事实 | `bind_member` / `unbind_member` 经 `MemberBindingState` → `AgentInstanceStore.set_member_bindings` |
 
-工具面的 `set_member_bound` 同时维护两者：工具成员走 `bind_tool` / `unbind_tool`（关系库），技能成员写快照（技能没有工具形态）；旧快照若同时带 `available` 键会一并同步，避免两种说法不一致。短暂不一致时：常驻集以快照轴为准，授权与工具名以关系库为准。
+`bind_member` / `unbind_member` 只改实例快照：`set_member_bound` 更新内部绑定集后经 `MemberBindingState.save` → `AgentInstanceStore.set_member_bindings` 写 `axes.bind`；`ability_tools` 由启动核定与管理面 `enable_tool` / `disable_tool` 维护，元工具不直接写它。旧快照若同时带 `available` 键会一并同步；常驻集以快照轴为准，授权与工具名以关系库为准。
 
 ### 9.7 失败语义与已知限制
 
@@ -1530,31 +1530,25 @@ Project Root 四库：`db/action-chains.sqlite3`（链 + `ability_*`）、`db/ag
 - 影响：Observer 侧仍保留 `listManifestAbilities` 等调用，发出后回执是 `Unknown command`；`manifests` store 也因此没有事件源。这是**已废弃**的命令面，不应作为新增功能的基础。
 - 状态：已废弃命令 + 未清理的客户端调用。
 
-### 16.3 `AgentAbilityRequest` 仍有未实现分支
-
-- 现状：`agents.create_from_template` 的旧模板路径在 `core/api/handlers/agents.py::_spec_from_template` 检查 `AgentAbilityRequest`；只要 `packages` / `mcp_refs` / `surface` 任一非空就抛 `UNAVAILABLE`，错误文本仍提旧字段名。
-- 影响：这条路径不是当前模板主线（模板走 `agent_templates.available_members` + 装配接口），但协议模型仍在，容易让调用方以为包维度申请可用。
-- 状态：**未实施**。新代码不应依赖该分支。
-
-### 16.4 `ProjectPaths` 缺 `agents.sqlite3` 属性
+### 16.3 `ProjectPaths` 缺 `agents.sqlite3` 属性
 
 - 现状：`ProjectPaths` 有 `task_db_path` / `room_db_path` / `action_chain_db_path`，但没有 `agents.sqlite3` 的专用属性；实际路径由 `ghrah-subject/src/ghrah/subject/core_cluster/registry.py` 手工拼 `ProjectPaths.db_dir / "agents.sqlite3"`。
 - 影响：Root 布局的「唯一派生点」原则被打破；新增消费方若按 `ProjectPaths` 找库会找不到，容易各自再拼一次路径。
 - 状态：已实现但布局不完整。
 
-### 16.5 `SUBJECT_PORT` 只有定义，没有协议与提供方
+### 16.4 `SUBJECT_PORT` 只有定义，没有协议与提供方
 
 - 现状：`SUBJECT_PORT = "subject.port"` 定义并再导出；全仓没有 `SubjectPort` Protocol，也没有任何 `ctx.provide("subject.port", ...)`。
 - 影响：该键是不可消费的空声明；读 `keys.py` 会误以为 Subject 侧能力面已端口化，实际跨模块调用仍只有 Core 一个方向。
 - 状态：未实施。
 
-### 16.6 Subject 仍依赖 Core，边界基线 25 条
+### 16.5 Subject 仍依赖 Core，边界基线 25 条
 
 - 现状：`ghrah-subject/pyproject.toml` 仍声明 `ghrah-core>=0.2.0a0`；ratchet 基线 25 条（§4.6），含 `pyproject.toml::ghrah-core`。
 - 影响：Subject 与 Core 在同一进程内仍以直接 import 耦合；进程内没有物理边界，这条 AST 测试是唯一约束。
 - 状态：已实现闸门，目标未达成。
 
-### 16.7 契约包反向依赖 `ghrah-plugin`
+### 16.6 契约包反向依赖 `ghrah-plugin`
 
 - 现状：`ghrah-protocol/pyproject.toml` 依赖 `ghrah-plugin`；`payloads/plugin.py` 的 `PluginNegotiateResultPayload` 直接继承其 `NegotiationResult`。
 - 不成环：`ghrah-plugin` 是叶子，不依赖任何 `ghrah-*`。
@@ -1562,7 +1556,7 @@ Project Root 四库：`db/action-chains.sqlite3`（链 + `ability_*`）、`db/ag
 - 影响二：`ghrah-plugin` 的模型变更会直接改变 wire 形状，而它不在契约评审路径上；TS 侧只能手写镜像 `payloads/plugin.ts`。
 - 状态：已知例外，未建立禁止边或同步机制。
 
-### 16.8 Node 版本下限三处不一致
+### 16.7 Node 版本下限三处不一致
 
 | 声明位置 | 值 |
 | --- | --- |
@@ -1572,37 +1566,34 @@ Project Root 四库：`db/action-chains.sqlite3`（链 + `ability_*`）、`db/ag
 
 影响：分发声明入口给出的 22.12 与根 `package.json` 的 26 相差一个大版本；哪个生效取决于调用方（`ghrah` 工具链读 `ghrah.toml`，pnpm / CI 读 `.nvmrc`）。状态：未收敛。
 
-### 16.9 同一个容器键在两个包里各写一份字面量
+### 16.8 同一个容器键在两个包里各写一份字面量
 
 - 现状：`CORE_PORT` / `CORE_CATALOG` 在协议包 `ports/keys.py`；Subject 的 `runtime/service_keys.py` 又写了两份同值字面量并注释「名字就是协议包的键」。两处都有使用方：`units/core_cluster.py` 用协议常量 provide，`units/ability_control.py` / `agent_control.py` 用 Subject 常量 requires。
 - 影响：容器键本应只有一处真相，现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为「依赖未满足」。
 - 状态：已实现但重复声明。
 
-### 16.10 `TaskStoreUnit` 经 builtin 链挂载与「目标形态是插件」矛盾
+### 16.9 `TaskStoreUnit` 经 builtin 链挂载与「目标形态是插件」矛盾
 
 - 现状：`TaskStoreConfig` 与 `units/__init__.py` 都写明「目标装配形态是插件…当前经 builtin 链挂载属待纠正偏离」。
 - 影响：`taskstore.enabled`（默认 True）决定它作为内置 unit 挂载，顺序固定在 TaskUnit 之前；插件信任闸对它不生效——一个「可选、应受信任闸约束的插件」实际拥有内置 unit 的权限与生命周期。
 - 状态：代码自述偏离，未纠正。
 
-### 16.11 Observer 两个配置项只有默认值生效
+### 16.10 Observer 两个配置项只有默认值生效
 
 - 现状：`ObserverServerConfig.from_env()` 读 `GHRAH_SUBJECT_SERVER_WS_PATH`、`..._EVENT_REPLAY_CAPACITY`；但 `serve()` 里 `create_app(observer_config, ctx=ctx)` 第一行 `del config`，app 由 unit 持有；unit 以 `WebSocketObserverEndpointUnit(config)` 构造，`observer_config=None`，`init()` 回落到默认值，WS 固定 `/ws`、EventBus 容量固定 1000。
 - 影响：改这两个环境变量不改变行为，也不报错；`HOST` / `PORT` / `PING_*` / `LOG_LEVEL` 仍有效，形成「同一前缀部分生效」的误导。
 - 状态：已实现但配置未接通。
 
-### 16.12 其他残留
+### 16.11 其他残留
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
 | `units/__init__.py` docstring | 写 coexistence 7 / full 21（把已删除的模板库 unit 算进去），与实测 6 / 20 不符 | 以 §5.2 为准 |
 | 恢复报告分项计数 | `ReconcileReport` 定义 `agents_restored` / `agents_initialized`，但对账只把 `resumed` 计入 `agents_spawned` | 两个分项不会命中 |
 | `memory/` 目录 | 仅 `initialize()` 建目录，无读写方 | Root 看起来有记忆落点，实际是空目录 |
-| `manifests/` 目录 | 仅 `initialize()` 建目录；模板已迁 `agent_templates` | 历史布局残留；无生产写入 |
-| Core `manifest_ref` 派生路径 | Core 仍保留 `ManifestStoreProtocol` 与 `manifest_ref` spawn 分支，Subject 已不提供解析实现 | `manifest_ref` spawn 在生产链路不可用；创建线走装配接口 |
+| `manifests/` 目录 | 仅 `initialize()` 建目录；模板已迁 `agent_templates` | 无生产写入 |
 | `SubjectConfig.core_db_path` | 返回 `Path(db_path).parent / "ghrah.db"`，全仓无读写方；registry 的同名局部变量实际取 `ProjectPaths.action_chain_db_path` | 运维按该属性找库会得到一个不存在的文件 |
-| `mount_id` | 全仓没有实现与引用 | 属**未实施**概念，不要当活字段使用 |
 | `module_boundary_baseline.json` 的 `note` | 引用 `plans/` 下的本地文档（被 gitignore） | 克隆后无法追溯；违反「项目代码不引用 plans」仓规 |
-| 进程内 `/v1` 控制面与 `runtime*.py` | 已删除（`runtime.py` / `runtime_agents.py` / `runtime_digest.py` / `runtime_resources.py` / `runtime_connection.py` 均不在协议包） | 旧文档若引用这些入口即为过期；wire 侧只保留持久化直连的 7 条 persist 命令 |
 
 ## 附录 A：术语表
 
