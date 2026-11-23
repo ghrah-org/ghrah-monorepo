@@ -197,6 +197,10 @@ async def test_resume_interrupted_from_compact_checkpoint(rollback_runtime):
     assert delivery.state.value == "completed"
     assert delivery.consumed_node_id == action.id
     assert cm.active_head.parent_id == compact.id
+    assert cm.active_head.metadata["delivery_context"] == {
+        "agent_id": "agent",
+        "message_manager": True,
+    }
     assert not any(message.text == "original payload" for message in cm.active_head.messages_delta)
 
 

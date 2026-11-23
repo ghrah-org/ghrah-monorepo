@@ -110,7 +110,6 @@ class MailboxReader:
             )
         ).fetchall()
         message = dict(row)
-        message["project_id"] = self._identity.project_id
         message["metadata"] = json.loads(message["metadata"])
         message["external_sender"] = bool(message["external_sender"])
         projected = []

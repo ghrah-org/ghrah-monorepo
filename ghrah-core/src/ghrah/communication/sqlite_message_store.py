@@ -1503,7 +1503,6 @@ class SqliteMessageStore:
         ).fetchall()
         return MessageRecord(
             message_id,
-            self.scope_id,
             row["sender_id"],
             tuple(item[0] for item in recipients),
             row["content"],

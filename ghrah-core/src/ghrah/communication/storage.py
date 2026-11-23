@@ -42,7 +42,6 @@ class MessageRecord:
     """不可变消息及其持久接收者集合。"""
 
     message_id: str
-    project_id: str
     sender_id: str
     recipient_ids: tuple[str, ...]
     content: str

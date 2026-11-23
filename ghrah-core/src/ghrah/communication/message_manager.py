@@ -1101,7 +1101,6 @@ class MessageManager:
                     **record.metadata,
                     "external_sender": record.external_sender,
                     "message_manager": True,
-                    "project_id": self._sqlite.scope_id,
                     "agent_id": agent_id,
                     "message_id": record.message_id,
                     "delivery_id": delivery_id,

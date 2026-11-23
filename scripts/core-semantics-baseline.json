@@ -44,7 +44,7 @@
       "ghrah/ability/scheme/host.py": 7,
       "ghrah/chat/format/__init__.py": 1,
       "ghrah/core/read/ability_catalog.py": 5,
-      "ghrah/core/unit.py": 2
+      "ghrah/core/unit.py": 1
     },
     "project_id": {
       "ghrah/ability/access/startup.py": 1,
@@ -59,16 +59,14 @@
       "ghrah/ability/surface/projection.py": 1,
       "ghrah/ability/surface/runtime.py": 1,
       "ghrah/ability/surface/search.py": 2,
-      "ghrah/agents/base.py": 4,
-      "ghrah/communication/mailbox_reader.py": 4,
-      "ghrah/communication/message_manager.py": 6,
+      "ghrah/communication/mailbox_reader.py": 2,
+      "ghrah/communication/message_manager.py": 5,
       "ghrah/communication/sqlite_message_store.py": 2,
-      "ghrah/communication/storage.py": 1,
       "ghrah/core/read/ability.py": 2,
       "ghrah/core/read/ability_admin.py": 1,
       "ghrah/core/read/ability_catalog.py": 8,
       "ghrah/core/read/mailbox.py": 1,
-      "ghrah/core/unit.py": 18,
+      "ghrah/core/unit.py": 16,
       "ghrah/core/units/registry.py": 1,
       "ghrah/core/wiring.py": 2
     },

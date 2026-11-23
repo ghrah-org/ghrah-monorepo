@@ -704,7 +704,6 @@ class ActorAgent:
                                     for key in ("room_id", "message_manager")
                                     if message.metadata.get(key)
                                 },
-                                "project_id": message.metadata["project_id"],
                                 "agent_id": self.config.effective_agent_id,
                             }
                         )
@@ -877,7 +876,7 @@ class ActorAgent:
             # 再次落入 RoomLog。历史同步由 get_chain_history 显式承担。
             delivery_context = {
                 key: message.metadata[key]
-                for key in ("room_id", "project_id", "agent_id", "message_manager")
+                for key in ("room_id", "agent_id", "message_manager")
                 if message.metadata and message.metadata.get(key)
             }
             self._drive_active = True
@@ -1726,9 +1725,7 @@ class ActorAgent:
                 from ghrah.context.persistence.serialization import serialize_branch, serialize_node
 
                 delivery_context = {
-                    k: accumulated_data[k]
-                    for k in ("room_id", "project_id", "agent_id")
-                    if k in accumulated_data
+                    k: accumulated_data[k] for k in ("room_id", "agent_id") if k in accumulated_data
                 }
                 if get_iteration_committer(cm) is not None:
                     delivery_context["message_manager"] = True

@@ -683,11 +683,6 @@ class CoreUnit:
             HostCommandPort(HostCommandBridge(serial)) if callable(serial) else None
         )
 
-        if (
-            self._config.message_manager is not None
-            and self._config.message_manager.project_id != self._config.project_id
-        ):
-            raise ValueError("MessageManager project does not match CoreUnit")
         # 装配模式：一次选择同时决定能力目录、工具实例与 Skill 读取服务。
         # 只属于旧模式的可写入口由 builtin 模式显式拒绝。
         assembly = AbilityAssembly.select(
