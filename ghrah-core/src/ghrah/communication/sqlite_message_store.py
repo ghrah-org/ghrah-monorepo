@@ -25,6 +25,7 @@ from ghrah.communication.delivery_queue import (
     blocker_joins,
     blocker_reason_sql,
     display_state,
+    find_blocker,
     has_turns,
     needs_delivery_repair,
     pending_turn_input_ids,
@@ -55,6 +56,7 @@ from ghrah.communication.storage import (
     RecoveredDelivery,
     ResumeCheckpoint,
     SavedDeliveryResult,
+    TurnInput,
 )
 from ghrah.context import recovery, turn
 from ghrah.context.persistence.changes import ContextChanges
@@ -438,6 +440,162 @@ class SqliteMessageStore(SqliteTurnStore):
             except BaseException:
                 await db.rollback()
                 raise
+
+    # ── 读查询（MessageQuery）──
+
+    def require_open(self) -> None:
+        """未打开或正在关闭时立即报错。"""
+        self.require_connection()
+
+    async def read_message(self, message_id: str) -> MessageRecord:
+        """按 ID 读取消息及其接收者集合。"""
+        async with self.lock:
+            return await self._read_message(self.require_connection(), message_id)
+
+    async def list_deliveries(self, message_id: str) -> tuple[DeliveryRecord, ...]:
+        """读取一条消息各接收者的投递与结果引用。"""
+        async with self.lock:
+            rows = await (
+                await self.require_connection().execute(
+                    "SELECT d.*, r.delivery_id AS result_id, r.result_node_id "
+                    "FROM mm_messages m LEFT JOIN mm_deliveries d ON d.message_id=m.message_id "
+                    "LEFT JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
+                    "WHERE m.message_id=? ORDER BY d.seq",
+                    (message_id,),
+                )
+            ).fetchall()
+        if not rows:
+            raise KeyError(message_id)
+        return tuple(self.delivery_record(row) for row in rows if row["delivery_id"] is not None)
+
+    async def list_replies(self, message_id: str) -> tuple[MessageRecord, ...]:
+        """按原请求读取各响应者的持久回复。"""
+        async with self.lock:
+            db = self.require_connection()
+            await self._read_message(db, message_id)
+            rows = await (
+                await db.execute(
+                    "SELECT message_id FROM mm_messages WHERE reply_to=? ORDER BY seq",
+                    (message_id,),
+                )
+            ).fetchall()
+            return tuple([await self._read_message(db, row[0]) for row in rows])
+
+    async def queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
+        """读取同会话尚未收敛的前序投递及其阻塞原因。"""
+        async with self.lock:
+            row = await find_blocker(self.require_connection(), delivery_id)
+        return self.delivery_record(row) if row is not None else None
+
+    async def has_active_turn(self, agent_id: str) -> bool:
+        """该 Agent 是否已有持久活动轮次。"""
+        async with self.lock:
+            db = self.require_connection()
+            return await has_turns(db) and await turn.has_active_turn(db, agent_id)
+
+    async def require_active_turn(self, turn_id: str) -> None:
+        """在存储锁内确认轮次仍持有执行权。"""
+        async with self.lock:
+            await turn.require_active(self.require_connection(), turn_id)
+
+    async def load_turn_inputs(self, turn_id: str) -> tuple[TurnInput, ...]:
+        """按受理顺序读取本轮尚未消费的注入，不修改投递。"""
+        async with self.lock:
+            rows = await (
+                await self.require_connection().execute(
+                    "SELECT d.delivery_id, d.target_session_id, m.message_id, m.content, "
+                    "m.sender_id, m.external_sender, m.metadata FROM mm_deliveries d "
+                    "JOIN turns t ON t.turn_id=d.turn_id "
+                    "JOIN mm_messages m ON m.message_id=d.message_id "
+                    "WHERE d.turn_id=? AND t.status IN ('open','waiting_hitl') "
+                    "AND d.state='pending' AND d.consumed_node_id IS NULL "
+                    "AND d.delivery_policy='inject' AND d.blocked_reason IS NULL AND d.parked=0 "
+                    "ORDER BY d.seq",
+                    (turn_id,),
+                )
+            ).fetchall()
+        return tuple(
+            TurnInput(
+                delivery_id=row["delivery_id"],
+                message_id=row["message_id"],
+                target_session_id=row["target_session_id"],
+                content=row["content"],
+                sender_id=row["sender_id"],
+                external_sender=bool(row["external_sender"]),
+                metadata=json.loads(row["metadata"]),
+            )
+            for row in rows
+        )
+
+    async def has_injected_peer(self, message_id: str) -> bool:
+        """是否存在绑定到他人轮次的注入投递（因此没有独立回复）。"""
+        async with self.lock:
+            row = await (
+                await self.require_connection().execute(
+                    "SELECT 1 FROM mm_deliveries d JOIN turns t ON t.turn_id=d.turn_id "
+                    "WHERE d.message_id=? AND d.delivery_policy='inject' "
+                    "AND d.delivery_id IS NOT t.opener_delivery_id LIMIT 1",
+                    (message_id,),
+                )
+            ).fetchone()
+        return row is not None
+
+    async def inline_wait_is_active(self, message_id: str, parent_delivery_id: str) -> bool:
+        """同步等待是否仍处于 waiting。"""
+        async with self.lock:
+            row = await (
+                await self.require_connection().execute(
+                    "SELECT 1 FROM mm_inline_waits "
+                    "WHERE message_id=? AND parent_delivery_id=? AND state='waiting'",
+                    (message_id, parent_delivery_id),
+                )
+            ).fetchone()
+        return row is not None
+
+    async def pending_room_projections(self, limit: int) -> tuple[tuple[str, int], ...]:
+        """读取待确认的 Room 投影及其已失败次数。"""
+        async with self.lock:
+            rows = await (
+                await self.require_connection().execute(
+                    "SELECT message_id, attempts FROM mm_room_projections "
+                    "WHERE completed=0 ORDER BY rowid LIMIT ?",
+                    (limit,),
+                )
+            ).fetchall()
+        return tuple((row[0], int(row[1] or 0)) for row in rows)
+
+    async def complete_room_projection(self, message_id: str) -> None:
+        """标记 Room 投影已确认。"""
+        async with self.transaction() as db:
+            await db.execute(
+                "UPDATE mm_room_projections SET completed=1, error=NULL WHERE message_id=?",
+                (message_id,),
+            )
+
+    async def record_room_projection_failure(
+        self, message_id: str, *, attempts: int, error: str, exhausted: bool
+    ) -> None:
+        """记录一次投影失败；耗尽后标记终结，保留最后原因。"""
+        async with self.transaction() as db:
+            await db.execute(
+                "UPDATE mm_room_projections SET attempts=?, error=?, completed=? "
+                "WHERE message_id=?",
+                (attempts, error, 1 if exhausted else 0, message_id),
+            )
+
+    async def list_session_agent_ids(self) -> frozenset[str] | None:
+        """从链库 sessions 表重建身份集合；无该表时返回 None。"""
+        async with self.lock:
+            db = self.require_connection()
+            exists = await (
+                await db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+                )
+            ).fetchone()
+            if exists is None:
+                return None
+            rows = await (await db.execute("SELECT DISTINCT agent_name FROM sessions")).fetchall()
+        return frozenset(row[0] for row in rows)
 
     async def claim_delivery(
         self,

@@ -197,6 +197,59 @@ class DeliveryRecoveryProbe:
 
 
 @dataclass(frozen=True)
+class TurnInput:
+    """一轮待消费的注入输入；正文组装由调用方负责。"""
+
+    delivery_id: str
+    message_id: str
+    target_session_id: str | None
+    content: str
+    sender_id: str
+    external_sender: bool
+    metadata: dict
+
+
+class MessageQuery(Protocol):
+    """同一存储域的类型化读查询。
+
+    调用方只收发领域记录；SQL、行对象与连接留在实现内。查询各自取一次
+    存储锁，不与其他写操作嵌套。
+    """
+
+    def require_open(self) -> None:
+        """未打开或正在关闭时立即报错。"""
+        ...
+
+    async def read_message(self, message_id: str) -> MessageRecord: ...
+
+    async def list_deliveries(self, message_id: str) -> tuple[DeliveryRecord, ...]: ...
+
+    async def list_replies(self, message_id: str) -> tuple[MessageRecord, ...]: ...
+
+    async def queue_blocker(self, delivery_id: str) -> DeliveryRecord | None: ...
+
+    async def has_active_turn(self, agent_id: str) -> bool: ...
+
+    async def require_active_turn(self, turn_id: str) -> None: ...
+
+    async def load_turn_inputs(self, turn_id: str) -> tuple[TurnInput, ...]: ...
+
+    async def has_injected_peer(self, message_id: str) -> bool: ...
+
+    async def inline_wait_is_active(self, message_id: str, parent_delivery_id: str) -> bool: ...
+
+    async def pending_room_projections(self, limit: int) -> tuple[tuple[str, int], ...]: ...
+
+    async def complete_room_projection(self, message_id: str) -> None: ...
+
+    async def record_room_projection_failure(
+        self, message_id: str, *, attempts: int, error: str, exhausted: bool
+    ) -> None: ...
+
+    async def list_session_agent_ids(self) -> frozenset[str] | None: ...
+
+
+@dataclass(frozen=True)
 class RecoveredDelivery:
     """已提交的恢复结果，用于唤醒消息等待者和发布轮次闭合。"""
 

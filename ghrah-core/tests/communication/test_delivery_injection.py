@@ -84,7 +84,7 @@ async def test_queue_and_injection_reads_batch_and_idle_scan_does_not_write(runt
         assert sum(sql.startswith("SELECT") for sql in statements) <= 4
 
     statements.clear()
-    db = mm._require_db()
+    db = mm._sqlite.require_connection()
     await db.set_trace_callback(statements.append)
     try:
         await mm._scan()
@@ -153,7 +153,7 @@ async def test_terminal_turn_releases_unconsumed_and_settles_consumed(runtime, t
     active = await cm.open_turn()
     consumed = await accept(mm, "consumed")
     queued = await accept(mm, "unconsumed")
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         await db.execute(
             "UPDATE mm_deliveries SET consumed_node_id=?, consumed_session_id=? "
             "WHERE delivery_id=?",
@@ -315,7 +315,7 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
     incoming = await accept(mm, "incoming")
     opener_id = opener.deliveries[0].delivery_id
     input_id = incoming.deliveries[0].delivery_id
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         await db.execute(
             "UPDATE turns SET opener_delivery_id=? WHERE turn_id=?", (opener_id, turn_id)
         )
@@ -331,7 +331,7 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
     node = cm.commit_iteration()
     scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
     scope.consumed_deliveries.add(input_id)
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         if fault == "closed":
             await db.execute("UPDATE turns SET status='closed' WHERE turn_id=?", (turn_id,))
         elif fault == "head_changed":
@@ -372,7 +372,7 @@ async def test_compact_commits_without_loading_or_consuming_injections(runtime):
     opener = await accept(mm, "opener", policy="queue")
     incoming = await accept(mm, "incoming")
     opener_id = opener.deliveries[0].delivery_id
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         await db.execute(
             "UPDATE mm_deliveries SET state='processing', turn_id=? WHERE delivery_id=?",
             (turn_id, opener_id),
@@ -476,7 +476,7 @@ async def test_special_turn_blockers_match_scheduler_and_recovery(runtime, missi
     active = await agent._context_manager.open_turn()
     injected = await accept(mm, "injected")
     later = await accept(mm, "later", policy="queue")
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         if missing:
             await db.execute(
                 "UPDATE mm_deliveries SET turn_id='missing' WHERE delivery_id=?",
@@ -488,9 +488,9 @@ async def test_special_turn_blockers_match_scheduler_and_recovery(runtime, missi
     assert blocker.queue_block_reason == (
         "turn_missing" if missing else "turn_terminal_pending_input"
     )
-    async with mm._lock:
-        db = mm._require_db()
-        candidate = await (await db.execute(mm._next_delivery_sql(), ("agent",))).fetchone()
+    async with mm._sqlite.lock:
+        db = mm._sqlite.require_connection()
+        candidate = await (await db.execute(mm._sqlite._next_delivery_sql(), ("agent",))).fetchone()
         assert candidate is None
     await mm.dispatch_pending()
     (released,) = await mm.get_deliveries(injected.message_id)

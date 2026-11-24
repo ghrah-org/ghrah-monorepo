@@ -77,7 +77,7 @@ async def test_mm_turn_closes_with_opener_and_nodes(runtime):
 async def test_claim_failure_rolls_back_turn_before_agent_runs(runtime):
     agent, backend, mm = runtime
     session_id = agent._context_manager.active_session_id
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         await db.execute(
             "CREATE TRIGGER reject_claim BEFORE UPDATE OF state ON mm_deliveries "
             "WHEN NEW.state='processing' BEGIN SELECT RAISE(ABORT, 'claim failed'); END"
@@ -91,7 +91,7 @@ async def test_claim_failure_rolls_back_turn_before_agent_runs(runtime):
     assert agent._context_manager.active_turn_id is None
     assert await mm.get_replies(request.message_id) == ()
 
-    async with mm._transaction() as db:
+    async with mm._sqlite.transaction() as db:
         await db.execute("DROP TRIGGER reject_claim")
     await mm.retry(failed.delivery_id)
     await mm.dispatch_pending()

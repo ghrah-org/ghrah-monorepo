@@ -12,22 +12,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
-from contextlib import AbstractAsyncContextManager
 from contextvars import Context, ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import aiosqlite
-
 from ghrah.agents.runner import detached_runner_context
 from ghrah.chat.content import TextBlock, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
-from ghrah.communication.delivery_queue import find_blocker, has_turns
 from ghrah.communication.sqlite_message_store import SqliteMessageStore
 from ghrah.communication.storage import (
     DeliveryClaimCancelled,
@@ -40,6 +35,7 @@ from ghrah.communication.storage import (
     DeliveryStore,
     FinalDeliveryResult,
     MessageKind,
+    MessageQuery,
     MessageRecord,
     MessageSubmission,
     PreparedMessage,
@@ -124,6 +120,7 @@ class MessageManager:
             raise ValueError("Message store path/scope mismatch")
         self._sqlite = _store or SqliteMessageStore(path, project_id)
         self._delivery_store: DeliveryStore = self._sqlite
+        self._query: MessageQuery = self._sqlite
         self._agent_ids = frozenset(agent_ids)
         self._poll_interval = poll_interval
         self._session_routing = session_routing
@@ -132,7 +129,6 @@ class MessageManager:
         self._room_projector: Callable[[MessageRecord], Awaitable[None]] | None = None
         self._projection_lock = asyncio.Lock()
         self._session_receivers: set[str] = set()
-        self._lock = self._sqlite.lock
         self._scan_lock = asyncio.Lock()
         self._receivers: dict[str, Receiver] = {}
         self._turn_closure_publishers: dict[str, TurnClosurePublisher] = {}
@@ -198,7 +194,7 @@ class MessageManager:
 
     async def prepare_dispatch(self) -> None:
         """显式验收恢复路径；错误直接传播，不通过后台循环吞掉初始化故障。"""
-        self._require_db()
+        self._sqlite.require_open()
         if self._closing or self._dispatcher is not None or self._receivers:
             raise RuntimeError("Dispatch preparation requires an open, inactive manager")
         await self.recover_completions()
@@ -206,7 +202,7 @@ class MessageManager:
 
     def start_dispatcher(self) -> None:
         """在运行时就绪时幂等启动调度，不创建或绑定 Agent。"""
-        self._require_db()
+        self._sqlite.require_open()
         if self._closing:
             raise RuntimeError("MessageManager is closing")
         if self._dispatcher is None:
@@ -234,7 +230,7 @@ class MessageManager:
 
     def bind(self, agent_id: str, receiver: Receiver, *, _session_aware: bool = False) -> None:
         """将稳定 agent ID 绑定到在线接收回调，并唤醒待收扫描。"""
-        self._require_db()
+        self._sqlite.require_open()
         self._check_identity(agent_id)
         if self._session_routing and not _session_aware:
             raise ValueError("Session routing requires bind_atomic")
@@ -247,7 +243,7 @@ class MessageManager:
 
     async def unbind(self, agent_id: str) -> None:
         """停止该 agent 的消费；未开始消息继续离线待收。"""
-        self._require_db()
+        self._sqlite.require_open()
         self._receivers.pop(agent_id, None)
         self._turn_closure_publishers.pop(agent_id, None)
         self._paused_agents.discard(agent_id)
@@ -272,7 +268,7 @@ class MessageManager:
     async def bind_atomic(self, agent: ActorAgent) -> None:
         """显式绑定同文件 SQLite 上下文，原子提交消费确认与本轮出站。"""
         agent_id = agent.config.effective_agent_id
-        self._require_db()
+        self._sqlite.require_open()
         self._check_identity(agent_id)
         if agent_id in self._receivers:
             raise ValueError(f"Agent already bound: {agent_id}")
@@ -351,58 +347,40 @@ class MessageManager:
 
     async def has_active_turn(self, agent_id: str) -> bool:
         """检查调度器是否已为该接收方持久领取一轮。"""
-        async with self._lock:
-            db = self._require_db()
-            return await has_turns(db) and await turn.has_active_turn(db, agent_id)
+        return await self._query.has_active_turn(agent_id)
 
     async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
         """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""
-        async with self._lock:
-            db = self._require_db()
-            rows = await (
-                await db.execute(
-                    "SELECT d.delivery_id, d.target_session_id, m.message_id, m.content, "
-                    "m.sender_id, m.external_sender, m.metadata FROM mm_deliveries d "
-                    "JOIN turns t ON t.turn_id=d.turn_id "
-                    "JOIN mm_messages m ON m.message_id=d.message_id "
-                    "WHERE d.turn_id=? AND t.status IN ('open','waiting_hitl') "
-                    "AND d.state='pending' AND d.consumed_node_id IS NULL "
-                    "AND d.delivery_policy='inject' AND d.blocked_reason IS NULL AND d.parked=0 "
-                    "ORDER BY d.seq",
-                    (turn_id,),
+        inputs = []
+        for item in await self._query.load_turn_inputs(turn_id):
+            metadata = item.metadata
+            blocks = metadata.get("content_blocks")
+            content = blocks_from_dicts(blocks) if blocks else item.content
+            if (
+                blocks
+                and item.content
+                and not any(
+                    isinstance(block, TextBlock) and block.text == item.content for block in content
                 )
-            ).fetchall()
-            inputs = []
-            for row in rows:
-                metadata = json.loads(row["metadata"])
-                blocks = metadata.get("content_blocks")
-                text = row["content"]
-                content = blocks_from_dicts(blocks) if blocks else text
-                if (
-                    blocks
-                    and text
-                    and not any(
-                        isinstance(block, TextBlock) and block.text == text for block in content
-                    )
-                ):
-                    content.insert(0, TextBlock(text=text))
-                inputs.append(
-                    ChatMessage.user(
-                        content,
-                        source=row["sender_id"].removeprefix("human:")
-                        if row["external_sender"]
-                        else f"agent:{row['sender_id']}",
-                        metadata={
-                            **metadata,
-                            "message_id": row["message_id"],
-                            "delivery_id": row["delivery_id"],
-                            "turn_id": turn_id,
-                            "delivery_policy": "inject",
-                            "message_type": metadata.get("message_type", "chat"),
-                            "target_session_id": row["target_session_id"],
-                        },
-                    )
+            ):
+                content.insert(0, TextBlock(text=item.content))
+            inputs.append(
+                ChatMessage.user(
+                    content,
+                    source=item.sender_id.removeprefix("human:")
+                    if item.external_sender
+                    else f"agent:{item.sender_id}",
+                    metadata={
+                        **metadata,
+                        "message_id": item.message_id,
+                        "delivery_id": item.delivery_id,
+                        "turn_id": turn_id,
+                        "delivery_policy": "inject",
+                        "message_type": metadata.get("message_type", "chat"),
+                        "target_session_id": item.target_session_id,
+                    },
                 )
+            )
         return tuple(inputs)
 
     async def cancel(self, delivery_id: str) -> None:
@@ -596,9 +574,8 @@ class MessageManager:
                 return
             context_manager.require_turn(turn_id)
             if turn_id is not None:
-                async with self._lock:
-                    # 其他进程的中止不会设置本进程的 Event。
-                    await turn.require_active(self._require_db(), turn_id)
+                # 其他进程的中止不会设置本进程的 Event。
+                await self._query.require_active_turn(turn_id)
                 context_manager.require_turn(turn_id)
 
         async def wake_on_abort(event: asyncio.Event) -> None:
@@ -611,17 +588,7 @@ class MessageManager:
                 await require_turn()
                 deliveries = await self.get_deliveries(message_id)
                 if any(d.delivery_policy == "inject" and d.turn_id for d in deliveries):
-                    async with self._lock:
-                        db = self._require_db()
-                        injected = await (
-                            await db.execute(
-                                "SELECT 1 FROM mm_deliveries d JOIN turns t ON t.turn_id=d.turn_id "
-                                "WHERE d.message_id=? AND d.delivery_policy='inject' "
-                                "AND d.delivery_id IS NOT t.opener_delivery_id LIMIT 1",
-                                (message_id,),
-                            )
-                        ).fetchone()
-                    if injected is not None:
+                    if await self._query.has_injected_peer(message_id):
                         raise ValueError("injected delivery has no independent reply")
                 terminal = {
                     DeliveryState.COMPLETED,
@@ -712,19 +679,11 @@ class MessageManager:
         context_manager.check_turn_revoked()
         turn_id = context_manager.active_turn_id
         request = await self.get_message(message_id)
-        async with self._lock:
-            db = self._require_db()
-            row = await (
-                await db.execute(
-                    "SELECT 1 FROM mm_inline_waits "
-                    "WHERE message_id=? AND parent_delivery_id=? AND state='waiting'",
-                    (message_id, scope.delivery_id),
-                )
-            ).fetchone()
-            if row is None and turn_id is not None:
-                await turn.require_active(db, turn_id)
+        waiting = await self._query.inline_wait_is_active(message_id, scope.delivery_id)
+        if not waiting and turn_id is not None:
+            await self._query.require_active_turn(turn_id)
         context_manager.require_turn(turn_id)
-        if row is None:
+        if not waiting:
             raise ValueError("Inline request does not belong to this execution")
         targets = set(request.recipient_ids)
 
@@ -763,46 +722,19 @@ class MessageManager:
 
     async def get_message(self, message_id: str) -> MessageRecord:
         """查询持久消息及来源与去向。"""
-        async with self._lock:
-            return await self._sqlite._read_message(self._require_db(), message_id)
+        return await self._query.read_message(message_id)
 
     async def get_deliveries(self, message_id: str) -> tuple[DeliveryRecord, ...]:
         """查询各接收者的独立状态；未知消息报错。"""
-        async with self._lock:
-            db = self._require_db()
-            rows = await (
-                await db.execute(
-                    "SELECT d.*, r.delivery_id AS result_id, r.result_node_id "
-                    "FROM mm_messages m LEFT JOIN mm_deliveries d ON d.message_id=m.message_id "
-                    "LEFT JOIN mm_delivery_results r ON r.delivery_id=d.delivery_id "
-                    "WHERE m.message_id=? ORDER BY d.seq",
-                    (message_id,),
-                )
-            ).fetchall()
-        if not rows:
-            raise KeyError(message_id)
-        return tuple(
-            self._sqlite.delivery_record(row) for row in rows if row["delivery_id"] is not None
-        )
+        return await self._query.list_deliveries(message_id)
 
     async def get_queue_blocker(self, delivery_id: str) -> DeliveryRecord | None:
         """查询同会话尚未收敛的前序投递，并报告轮次或结果收尾的阻塞原因。"""
-        async with self._lock:
-            row = await find_blocker(self._require_db(), delivery_id)
-        return self._sqlite.delivery_record(row) if row is not None else None
+        return await self._query.queue_blocker(delivery_id)
 
     async def get_replies(self, message_id: str) -> tuple[MessageRecord, ...]:
         """按原请求查询各响应者持久回复，不依赖内存 Future。"""
-        async with self._lock:
-            db = self._require_db()
-            await self._sqlite._read_message(db, message_id)
-            rows = await (
-                await db.execute(
-                    "SELECT message_id FROM mm_messages WHERE reply_to=? ORDER BY seq",
-                    (message_id,),
-                )
-            ).fetchall()
-            return tuple([await self._sqlite._read_message(db, row[0]) for row in rows])
+        return await self._query.list_replies(message_id)
 
     async def retry(self, delivery_id: str) -> None:
         """显式重试失败或中断投递；调用方须确认重复副作用风险。"""
@@ -844,7 +776,7 @@ class MessageManager:
 
     async def dispatch_pending(self) -> None:
         """处理当前在线 agent 可领取的消息；离线和中断不阻塞调用返回。"""
-        self._require_db()
+        self._sqlite.require_open()
         while True:
             scan_saw_worker = await self._scan()
             tasks = tuple(self._workers.values())
@@ -891,35 +823,18 @@ class MessageManager:
         if self._room_projector is None:
             return 0
         async with self._projection_lock:
-            async with self._lock:
-                rows = await (
-                    await self._require_db().execute(
-                        "SELECT message_id, attempts FROM mm_room_projections "
-                        "WHERE completed=0 ORDER BY rowid LIMIT ?",
-                        (limit,),
-                    )
-                ).fetchall()
             completed = 0
-            for row in rows:
-                message_id, attempts = row[0], int(row[1] or 0)
+            for message_id, attempts in await self._query.pending_room_projections(limit):
                 try:
                     await self._room_projector(await self.get_message(message_id))
-                    async with self._transaction() as db:
-                        await db.execute(
-                            "UPDATE mm_room_projections SET completed=1, error=NULL "
-                            "WHERE message_id=?",
-                            (message_id,),
-                        )
+                    await self._query.complete_room_projection(message_id)
                     completed += 1
                 except Exception as exc:
                     failed = attempts + 1
                     exhausted = failed >= ROOM_PROJECTION_MAX_ATTEMPTS
-                    async with self._transaction() as db:
-                        await db.execute(
-                            "UPDATE mm_room_projections SET attempts=?, error=?, completed=? "
-                            "WHERE message_id=?",
-                            (failed, str(exc), 1 if exhausted else 0, message_id),
-                        )
+                    await self._query.record_room_projection_failure(
+                        message_id, attempts=failed, error=str(exc), exhausted=exhausted
+                    )
                     if exhausted:
                         logger.warning(
                             "Room projection abandoned after %d attempts: %s: %s",
@@ -935,30 +850,13 @@ class MessageManager:
         """从 Core sessions 重建身份校验缓存，不独立写入身份事实。"""
         if not self._allow_persisted_agents:
             return
-        async with self._lock:
-            db = self._require_db()
-            exists = await (
-                await db.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
-                )
-            ).fetchone()
-            if exists:
-                rows = await (
-                    await db.execute("SELECT DISTINCT agent_name FROM sessions")
-                ).fetchall()
-                self._agent_ids = frozenset(row[0] for row in rows)
+        ids = await self._query.list_session_agent_ids()
+        if ids is not None:
+            self._agent_ids = ids
 
     def _check_identity(self, agent_id: str) -> None:
         if agent_id not in self._agent_ids:
             raise ValueError(f"Unknown agent ID: {agent_id}")
-
-    def _require_db(self) -> aiosqlite.Connection:
-        return self._sqlite.require_connection()
-
-    def _transaction(self) -> AbstractAsyncContextManager[aiosqlite.Connection]:
-        return self._sqlite.transaction()
-
-    _next_delivery_sql = staticmethod(SqliteMessageStore._next_delivery_sql)
 
     async def _commit_atomic(self, scope: _AtomicDelivery, changes: ContextChanges) -> None:
         scope.committing = True

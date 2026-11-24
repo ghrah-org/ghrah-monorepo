@@ -19,6 +19,7 @@ from _helpers import ScriptedLLM
 from ghrah.ability.builtin.core.operations.conversation import ConversationAbility
 from ghrah.agents.builder import AgentBuilder
 from ghrah.communication.message_manager import DeliveryState, MessageKind, MessageManager
+from ghrah.communication.sqlite_message_store import SqliteMessageStore
 from ghrah.context.turn import TurnRevokedError
 from ghrah.core.config import AgentConfig
 from ghrah.core.message import AgentMessage, MessageType
@@ -573,7 +574,7 @@ async def test_stranded_callback_delivery_recovers_without_context_schema(tmp_pa
         later = await send_request(manager, "later")
         deliveries = await manager.get_deliveries(first.message_id)
         prior = next(item for item in deliveries if item.recipient_id == "b")
-        async with manager._transaction() as db:
+        async with manager._sqlite.transaction() as db:
             await db.execute(
                 "UPDATE mm_deliveries SET state='processing', turn_id=?, attempts=1 "
                 "WHERE delivery_id=?",
@@ -639,10 +640,26 @@ async def test_reopen_rebuilds_message_indexes(tmp_path, source_version):
             )
             assert deliveries == [("pending", None, "queue", 0, None)] * 2
             plan = await db.execute_fetchall(
-                "EXPLAIN QUERY PLAN " + MessageManager._next_delivery_sql(with_turns=False), ("b",)
+                "EXPLAIN QUERY PLAN " + SqliteMessageStore._next_delivery_sql(with_turns=False),
+                ("b",),
             )
             searches = [row[3] for row in plan if row[3].startswith("SEARCH ")]
             for index in ("mm_delivery_candidates", "mm_session_order"):
                 assert any(f"INDEX {index} " in detail for detail in searches), plan
             with pytest.raises(aiosqlite.IntegrityError):
                 await db.execute("UPDATE mm_deliveries SET delivery_policy='unknown'")
+
+
+def test_scheduler_holds_no_database_access():
+    """调度器只经存储域协议读写，不直接持有连接或 SQL。"""
+    import inspect
+
+    from ghrah.communication import message_manager as module
+
+    source = inspect.getsource(module)
+    for marker in ("import aiosqlite", ".execute(", "SELECT ", "UPDATE ", "INSERT "):
+        assert marker not in source, f"MessageManager must not contain {marker!r}"
+    for private in ("require_connection(", "._read_message(", ".delivery_record("):
+        assert private not in source, (
+            f"MessageManager must not reach into the store via {private!r}"
+        )
