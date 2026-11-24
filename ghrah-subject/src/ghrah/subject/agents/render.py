@@ -53,6 +53,13 @@ __all__ = [
 ]
 
 
+def _assembly_member_type(package: str, member: AgentTemplateMember) -> str:
+    """模板成员类型归一：``mcp`` 命名空间的成员一律是 MCP，兼容旧模板误存 operation。"""
+    if package == "mcp" or member.member.startswith("mcp."):
+        return "mcp"
+    return member.type
+
+
 class RenderError(ValueError):
     """模板还不足以创建 Agent（缺模型、空提示词、workspace 角色解析不到）。
 
@@ -318,7 +325,7 @@ def render_assembly(
             members.append(
                 AgentAssemblyMember(
                     member=member.member,
-                    type=member.type,
+                    type=_assembly_member_type(package, member),
                     version=version,
                     ability_type=ability_type,
                     permissions=permissions,

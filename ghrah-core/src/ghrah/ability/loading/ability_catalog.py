@@ -82,7 +82,7 @@ REGISTRY_ONLY_OPERATIONS: frozenset[str] = frozenset({"send"})
 """只在 registry 存在、不走声明路径的成员。
 
 ``send`` 由 Core 的 room 装配期注入，历史上没有 manifest 声明；投影时跳过它
-以保持既有语义（``list_abilities`` 的 registry-only 差异面依赖这一点）。
+以保持既有语义（registry-only 差异面依赖这一点）。
 它仍是 ``cluster/ability.yaml`` 里的正式成员，只是不产出运行时 view。
 """
 
@@ -178,7 +178,7 @@ def load_ability_definitions() -> Mapping[str, AbilityDefinition]:
     """扫描内置树并解析全部容器定义（实现面的严格读数）。
 
     用在需要「现在有哪些能力、各自声明了什么」且**必须可信**的场景：投影 view、
-    handler 解析、``list_abilities``、装配前体检。外部目录里的包不在这里——
+    handler 解析、装配前体检。外部目录里的包不在这里——
     它们由 ``ability_scan.scan_ability_definitions()`` 的目录面负责。
 
     与目录面的差别只有两条：范围只到内置树，且遇错**直接抛**（内置树是源码，
@@ -401,7 +401,7 @@ def build_tool_schema(operation_key: str, operation: OperationDefinition) -> Too
     """按定义面组装模型工具 schema（公开入口）。
 
     用在「只要工具面、不要运行时 view」的场景：外部列举工具、注入模型上下文、
-    与 ``list_abilities`` 的展示对齐。与 :func:`_project` 共用同一个转换，
+    与模型工具面展示对齐。与 :func:`_project` 共用同一个转换，
     因此工具面只有一个形状，不会出现两套参数契约。
 
     Args:
@@ -441,7 +441,7 @@ def _project(
     """
     if operation.mcp is not None:
         # MCP 成员没有实现脚本：它由安装快照（``mcp.<name>`` 包）提供，执行走
-        # ``execute_mcp_member``。内置树声明 mcp 成员意味着来源错位，按名字报出来，
+        # ``mcp_call``。内置树声明 mcp 成员意味着来源错位，按名字报出来，
         # 而不是让它落到"无法装载实现脚本"那种含糊错误上。
         raise ManifestValidationError(
             f"{definition.container_name}.{operation_key}: MCP 成员必须来自安装包"
@@ -477,8 +477,8 @@ def _project(
 def load_all_builtin_manifests() -> Mapping[str, AbilityManifest]:
     """全部运行时 view（定义面 + 实现面投影的结果）。
 
-    用在「要展示 / 要注入模型工具面」的场景：``list_abilities``、
-    manifest store、``catalog.scan_catalog``。工具 schema 就在 view 的 ``tool``。
+    用在「要展示 / 要注入模型工具面」的场景：manifest store、
+    ``catalog.scan_catalog``。工具 schema 就在 view 的 ``tool``。
 
     **每次调用都重新读取内置定义并投影**（无结果缓存）。已导入的 Python
     模块仍复用模块缓存，不自动更新已有工具绑定或执行实例。
@@ -549,7 +549,7 @@ def builtin_handlers() -> tuple[str, ...]:
     """全部可解析的 handler 名。
 
     用在需要「能力类型全集」的场景：``available_ability_types``、
-    registry-only 差异面（``list_abilities``）。
+    registry-only 差异面。
 
     Returns:
         升序元组（确定性，便于比对与展示）；含 registry-only 成员。

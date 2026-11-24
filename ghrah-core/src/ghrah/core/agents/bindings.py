@@ -14,6 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from typing import Any
 
+from ghrah.ability.member import Member
+
 __all__ = ["MemberBindingState"]
 
 
@@ -42,3 +44,28 @@ class MemberBindingState:
         record = await store.set_member_bindings(agent_id, bound)
         if record is None:
             raise RuntimeError(f"agent instance snapshot not found: {agent_id}")
+
+    async def members(self, agent_id: str) -> list[Member] | None:
+        """读取实例快照里冻结的成员记录（含 ``axes`` 与定义数据）。
+
+        快照是成员轴（``visible`` / ``bind``）的权威；运行期只读不改。返回
+        ``None`` 表示该 Agent 没有实例快照——调用方据此给出明确原因，不猜
+        默认轴。
+
+        Args:
+            agent_id: 实例标识。
+
+        Returns:
+            定义态成员列表；实例不存在时返回 ``None``。
+
+        Raises:
+            RuntimeError: 实例库未配置。
+            MemberError: 快照成员记录不合法（fail-closed，不补默认值）。
+        """
+        store = self._store_provider()
+        record = await store.get(agent_id)
+        if record is None:
+            return None
+        return [
+            Member.from_wire(item, source=f"agent snapshot {agent_id}") for item in record.members
+        ]

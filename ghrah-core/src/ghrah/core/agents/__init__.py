@@ -16,10 +16,13 @@
 from __future__ import annotations
 
 from ghrah.core.agents.assembly import (
+    SEARCH_TOOLS_MEMBER,
     AssemblyError,
     config_from_snapshot,
     config_to_snapshot,
+    member_axes_for_creation,
     member_axes_from_spec,
+    normalize_snapshot_members,
     resolve_assembly,
     resolve_members,
     surface_from_snapshot,
@@ -32,13 +35,16 @@ from ghrah.core.agents.instance_store import (
 from ghrah.core.agents.members import resolve_member_entities
 
 __all__ = [
+    "SEARCH_TOOLS_MEMBER",
     "AgentInstanceRecord",
     "AgentInstanceStore",
     "AgentInstanceStoreError",
     "AssemblyError",
     "config_from_snapshot",
     "config_to_snapshot",
+    "member_axes_for_creation",
     "member_axes_from_spec",
+    "normalize_snapshot_members",
     "resolve_assembly",
     "resolve_member_entities",
     "resolve_members",

@@ -49,7 +49,7 @@ abilities:
   - type: end_task
   - ref: ghrah.fs.read_file
   - ref: ghrah.fs.write_file
-  - ref: ghrah.mcp.mcp_call
+  - ref: ghrah.cluster.query_agents
 """
 
 _AGENT_YAML_FS = """\
@@ -339,8 +339,8 @@ class TestBuiltinMode:
             # 固定在投影层，不再直接暴露旧注册表类模块。
             assert modules["read_file"] == "ghrah.ability.access.startup"
             assert modules["write_file"] == "ghrah.ability.access.startup"
-            # mcp_call 只在新版容器定义里存在：命中它即证明 ref/type 都走新来源
-            assert modules["mcp_call"] == "ghrah.ability.access.startup"
+            # query_agents 只在新版容器定义里存在：命中它即证明 ref/type 都走新来源
+            assert modules["query_agents"] == "ghrah.ability.access.startup"
             # 声明存储里的能力库没有被读（同一模式不混第二套目录）
             assert store.ability_reads == []
         finally:
@@ -550,7 +550,7 @@ class TestBuiltinGrantMaterialization:
             assert receipt["success"], receipt.get("error")
             abilities = await _abilities_of(unit, "consumer")
             assert abilities["read_file"] == "ghrah.ability.access.startup"
-            assert abilities["mcp_call"] == "ghrah.ability.access.startup"
+            assert abilities["query_agents"] == "ghrah.ability.access.startup"
             assert "write_file" not in abilities
         finally:
             await store.close()
@@ -598,7 +598,7 @@ class TestBuiltinGrantMaterialization:
             deploy = AccessIdentity("default", "deployment", "deployment", True, "deployment")
             names = await store.tool_names(deploy, _agent_id("consumer"))
             assert "read_file" in names
-            assert {"read_file", "write_file", "mcp_call"} <= set(names)
+            assert {"read_file", "write_file", "query_agents"} <= set(names)
         finally:
             await store.close()
 
@@ -770,7 +770,7 @@ async def test_actor_tool_table_follows_revoke_without_restart(tmp_path: Path) -
         # 本用例只验证授权投影；阈值与首次模型窗口装配由独立用例覆盖。
         handle._tool_surface.config = SurfaceConfig(mode="static")
         await handle.refresh_tool_projection()
-        assert {"read_file", "write_file", "mcp_call"} <= tool_names()
+        assert {"read_file", "write_file", "query_agents"} <= tool_names()
 
         actor = AccessIdentity("default", "deployment", "control", True, "deployment")
         revision = await ability_store.agent_revision(actor, _agent_id("consumer"))
@@ -992,7 +992,9 @@ async def test_real_spawn_tool_assigns_child_own_id_and_bound_run(tmp_path):
 
     store = _consumer_store()
     store._agents["w0.parent"] = parse_agent_manifest(
-        _AGENT_YAML.replace("  - ref: ghrah.mcp.mcp_call", "  - ref: ghrah.cluster.spawn_agent")
+        _AGENT_YAML.replace(
+            "  - ref: ghrah.cluster.query_agents", "  - ref: ghrah.cluster.spawn_agent"
+        )
     )
     unit, db = await _authorized_builtin_unit(tmp_path, manifest_store=store)
     try:
@@ -1069,7 +1071,7 @@ async def test_builtin_approval_is_identical_across_real_entrypoints(
         if entry == "child":
             store._agents["w0.parent"] = parse_agent_manifest(
                 _AGENT_YAML.replace(
-                    "  - ref: ghrah.mcp.mcp_call", "  - ref: ghrah.cluster.spawn_agent"
+                    "  - ref: ghrah.cluster.query_agents", "  - ref: ghrah.cluster.spawn_agent"
                 )
             )
             receipt = await _spawn(unit, _manifest_payload("parent", "w0.parent"))

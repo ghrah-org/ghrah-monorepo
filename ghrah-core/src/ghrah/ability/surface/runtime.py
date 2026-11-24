@@ -21,7 +21,6 @@ from ghrah.ability.surface.assembly import SurfaceThresholds, assemble_surface
 from ghrah.ability.surface.catalog import SurfaceTool, read_agent_catalog
 from ghrah.ability.surface.config import DEFAULT_LOADED_LIMIT, DEFAULT_SEARCH_LIMIT, SurfaceConfig
 from ghrah.ability.surface.naming import META_TOOL_NAMES, RESERVED_TOOL_NAMES
-from ghrah.ability.surface.search import AgentToolSearch
 from ghrah.context.token_estimator import effective_length
 from ghrah.types.results import ActionOutcome, ActionResult
 
@@ -89,6 +88,7 @@ class ToolSurfaceRuntime:
         loaded_limit: int = DEFAULT_LOADED_LIMIT,
         bound: Collection[str] | None = None,
         on_bound_change: Callable[[frozenset[str]], Awaitable[None]] | None = None,
+        member_snapshot: Callable[[], Awaitable[list[Any] | None]] | None = None,
     ) -> None:
         if type(loaded_limit) is not int or loaded_limit < 0:
             raise ValueError("loaded_limit 必须是非负整数")
@@ -104,21 +104,19 @@ class ToolSurfaceRuntime:
         self._static_names: set[str] = set()
         self._lru: OrderedDict[str, None] = OrderedDict()
         self._audit: list[dict[str, Any]] = []
-        self._search: AgentToolSearch | None = None
         self._skill_digest: str | None = None
         # 绑定集合（成员全名）：权威在实例快照，这里只做镜像；None 表示调用方
         # 没有提供成员轴（旧路径），按"全部可见成员都常驻"处理。
         self._bound: set[str] | None = set(bound) if bound is not None else None
         self._on_bound_change = on_bound_change
+        # 实例快照成员的只读回调（`search_tools` 读 axes）；None = 未接线实例库。
+        self._member_snapshot = member_snapshot
 
     def bind_run(self, run: str) -> None:
         """由生命周期边界固定 run，不允许旧对象绑定新代次。"""
         if not run or self.closed or (self.run and self.run != run):
             raise ValueError("工具面不能绑定另一运行代次")
         self.run = run
-        self._search = AgentToolSearch(
-            self.agent, run, store=self.store, search_limit=self.search_limit
-        )
 
     def validate_call(self, call: OperationCall) -> None:
         """调用身份只能来自同一受信装配，不从参数或消息中取身份。"""
@@ -402,6 +400,74 @@ class ToolSurfaceRuntime:
         rows, self._audit = self._audit, []
         return rows
 
+    async def _visible_unbound(self) -> dict[str, Any]:
+        """扫描当前 Agent 实例快照里「可见但未绑定」的授予成员。
+
+        数据源是实例快照 ``agent_instances.members[].axes``（绑定轴的权威）：
+        只保留 ``visible=true`` 且 ``bind=false`` 的工具成员（operation /
+        mcp；skill 是内容，走 ``load_skill``）。候选仍与关系库授权目录交集，
+        保证搜到的名字当前可被 ``execute_tool`` / ``bind_member`` 使用；
+        已绑定成员已在模型上下文里，不进搜索结果。
+
+        Returns:
+            ``{"status", "data", "reason"}``；状态为 ``ok`` / ``empty`` /
+            ``unavailable`` / ``not_found`` / ``error``，供模型直接阅读。
+        """
+        reader = self._member_snapshot
+        if reader is None:
+            return {
+                "status": "unavailable",
+                "data": [],
+                "reason": (
+                    "Agent instance store is not wired into this deployment; "
+                    "member axes cannot be read"
+                ),
+            }
+        try:
+            members = await reader()
+        except RuntimeError as error:
+            return {"status": "unavailable", "data": [], "reason": str(error)}
+        except Exception:  # noqa: BLE001 — 读失败不伪装成空结果，交日志定位
+            logger.exception("Agent instance member snapshot read failed")
+            return {
+                "status": "error",
+                "data": [],
+                "reason": "Member snapshot read failed; check runtime logs",
+            }
+        if members is None:
+            return {
+                "status": "not_found",
+                "data": [],
+                "reason": "Agent instance snapshot not found for this Agent",
+            }
+        catalog = await self._catalog()
+        granted = {tool.full_name: tool for tool in catalog.tools}
+        rows: list[dict[str, Any]] = []
+        for member in members:
+            if member.type == "skill":
+                continue
+            if not member.axes.visible or member.axes.bind:
+                continue
+            tool = granted.get(member.member)
+            if tool is None or tool.entry.tool_name in RESERVED_TOOL_NAMES:
+                continue
+            rows.append(
+                {
+                    "name": tool.entry.tool_name,
+                    "member": member.member,
+                    "package": tool.entry.package,
+                    "title": str(member.data.get("title") or ""),
+                    "description": str(member.data.get("description") or ""),
+                    "available": bool(tool.entry.available),
+                }
+            )
+        rows.sort(key=lambda row: row["name"])
+        return {
+            "status": "ok" if rows else "empty",
+            "data": rows,
+            "reason": "" if rows else "No visible unbound members",
+        }
+
     async def invoke(
         self, name: str, request: BaseModel, call: OperationCall, services: Any
     ) -> ActionResult:
@@ -421,23 +487,7 @@ class ToolSurfaceRuntime:
                 {"kind": "meta.call", "name": name, "tool_call_id": call.tool_call_id}
             )
             if name == "search_tools":
-                rows = await self._search.search(
-                    request.query,
-                    limit=request.limit if "limit" in request.model_fields_set else None,
-                )
-                return ActionResult(
-                    ActionOutcome.SUCCESS,
-                    {
-                        "tools": [
-                            {
-                                "name": row.tool_name,
-                                "description": row.description,
-                                "package": row.package,
-                            }
-                            for row in rows
-                        ]
-                    },
-                )
+                return ActionResult(ActionOutcome.SUCCESS, await self._visible_unbound())
             if name == "bind_member" or name == "unbind_member":
                 bound, error = await self.set_member_bound(request.name, bind=name == "bind_member")
                 if not bound:
@@ -532,12 +582,11 @@ class ToolSurfaceRuntime:
         return result
 
     async def close(self) -> None:
-        """运行结束时释放加载与搜索状态，旧对象永久停止接纳。"""
+        """运行结束时释放加载状态，旧对象永久停止接纳。"""
         self.closed = True
         self._loaded.clear()
         self._static_names.clear()
         self._lru.clear()
-        self._search = None
         self._audit.clear()
 
 

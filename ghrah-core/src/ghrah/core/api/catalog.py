@@ -16,6 +16,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ghrah.protocol.ability_control import (
+    AbilityMcpDraftProbeRequest,
+    AbilityMcpDraftProbeView,
+    AbilityMcpInstallRequest,
+    AbilityMcpInstallView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
     AbilityPackageCatalogView,
@@ -103,6 +107,24 @@ class CoreCatalog:
             source_name=source_name,
         )
         return AbilityPackageImportView.model_validate(raw)
+
+    async def mcp_draft_probe(
+        self, request: AbilityMcpDraftProbeRequest
+    ) -> AbilityMcpDraftProbeView:
+        """探测未保存的 MCP 草稿连接；不写 agentconf。"""
+        raw = await self._call(
+            "abilities.mcp_draft_probe",
+            request=request.model_dump(mode="json"),
+        )
+        return AbilityMcpDraftProbeView.model_validate(raw)
+
+    async def mcp_install(self, request: AbilityMcpInstallRequest) -> AbilityMcpInstallView:
+        """验证并安装页面选择的 MCP 工具。"""
+        raw = await self._call(
+            "abilities.mcp_install",
+            request=request.model_dump(mode="json"),
+        )
+        return AbilityMcpInstallView.model_validate(raw)
 
     async def aclose(self) -> None:
         """释放内部资源（幂等）。"""

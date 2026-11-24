@@ -244,7 +244,17 @@ class InstalledAbilityProvider:
         if not self._installer.verify(package, item.version)[0].ok:
             raise ManifestValidationError(f"安装包校验失败：{package}")
         if version.definition().origin == "mcp":
-            return McpSnapshotOperation(member)
+            operation = version.definition().operations[member]
+            mcp = operation.mcp
+            return McpSnapshotOperation(
+                member,
+                server=mcp.server if mcp is not None else "",
+                tool=mcp.tool if mcp is not None else "",
+                read_only=bool(mcp.read_only) if mcp is not None else False,
+                description=operation.description,
+                input_schema=dict(operation.input_schema) or {"type": "object"},
+                timeout_ms=operation.execution.timeout_ms,
+            )
         key = (digest, member)
         module = self._loaded.get(key)
         if module is None:
@@ -283,8 +293,24 @@ class InstalledAbilityProvider:
 class McpSnapshotOperation(Ability):
     """快照成员的进程内适配；只把已固定调用交给受信 MCP 端口。"""
 
-    def __init__(self, member: str) -> None:
+    def __init__(
+        self,
+        member: str,
+        *,
+        server: str = "",
+        tool: str = "",
+        read_only: bool = False,
+        description: str = "",
+        input_schema: dict[str, Any] | None = None,
+        timeout_ms: int | None = None,
+    ) -> None:
         self._member = member
+        self._server = server
+        self._tool = tool
+        self._read_only = read_only
+        self._description = description or member
+        self._input_schema = input_schema or {"type": "object"}
+        self._timeout_ms = timeout_ms
 
     @property
     def name(self) -> str:
@@ -297,9 +323,18 @@ class McpSnapshotOperation(Ability):
 
     async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
         """逐成员执行，不允许参数选择服务器、凭据或工具。"""
-        from ghrah.ability.mcp_wiring import execute_mcp_member
+        from ghrah.ability.mcp_wiring import mcp_call
 
-        return await execute_mcp_member(call, services)
+        return await mcp_call(
+            call,
+            services,
+            server=self._server,
+            tool=self._tool,
+            read_only=self._read_only,
+            description=self._description,
+            input_schema=self._input_schema,
+            timeout_ms=self._timeout_ms,
+        )
 
 
 def _ability_safe_name(member: str) -> str:

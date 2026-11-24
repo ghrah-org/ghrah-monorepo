@@ -22,8 +22,8 @@ Core 在收到这些数据后自行解析成 :class:`Member`。
 - ``version``：``external`` 包的定义态必填（SemVer 三段）；引用态可留空（装配规格
   不总带版本）；``kernel``（内置件随源码发布）恒为 ``None``。
 - ``ability_type``：``kernel`` / ``external``，决定 ``data.path`` 相对哪个根。
-- ``axes``：``visible`` / ``bind`` 两轴；按当前语义二者恒等（不可见即不可执行，
-  可见即一定可执行），保留两个字段是因为不同场景读不同名字。
+- ``axes``：``visible`` / ``bind`` 两轴，彼此独立：``visible`` 决定能否被发现
+  （``search_tools`` / 目录），``bind`` 决定是否常驻模型上下文。
 - ``data``：类型专属数据。两种形态共用同一个实体：
   **定义态**（``ability.yaml`` / 版本画像）字段齐全，构造期按 ``type`` 校验必填键
   与未知键；**引用态**（模板勾选 / 授权申请）``data`` 为空，只记录身份与轴。
@@ -113,6 +113,7 @@ _ALLOWED_DATA: dict[str, frozenset[str]] = {
             "tool",
             "input_schema",
             "output_schema",
+            "read_only",
             "tags",
             "effects",
             "permissions",
@@ -133,14 +134,15 @@ class MemberError(ValueError):
 class MemberAxes:
     """成员的两条轴：模型可见、绑定为工具。
 
-    两轴描述**授予之后**的状态：
+    两轴描述**授予之后**的状态，彼此独立：
 
-    - ``visible``：能否被发现（目录/搜索可见）；
+    - ``visible``：能否被发现（``search_tools`` / 目录可见）；
     - ``bind``：是否绑定进模型上下文（工具 schema 常驻）。
 
-    约束只有一条：``bind=true`` 要求 ``visible=true``（绑定必然可见）。
-    ``visible=true, bind=false`` 是合法状态——可发现但未绑定，模型可通过
+    ``visible=true, bind=false`` 是常见状态——可发现但未绑定，模型可通过
     ``bind_member`` 显式装上，或直接经 ``execute_tool`` 调用。
+    ``visible=false, bind=true`` 用于「常驻但不进发现面」的成员（内置
+    ``search_tools`` 在实例创建时固定为这一状态），因此不再要求绑定必然可见。
     """
 
     visible: bool = True
@@ -149,8 +151,6 @@ class MemberAxes:
     def __post_init__(self) -> None:
         if not isinstance(self.visible, bool) or not isinstance(self.bind, bool):
             raise MemberError("axes.visible / axes.bind 必须是 bool")
-        if self.bind and not self.visible:
-            raise MemberError("axes.bind=true 要求 visible=true（绑定必然可见）")
 
     @classmethod
     def from_wire(cls, raw: Any) -> MemberAxes:
@@ -174,8 +174,8 @@ class MemberAxes:
         return {"visible": self.visible, "bind": self.bind}
 
     def with_bind(self, bind: bool) -> MemberAxes:
-        """换绑定轴，返回新轴（绑定要求可见，``visible=false`` 时强制不绑）。"""
-        return MemberAxes(visible=self.visible, bind=bool(bind) and self.visible)
+        """换绑定轴，返回新轴；可见性与绑定互不影响。"""
+        return MemberAxes(visible=self.visible, bind=bool(bind))
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +255,12 @@ class Member:
         unknown = set(self.data) - _ALLOWED_DATA[self.type]
         if unknown:
             raise MemberError(f"{self.type} 成员的 data 含未知键 {sorted(unknown)}")
+        if (
+            self.type == "mcp"
+            and "read_only" in self.data
+            and not isinstance(self.data["read_only"], bool)
+        ):
+            raise MemberError("mcp 成员的 data.read_only 必须是 bool")
 
     # ---------------------------------------------------------------- identity
 
@@ -384,7 +390,7 @@ class Member:
             version: 包版本；``kernel`` 必须为 ``None``。
             ability_type: 所属包类型。
             visible: 是否进入可见面。
-            bind: 是否绑定为工具；必须与 ``visible`` 一致。
+            bind: 是否绑定为工具；与 ``visible`` 相互独立。
 
         Returns:
             引用态成员记录（``data`` 为空）。

@@ -16,14 +16,11 @@ from ghrah.protocol.ability_tree import RevokeAbilityRequest, UnbindToolRequest
 from ouroboros import Context
 
 from ghrah.ability.access import AccessIdentity, GrantPolicy, GrantRule
-from ghrah.ability.execution.invocation import MemberReference
-from ghrah.ability.mcp_wiring import McpDeploymentConfig, McpMemberBinding, McpPackageBinding
+from ghrah.ability.mcp_member import McpRuntimeConfig
 from ghrah.ability.package.generate import build
 from ghrah.ability.package.installer import AbilityInstaller
-from ghrah.ability.package.provider import InstalledAbilityProvider
 from ghrah.chat.content import ToolCallBlock
 from ghrah.mcp.agentconf_source import AgentconfMcpSource
-from ghrah.mcp.spec import McpToolSpec
 
 AGENT = "a" * 32
 ADMIN = AccessIdentity("project", "deployment", "control", True)
@@ -44,7 +41,7 @@ surface: {mode: progressive, static: [ghrah.fs.read_file, ghrah.core.load_skill]
 
 
 @asynccontextmanager
-async def environment(tmp_path, endpoint, *, wired=True, route="echo", large=False):
+async def environment(tmp_path, endpoint, *, wired=True, large=False):
     subject = pytest.importorskip("ghrah.subject.config")
     from ghrah.subject.core_cluster.registry import CoreClusterRegistry, default_core_unit_factory
 
@@ -122,21 +119,6 @@ async def execute(call, services):
     build(local)
     installer.install(local)
     (tmp_path / "note.txt").write_text("local file input", encoding="utf-8", newline="\n")
-    version = InstalledAbilityProvider(installer.root).capture("mcp.local")
-    operation = version.definition().operations["echo"]
-    reference = MemberReference("mcp-local", "local", "echo", version.digest)
-    binding = McpPackageBinding(
-        "project",
-        "cluster",
-        AGENT,
-        "local-server",
-        "local",
-        (
-            McpMemberBinding(
-                reference, McpToolSpec(route, operation.description, operation.input_schema)
-            ),
-        ),
-    )
 
     class Model(ToolScriptedLLM):
         model_capabilities = {"max_context_length": 128000}
@@ -170,7 +152,7 @@ async def execute(call, services):
                             arguments={"script": "skills/guide/scripts/export", "arguments": {}},
                         )
                     ],
-                    [ToolCallBlock(id="search", name="search_tools", arguments={"query": "echo"})],
+                    [ToolCallBlock(id="search", name="search_tools", arguments={})],
                     [
                         ToolCallBlock(
                             id="describe", name="describe_tool", arguments={"name": "echo"}
@@ -215,7 +197,7 @@ async def execute(call, services):
                 GrantRule(package="acme.content", skill="guide", script="export", available=True),
             )
         ),
-        mcp=McpDeploymentConfig((binding,), source=source) if wired else None,
+        mcp=McpRuntimeConfig(enabled=wired, source=source),
     )
     registry = CoreClusterRegistry(unit_factory=default_core_unit_factory(cfg, lambda _: model))
     try:
@@ -265,6 +247,8 @@ async def execute(call, services):
                                         "type": "mcp",
                                         "version": "0.0.1",
                                         "permissions": {"net_access": True},
+                                        # 可见但未绑定：search_tools 的发现面来源。
+                                        "axes": {"visible": True, "available": False},
                                     },
                                 ],
                             }
@@ -279,7 +263,6 @@ async def execute(call, services):
                     model=model,
                     installer=installer,
                     installed=installed,
-                    binding=binding,
                     source=source,
                     reads=reads,
                     store=unit._config.ability_store,
@@ -333,7 +316,7 @@ async def test_snapshot_spawn_model_direct_and_uninstall(tmp_path, mock_mcp_endp
         assert (tmp_path / "script-output.txt").read_text() == "local script effect"
         assert literal_eval(results["describe"])["available"]
         assert "echo: snapshot result" in results["execute"]
-        assert all("credential" not in row for row in literal_eval(results["search"])["tools"])
+        assert all("credential" not in row for row in literal_eval(results["search"])["data"])
         assert endpoint.token not in str(env.model.calls)
         assert "echo" not in [item["function"]["name"] for item in env.model.definitions[0]]
         assert "echo" in [item["function"]["name"] for item in env.model.definitions[6]]
@@ -346,33 +329,28 @@ async def test_snapshot_spawn_model_direct_and_uninstall(tmp_path, mock_mcp_endp
         assert (await direct(env))["data"]["success"]
         assert endpoint.stats()["calls"] == ["echo", "echo"]
         service = env.actor._context_manager.ability_content.mcp_service
-        assert service._active
+        assert service._runtime.activated_servers(agent_scope=service.scope)
         env.installer.uninstall(env.installed.full_name, env.installed.version)
         result = await direct(env, "after-uninstall")
         assert not result["success"] or not result["data"]["success"]
         assert endpoint.stats()["calls"] == ["echo", "echo"]
-        assert not service._active
         await env.unit.supervisor.terminate_agent("consumer")
-        assert service._closed and not env.unit._mcp_deployment._agents
+        assert service._closed and not env.unit._mcp_deployment._services
 
 
-@pytest.mark.parametrize("wired,route", [(False, "echo"), (True, "query")])
-async def test_unwired_or_mismatched_route_never_calls_server(
-    tmp_path, mock_mcp_endpoint, wired, route
-):
-    async with environment(tmp_path, mock_mcp_endpoint, wired=wired, route=route) as env:
+async def test_unwired_never_calls_server(tmp_path, mock_mcp_endpoint):
+    async with environment(tmp_path, mock_mcp_endpoint, wired=False) as env:
         assert await env.unit.supervisor.send("consumer", "Attempt echo") == "done"
         assert mock_mcp_endpoint.stats()["calls"] == []
         assert endpoint_secret_absent(env.model, mock_mcp_endpoint.token)
         assert not env.reads
-        if not wired:
-            result = next(
-                block
-                for message in env.model.calls[-1]
-                for block in message.content_blocks
-                if getattr(block, "tool_call_id", None) == "describe"
-            )
-            assert not literal_eval(result.content)["available"]
+        result = next(
+            block
+            for message in env.model.calls[-1]
+            for block in message.content_blocks
+            if getattr(block, "tool_call_id", None) == "describe"
+        )
+        assert not literal_eval(result.content)["available"]
 
 
 def endpoint_secret_absent(model, secret):
@@ -425,5 +403,15 @@ async def test_snapshot_changes_reject_calls_and_release_sessions(
         if change != "run":
             await direct(env, "after-change")
             await service.refresh()
-        assert not service._active
         assert mock_mcp_endpoint.stats()["calls"] == ["echo"]
+
+
+async def test_member_runtime_spawn_model_and_direct(tmp_path, mock_mcp_endpoint):
+    """成员驱动部署：工具面经成员 data 调 MCP，不依赖包级绑定。"""
+    endpoint = mock_mcp_endpoint
+    async with environment(tmp_path, endpoint) as env:
+        assert await env.unit.supervisor.send("consumer", "Echo through member runtime") == "done"
+        assert endpoint.stats()["calls"] == ["echo"]
+        assert (await direct(env))["data"]["success"]
+        assert endpoint.stats()["calls"] == ["echo", "echo"]
+        assert endpoint.token not in str(env.model.calls)

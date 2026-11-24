@@ -274,6 +274,24 @@ class AbilityReadStore:
             db_path=self._agentconf_db_path,
         )
 
+    async def mcp_draft_probe(self, request: Any) -> Any:
+        """探测未保存的 MCP 草稿连接；不写 agentconf。"""
+        from ghrah.core.read.ability_mcp_install import probe_mcp_draft
+
+        return await probe_mcp_draft(request, db_path=self._agentconf_db_path)
+
+    async def mcp_install(self, request: Any) -> Any:
+        """验证并安装页面选择的 MCP 工具；失败回滚本次 agentconf 记录。"""
+        from ghrah.core.read.ability_mcp_install import install_mcp_ability
+
+        if self._install_root is None:
+            raise AbilityUnavailableError("能力安装根未配置")
+        return await install_mcp_ability(
+            db_path=self._agentconf_db_path,
+            install_root=self._install_root,
+            request=request,
+        )
+
     async def package_groups(self, *, agent_id: str | None = None) -> AbilityPackageGroupsView:
         """能力包分组视图；实例未绑定作用域时只返回全局发行版视图。"""
         if self._scope_id is None:

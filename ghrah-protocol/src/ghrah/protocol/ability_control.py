@@ -46,6 +46,16 @@ __all__ = [
     "AbilityMcpProbeReason",
     "AbilityMcpProbeRequest",
     "AbilityMcpProbeView",
+    "AbilityMcpDraftAuth",
+    "AbilityMcpDraftProbeRequest",
+    "AbilityMcpDraftProbeView",
+    "AbilityMcpConnectionInput",
+    "AbilityMcpServerInput",
+    "AbilityMcpAbilityInput",
+    "AbilityMcpInstallRequest",
+    "AbilityMcpInstallMemberView",
+    "AbilityMcpInstallView",
+    "AbilityMcpAgentconfView",
     "AbilityMcpResourceView",
     "AbilityMcpServerInfoView",
     "AbilityMcpSnapshotView",
@@ -569,6 +579,147 @@ class AbilityMcpProbeView(TreeModel):
         if not self.ok and self.error is None:
             raise ValueError("探测失败时必须给出 error")
         return self
+
+
+class AbilityMcpDraftAuth(TreeModel):
+    """草稿探测的认证方式；``key`` 或 ``provider_id`` 只随请求提交，不在响应里回传。"""
+
+    mode: Literal["bearer", "header", "provider"] = "bearer"
+    header: str | None = Field(default=None, min_length=1)
+    key: str = Field(default="", min_length=0, repr=False)
+    provider_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def header_matches_mode(self) -> AbilityMcpDraftAuth:
+        """每种认证模式只接受对应的凭据来源。"""
+        if self.mode == "provider":
+            if not self.provider_id or self.header is not None or self.key:
+                raise ValueError("provider 模式必须提供 provider_id，且不接受 header/key")
+            return self
+        if not self.key:
+            raise ValueError("bearer/header 模式必须提供 key")
+        if self.provider_id is not None:
+            raise ValueError("bearer/header 模式不接受 provider_id")
+        if self.mode == "header" and not self.header:
+            raise ValueError("header 模式必须提供 header")
+        if self.mode == "bearer" and self.header:
+            raise ValueError("bearer 模式不接受 header")
+        return self
+
+
+class AbilityMcpDraftProbeRequest(TreeModel):
+    """添加 MCP 向导的草稿探测；不要求 agentconf 已有记录。"""
+
+    url: str = Field(min_length=1)
+    auth: AbilityMcpDraftAuth
+    timeout_ms: int = Field(default=5000, ge=1000, le=10000)
+    include_resources: bool = False
+
+
+class AbilityMcpDraftProbeView(TreeModel):
+    """草稿探测结果；成功与失败同形，HTTP 层一律 200。"""
+
+    format: Literal["ghrah.ability-control.mcp-draft-probe.v1"] = (
+        "ghrah.ability-control.mcp-draft-probe.v1"
+    )
+    ok: bool
+    phase: AbilityMcpProbePhase
+    elapsed_ms: int = Field(ge=0)
+    protocol_version: str | None = None
+    server_info: AbilityMcpServerInfoView | None = None
+    tools: list[AbilityMcpToolView] = Field(default_factory=list)
+    tool_count: int = Field(ge=0)
+    resources: list[AbilityMcpResourceView] = Field(default_factory=list)
+    resource_count: int = Field(ge=0)
+    resources_supported: bool = False
+    truncated: bool = False
+    error: AbilityMcpProbeErrorView | None = None
+
+    @model_validator(mode="after")
+    def error_matches_ok(self) -> AbilityMcpDraftProbeView:
+        """成功时不得带错误；失败时必须给出分类错误。"""
+        if self.ok and self.error is not None:
+            raise ValueError("探测成功时 error 必须为 null")
+        if not self.ok and self.error is None:
+            raise ValueError("探测失败时必须给出 error")
+        return self
+
+
+class AbilityMcpConnectionInput(TreeModel):
+    """安装时提交的连接信息；只用于本次探测与保存，不在安装产物里。"""
+
+    url: str = Field(min_length=1)
+    auth: AbilityMcpDraftAuth
+    timeout_ms: int = Field(default=5000, ge=1000, le=10000)
+
+
+class AbilityMcpServerInput(TreeModel):
+    """agentconf MCP 服务的身份与显示信息。"""
+
+    ref: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_-]*$", max_length=64)
+    display_name: str | None = Field(default=None, min_length=1)
+    vendor: str | None = Field(default=None, min_length=1)
+
+
+class AbilityMcpAbilityInput(TreeModel):
+    """页面生成的 Ability 身份；版本缺省时由安装器按冲突叠加。"""
+
+    namespace: Literal["mcp"] = "mcp"
+    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_-]*$", max_length=64)
+    version: str | None = Field(
+        default=None,
+        pattern=r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$",
+    )
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    prefix: str = Field(default="", pattern=r"^[a-z0-9_]*$", max_length=64)
+
+
+class AbilityMcpInstallRequest(TreeModel):
+    """由页面选中的工具安装一个 MCP Ability。"""
+
+    connection: AbilityMcpConnectionInput
+    server: AbilityMcpServerInput
+    tools: list[str] = Field(min_length=1)
+    ability: AbilityMcpAbilityInput
+
+    @model_validator(mode="after")
+    def tools_are_unique(self) -> AbilityMcpInstallRequest:
+        """一个工具只能出现一次；顺序不影响成员键。"""
+        if len(set(self.tools)) != len(self.tools):
+            raise ValueError("tools 不允许重复")
+        return self
+
+
+class AbilityMcpInstallMemberView(TreeModel):
+    """安装回执里的一个成员；只暴露成员身份，不含连接与凭据。"""
+
+    member: str
+    type: Literal["mcp"] = "mcp"
+    server: str
+    tool: str
+    read_only: bool = False
+
+
+class AbilityMcpAgentconfView(TreeModel):
+    """本次安装落库的 agentconf 连接身份；不含密钥与 URL。"""
+
+    provider_id: str
+    server_id: str
+
+
+class AbilityMcpInstallView(TreeModel):
+    """安装回执：实际安装的版本、成员与 agentconf 记录。"""
+
+    format: Literal["ghrah.ability-control.mcp-install.v1"] = "ghrah.ability-control.mcp-install.v1"
+    package: str
+    version: str
+    digest: str
+    members: list[AbilityMcpInstallMemberView] = Field(default_factory=list)
+    member_count: int = Field(ge=0)
+    version_bumped: bool = False
+    already_installed: bool = False
+    agentconf: AbilityMcpAgentconfView
 
 
 class AbilityInstanceVersionView(TreeModel):

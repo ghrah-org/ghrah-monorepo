@@ -41,17 +41,27 @@ from ghrah.mcp.errors import McpConfigError, McpCredentialMissingError, McpUnsup
 _RESERVED = {"search_tools", "describe_tool", "execute_tool", "run_script"}
 
 
-def tool_keys(names: list[str]) -> dict[str, str]:
+_SEMVER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$")
+
+
+def _normalize_prefix(prefix: str) -> str:
+    """把成员键前缀归一成 ``<name>_`` 形状；空前缀保持为空。"""
+    normalized = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", prefix.lower())).strip("_")
+    return f"{normalized}_" if normalized else ""
+
+
+def tool_keys(names: list[str], *, prefix: str = "") -> dict[str, str]:
     """按原始名排序并规范化工具键；冲突以原始名摘要消解。"""
     if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(
         names
     ):
         raise InstallerError("invalid_tools", "MCP 工具名为空或重复")
+    normalized_prefix = _normalize_prefix(prefix)
     result: dict[str, str] = {}
     used: set[str] = set()
     for name in sorted(names):
         base = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", name.lower())).strip("_")
-        base = base or "mcp_tool"
+        base = normalized_prefix + (base or "mcp_tool")
         if not base[0].isalpha() or base in _RESERVED:
             base = "mcp_" + base
         key = base
@@ -187,20 +197,23 @@ async def _observe(header: dict[str, Any], source: Any, connector: Any) -> list[
             source.close()
 
 
-def _snapshot(header: dict[str, Any], tools: list[dict[str, Any]]) -> str:
+def _snapshot(header: dict[str, Any], tools: list[dict[str, Any]], *, prefix: str = "") -> str:
     if not tools:
         raise InstallerError("no_tools", "MCP 服务器没有工具；保留原快照")
-    keys = tool_keys([tool["name"] for tool in tools])
+    keys = tool_keys([tool["name"] for tool in tools], prefix=prefix)
     operations = {}
     server = header["mcp"]["server"]
     for tool in tools:
         name = tool["name"]
+        mcp: dict[str, Any] = {"server": server, "tool": name}
+        if tool.get("read_only_hint"):
+            mcp["read_only"] = True
         operations[keys[name]] = {
             "title": tool.get("title") or name,
             "description": tool.get("description") or tool.get("title") or name,
             "input_schema": tool.get("input_schema") or {},
             "output_schema": tool.get("output_schema") or {},
-            "mcp": {"server": server, "tool": name},
+            "mcp": mcp,
             "tags": sorted({"mcp", server}),
             "effects": ["net:request"],
             "permissions": {"net_access": True},
@@ -230,6 +243,110 @@ def _snapshot(header: dict[str, Any], tools: list[dict[str, Any]]) -> str:
     except ManifestValidationError:
         raise InstallerError("invalid_tools", "MCP 工具契约无效") from None
     return raw
+
+
+def build_mcp_definition(
+    header: dict[str, Any], tools: list[dict[str, Any]], *, prefix: str = ""
+) -> str:
+    """按选中的工具快照生成 v2 定义；不访问网络、不写盘。
+
+    Args:
+        header: 已校验的 MCP 包头（含 ``identity.version``）。
+        tools: 本次探测并勾选的工具快照。
+        prefix: 成员键前缀（例如 ``aliyun_``）。
+
+    Returns:
+        可直接安装的 ``ability.yaml`` 文本。
+    """
+    return _snapshot(header, tools, prefix=prefix)
+
+
+def _bump_patch(version: str) -> str:
+    major, minor, patch = (int(part) for part in version.split("."))
+    if patch >= 999999999:
+        raise InstallerError("version_exhausted", "MCP patch 版本已耗尽")
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def plan_mcp_version(installer: AbilityInstaller, name: str, requested: str | None = None) -> str:
+    """计算本次安装的实际版本；同名冲突/版本回退时叠加 patch。
+
+    Args:
+        installer: 目标安装根。
+        name: 能力名（``mcp.<name>`` 的第二段）。
+        requested: 页面请求的版本；``None`` 表示自动。
+
+    Returns:
+        SemVer core 三段版本。
+
+    Raises:
+        InstallerError: 请求版本非法或版本耗尽。
+    """
+    if requested is not None and not _SEMVER_PATTERN.fullmatch(requested):
+        raise InstallerError("invalid_version", f"MCP 版本必须是 SemVer 三段: {requested!r}")
+    versions = installer.store.versions_of(f"mcp.{name}")
+    if not versions:
+        return requested or "0.0.1"
+    latest = max(versions, key=lambda item: tuple(map(int, item.version.split(".")))).version
+    if requested is not None:
+        requested_key = tuple(map(int, requested.split(".")))
+        latest_key = tuple(map(int, latest.split(".")))
+        if requested_key > latest_key and all(item.version != requested for item in versions):
+            return requested
+    return _bump_patch(latest)
+
+
+async def install_mcp_definition(
+    installer: AbilityInstaller,
+    header: dict[str, Any],
+    tools: list[dict[str, Any]],
+    *,
+    prefix: str = "",
+    requested_version: str | None = None,
+) -> InstallResult:
+    """生成并安装一份选中工具的 MCP 定义（页面安装主路径）。
+
+    先按最新已有版本尝试安装：内容相同则幂等返回，内容不同才叠加 patch；
+    这样重复提交同一选择不会每次生成新版本。
+
+    Args:
+        installer: 目标安装根。
+        header: 已校验的 MCP 包头（``identity.version`` 可缺省/被覆盖）。
+        tools: 本次探测并勾选的工具快照。
+        prefix: 成员键前缀。
+        requested_version: 页面请求版本；冲突时自动叠加 patch。
+
+    Returns:
+        安装结果（``version`` 为实际安装版本）。
+    """
+    async with _serialized(installer, header["mcp"]["server"]):
+        identity = dict(header["identity"])
+        full_name = f"mcp.{identity['name']}"
+        versions = installer.store.versions_of(full_name)
+        latest = (
+            max(versions, key=lambda item: tuple(map(int, item.version.split("."))))
+            if versions
+            else None
+        )
+        requested = requested_version or identity.get("version")
+        if requested is not None and not _SEMVER_PATTERN.fullmatch(requested):
+            raise InstallerError("invalid_version", f"MCP 版本必须是 SemVer 三段: {requested!r}")
+        candidate = requested or "0.0.1"
+        if latest is not None:
+            latest_key = tuple(map(int, latest.version.split(".")))
+            requested_key = tuple(map(int, requested.split("."))) if requested else None
+            if requested_key is None or requested_key <= latest_key:
+                candidate = latest.version
+        for _ in range(2):
+            effective_header = {**header, "identity": {**identity, "version": candidate}}
+            raw = build_mcp_definition(effective_header, tools, prefix=prefix)
+            try:
+                return _publish(installer, raw)
+            except InstallerError as error:
+                if error.code != "version_conflict":
+                    raise
+                candidate = _bump_patch(candidate)
+        raise InstallerError("version_conflict", "MCP 版本在安装期间冲突，请重试")
 
 
 async def install_mcp(

@@ -21,8 +21,12 @@ from typing import Any
 
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.loading.ability_schema import definition_from_payload
-from ghrah.ability.member import Member, MemberAxes, MemberError
-from ghrah.core.agents.assembly import AssemblyError, parse_spec_member
+from ghrah.ability.member import Member, MemberError
+from ghrah.core.agents.assembly import (
+    AssemblyError,
+    member_axes_for_creation,
+    parse_spec_member,
+)
 from ghrah.core.read.ability_catalog import read_installed_version
 
 __all__ = ["resolve_member_entities"]
@@ -81,7 +85,11 @@ def _external_definition(install_root: str | None, reference: Member) -> Any:
 
 
 def _enrich(reference: Member, definition_member: Member) -> Member:
-    """引用态 + 定义数据 → 定义态成员（轴以引用为准）。"""
+    """引用态 + 定义数据 → 定义态成员。
+
+    轴沿用引用态（可见性与绑定相互独立），``search_tools`` 由
+    :func:`member_axes_for_creation` 固定为「不可见但绑定」。
+    """
     try:
         return Member(
             namespace=reference.namespace,
@@ -90,7 +98,7 @@ def _enrich(reference: Member, definition_member: Member) -> Member:
             type=definition_member.type,
             version=definition_member.version,
             ability_type=definition_member.ability_type,
-            axes=MemberAxes(visible=True, bind=reference.axes.bind),
+            axes=member_axes_for_creation(reference),
             data=dict(definition_member.data),
         )
     except MemberError as error:

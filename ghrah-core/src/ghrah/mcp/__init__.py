@@ -66,6 +66,7 @@ from ghrah.mcp.probe import (
     McpProbeFailure,
     McpProbeReport,
     McpResourceInfo,
+    probe_draft,
     probe_server,
 )
 from ghrah.mcp.result import ToolOutcome, project_result, structured_as_text
@@ -130,6 +131,7 @@ __all__ = [
     "load_spec",
     "no_credentials",
     "open_client",
+    "probe_draft",
     "probe_endpoint",
     "probe_server",
     "project_result",

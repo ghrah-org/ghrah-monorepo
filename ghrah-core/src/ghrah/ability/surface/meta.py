@@ -12,11 +12,9 @@ from ghrah.types.results import ActionOutcome, ActionResult
 
 
 class SearchInput(BaseModel):
-    """关键词查询与有界结果条数。"""
+    """无参数：扫描当前 Agent 实例的可见未绑定成员。"""
 
     model_config = ConfigDict(extra="forbid")
-    query: str = Field(min_length=1, description="Keywords; English keywords may improve matches.")
-    limit: int = Field(default=8, ge=1, le=20, description="Maximum number of results, at most 20.")
 
 
 class DescribeInput(BaseModel):
@@ -54,19 +52,26 @@ class BindOutput(BaseModel):
 
 
 class SearchItem(BaseModel):
-    """可返回给模型的一行搜索摘要。"""
+    """可返回给模型的一行发现结果（当前可见但未绑定）。"""
 
     model_config = ConfigDict(extra="forbid")
-    name: str
-    description: str
-    package: str
+    name: str = Field(
+        description="Exact tool name for describe_tool, execute_tool, or bind_member."
+    )
+    member: str = Field(description="Member full name recorded in the Agent instance snapshot.")
+    package: str = Field(description="Package alias of the member.")
+    title: str = Field(description="Member title.")
+    description: str = Field(description="Member description.")
+    available: bool = Field(description="Whether the member backend is currently available.")
 
 
 class SearchOutput(BaseModel):
-    """搜索结果不含 schema。"""
+    """扫描结果；空结果也给出原因，便于模型调整下一步。"""
 
     model_config = ConfigDict(extra="forbid")
-    tools: list[SearchItem]
+    status: str = Field(description="ok, empty, unavailable, not_found, or error.")
+    data: list[SearchItem] = Field(description="Visible but unbound granted tools.")
+    reason: str = Field(description="Why data is empty, when it is.")
 
 
 class DescribeOutput(BaseModel):
