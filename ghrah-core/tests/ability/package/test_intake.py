@@ -232,6 +232,58 @@ def test_stray_files_inside_member_directories_are_ignored(tmp_path: Path) -> No
     ]
 
 
+BARE_SKILL = """\
+---
+name: guide
+description: 写作指南。
+---
+# 指南
+
+见 [templates](templates) 与 [卡片](references/cards.md)。
+"""
+
+
+def test_bare_skill_directory_is_adopted(tmp_path: Path) -> None:
+    """顶层直接是 SKILL.md 的单技能包：整目录收纳成 skills/<key>/ 后照常安装。"""
+    root = tmp_path / "acme.notes"
+    (root / "references").mkdir(parents=True)
+    (root / "templates").mkdir()
+    (root / "scripts").mkdir()
+    (root / "SKILL.md").write_text(BARE_SKILL, encoding="utf-8", newline="\n")
+    (root / "references" / "cards.md").write_text("# 卡片\n", encoding="utf-8", newline="\n")
+    (root / "templates" / "OVERVIEW.md").write_text("# 总览\n", encoding="utf-8", newline="\n")
+    (root / "scripts" / "check.mjs").write_text("export {};\n", encoding="utf-8", newline="\n")
+
+    result = normalize_source(root)
+
+    assert [member.member for member in result.definition.to_members()] == ["acme.notes.guide"]
+    skill = result.definition.skills["guide"]
+    assert skill.body.path == "skills/guide/SKILL.md"
+    # 固定角色之外的目录也随包保留，并登记成可读引用。
+    assert "templates-overview" in skill.references
+    assert "cards" in skill.references
+    assert (root / "skills" / "guide" / "scripts" / "check.mjs").is_file()
+    assert any("收纳" in item for item in result.warnings)
+
+
+def test_nested_package_root_is_discovered(tmp_path: Path) -> None:
+    """成员埋在 bundle/ability/<name>/ 里：不按目录结构判断，直接找出来组装。"""
+    package = tmp_path / "bundle" / "ability" / "requirement"
+    (package / "skills" / "guide").mkdir(parents=True)
+    (package / "ability.yaml").write_text(HEADER, encoding="utf-8", newline="\n")
+    (package / "skills" / "guide" / "SKILL.md").write_text(
+        SKILL_BODY, encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "bundle" / "README.md").write_text("# 说明\n", encoding="utf-8", newline="\n")
+
+    result = normalize_source(tmp_path / "bundle", name_hint="bundle.zip")
+
+    assert result.root is not None and result.root != tmp_path / "bundle"
+    assert [member.member for member in result.definition.to_members()] == ["acme.tools.guide"]
+    assert (result.root / "skills" / "guide" / "SKILL.md").is_file()
+    assert any("不在根目录" in item for item in result.warnings)
+
+
 def test_second_normalisation_is_a_no_op(tmp_path: Path) -> None:
     root = _package(tmp_path / "acme.tools")
     normalize_source(root)

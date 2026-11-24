@@ -61,7 +61,6 @@ _REQUIRED_PERMISSION = {
     "delete_file": "fs_write",
     "move_file": "fs_write",
     "execute_command": "shell_access",
-    "mcp_call": "net_access",
 }
 
 

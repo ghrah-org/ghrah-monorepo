@@ -380,6 +380,72 @@ def test_import_rejects_archive_without_any_member(tmp_path: Path) -> None:
         asyncio.run(run())
 
 
+def test_import_accepts_bare_skill_archive(tmp_path: Path) -> None:
+    """顶层直接是 SKILL.md 的单技能包：收纳成 skills/<key>/ 后安装。"""
+    skill = (
+        "---\nname: distiller\ndescription: 蒸馏 skill\n---\n\n"
+        "见 [templates](templates) 与 [卡片](references/cards.md)。\n"
+    )
+    source = tmp_path / "src"
+    (source / "references").mkdir(parents=True)
+    (source / "templates").mkdir()
+    (source / "SKILL.md").write_text(skill, encoding="utf-8", newline="\n")
+    (source / "references" / "cards.md").write_text("# 卡片\n", encoding="utf-8", newline="\n")
+    (source / "templates" / "OVERVIEW.md").write_text("# 总览\n", encoding="utf-8", newline="\n")
+    archive = zip_package(source, tmp_path / "bare-skill.zip", top=None)
+    install_root = tmp_path / "ability"
+    catalog = build_core_catalog(install_root=str(install_root))
+
+    async def run() -> object:
+        try:
+            return await catalog.package_import(
+                archive_path=str(archive), source_name="acme.notes.zip"
+            )
+        finally:
+            await catalog.aclose()
+
+    view = asyncio.run(run())
+    assert (view.namespace, view.name) == ("acme", "notes")
+    installed = install_root / "acme" / "notes" / "0.1.0"
+    assert (installed / "skills" / "distiller" / "SKILL.md").is_file()
+    document = yaml.safe_load((installed / "ability.yaml").read_text(encoding="utf-8"))
+    assert [item["member"] for item in document["members"]] == ["acme.notes.distiller"]
+
+
+def test_import_discovers_package_nested_in_bundle(tmp_path: Path) -> None:
+    """成员埋在任意层级（``bundle/ability/<name>/``）：按发现结果组装后安装。"""
+    package = tmp_path / "src" / "bundle" / "ability" / "requirement"
+    (package / "skills" / "guide").mkdir(parents=True)
+    (package / "ability.yaml").write_text(
+        manifest_text(namespace="acme", name="requirement", version="2.0.0"),
+        encoding="utf-8",
+        newline="\n",
+    )
+    (package / "skills" / "guide" / "SKILL.md").write_text(
+        "---\nname: guide\ndescription: 指南\n---\n\n# 指南\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (tmp_path / "src" / "bundle" / "README.md").write_text(
+        "# 说明\n", encoding="utf-8", newline="\n"
+    )
+    archive = zip_package(tmp_path / "src" / "bundle", tmp_path / "bundle.zip", top="bundle")
+    install_root = tmp_path / "ability"
+    catalog = build_core_catalog(install_root=str(install_root))
+
+    async def run() -> object:
+        try:
+            return await catalog.package_import(archive_path=str(archive), source_name="bundle.zip")
+        finally:
+            await catalog.aclose()
+
+    view = asyncio.run(run())
+    assert (view.namespace, view.name, view.version) == ("acme", "requirement", "2.0.0")
+    installed = install_root / "acme" / "requirement" / "2.0.0"
+    assert (installed / "skills" / "guide" / "SKILL.md").is_file()
+    assert view.operation_count == 0
+
+
 def test_import_allows_skill_member_without_abi_precheck(tmp_path: Path) -> None:
     """skill 成员不进 operation 预检：装得进去，内容由安装器校验覆盖。"""
     source = write_package(tmp_path / "src", with_skill=True)

@@ -38,12 +38,22 @@ from ghrah.protocol.ability_control import (
     AbilityInstanceVersionView,
     AbilityInstanceView,
     AbilityLifecycleView,
+    AbilityMcpAbilityInput,
+    AbilityMcpAgentconfView,
+    AbilityMcpConnectionInput,
+    AbilityMcpDraftAuth,
+    AbilityMcpDraftProbeRequest,
+    AbilityMcpDraftProbeView,
+    AbilityMcpInstallMemberView,
+    AbilityMcpInstallRequest,
+    AbilityMcpInstallView,
     AbilityMcpMemberView,
     AbilityMcpProbeErrorView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
     AbilityMcpResourceView,
     AbilityMcpServerInfoView,
+    AbilityMcpServerInput,
     AbilityMcpSnapshotView,
     AbilityMcpToolView,
     AbilityNamedResourceView,
@@ -200,6 +210,16 @@ CONTROL_MODELS = (
     AbilityMcpResourceView,
     AbilityMcpProbeErrorView,
     AbilityMcpProbeView,
+    AbilityMcpDraftAuth,
+    AbilityMcpDraftProbeRequest,
+    AbilityMcpDraftProbeView,
+    AbilityMcpConnectionInput,
+    AbilityMcpServerInput,
+    AbilityMcpAbilityInput,
+    AbilityMcpInstallRequest,
+    AbilityMcpInstallMemberView,
+    AbilityMcpInstallView,
+    AbilityMcpAgentconfView,
     AbilityInstanceVersionView,
     AbilityInstanceView,
     AbilityUnboundVersionView,
@@ -395,6 +415,12 @@ def _generate(
             value += ".refine(v=>(v.view===null)!==(v.error===null))"
         if name == "AbilityMcpProbeView":
             value += ".refine(v=>(v.error===null)===v.ok)"
+        if name == "AbilityMcpDraftProbeView":
+            value += ".refine(v=>(v.error===null)===v.ok)"
+        if name == "AbilityMcpDraftAuth":
+            value += '.refine(v=>(v.mode==="header")===(v.header!==null))'
+        if name == "AbilityMcpInstallRequest":
+            value += ".refine(v=>new Set(v.tools).size===v.tools.length)"
         # 模板契约的跨字段约束：JSON Schema 表达不了，按既有惯例手工补 refine，
         # 保证 TS 侧与 Python `model_validator` 拒绝同一批请求。
         if name == "AgentTemplatePackageView":

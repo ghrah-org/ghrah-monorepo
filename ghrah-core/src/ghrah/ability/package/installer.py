@@ -1086,6 +1086,36 @@ class AbilityInstaller:
             raise InstallerError("invalid_full_name", "需要 mcp.<name> 身份")
         return await refresh_mcp(self, full_name, source=source, connector=connector)
 
+    async def install_mcp_definition(
+        self,
+        header: dict[str, Any],
+        tools: list[dict[str, Any]],
+        *,
+        prefix: str = "",
+        requested_version: str | None = None,
+    ) -> InstallResult:
+        """由选中工具快照生成并安装 MCP 定义（页面安装主路径）。
+
+        Args:
+            header: MCP 包头（``identity.version`` 可缺省，冲突时自动叠加）。
+            tools: 本次探测并勾选的工具快照。
+            prefix: 成员键前缀。
+            requested_version: 页面请求版本。
+
+        Returns:
+            安装结果；``version`` 为实际安装版本。
+        """
+        from ghrah.ability.package.sources.mcp import install_mcp_definition
+
+        self._check_root()
+        return await install_mcp_definition(
+            self,
+            header,
+            tools,
+            prefix=prefix,
+            requested_version=requested_version,
+        )
+
 
 _LOCK_PROBLEM_CODES: frozenset[str] = frozenset(
     {"lock_invalid", "lock_schema_unsupported", "lock_digest_mismatch"}

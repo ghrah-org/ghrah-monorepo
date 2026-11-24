@@ -63,7 +63,7 @@ system_prompt: Use the selected tools.
 max_iterations: 5
 abilities:
   - type: conversation
-  - ref: ghrah.core.list_abilities
+  - ref: ghrah.core.session_info
 """
 
 AGENT_CONTROL_ONLY = """\
@@ -365,7 +365,7 @@ async def test_next_manifest_revokes_stale_package_and_unbinds_tools(store, tmp_
         record.alias for record in await store.grants(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     ] == ["core"]
     assert _without_system(await store.tool_names(DEPLOY, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == (
-        "list_abilities",
+        "session_info",
     )
 
 
@@ -583,7 +583,7 @@ async def test_core_member_is_admitted(store, tmp_path):
     result = await _materializer(store, assembly, tmp_path).materialize(
         agent="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", resolved=resolved
     )
-    tool = next(item for item in result.abilities if item.name == "list_abilities")
+    tool = next(item for item in result.abilities if item.name == "session_info")
     outcome = await tool.execute(make_call(arguments={}), make_services())
     error = str(outcome.data.get("error", ""))
     assert "backend is not supported by the admission layer" not in error

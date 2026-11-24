@@ -22,11 +22,13 @@ from ghrah.mcp import (
     McpServerNotConfiguredError,
     list_resource_templates,
     list_resources,
+    probe_draft,
     probe_server,
     server_supports_resources,
 )
 from ghrah.mcp.diagnostics import redact_secrets
 from ghrah.mcp.errors import McpProtocolError, McpRequestError
+from ghrah.mcp.spec import AUTH_PLACEHOLDER
 
 URL = "https://gw.example.com/api/v1/mcps/WebFetch/mcp"
 KEY = "sk-test-0123456789abcdef"
@@ -542,3 +544,37 @@ async def test_cancellation_propagates(tmp_path) -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_probe_draft_uses_inline_connection_without_agentconf() -> None:
+    client = FakeClient()
+    connector = Connector(client)
+    report = await probe_draft(
+        url=URL,
+        headers={"Authorization": f"Bearer {AUTH_PLACEHOLDER}"},
+        credential=KEY,
+        connector=connector,
+    )
+
+    assert report.ok is True
+    assert report.tools and report.tools[0]["name"] == "echo"
+    assert connector.calls == 1
+    assert connector.spec is not None
+    assert connector.spec.url == URL
+    assert connector.kwargs is not None
+    assert connector.kwargs["credential"] == KEY
+    assert connector.spec.headers["Authorization"] == f"Bearer {AUTH_PLACEHOLDER}"
+    assert KEY not in str(dict(connector.spec.headers))
+
+
+async def test_probe_draft_config_error_does_not_connect() -> None:
+    connector = Connector(FakeClient())
+    report = await probe_draft(url="not-a-url", credential=KEY, connector=connector)
+
+    assert report.ok is False
+    assert report.phase == "config"
+    assert report.failure is not None
+    assert report.failure.reason == "config_invalid"
+    assert connector.calls == 0
+    assert "not-a-url" not in report.failure.detail
+    assert KEY not in report.failure.detail

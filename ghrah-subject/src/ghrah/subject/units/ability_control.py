@@ -25,6 +25,10 @@ from fastapi.responses import JSONResponse
 from ghrah.protocol.ability_control import (
     AbilityApiFeatures,
     AbilityApiStatus,
+    AbilityMcpDraftProbeRequest,
+    AbilityMcpDraftProbeView,
+    AbilityMcpInstallRequest,
+    AbilityMcpInstallView,
     AbilityMcpProbeRequest,
 )
 from ghrah.protocol.ability_tree import (
@@ -68,6 +72,10 @@ _ERROR_STATUS: dict[str, int] = {
     "too_large": 413,
     "unsupported_archive": 415,
     "invalid_package": 422,
+    "probe_failed": 422,
+    "server_conflict": 409,
+    "install_failed": 500,
+    "rollback_failed": 500,
 }
 
 #: Core 的 ``ProblemCode`` → 本单元的 HTTP 错误码（保持既有状态码语义）。
@@ -256,6 +264,7 @@ def build_ability_control_router(
         except Exception:  # pragma: no cover - 事件只是失效信号，不阻断结果
             logger.warning("ability package change event publish failed", exc_info=True)
 
+    @router.get("/abilities/status")
     async def status() -> dict[str, Any]:
         """管理面可用性：能力来源 × 本进程启用开关。"""
         reason = ""
@@ -282,8 +291,7 @@ def build_ability_control_router(
         )
         return _jsonable(payload)
 
-    router.add_api_route("/abilities/status", status, methods=["GET"])
-
+    @router.get("/projects/{project_id}/agents/{agent_id}/ability-tree")
     async def _tree(
         project_id: str,
         agent_id: str,
@@ -293,10 +301,7 @@ def build_ability_control_router(
         port = await _port(request, project_id)
         return _jsonable(await _call(port.abilities.tree(agent_id=agent_id)))
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree", _tree, methods=["GET"]
-    )
-
+    @router.get("/projects/{project_id}/agents/{agent_id}/ability-admin")
     async def _admin(
         project_id: str,
         agent_id: str,
@@ -308,10 +313,7 @@ def build_ability_control_router(
         port = await _port(request, project_id)
         return _jsonable(await _call(port.abilities.admin(agent_id=agent_id)))
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-admin", _admin, methods=["GET"]
-    )
-
+    @router.get("/projects/{project_id}/agents/{agent_id}/ability-changes")
     async def _changes(
         project_id: str,
         agent_id: str,
@@ -325,10 +327,10 @@ def build_ability_control_router(
         page = await _call(port.abilities.changes(after_seq=after_seq, limit=limit))
         return _jsonable(page)
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-changes", _changes, methods=["GET"]
+    @router.get(
+        "/projects/{project_id}/agents/{agent_id}/ability-tree/abilities/"
+        "{alias}/content/{member:path}"
     )
-
     async def _content(
         project_id: str,
         agent_id: str,
@@ -351,13 +353,6 @@ def build_ability_control_router(
         )
         return _jsonable(result)
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree/abilities/"
-        "{alias}/content/{member:path}",
-        _content,
-        methods=["GET"],
-    )
-
     async def _body(request: Request) -> dict[str, Any]:
         try:
             raw = await request.json()
@@ -373,6 +368,7 @@ def build_ability_control_router(
         await _publish_tree(project_id, agent_id, result.revision, reason)
         return _jsonable(result)
 
+    @router.put("/projects/{project_id}/agents/{agent_id}/ability-tree/grants/{alias}")
     async def _put_grant(
         project_id: str,
         agent_id: str,
@@ -395,12 +391,7 @@ def build_ability_control_router(
         result = await _call(port.abilities.grant(agent_id=agent_id, change=change))
         return await _after_write(project_id, agent_id, result, "grant")
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree/grants/{alias}",
-        _put_grant,
-        methods=["PUT"],
-    )
-
+    @router.delete("/projects/{project_id}/agents/{agent_id}/ability-tree/grants/{alias}")
     async def _delete_grant(
         project_id: str,
         agent_id: str,
@@ -417,12 +408,7 @@ def build_ability_control_router(
         result = await _call(port.abilities.revoke(agent_id=agent_id, change=change))
         return await _after_write(project_id, agent_id, result, "revoke")
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree/grants/{alias}",
-        _delete_grant,
-        methods=["DELETE"],
-    )
-
+    @router.put("/projects/{project_id}/agents/{agent_id}/ability-tree/tools/{tool_name}")
     async def _put_tool(
         project_id: str,
         agent_id: str,
@@ -445,12 +431,7 @@ def build_ability_control_router(
         result = await _call(port.abilities.enable_tool(agent_id=agent_id, change=change))
         return await _after_write(project_id, agent_id, result, "bind_tool")
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree/tools/{tool_name}",
-        _put_tool,
-        methods=["PUT"],
-    )
-
+    @router.delete("/projects/{project_id}/agents/{agent_id}/ability-tree/tools/{tool_name}")
     async def _delete_tool(
         project_id: str,
         agent_id: str,
@@ -464,17 +445,11 @@ def build_ability_control_router(
         result = await _call(port.abilities.disable_tool(agent_id=agent_id, change=change))
         return await _after_write(project_id, agent_id, result, "unbind_tool")
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-tree/tools/{tool_name}",
-        _delete_tool,
-        methods=["DELETE"],
-    )
-
+    @router.get("/ability-packages")
     async def _packages(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
         return _jsonable(await _call(_catalog().packages()))
 
-    router.add_api_route("/ability-packages", _packages, methods=["GET"])
-
+    @router.get("/ability-packages/{namespace}/{name}")
     async def _package_detail(
         namespace: str,
         name: str,
@@ -482,8 +457,6 @@ def build_ability_control_router(
     ) -> dict[str, Any]:
         view = await _call(_catalog().package_detail(namespace=namespace, name=name))
         return _jsonable(view)
-
-    router.add_api_route("/ability-packages/{namespace}/{name}", _package_detail, methods=["GET"])
 
     @router.get("/ability-packages/{namespace}/{name}/versions/{version}")
     async def _package_version_profile(
@@ -514,6 +487,39 @@ def build_ability_control_router(
         )
         return _jsonable(view)
 
+    @router.post("/agentconf/mcp/probe", response_model=AbilityMcpDraftProbeView)
+    async def _draft_mcp_probe(
+        body: AbilityMcpDraftProbeRequest,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> AbilityMcpDraftProbeView:
+        """草稿探测：不写 agentconf、不安装，只验证端点并取 tools。"""
+        if not _authorized(request, config):
+            raise AbilityApiError("access_denied", "非回环请求需要有效 Bearer token")
+        if not _mcp_probe_ready():
+            raise AbilityApiError("capability_unavailable", "MCP 探测未启用：缺少 MCP SDK")
+        return await _call(_catalog().mcp_draft_probe(body))
+
+    @router.post("/ability-packages/mcp/install", response_model=AbilityMcpInstallView)
+    async def _install_mcp(
+        body: AbilityMcpInstallRequest,
+        request: Request,
+        _: None = Depends(_ensure_catalog),
+    ) -> AbilityMcpInstallView:
+        """由选中工具安装 MCP Ability；先验证，后保存 agentconf，再安装。"""
+        if not _authorized(request, config):
+            raise AbilityApiError("access_denied", "非回环请求需要有效 Bearer token")
+        if not config.ability_packages_install:
+            raise AbilityApiError("capability_unavailable", "能力包安装未启用")
+        if not _mcp_probe_ready():
+            raise AbilityApiError("capability_unavailable", "MCP 探测未启用：缺少 MCP SDK")
+        view = await _call(_catalog().mcp_install(body))
+        await _publish_package(
+            {"namespace": "mcp", "name": body.ability.name, "version": view.version}
+        )
+        return view
+
+    @router.get("/projects/{project_id}/ability-instances")
     async def _instances(
         project_id: str,
         request: Request,
@@ -522,13 +528,11 @@ def build_ability_control_router(
         port = await _port(request, project_id)
         return _jsonable(await _call(port.abilities.instances()))
 
-    router.add_api_route("/projects/{project_id}/ability-instances", _instances, methods=["GET"])
-
+    @router.get("/ability-package-groups")
     async def _package_groups(_: None = Depends(_ensure_catalog)) -> dict[str, Any]:
         return _jsonable(await _call(_catalog().package_groups()))
 
-    router.add_api_route("/ability-package-groups", _package_groups, methods=["GET"])
-
+    @router.get("/projects/{project_id}/ability-package-groups")
     async def _project_package_groups(
         project_id: str,
         request: Request,
@@ -537,12 +541,7 @@ def build_ability_control_router(
         port = await _port(request, project_id)
         return _jsonable(await _call(port.abilities.package_groups()))
 
-    router.add_api_route(
-        "/projects/{project_id}/ability-package-groups",
-        _project_package_groups,
-        methods=["GET"],
-    )
-
+    @router.get("/projects/{project_id}/agents/{agent_id}/ability-package-groups")
     async def _agent_package_groups(
         project_id: str,
         agent_id: str,
@@ -552,12 +551,9 @@ def build_ability_control_router(
         port = await _port(request, project_id)
         return _jsonable(await _call(port.abilities.package_groups(agent_id=agent_id)))
 
-    router.add_api_route(
-        "/projects/{project_id}/agents/{agent_id}/ability-package-groups",
-        _agent_package_groups,
-        methods=["GET"],
-    )
-
+    @router.post("/ability-packages/{namespace}/{name}/versions/{version}/verify")
+    @router.delete("/ability-packages/{namespace}/{name}/versions/{version}")
+    @router.post("/projects/{project_id}/ability-instances/{instance_id}/select")
     async def _closed_write(
         namespace: str = "",
         name: str = "",
@@ -569,6 +565,7 @@ def build_ability_control_router(
         del namespace, name, version, project_id, instance_id
         raise AbilityApiError("capability_unavailable", "该写入尚未开放")
 
+    @router.post("/ability-packages/import")
     async def _import_package(
         request: Request,
         file: UploadFile = File(...),
@@ -619,23 +616,6 @@ def build_ability_control_router(
         payload = _jsonable(result)
         await _publish_package(payload)
         return payload
-
-    router.add_api_route("/ability-packages/import", _import_package, methods=["POST"])
-    router.add_api_route(
-        "/ability-packages/{namespace}/{name}/versions/{version}/verify",
-        _closed_write,
-        methods=["POST"],
-    )
-    router.add_api_route(
-        "/ability-packages/{namespace}/{name}/versions/{version}",
-        _closed_write,
-        methods=["DELETE"],
-    )
-    router.add_api_route(
-        "/projects/{project_id}/ability-instances/{instance_id}/select",
-        _closed_write,
-        methods=["POST"],
-    )
 
     return router
 

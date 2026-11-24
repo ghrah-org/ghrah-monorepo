@@ -1016,3 +1016,304 @@ async def test_package_mcp_probe_route_maps_gate_result_and_catalog_errors(
     finally:
         server.should_exit = True
         await task
+
+
+async def test_mcp_draft_probe_route_uses_inline_connection(
+    tmp_path: Path, make_app, monkeypatch
+) -> None:
+    from agentconf import AgentsConfig
+    from ghrah.mcp import McpProbeReport
+
+    from ghrah.subject.config import AbilityConfig
+
+    async def fake_probe(**kwargs):
+        assert kwargs["url"] == "https://example.com/mcp"
+        assert kwargs["credential"] == "secret-key"
+        assert kwargs["headers"]["Authorization"].endswith("{{auth}}")
+        return McpProbeReport(
+            ok=True,
+            phase="list_tools",
+            elapsed_ms=12,
+            server_name="remote",
+            server_version="1.0.0",
+            tools=(
+                {
+                    "name": "echo",
+                    "title": "Echo",
+                    "description": "回显",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                    "read_only_hint": True,
+                },
+            ),
+        )
+
+    monkeypatch.setattr("ghrah.core.read.ability_mcp_install.probe_draft", fake_probe)
+    monkeypatch.setattr("ghrah.subject.units.ability_control._mcp_probe_ready", lambda: True)
+    db = tmp_path / "agentconf.db"
+    with AgentsConfig(db):
+        pass
+    config = SubjectConfig(
+        ability_source="builtin",
+        observer_http_api_enabled=True,
+        agentconf_db_path=str(db),
+        ability=AbilityConfig(install_root=str(tmp_path / "store")),
+    )
+    app = make_app(config, _Handle("proj", "/tmp/project", None), _Bus())
+    server, task, port = await _serve(app)
+    try:
+        status, payload = await _request(
+            f"http://127.0.0.1:{port}/api/v1/agentconf/mcp/probe",
+            method="POST",
+            body={
+                "url": "https://example.com/mcp",
+                "auth": {"mode": "bearer", "key": "secret-key"},
+                "timeout_ms": 5000,
+            },
+        )
+    finally:
+        server.should_exit = True
+        await task
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["tool_count"] == 1
+    assert payload["tools"][0]["name"] == "echo"
+    assert payload["server_info"] == {"name": "remote", "version": "1.0.0"}
+
+
+async def test_mcp_install_route_saves_connection_and_installs_selected_tools(
+    tmp_path: Path, make_app, monkeypatch
+) -> None:
+    from agentconf import AgentsConfig
+    from ghrah.mcp import McpProbeReport
+
+    from ghrah.subject.config import AbilityConfig
+
+    tools = (
+        {
+            "name": "echo",
+            "title": "Echo",
+            "description": "回显",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "read_only_hint": True,
+        },
+        {
+            "name": "write",
+            "title": "Write",
+            "description": "写入",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "read_only_hint": False,
+        },
+    )
+
+    async def fake_probe(**kwargs):
+        del kwargs
+        return McpProbeReport(
+            ok=True,
+            phase="list_tools",
+            elapsed_ms=8,
+            server_name="remote",
+            server_version="1.0.0",
+            tools=tools,
+        )
+
+    monkeypatch.setattr("ghrah.core.read.ability_mcp_install.probe_draft", fake_probe)
+    monkeypatch.setattr("ghrah.subject.units.ability_control._mcp_probe_ready", lambda: True)
+    db = tmp_path / "agentconf.db"
+    with AgentsConfig(db):
+        pass
+    store = tmp_path / "store"
+    config = SubjectConfig(
+        ability_source="builtin",
+        observer_http_api_enabled=True,
+        ability_packages_install=True,
+        agentconf_db_path=str(db),
+        ability=AbilityConfig(install_root=str(store)),
+    )
+    app = make_app(config, _Handle("proj", "/tmp/project", None), _Bus())
+    server, task, port = await _serve(app)
+    try:
+        status, payload = await _request(
+            f"http://127.0.0.1:{port}/api/v1/ability-packages/mcp/install",
+            method="POST",
+            body={
+                "connection": {
+                    "url": "https://example.com/mcp",
+                    "auth": {"mode": "bearer", "key": "secret-key"},
+                    "timeout_ms": 5000,
+                },
+                "server": {"ref": "demo_mcp", "display_name": "Demo"},
+                "tools": ["echo"],
+                "ability": {
+                    "name": "demo",
+                    "title": "Demo",
+                    "description": "演示",
+                    "prefix": "demo_",
+                },
+            },
+        )
+    finally:
+        server.should_exit = True
+        await task
+    assert status == 200
+    assert payload["version"] == "0.0.1"
+    assert payload["member_count"] == 1
+    assert payload["members"][0]["member"] == "mcp.demo.demo_echo"
+    assert payload["members"][0]["read_only"] is True
+    assert payload["agentconf"]["server_id"]
+    with AgentsConfig(db) as cfg:
+        assert cfg.get_mcp_server("demo_mcp").name == "demo_mcp"
+    assert (store / "mcp" / "demo" / "0.0.1" / "ability.yaml").is_file()
+
+
+async def test_mcp_install_reuses_selected_provider_credential(
+    tmp_path: Path, make_app, monkeypatch
+) -> None:
+    from agentconf import AgentsConfig
+    from ghrah.mcp import McpProbeReport
+
+    from ghrah.subject.config import AbilityConfig
+
+    tools = (
+        {
+            "name": "echo",
+            "title": "Echo",
+            "description": "回显",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "read_only_hint": True,
+        },
+    )
+    captured: dict[str, str] = {}
+
+    async def fake_probe(**kwargs):
+        captured["credential"] = kwargs["credential"]
+        captured["headers"] = kwargs["headers"]["Authorization"]
+        return McpProbeReport(
+            ok=True,
+            phase="list_tools",
+            elapsed_ms=4,
+            server_name="remote",
+            server_version="1.0.0",
+            tools=tools,
+        )
+
+    monkeypatch.setattr("ghrah.core.read.ability_mcp_install.probe_draft", fake_probe)
+    monkeypatch.setattr("ghrah.subject.units.ability_control._mcp_probe_ready", lambda: True)
+    db = tmp_path / "agentconf.db"
+    with AgentsConfig(db) as cfg:
+        provider = cfg.create_mcp_provider(
+            "shared-provider",
+            vendor="Vendor",
+            api_key="shared-secret",
+            default_binding={
+                "target": "http_header",
+                "name": "Authorization",
+                "value_template": "Bearer {{auth}}",
+            },
+        )
+        provider_id = provider.id
+    store = tmp_path / "store"
+    config = SubjectConfig(
+        ability_source="builtin",
+        observer_http_api_enabled=True,
+        ability_packages_install=True,
+        agentconf_db_path=str(db),
+        ability=AbilityConfig(install_root=str(store)),
+    )
+    app = make_app(config, _Handle("proj", "/tmp/project", None), _Bus())
+    server, task, port = await _serve(app)
+    try:
+        status, payload = await _request(
+            f"http://127.0.0.1:{port}/api/v1/ability-packages/mcp/install",
+            method="POST",
+            body={
+                "connection": {
+                    "url": "https://example.com/mcp",
+                    "auth": {"mode": "provider", "provider_id": provider_id},
+                    "timeout_ms": 5000,
+                },
+                "server": {"ref": "shared_mcp", "display_name": "Shared"},
+                "tools": ["echo"],
+                "ability": {
+                    "name": "shared",
+                    "title": "Shared",
+                    "description": "复用提供商",
+                    "prefix": "shared_",
+                },
+            },
+        )
+    finally:
+        server.should_exit = True
+        await task
+    assert status == 200, payload
+    assert captured["credential"] == "shared-secret"
+    assert captured["headers"] == "Bearer {{auth}}"
+    with AgentsConfig(db) as cfg:
+        saved = cfg.get_mcp_server("shared_mcp")
+        assert saved.auth.provider_id == provider_id
+        assert cfg.get_mcp_provider("shared-provider").api_key.get_secret_value() == "shared-secret"
+
+
+async def test_mcp_install_rejects_tools_missing_after_probe(
+    tmp_path: Path, make_app, monkeypatch
+) -> None:
+    from agentconf import AgentsConfig
+    from ghrah.mcp import McpProbeReport
+
+    from ghrah.subject.config import AbilityConfig
+
+    async def fake_probe(**kwargs):
+        del kwargs
+        return McpProbeReport(
+            ok=True,
+            phase="list_tools",
+            elapsed_ms=4,
+            tools=(
+                {
+                    "name": "echo",
+                    "title": "Echo",
+                    "description": "回显",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                },
+            ),
+        )
+
+    monkeypatch.setattr("ghrah.core.read.ability_mcp_install.probe_draft", fake_probe)
+    monkeypatch.setattr("ghrah.subject.units.ability_control._mcp_probe_ready", lambda: True)
+    db = tmp_path / "agentconf.db"
+    with AgentsConfig(db):
+        pass
+    config = SubjectConfig(
+        ability_source="builtin",
+        observer_http_api_enabled=True,
+        ability_packages_install=True,
+        agentconf_db_path=str(db),
+        ability=AbilityConfig(install_root=str(tmp_path / "store")),
+    )
+    app = make_app(config, _Handle("proj", "/tmp/project", None), _Bus())
+    server, task, port = await _serve(app)
+    try:
+        status, payload = await _request(
+            f"http://127.0.0.1:{port}/api/v1/ability-packages/mcp/install",
+            method="POST",
+            body={
+                "connection": {
+                    "url": "https://example.com/mcp",
+                    "auth": {"mode": "bearer", "key": "secret-key"},
+                },
+                "server": {"ref": "demo_mcp"},
+                "tools": ["echo", "gone"],
+                "ability": {"name": "demo", "title": "Demo", "description": "演示"},
+            },
+        )
+    finally:
+        server.should_exit = True
+        await task
+    assert status == 409
+    assert payload["error"]["code"] == "conflict"
+    with AgentsConfig(db) as cfg:
+        assert [item.name for item in cfg.list_mcp_servers()] == []

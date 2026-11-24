@@ -237,7 +237,8 @@ class CoreUnitConfig:
     # Room 投影器：``async (message) -> None``。None = 不投影（Room 日志留 pending）。
     # 房间状态归 Subject 所有，投影目标由装配方注入。
     room_projector: Any = None
-    # 受信 MCP 装配配置；None = 关闭，不读取 agentconf、不发现端点。
+    # 受信 MCP 装配配置：``True`` = 成员驱动（默认 agentconf 库），
+    # ``McpRuntimeConfig`` = 成员驱动显式参数；None/False = 关闭。
     mcp: Any = None
     # 宿主命令授权表：key = instance_id 或 f"{instance_id}/{member}"；
     # value = 允许派发的不透明命令名。空表 = 任何成员都不注入 HostCommandPort。
@@ -659,13 +660,30 @@ class CoreUnit:
         )
         self._assembly = assembly
         if self._config.mcp is not None:
-            from ghrah.ability.mcp_wiring import McpDeployment, McpDeploymentConfig
+            from ghrah.ability.mcp_member import McpMemberDeployment, McpRuntimeConfig
 
-            if not isinstance(self._config.mcp, McpDeploymentConfig):
-                raise TypeError("mcp 必须是 McpDeploymentConfig 或 None")
-            if self._config.ability_store is None:
-                raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
-            self._mcp_deployment = McpDeployment(self._config.mcp, self._config.ability_store)
+            if isinstance(self._config.mcp, McpRuntimeConfig):
+                if self._config.ability_store is None:
+                    raise ValueError("MCP 接线需要 builtin 来源和显式授权关系库")
+                self._mcp_deployment = McpMemberDeployment(
+                    self._config.mcp,
+                    self._config.ability_store,
+                )
+            elif self._config.mcp is True:
+                if self._config.ability_store is not None:
+                    self._mcp_deployment = McpMemberDeployment(
+                        McpRuntimeConfig(
+                            enabled=True,
+                            db_path=self._config.agentconf_db_path,
+                        ),
+                        self._config.ability_store,
+                    )
+                else:
+                    self._mcp_deployment = None
+            elif self._config.mcp is False:
+                self._mcp_deployment = None
+            else:
+                raise TypeError("mcp 必须是 True/False / McpRuntimeConfig 或 None")
         # 授权装配边界：builtin 模式在装配期构造唯一一个启动核定器，顶层 spawn
         # 与子 Agent spawn 共用；未注入关系库时保持 None，spawn 期显式失败
         # （不再回退按模板实例化）。
@@ -1237,7 +1255,12 @@ class CoreUnit:
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any]:
         """用新的装配输入覆盖快照并应用：先落库（权威），再重启活实例。"""
-        from ghrah.core.agents import AssemblyError, config_to_snapshot, resolve_assembly
+        from ghrah.core.agents import (
+            AssemblyError,
+            config_to_snapshot,
+            normalize_snapshot_members,
+            resolve_assembly,
+        )
 
         del cmd_ctx
         agent_id = str(payload.get("agent_id") or "").strip()
@@ -1262,11 +1285,12 @@ class CoreUnit:
             return self._err(str(error))
         resolved.config = replace(resolved.config, agent_id=agent_id)
         surface = spec.config.surface.model_dump() if spec.config.surface is not None else None
+        members = normalize_snapshot_members([item.model_dump() for item in spec.members])
         await store.save(
             agent_id=agent_id,
             name=resolved.config.name,
             config=config_to_snapshot(resolved.config),
-            members=[item.model_dump() for item in spec.members],
+            members=members,
             surface=surface,
             mcp_refs=list(spec.config.mcp_refs),
             incarnation_id=record.incarnation_id,
@@ -1281,7 +1305,7 @@ class CoreUnit:
                 agent_id=agent_id,
                 name=resolved.config.name,
                 config=config_to_snapshot(resolved.config),
-                members=[item.model_dump() for item in spec.members],
+                members=members,
                 surface=surface,
                 mcp_refs=list(spec.config.mcp_refs),
                 incarnation_id=(result.get("data") or {}).get("incarnation_id"),

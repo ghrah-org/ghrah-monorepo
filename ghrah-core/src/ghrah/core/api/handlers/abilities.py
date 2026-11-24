@@ -11,6 +11,8 @@ from ghrah.protocol.ability_control import (
     AbilityChangesPage,
     AbilityGrantWriteView,
     AbilityInstancesView,
+    AbilityMcpDraftProbeView,
+    AbilityMcpInstallView,
     AbilityMcpProbeView,
     AbilityPackageCatalogView,
     AbilityPackageDetailView,
@@ -33,6 +35,8 @@ from ghrah.core.api.interfaces import (
     AbilitiesEnableToolRequest,
     AbilitiesGrantRequest,
     AbilitiesInstancesRequest,
+    AbilitiesMcpDraftProbeRequest,
+    AbilitiesMcpInstallRequest,
     AbilitiesPackageDetailRequest,
     AbilitiesPackageGroupsGlobalRequest,
     AbilitiesPackageGroupsRequest,
@@ -211,6 +215,16 @@ def make_catalog_handlers(store: AbilityReadStore) -> dict[str, Handler]:
             archive_path=request.archive_path, source_name=request.source_name
         )
 
+    async def mcp_draft_probe(
+        request: AbilitiesMcpDraftProbeRequest,
+    ) -> AbilityMcpDraftProbeView:
+        """探测未保存的 MCP 草稿连接。"""
+        return await store.mcp_draft_probe(request.request)
+
+    async def mcp_install(request: AbilitiesMcpInstallRequest) -> AbilityMcpInstallView:
+        """安装页面选择的 MCP 工具。"""
+        return await store.mcp_install(request.request)
+
     return {
         "abilities.packages": packages,
         "abilities.package_detail": package_detail,
@@ -218,4 +232,6 @@ def make_catalog_handlers(store: AbilityReadStore) -> dict[str, Handler]:
         "abilities.package_mcp_probe": package_mcp_probe,
         "abilities.package_groups": package_groups,
         "abilities.package_import": package_import,
+        "abilities.mcp_draft_probe": mcp_draft_probe,
+        "abilities.mcp_install": mcp_install,
     }
