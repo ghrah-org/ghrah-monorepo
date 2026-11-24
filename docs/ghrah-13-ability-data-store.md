@@ -150,7 +150,7 @@ Scheme 树（ghrah.scheme.loading）    ──直接读──▶  能力目录 /
 
 规则：
 
-- `axes.visible` 创建时固定 `true`；`bind` 取创建请求的 `initial_bindings`。
+- `axes.visible` 创建时默认 `true`；`bind` 取创建请求的 `initial_bindings`。**例外**：内置 `ghrah.core.search_tools` 被选中时固定为 `visible=false, bind=true`（常驻但不进发现面）。
 - `data` 由创建线按来源补齐（external 按版本读安装记录；kernel 读内置树），**不来自模板**。
 - 快照是"钉住的副本"：定义数据不随安装目录变化；授权仍以关系库为准，二者不互相同步。
 

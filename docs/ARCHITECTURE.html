@@ -345,7 +345,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <div class="arch-group"><div class="arch-group-title">链 + 能力关系库</div><div class="arch-group-desc">每 Project db/action-chains.sqlite3</div><div class="arch-cards"><a class="arch-card" href="#74-sqlitebackend7-表-v3read_onlybegin-immediate"><span class="nm">链 7 表</span><span class="ds">节点 / 会话 / 分支 / 消息</span></a><a class="arch-card" href="#92-能力关系库-schema-v5"><span class="nm">ability_* 8 表</span><span class="ds">版本 · 内容 · 授权 · 绑定 · 变更</span></a></div></div>
 <div class="arch-group solo"><div class="arch-group-title">实例快照库</div><div class="arch-group-desc">每 Project db/agents.sqlite3</div><div class="arch-cards"><a class="arch-card" href="#91-三库三权威"><span class="nm">agent_instances</span><span class="ds">配置 · 成员定义态 · axes</span></a></div></div>
 <div class="arch-group"><div class="arch-group-title">全局业务库</div><div class="arch-group-desc">data/subject.db</div><div class="arch-cards"><a class="arch-card" href="#101-模板库agent_templatesavailable_members"><span class="nm">agent_templates</span><span class="ds">available_members</span></a><a class="arch-card" href="#111-projectroot-布局projectstore-v6agentrecord"><span class="nm">项目 / Room / Task</span><span class="ds">ProjectStore v6 等</span></a></div></div>
-<div class="arch-group"><div class="arch-group-title">外部依赖</div><div class="arch-cards"><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">LLM 端点</span><span class="ds">agentconf 库解析</span></a><a class="arch-card" href="#83-扫描漂移与启动提交"><span class="nm">安装根</span><span class="ds">&lt;ns&gt;/&lt;name&gt;/&lt;version&gt;/ · 启动期提交来源</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">MCP 服务器</span><span class="ds">mcp_call · 快照包</span></a></div></div>
+<div class="arch-group"><div class="arch-group-title">外部依赖</div><div class="arch-cards"><a class="arch-card" href="#61-coreunit-与-34-字段配置"><span class="nm">LLM 端点</span><span class="ds">agentconf 库解析</span></a><a class="arch-card" href="#83-扫描漂移与启动提交"><span class="nm">安装根</span><span class="ds">&lt;ns&gt;/&lt;name&gt;/&lt;version&gt;/ · 启动期提交来源</span></a><a class="arch-card" href="#82-内置包与预装包"><span class="nm">MCP 成员</span><span class="ds">安装快照 · 成员驱动</span></a></div></div>
 </div></section>
 <div class="arch-note">可选组件（未发布、不在主链上）：ghrah-kernel · ghrah-plugin · ghrah-taskstore · ghrah-scheme</div>
 </figure>
@@ -1057,19 +1057,17 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 </tbody></table>
 <p><code>members</code> 由 <code>python -m ghrah.ability.tools.build</code> 生成，禁止手写；operation 的实现位置在 <code>data.path</code>（不是旧的 <code>entry</code>），<code>input_schema</code> / <code>output_schema</code> 来自实现脚本的 <code>Input</code> / <code>Output</code> 模型。纯 skill 包合法：<code>members</code> 只含 skill 记录。</p>
 <h3 id="82-内置包与预装包">8.2 内置包与预装包</h3>
-<p><code>ghrah-core/src/ghrah/ability/builtin/</code> 有 6 个包、28 个成员：</p>
+<p><code>ghrah-core/src/ghrah/ability/builtin/</code> 有 6 个包、27 个成员：</p>
 <table>
 <thead><tr><th>包</th><th>成员数</th><th>内容</th></tr></thead>
 <tbody>
-<tr><td><code>ghrah.core</code></td><td>11</td><td><code>bind_member</code>、<code>unbind_member</code>、<code>conversation</code>、<code>end_task</code>、<code>list_abilities</code>、<code>load_skill</code>、<code>recall_context</code>、<code>search_tools</code>、<code>describe_tool</code>、<code>execute_tool</code>、<code>session_info</code></td></tr>
+<tr><td><code>ghrah.core</code></td><td>10</td><td><code>bind_member</code>、<code>unbind_member</code>、<code>conversation</code>、<code>end_task</code>、<code>load_skill</code>、<code>recall_context</code>、<code>search_tools</code>、<code>describe_tool</code>、<code>execute_tool</code>、<code>session_info</code></td></tr>
 <tr><td><code>ghrah.cluster</code></td><td>7</td><td><code>spawn_agent</code>、<code>terminate_agent</code>、<code>send</code>、<code>send_message</code>、<code>broadcast_message</code>、<code>query_agents</code>、<code>query_manifests</code></td></tr>
 <tr><td><code>ghrah.fs</code></td><td>7</td><td>读、写、编辑、移动、删除、列目录、搜文件</td></tr>
 <tr><td><code>ghrah.shell</code></td><td>1</td><td><code>execute_command</code></td></tr>
-<tr><td><code>ghrah.mcp</code></td><td>1</td><td><code>mcp_call</code></td></tr>
 <tr><td><code>ghrah.ability-builder</code></td><td>1</td><td>纯技能包：<code>ability-package-development-guide</code>（skill）</td></tr>
 </tbody></table>
-<p>合计 <strong>27 个 operation + 1 个 skill</strong>。另有发行版预装包 <code>ghrah.project_agent_manage</code>（<code>ghrah-subject/src/ghrah/subject/shipped_abilities/</code>，4 个 operation：add / get / list / remove project agent），由 <code>ShippedAbilityUnit</code> 在启动时补齐，属 external 能力件。</p>
-<p><code>list_abilities</code> 仍是<strong>活实现</strong>：定义在 <code>ghrah-core/src/ghrah/ability/builtin/core/ability.yaml</code>，代码在 <code>.../core/operations/list_abilities.py</code>，<code>expose: true</code>。它是否出现在模型工具面取决于是否被模板/授权选中并绑定，不是被删除；<code>LedgerUnit</code>、<code>GrantRecord</code> 同理仍是生产代码（§9.4）。</p>
+<p>合计 <strong>25 个 operation + 1 个 skill</strong>。另有发行版预装包 <code>ghrah.project_agent_manage</code>（<code>ghrah-subject/src/ghrah/subject/shipped_abilities/</code>，4 个 operation：add / get / list / remove project agent），由 <code>ShippedAbilityUnit</code> 在启动时补齐，属 external 能力件。</p>
 <h3 id="83-扫描漂移与启动提交">8.3 扫描、漂移与启动提交</h3>
 <table>
 <thead><tr><th>阶段</th><th>入口</th><th>事实</th></tr></thead>
@@ -1134,7 +1132,6 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>技能目录</td><td><code>skill_reminder()</code> 每轮注入已绑定技能；未绑定可见技能只给一行绑定提示；纯技能包照常进目录</td></tr>
 <tr><td>失效</td><td>成员被撤销/卸载时从 <code>ready</code> 与绑定集自然掉出；<code>refresh</code> 重建 static 集</td></tr>
 </tbody></table>
-<p><code>list_abilities</code> 虽然 <code>expose: true</code>，但不属于 <code>META_TOOL_NAMES</code>，也不会被自动授予：它出现在工具面的前提是包被授予且成员被绑定。默认模板不选它，所以默认工具面看不到它。</p>
 <h3 id="87-成员实体member">8.7 成员实体：<code>Member</code></h3>
 <p><code>ghrah-core/src/ghrah/ability/member.py::Member</code> 是成员的定义态实体，负责身份、全名、axes 与 wire 形状：</p>
 <table>
@@ -1143,7 +1140,7 @@ mark{background:#fff2a8;padding:0 2px;border-radius:3px}
 <tr><td>定义态</td><td><code>namespace</code>、<code>name</code>、<code>member</code>、<code>type</code>、<code>version</code>、<code>ability_type</code>、<code>axes{visible,bind}</code>、<code>data</code></td><td>实例快照 <code>agent_instances.members</code> 与工具面</td></tr>
 <tr><td>引用态</td><td>只含身份六字段 + <code>permissions</code> + <code>axes{visible,available}</code></td><td>模板渲染出的 <code>AgentAssemblyMember</code>；创建时由 Core 补齐 <code>data</code></td></tr>
 <tr><td>身份六字段</td><td><code>namespace</code> / <code>name</code> / <code>member</code> / <code>type</code> / <code>version</code> / <code>ability_type</code></td><td>跨模板、装配、快照、日志稳定的追踪键</td></tr>
-<tr><td>axes</td><td><code>visible</code>（可发现）与 <code>bind</code>（常驻上下文）</td><td>三条合法组合：<code>true/true</code>、<code>true/false</code>、<code>false/false</code>；<code>false/true</code> 构造期拒绝</td></tr>
+<tr><td>axes</td><td><code>visible</code>（可发现）与 <code>bind</code>（常驻上下文）</td><td>两轴正交，四种组合都合法；<code>false/true</code>（常驻但不进发现面）用于内置 <code>search_tools</code></td></tr>
 </tbody></table>
 <p>三类成员：<code>operation</code>（可执行，产工具）、<code>skill</code>（说明书 + 资源，产目录条目）、<code>mcp</code>（远端工具，经快照绑定）。<code>skill</code> 下的 <code>scripts</code> 是资源不是成员：它出现在授权地址 <code>skill/&lt;key&gt;/scripts/&lt;script&gt;</code>，但不会成为独立的装配成员。</p>
 <h3 id="88-运行期不读安装目录">8.8 运行期不读安装目录</h3>

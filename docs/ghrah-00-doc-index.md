@@ -24,6 +24,7 @@
 | 2.8 | 2026-11-20 | member 两轴改为 `visible` / `bind`（绑定要求可见）；`ghrah-11` §5 重写并补运行期绑定与 wire 过渡说明；`ghrah-10` 增 `initial_bindings` 创建参数与 `INST-11` 绑定/解绑 |
 | 2.9 | 2026-11-20 | 启动按成员类型分流注入：operation 进工具面静态集、skill 进每轮目录（均按 `bind` 过滤）、控制成员走 control 通道；`bind_member` 支持技能目录名；`ghrah-11` §5 补技能分流 |
 | 3.0 | 2026-11-23 | 模板成员改为 `available_members`（三段全名，只存身份六字段）；创建线补齐成员定义数据写入实例快照；技能目录注入 `read` 地址、`load_skill` 接受裸键/地址；新增 `ghrah-13`（能力与成员数据底座：SQLite 权威、启动提交、快照恢复、迁移）；`ARCHITECTURE.md` 全面重写并重新生成 HTML，删除 Scheme 树权威等旧特性设计 |
+| 3.1 | 2026-11-23 | 成员两轴解耦：`visible`（可发现）与 `bind`（常驻上下文）相互独立，`visible=false, bind=true` 合法；内置 `search_tools` 在实例创建/恢复时固定为该组合（常驻但不进自身发现面）；`search_tools` 改为扫描实例快照 `axes`，返回 `{status,data,reason}`；删除 `ghrah.core.list_abilities`（发现面由 `search_tools` 与技能目录承担） |
 
 ## 1. 这个目录是什么
 

@@ -166,7 +166,7 @@ operation 成员同形状，`type: operation`，`data` 用 `path` + `input_schem
 | `true` | `true` | ✅ | 已绑定 | schema 常驻模型上下文 |
 | `true` | `false` | ✅ | 可发现未绑定 | `search_tools` 可找到、`execute_tool` 可调用；可 `bind_member` 装上 |
 | `false` | `false` | ✅ | 隐藏 | 不进目录、不可发现 |
-| `false` | `true` | ❌ | 绑定却不可见 | 构造期拒绝：`bind=true` 要求 `visible=true` |
+| `false` | `true` | ✅ | 常驻但不进发现面 | schema 常驻上下文，但不出现在 `search_tools` 结果里（内置 `search_tools` 创建时固定此状态） |
 
 `MemberAxes.from_wire` 过渡期把历史字段 `available` 当 `bind` 读，也接受直接写 `bind`；`to_wire` 只写 `{visible, bind}`。注意**同名不同义**的另一套轴：关系库 grant 的 `axes` 是 `{visible, available}`，`available` 表示「可执行」（§6.3、§13.2 P-1）。
 
@@ -487,7 +487,7 @@ members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
 
 ### 11.2 硬拒绝先于审批
 
-`_REQUIRED_PERMISSION`（`ability/execution/ability_build.py`）声明「成员需要哪项能力」：`write_file` / `edit_file` / `delete_file` / `move_file` → `fs_write`，`execute_command` → `shell_access`，`mcp_call` → `net_access`。有效范围缺该项时用 `PermissionDeniedAbility` 包一层：`check_call` 直接失败，审批无法覆盖。
+`_REQUIRED_PERMISSION`（`ability/execution/ability_build.py`）声明「成员需要哪项能力」：`write_file` / `edit_file` / `delete_file` / `move_file` → `fs_write`，`execute_command` → `shell_access`。有效范围缺该项时用 `PermissionDeniedAbility` 包一层：`check_call` 直接失败，审批无法覆盖。
 
 ### 11.3 FS 判定
 
@@ -549,7 +549,7 @@ members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
 | --- | --- | --- |
 | I-01 | 运行期只读 SQLite，不读安装目录 | `surface_snapshot` / `resolve` / `read_chunk` 的输入只有库内数据 |
 | I-02 | 成员契约唯一来源是已提交定义；工具 schema 不从实现脚本二次读取 | `_instantiate` 取 `operation["input_schema"]` |
-| I-03 | `bind=true` 要求 `visible=true` | `MemberAxes.__post_init__` |
+| I-03 | 两轴相互独立：`visible` 只决定能否被发现，`bind` 只决定是否常驻上下文；`search_tools` 在实例创建时固定为 `visible=false, bind=true` | `MemberAxes` / `member_axes_for_creation` |
 | I-04 | 授权地址规范唯一：`operations/<k>`、`skill/<k>[/<role>/<k>]` | `GrantFacts.__post_init__`（地址全集必须被 axes 覆盖） |
 | I-05 | 授权只经关系库写，且必须带 `expected_revision` | `write_grant` / `write_revoke` / `write_bind_tool` |
 | I-06 | 版本按 digest 不可变，提交幂等 | `commit_version` 的摘要自洽校验 |
@@ -566,7 +566,7 @@ members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
 | 编号 | 偏差 | 证据 | 影响 |
 | --- | --- | --- | --- |
 | P-1 | 两套同名 `axes` 语义不同：成员侧 `{visible, bind}`，授权事实侧 `{visible, available}` | `ability/member.py` `MemberAxes` vs `ability/access/facts.py` `GrantFacts` | 跨层阅读易把"绑定"当"可执行" |
-| P-2 | `Member.reference` docstring 仍称「`bind` 必须与 `visible` 一致」，与 `MemberAxes` 允许 `visible=true, bind=false` 矛盾 | `ability/member.py` 的 `reference` | docstring 陈旧，易误导调用方 |
+| P-2 | 已修复：两轴解耦后，`Member.reference` 不再声明「`bind` 必须与 `visible` 一致」 | `ability/member.py` 的 `reference` | — |
 | P-3 | `execution.timeout_ms` 对能力件生效（`asyncio.timeout`），对内核件不生效 | `ability/package/provider.py` `PythonOperation.execute` vs `ability/execution/executor.py` | 同一字段两种运行行为 |
 | P-4 | `surface_snapshot` 读的是 `include_unavailable_bindings=True` 的投影，不可用成员仍在目录里（`available=false`），必须由上层过滤 | `store.surface_snapshot` / `runtime.refresh` | 漏过滤会让模型看到不可执行工具 |
 | P-5 | 退化身份包成员名两段/三段并存，靠三处等价兼容维持 | 解析回退、安装记录回退、`surface/runtime.py` `_member_forms` | 兼容层与长期债务（`ghrah-11` §11、`ghrah-12` §11、`ghrah-13` §6.2） |
@@ -594,7 +594,7 @@ members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
 | 装配点 A「按定义创建能力」+ 两条路径差异 | 函数不存在 | 单一路径：`StartupGrantMaterializer.materialize` |
 | 旧用户级扫描根与对应环境变量开关 | **已退役**；默认池只有内置树 | 外部包走 `ability.install_root` → `InstalledAbilityProvider` |
 | `manifest: ability` + `version: "1"` 的旧清单形状 | 不再是能力包写法 | `ability.yaml` + `schema_version: '2'` |
-| `list_abilities` 被当作「能力管理的只读工具」 | 它是 `ghrah.core` 的普通 operation 成员：模板申请并被授予/绑定时才进工具面 | 管理面是关系库与 `ghrah ability` CLI（§15） |
+| `list_abilities` | **已删除**（模型侧不再有全量清单工具） | 发现面由 `search_tools`（可见未绑定成员）与 `load_skill`（技能目录/正文）承担 |
 | 旧 §13.2 的 D-1…D-20 表 | 已按当前代码重测，收敛为 §13.2 的 P-1…P-8 | — |
 
 ## 15 构建、安装与导入

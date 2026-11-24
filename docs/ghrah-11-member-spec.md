@@ -298,17 +298,17 @@ GrantFacts {
 
 轴的两个来源（模板本身不存轴）：
 
-1. **创建时**：`initial_bindings` 列出要绑定的成员全名；未列出的可见成员 `bind=false`；`visible` 恒 `true`。控制成员强制绑定。
+1. **创建时**：`initial_bindings` 列出要绑定的成员全名；未列出的可见成员 `bind=false`；`visible` 默认 `true`。控制成员强制绑定。**例外**：内置 `ghrah.core.search_tools` 只要被选中，创建/恢复时一律规范为 `visible=false, bind=true`（见 §5 两轴表）。
 2. **运行期**：`bind_member` / `unbind_member` 立即改写实例快照的 `axes.bind`，重启按快照恢复。
 
-三条合法组合：
+四条合法组合：
 
 | visible | bind | 合法 | 语义 | 装配结果 |
 | --- | --- | --- | --- | --- |
 | `true` | `true` | ✅ | 已绑定 | schema 常驻模型上下文，可直接调用 |
 | `true` | `false` | ✅ | 可发现未绑定 | 可被 `search_tools` 找到、`execute_tool` 调用；模型可 `bind_member` 装上 |
 | `false` | `false` | ✅ | 隐藏 | 不进目录，不可发现也不可调用 |
-| `false` | `true` | ❌ | 绑定却不可见——无法解释 | 构造期拒绝（`bind=true` 要求 `visible=true`） |
+| `false` | `true` | ✅ | 常驻但不进发现面 | schema 常驻模型上下文；不出现在 `search_tools` 结果里。内置 `search_tools` 自身用这一组合 |
 
 运行期变更：`bind_member` / `unbind_member` 两个元工具由模型自行调用；绑定的权威是
 **实例快照**（`agent_instances.members[].axes`），每次变更立即写库，重启按库恢复。

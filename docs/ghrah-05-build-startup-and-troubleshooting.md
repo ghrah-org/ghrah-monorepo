@@ -192,7 +192,7 @@ dev 产物落 `.dev/` 而永不重指 `current`，所以 dev 迭代不会污染�
 
 ```json
 {"mode":"merge","rules":[
-  {"package":"ghrah.core","operation":"list_abilities"},
+  {"package":"ghrah.core","operation":"session_info"},
   {"package":"ghrah.fs","operation":"read_file"},
   {"package":"ghrah.fs","operation":"list_directory"},
   {"package":"ghrah.shell","operation":"execute_command"}

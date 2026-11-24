@@ -190,7 +190,7 @@ stateDiagram-v2
 - `desired_state` 是**声明**（记录里），决定重启后要不要拉起。
 - `runtime_status` 是**诊断**（记录里），不影响调度；三态判定口径为 `running` / `stopped` / `failed`（另有 `pending`、`lost` 两个历史值）。
 - `incarnation_id` 是**进程实例**（快照里），每次启动变化；停止后记录里仍保留上一次值，仅用于识别陈旧操作。
-- 成员轴 `axes{visible,bind}` 是**绑定事实**（快照里），由创建请求与运行期 `bind_member`/`unbind_member` 写。
+- 成员轴 `axes{visible,bind}` 是**绑定事实**（快照里），由创建请求与运行期 `bind_member`/`unbind_member` 写；两轴相互独立（`visible`=可被发现，`bind`=常驻上下文），内置 `search_tools` 创建时固定为 `visible=false, bind=true`。
 
 ### 3.5 并发控制
 
@@ -538,7 +538,7 @@ AgentAssemblyMember（引用态：只有身份与轴，**不含 data**）
 | 显式集合 | 非控制成员：`member` 全名 ∈ 集合；控制成员（`conversation` / `end_task`）：恒 `true` |
 | 技能成员 | 与 operation 同规则（技能没有工具形态，绑定轴决定目录是否常驻） |
 
-`visible` **恒为 `true`**：模板不提供可见性选择，`initial_bindings` 只切绑定轴（`ghrah-subject/src/ghrah/subject/agents/render.py:314-345`）。渲染结束后若集合里有未下发的名字，抛 `invalid_binding`（`ghrah-subject/src/ghrah/subject/agents/render.py:367-372`）。
+`visible` **默认恒为 `true`**：模板不提供可见性选择，`initial_bindings` 只切绑定轴（`ghrah-subject/src/ghrah/subject/agents/render.py:314-345`）。**例外**：内置 `ghrah.core.search_tools` 被选中时，Core 在创建/恢复时把两轴固定为 `visible=false, bind=true`（`member_axes_for_creation`）——它必须常驻上下文，但不进 `search_tools` 自己的发现结果。渲染结束后若集合里有未下发的名字，抛 `invalid_binding`（`ghrah-subject/src/ghrah/subject/agents/render.py:367-372`）。
 
 ### 5.3 控制成员通道
 

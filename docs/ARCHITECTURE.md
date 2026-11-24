@@ -113,7 +113,7 @@
 @group 外部依赖
 @card LLM 端点 | agentconf 库解析 #61-coreunit-与-34-字段配置
 @card 安装根 | <ns>/<name>/<version>/ · 启动期提交来源 #83-扫描漂移与启动提交
-@card MCP 服务器 | mcp_call · 快照包 #82-内置包与预装包
+@card MCP 成员 | 安装快照 · 成员驱动 #82-内置包与预装包
 @note 可选组件（未发布、不在主链上）：ghrah-kernel · ghrah-plugin · ghrah-taskstore · ghrah-scheme
 ```
 ### 1.1 两半区、契约与可选组件
@@ -959,20 +959,17 @@ Agent 的**自动拉起不在 Core**：Core 只负责「被要求时拉起/停�
 
 ### 8.2 内置包与预装包
 
-`ghrah-core/src/ghrah/ability/builtin/` 有 6 个包、28 个成员：
+`ghrah-core/src/ghrah/ability/builtin/` 有 6 个包、27 个成员：
 
 | 包 | 成员数 | 内容 |
 | --- | --- | --- |
-| `ghrah.core` | 11 | `bind_member`、`unbind_member`、`conversation`、`end_task`、`list_abilities`、`load_skill`、`recall_context`、`search_tools`、`describe_tool`、`execute_tool`、`session_info` |
+| `ghrah.core` | 10 | `bind_member`、`unbind_member`、`conversation`、`end_task`、`load_skill`、`recall_context`、`search_tools`、`describe_tool`、`execute_tool`、`session_info` |
 | `ghrah.cluster` | 7 | `spawn_agent`、`terminate_agent`、`send`、`send_message`、`broadcast_message`、`query_agents`、`query_manifests` |
 | `ghrah.fs` | 7 | 读、写、编辑、移动、删除、列目录、搜文件 |
 | `ghrah.shell` | 1 | `execute_command` |
-| `ghrah.mcp` | 1 | `mcp_call` |
 | `ghrah.ability-builder` | 1 | 纯技能包：`ability-package-development-guide`（skill） |
 
-合计 **27 个 operation + 1 个 skill**。另有发行版预装包 `ghrah.project_agent_manage`（`ghrah-subject/src/ghrah/subject/shipped_abilities/`，4 个 operation：add / get / list / remove project agent），由 `ShippedAbilityUnit` 在启动时补齐，属 external 能力件。
-
-`list_abilities` 仍是**活实现**：定义在 `ghrah-core/src/ghrah/ability/builtin/core/ability.yaml`，代码在 `.../core/operations/list_abilities.py`，`expose: true`。它是否出现在模型工具面取决于是否被模板/授权选中并绑定，不是被删除；`LedgerUnit`、`GrantRecord` 同理仍是生产代码（§9.4）。
+合计 **25 个 operation + 1 个 skill**。另有发行版预装包 `ghrah.project_agent_manage`（`ghrah-subject/src/ghrah/subject/shipped_abilities/`，4 个 operation：add / get / list / remove project agent），由 `ShippedAbilityUnit` 在启动时补齐，属 external 能力件。
 
 ### 8.3 扫描、漂移与启动提交
 
@@ -1046,8 +1043,6 @@ HITL 的固定步骤：
 | 技能目录 | `skill_reminder()` 每轮注入已绑定技能；未绑定可见技能只给一行绑定提示；纯技能包照常进目录 |
 | 失效 | 成员被撤销/卸载时从 `ready` 与绑定集自然掉出；`refresh` 重建 static 集 |
 
-`list_abilities` 虽然 `expose: true`，但不属于 `META_TOOL_NAMES`，也不会被自动授予：它出现在工具面的前提是包被授予且成员被绑定。默认模板不选它，所以默认工具面看不到它。
-
 ### 8.7 成员实体：`Member`
 
 `ghrah-core/src/ghrah/ability/member.py::Member` 是成员的定义态实体，负责身份、全名、axes 与 wire 形状：
@@ -1057,7 +1052,7 @@ HITL 的固定步骤：
 | 定义态 | `namespace`、`name`、`member`、`type`、`version`、`ability_type`、`axes{visible,bind}`、`data` | 实例快照 `agent_instances.members` 与工具面 |
 | 引用态 | 只含身份六字段 + `permissions` + `axes{visible,available}` | 模板渲染出的 `AgentAssemblyMember`；创建时由 Core 补齐 `data` |
 | 身份六字段 | `namespace` / `name` / `member` / `type` / `version` / `ability_type` | 跨模板、装配、快照、日志稳定的追踪键 |
-| axes | `visible`（可发现）与 `bind`（常驻上下文） | 三条合法组合：`true/true`、`true/false`、`false/false`；`false/true` 构造期拒绝 |
+| axes | `visible`（可发现）与 `bind`（常驻上下文） | 两轴正交，四种组合都合法；`false/true`（常驻但不进发现面）用于内置 `search_tools` |
 
 三类成员：`operation`（可执行，产工具）、`skill`（说明书 + 资源，产目录条目）、`mcp`（远端工具，经快照绑定）。`skill` 下的 `scripts` 是资源不是成员：它出现在授权地址 `skill/<key>/scripts/<script>`，但不会成为独立的装配成员。
 

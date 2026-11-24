@@ -645,7 +645,7 @@ sequenceDiagram
       "ability_type": "kernel",
       "latest_version": null,
       "operations": ["bind_member", "conversation", "describe_tool", "end_task",
-                     "execute_tool", "list_abilities", "load_skill", "recall_context",
+                     "execute_tool", "load_skill", "recall_context",
                      "search_tools", "session_info", "unbind_member"],
       "skills": [],
       "versions": [

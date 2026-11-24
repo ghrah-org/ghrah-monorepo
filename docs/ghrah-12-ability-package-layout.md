@@ -253,7 +253,7 @@ mcp: {server: <agentconf 里的服务器名>}
 ```
 
 - 快照的成员是远端工具（`type=mcp`），其 schema 由探测得到，不从本地代码推导。
-- `namespace=mcp` 是保留命名空间；`ghrah.mcp` 是内置的 MCP 接入包，两者不是一回事。
+- `namespace=mcp` 是保留命名空间；MCP 成员只来自安装快照，旧的 `ghrah.mcp` 内置接入包已退役。
 - 安装根下的槽位与能力件一致；快照刷新走 `refresh`。
 
 ## 6 构建、安装、装载的职责边界

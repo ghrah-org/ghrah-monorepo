@@ -418,12 +418,11 @@ python scripts/check_docstrings.py --summary             # docstring 覆盖
 | 容器 | 成员数 | handler | 说明 |
 | --- | --- | --- | --- |
 | `fs` | 7 | `read_file` `write_file` `edit_file` `delete_file` `move_file` `list_directory` `search_files` | 文件系统；全部进 `FS_ABILITY_TYPES` |
-| `core` | 6 | `conversation`(expose:false) `end_task` `list_abilities` `load_skill` `recall_context` `session_info` | 会话基础能力 |
+| `core` | 10 | `conversation`(expose:false) `end_task` `session_info` `load_skill` `recall_context` `search_tools` `describe_tool` `execute_tool` `bind_member` `unbind_member` | 会话基础能力 + 发现/绑定元工具 |
 | `cluster` | 7 | `query_agents` `send_message` `broadcast_message` `spawn_agent` `terminate_agent` `query_manifests` `send`(expose:false, registry-only) | 多 agent 协作 |
 | `shell` | 1 | `execute_command` | 命令执行；走命令分级 |
-| `mcp` | 1 | `mcp_call` | MCP 工具桥 |
 
-口径（仓库内置树，实测于 `f8ff157`）：handler 全集 **22**；工具面 **20**（去掉 `conversation` 与 `send`）；`AbilityManifest` 视图 **21**（只去掉 registry-only 的 `send`）。用户根 `~/.ghrah/skill-ability` 下还可以装 skill-only 容器，它们不产生 operation，因此不改变这三个数字。
+口径（仓库内置树，当前）：handler 全集 **25**；工具面 **23**（去掉 `conversation` 与 `send`）；`AbilityManifest` 视图 **24**（只去掉 registry-only 的 `send`）。用户根 `~/.ghrah/skill-ability` 下还可以装 skill-only 容器，它们不产生 operation，因此不改变这三个数字。
 
 ## 9. 常见错误对照
 

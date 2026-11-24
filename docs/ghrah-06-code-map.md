@@ -162,15 +162,14 @@ ability/                        能力域根：来源装配与共享契约
 
 ### 3.7 `builtin/` — 6 个内核件
 
-目录形态固定：`builtin/<包>/{ability.yaml,operations/,skills/}`。共 **27 个 operation + 1 个 skill**。
+目录形态固定：`builtin/<包>/{ability.yaml,operations/,skills/}`。共 **26 个 operation + 1 个 skill**。
 
 | 包 | operation | 成员要点 | 状态 |
 | --- | --- | --- | --- |
 | `fs` | 7 | `read_file`、`write_file`、`edit_file`、`move_file`、`delete_file`、`list_directory`、`search_files` | 现行 |
-| `core` | 11 | `conversation`、`end_task`、`session_info`、`list_abilities`、`load_skill`、`recall_context`、`search_tools`、`describe_tool`、`execute_tool`、`bind_member`、`unbind_member` | 现行 |
+| `core` | 10 | `conversation`、`end_task`、`session_info`、`load_skill`、`recall_context`、`search_tools`、`describe_tool`、`execute_tool`、`bind_member`、`unbind_member` | 现行 |
 | `cluster` | 7 | `spawn_agent`、`terminate_agent`、`query_agents`、`query_manifests`、`send`、`send_message`、`broadcast_message` | 现行 |
 | `shell` | 1 | `execute_command` | 现行 |
-| `mcp` | 1 | `mcp_call` | 现行 |
 | `ability-builder` | 0 | 1 个技能：`ability-package-development-guide`（能力包开发指南） | 现行 |
 
 `core` 包的 5 个元工具是**固定通道**：工具面收窄后，模型仍能发现、描述、执行、绑定/解绑成员（见 §8.3）。`ability-builder` 只有技能成员，是"纯技能包"的样板。

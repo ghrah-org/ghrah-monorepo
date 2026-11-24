@@ -64,7 +64,7 @@
 | 主要数据 | `input_schema` / `output_schema` / `execution` / `permissions` | `path` / `media_type` / 三类资源 | 远端工具契约 |
 | 典型数量 | 一个包 0..N | 一个包 0..N（**多技能合法**） | 一个包 1..N（快照） |
 
-技能成员有两条轴：`visible`（能否被发现）与 `bind`（是否进每轮正式目录）。唯一硬规则是 **`bind=true` 要求 `visible=true`**，构造期拒绝 `visible=false, bind=true`（`MemberAxes`，`.../ability/member.py:132-178`）。`visible=true, bind=false` 合法：可发现、未常驻，模型可调 `bind_member` 装上。两轴与定义面的 `expose` 不是一回事：`expose` 是包作者声明"有没有工具形态"，两轴是授予后的每 Agent 状态（`ghrah-11` §5）。
+技能成员有两条轴：`visible`（能否被发现）与 `bind`（是否进每轮正式目录），两轴相互独立。`visible=true, bind=false` 合法：可发现、未常驻，模型可调 `bind_member` 装上。`visible=false, bind=true` 是「常驻但不进发现面」，当前只由内置 `search_tools` 在实例创建时使用；技能目录的收集仍以 `visible=true` 为前提。两轴与定义面的 `expose` 不是一回事：`expose` 是包作者声明"有没有工具形态"，两轴是授予后的每 Agent 状态（`ghrah-11` §5）。
 
 `assets` / `references` / `scripts` 是技能的从属资源，不是独立成员：会出现在授权账本地址里（`skill/<key>/assets/<资源键>` 等），但不成装配成员，也不产工具（`ghrah-11` §2.1）。
 
@@ -275,10 +275,7 @@ if self._tool_surface is not None:
 
 ```python
 scripts = any(
-    script.available
-    for node in view.abilities
-    for skill in node.skills
-    for script in skill.scripts
+    script.available for node in view.abilities for skill in node.skills for script in skill.scripts
 )
 extras = controls + ([RunScriptTool(self).bind_tool()] if scripts else [])
 ```
@@ -295,7 +292,7 @@ extras = controls + ([RunScriptTool(self).bind_tool()] if scripts else [])
 | S-02 | 技能成员键 = `skills/` 目录名 = `SKILL.md` frontmatter `name` | 已实现 | `generate.py:327-330`、`content.py:239-242` |
 | S-03 | 一个包可以有 0..N 个技能；`operations` 与 `skills` 合计不能为零 | 已实现 | `ability_schema.py:765-766`、`generate.py:508-509` |
 | S-04 | 资源键在各自角色内唯一；脚本只允许 `.py`；资源摘要/大小由构建写入、捕获/安装核对 | 已实现 | `generate.py:356-381`、`content.py:245-256` |
-| S-05 | `bind=true` 要求 `visible=true`；`visible=false` 的技能既不进目录也不出提示 | 已实现 | `member.py:149-153`、`runtime.py:184-201` |
+| S-05 | 两轴相互独立；技能目录只按 `visible`/`bind` 的目录规则收集（`visible=false` 的技能不进正式目录）。`visible=false, bind=true` 当前只用于内置 `search_tools`，不用于技能 | 已实现 | `member.py:132-178`、`runtime.py:184-201` |
 | S-06 | 目录只含已授予且正文可见（`body_allowed`）的技能；纯技能包与 operation 包同权 | 已实现 | `surface/catalog.py:94-107`、`:143-151` |
 | S-07 | 目录条目的名字与 `read:` 地址必须能在当前 Agent 的授予里反查；地址不越权、不跨版本 | 已实现 | `store.py:1366-1415`、`local_content.py:214-229` |
 | S-08 | 正文只从 `ability_content` 读；清单路径/摘要/大小与定义、blob 三方一致才返回 | 已实现 | `store.py:1769-1784` |
