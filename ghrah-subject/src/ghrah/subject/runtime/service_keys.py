@@ -13,15 +13,17 @@ CAPABILITY_REGISTRY/CLUSTER_TRANSPORT_MANAGER）随旧实现剔除。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ghrah.subject.sandbox.executor import SandboxExecutor
 from ghrah.subject.sandbox.workspace import WorkspaceManager
+from ghrah.subject.service_key import SubjectServiceKey
 from ghrah.subject.task.store import TaskStore
 from ghrah.subject.workspace.models import WorkspaceRecord
 
 if TYPE_CHECKING:
+    from ghrah.protocol.views.core import AgentAssemblySpec, AgentStartView
+
     from ghrah.subject.project.models import AgentRecord, ProjectRecord
 
 __all__ = [
@@ -57,14 +59,6 @@ __all__ = [
     "TaskManagerService",
     "WorkspaceService",
 ]
-
-
-@dataclass(frozen=True)
-class SubjectServiceKey[T]:
-    """Typed key for values stored in the Ouroboros context (name carrier)."""
-
-    name: str
-    service_type: type[Any] | tuple[type[Any], ...] = object
 
 
 class AbilityAccessHandle(Protocol):
@@ -217,6 +211,9 @@ class ClusterHandle(Protocol):
 
     async def terminate_agent(self, agent_id: str, agent_name: str) -> dict[str, Any]:
         """发 terminate_agent，返回 command_result dict。"""
+
+    async def create_assembly(self, spec: AgentAssemblySpec) -> AgentStartView:
+        """将装配规格提交给 Core，返回可用实例的回执。"""
 
     async def start_assembly(self, agent_id: str) -> Any:
         """按实例快照启动 Agent（幂等）。"""
