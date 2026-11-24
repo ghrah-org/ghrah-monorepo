@@ -119,9 +119,7 @@ async def test_abort_wakes_inline_wait_and_releases_worker(tmp_path, monkeypatch
                     other = ContextManager("a", persistence=other_backend)
                     await other.abort_turn(
                         turn_id=parent.turn_id,
-                        settle_deliveries=None
-                        if abort_mode == "turn_only"
-                        else mm.converge_turn_deliveries,
+                        settlement=None if abort_mode == "turn_only" else mm.delivery_settlement,
                     )
             if abort_mode != "turn_only":
                 assert (await mm.get_deliveries(opener.message_id))[0].state == (

@@ -27,12 +27,7 @@ import aiosqlite
 from ghrah.agents.runner import detached_runner_context
 from ghrah.chat.content import TextBlock, blocks_from_dicts
 from ghrah.chat.message import ChatMessage
-from ghrah.communication.delivery_queue import (
-    find_blocker,
-    has_turns,
-    pending_turn_input_ids,
-    release_turn_inputs,
-)
+from ghrah.communication.delivery_queue import find_blocker, has_turns
 from ghrah.communication.sqlite_message_store import SqliteMessageStore
 from ghrah.communication.storage import (
     DeliveryClaimCancelled,
@@ -53,6 +48,7 @@ from ghrah.context import turn
 from ghrah.context.iteration_commit import clear_durable_iteration_scope
 from ghrah.context.manager import DeliverySessionUnavailableError
 from ghrah.context.persistence.changes import ContextChanges
+from ghrah.context.turn_store import DeliverySettlement
 from ghrah.core.message import AgentMessage, MessageType
 
 if TYPE_CHECKING:
@@ -348,29 +344,16 @@ class MessageManager:
         self.bind(agent_id, receive, _session_aware=True)
         self._turn_closure_publishers[agent_id] = agent.publish_turn_closure
 
-    @staticmethod
-    async def release_turn_inputs(
-        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
-    ) -> list[str]:
-        """使用 ContextManager 持有的事务，无需获取消息服务锁。"""
-        return await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
-
-    @staticmethod
-    async def pending_turn_input_ids(
-        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
-    ) -> list[str]:
-        """从预览的只读连接查询将解绑的投递。"""
-        return await pending_turn_input_ids(
-            db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
-        )
+    @property
+    def delivery_settlement(self) -> DeliverySettlement:
+        """本存储域的投递结算能力，供轮次事务在同事务内结算投递。"""
+        return self._sqlite.delivery_settlement
 
     async def has_active_turn(self, agent_id: str) -> bool:
         """检查调度器是否已为该接收方持久领取一轮。"""
         async with self._lock:
             db = self._require_db()
             return await has_turns(db) and await turn.has_active_turn(db, agent_id)
-
-    converge_turn_deliveries = staticmethod(SqliteMessageStore.converge_turn_deliveries)
 
     async def load_turn_inputs(self, turn_id: str) -> tuple[ChatMessage, ...]:
         """按受理顺序读取本轮尚未消费的持久注入，不修改投递。"""

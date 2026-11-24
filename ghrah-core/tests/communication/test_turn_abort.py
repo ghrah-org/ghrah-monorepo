@@ -650,10 +650,8 @@ async def test_crash_after_abort_commit_recovers_recovery_branch(rollback_runtim
             (json.dumps(["tool-1"]), node.id),
         )
     monkeypatch.setattr(cm, "_install_convergence", lambda changes: None)
-    outcome = await cm.abort_turn(
-        turn_id=turn_id, reason="crash-after-commit", settle_deliveries=None
-    )
-    assert outcome.changed and outcome.row["status"] == "aborted"
+    outcome = await cm.abort_turn(turn_id=turn_id, reason="crash-after-commit", settlement=None)
+    assert outcome.changed and outcome.record.status == "aborted"
     row = await backend.load_turn("agent", turn_id)
     metadata = json.loads(row["metadata"])
     assert metadata["recovery_branch_id"] and metadata["incomplete_node_id"]
@@ -697,10 +695,8 @@ async def test_crash_after_failure_convergence_keeps_single_diagnosis(
             (json.dumps(["tool-1"]), node.id),
         )
     monkeypatch.setattr(cm, "_install_convergence", lambda changes: None)
-    outcome = await cm.converge_turn(
-        turn_id=turn_id, error=RuntimeError("boom"), settle_deliveries=None
-    )
-    assert outcome.changed and outcome.row["status"] == "failed"
+    outcome = await cm.converge_turn(turn_id=turn_id, error=RuntimeError("boom"), settlement=None)
+    assert outcome.changed and outcome.record.status == "failed"
     row = await backend.load_turn("agent", turn_id)
     metadata = json.loads(row["metadata"])
     assert metadata["incomplete_node_id"] and metadata["recovery_branch_id"]

@@ -17,6 +17,7 @@ from ghrah.context.branch import ActionBranch
 from ghrah.context.node import ContextNode
 from ghrah.context.persistence.changes import ContextChanges
 from ghrah.context.persistence.serialization import deserialize_action_session, deserialize_branch
+from ghrah.context.turn_store import TurnRecord
 
 
 class SettleDeliveries(Protocol):
@@ -33,10 +34,21 @@ class SettleDeliveries(Protocol):
 
 
 @dataclass(frozen=True)
+class SceneNode:
+    """轮次最后一个有效成员节点的持久事实。"""
+
+    id: str
+    iteration: int
+    created_on_branch_id: str
+    agent_state: dict[str, Any]
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class Scene:
     """轮次结束前可重建的不完整现场。"""
 
-    last: aiosqlite.Row | None
+    last: SceneNode | None
     pending_hitl: int
     tool_ids: list[str]
     pending_tools: bool
@@ -50,7 +62,7 @@ class Scene:
 class ConvergenceOutcome:
     """一次收敛后的权威回执与可选链变更。"""
 
-    row: aiosqlite.Row
+    record: TurnRecord
     changes: ContextChanges | None = None
     changed: bool = False
     result_pending: bool = False
@@ -58,14 +70,14 @@ class ConvergenceOutcome:
     released_deliveries: int = 0
 
     def as_payload(self) -> dict[str, Any]:
-        metadata = json.loads(self.row["metadata"])
+        metadata = self.record.metadata
         return {
-            "turn_id": self.row["turn_id"],
-            "status": self.row["status"],
-            "closing_kind": self.row["closing_kind"],
-            "opener_delivery_id": self.row["opener_delivery_id"],
-            "aborted": self.changed and self.row["status"] == "aborted",
-            "already_terminal": self.row["status"] in turn.TERMINAL_STATUSES
+            "turn_id": self.record.turn_id,
+            "status": self.record.status,
+            "closing_kind": self.record.closing_kind,
+            "opener_delivery_id": self.record.opener_delivery_id,
+            "aborted": self.changed and self.record.status == "aborted",
+            "already_terminal": self.record.status in turn.TERMINAL_STATUSES
             and not self.changed
             and not self.result_pending,
             "result_pending": self.result_pending,
@@ -92,7 +104,18 @@ async def load_scene(db: aiosqlite.Connection, row: aiosqlite.Row) -> Scene:
     assert count is not None
     metadata = json.loads(last["metadata"]) if last is not None else {}
     tool_ids = metadata.get("pending_tool_call_ids") or []
-    return Scene(last, count[0], tool_ids, bool(tool_ids or metadata.get("pending_tool_replies")))
+    node = (
+        SceneNode(
+            id=last["id"],
+            iteration=last["iteration"],
+            created_on_branch_id=last["created_on_branch_id"],
+            agent_state=json.loads(last["agent_state"]),
+            metadata=metadata,
+        )
+        if last is not None
+        else None
+    )
+    return Scene(node, count[0], tool_ids, bool(tool_ids or metadata.get("pending_tool_replies")))
 
 
 async def plan_convergence(
@@ -109,7 +132,7 @@ async def plan_convergence(
     last = scene.last
     if last is None or row["start_node_id"] is None or not (scene.incomplete or crash_marker):
         return None
-    if crash_marker and crash_marker["last_correct_node_id"] != last["id"]:
+    if crash_marker and crash_marker["last_correct_node_id"] != last.id:
         return None
     async with db.execute(
         "SELECT * FROM sessions WHERE agent_name=? AND session_id=? AND lifecycle='open'",
@@ -122,27 +145,27 @@ async def plan_convergence(
     async with db.execute(
         "SELECT * FROM branches WHERE branch_id=? AND session_id=? AND lifecycle='open' "
         "AND head_node_id=?",
-        (session.active_branch_id, session.session_id, last["id"]),
+        (session.active_branch_id, session.session_id, last.id),
     ) as cursor:
         branch_row = await cursor.fetchone()
     if branch_row is None:
         return None
     old = deserialize_branch(dict(branch_row))
     node = ContextNode(
-        parent_id=last["id"],
+        parent_id=last.id,
         agent_name=row["agent_name"],
         session_id=session.session_id,
         created_on_branch_id=old.branch_id,
-        iteration=last["iteration"] + 1,
+        iteration=last.iteration + 1,
         ability_names=[turn.INCOMPLETE_KIND],
-        agent_state=json.loads(last["agent_state"]),
+        agent_state=last.agent_state,
         turn_id=row["turn_id"],
         metadata={
             "node_kind": turn.INCOMPLETE_KIND,
             "is_diagnosis": True,
             "incomplete_reason": reason,
             "phase": phase,
-            "last_correct_node_id": last["id"],
+            "last_correct_node_id": last.id,
             "turn_id": row["turn_id"],
             "pending_tool_call_ids": (
                 crash_marker["pending_tool_call_ids"] if crash_marker else scene.tool_ids
@@ -154,16 +177,16 @@ async def plan_convergence(
     branch = ActionBranch.create_fork(
         session_id=session.session_id,
         name=f"recovery-{row['turn_id'][:8]}",
-        head_node_id=last["id"],
+        head_node_id=last.id,
         parent_branch_id=old.branch_id,
-        fork_point_node_id=last["id"],
+        fork_point_node_id=last.id,
         metadata={
             "is_rollback": True,
             "trigger": reason,
             "turn_id": row["turn_id"],
             "rollback_from_branch_id": old.branch_id,
             "rollback_from_node_id": node.id,
-            "rollback_to_node_id": last["id"],
+            "rollback_to_node_id": last.id,
         },
     )
     return ContextChanges(
@@ -195,7 +218,7 @@ async def mark_crash_scenes(db: aiosqlite.Connection) -> None:
         marker = {
             "reason": "crash",
             "phase": "waiting_hitl" if scene.pending_hitl else "unknown",
-            "last_correct_node_id": scene.last["id"],
+            "last_correct_node_id": scene.last.id,
             "pending_tool_call_ids": scene.tool_ids,
         }
         await db.execute(

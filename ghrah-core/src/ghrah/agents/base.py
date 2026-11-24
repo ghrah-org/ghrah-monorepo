@@ -767,7 +767,7 @@ class ActorAgent:
         finally:
             if active is not None:
                 end_node_id = (
-                    convergence.row["end_node_id"] if convergence is not None else cm.active_head.id
+                    convergence.record.end_node_id if convergence is not None else cm.active_head.id
                 )
                 closure = await cm.finish_received_turn(
                     status=status,
@@ -795,8 +795,8 @@ class ActorAgent:
             return await cm.converge_turn(
                 turn_id=active.turn_id,
                 error=error,
-                settle_deliveries=(
-                    manager.converge_turn_deliveries
+                settlement=(
+                    manager.delivery_settlement
                     if manager is not None and active.owner == "mm"
                     else None
                 ),
@@ -2238,11 +2238,11 @@ class ActorAgent:
             turn_id=turn_id,
             session_id=session_id,
             reason=reason,
-            settle_deliveries=manager.converge_turn_deliveries if manager is not None else None,
+            settlement=manager.delivery_settlement if manager is not None else None,
         )
         if outcome.changed:
             await self._publish_convergence_branches(outcome)
-            await self.publish_turn_closure(TurnClosure.from_row(outcome.row))
+            await self.publish_turn_closure(TurnClosure.from_record(outcome.record))
         return outcome.as_payload()
 
     async def publish_turn_closure(self, closure: TurnClosure) -> None:
@@ -2276,7 +2276,7 @@ class ActorAgent:
                 turn_id=turn_id,
                 target=target,
                 node_id=node_id,
-                release_inputs=manager.release_turn_inputs if manager is not None else None,
+                settlement=manager.delivery_settlement if manager is not None else None,
             )
             if outcome.branch is not None:
                 info = self._branch_info(outcome.branch)
@@ -2288,10 +2288,10 @@ class ActorAgent:
                     TurnClosedEvent(
                         agent_name=self.config.name,
                         turn_id=turn_id,
-                        session_id=outcome.row["session_id"],
+                        session_id=outcome.record.session_id,
                         status="rolled_back",
                         closing_kind="rolled_back",
-                        end_node_id=outcome.row["end_node_id"],
+                        end_node_id=outcome.record.end_node_id,
                     )
                 )
             return outcome.as_payload()
@@ -2310,7 +2310,7 @@ class ActorAgent:
                 turn_id=turn_id,
                 target=target,
                 node_id=node_id,
-                pending_inputs=manager.pending_turn_input_ids if manager is not None else None,
+                settlement=manager.delivery_settlement if manager is not None else None,
             )
 
         return await self._runner.run(operation)

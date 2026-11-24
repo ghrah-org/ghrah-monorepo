@@ -16,7 +16,7 @@ HitlOutcome = Literal["approved", "rejected", "expired"]
 
 
 @dataclass(frozen=True)
-class HITLWriteResult:
+class _CasResult:
     """持久审批操作的结果。持久记录缺失与写入未确认分别表达。"""
 
     persisted: bool = False
@@ -84,7 +84,7 @@ async def resolve_cas(
     resolved_by: str | None,
     resolution: Any,
     now: str,
-) -> HITLWriteResult:
+) -> _CasResult:
     """仅转换 pending 请求，已处理时返回当前权威结果。"""
     cursor = await db.execute(
         "UPDATE hitl_requests SET status=?, resolved_by=?, resolution=?, resolved_at=? "
@@ -102,7 +102,7 @@ async def resolve_cas(
     updated = await cursor.fetchone()
     await cursor.close()
     if updated is not None:
-        return HITLWriteResult(True, True, updated["turn_id"], status, resolution)
+        return _CasResult(True, True, updated["turn_id"], status, resolution)
     row = await (
         await db.execute(
             "SELECT turn_id, status, resolution FROM hitl_requests "
@@ -111,10 +111,8 @@ async def resolve_cas(
         )
     ).fetchone()
     if row is None:
-        return HITLWriteResult()
-    return HITLWriteResult(
-        True, False, row["turn_id"], row["status"], json.loads(row["resolution"])
-    )
+        return _CasResult()
+    return _CasResult(True, False, row["turn_id"], row["status"], json.loads(row["resolution"]))
 
 
 async def orphan_all(

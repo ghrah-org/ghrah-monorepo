@@ -22,17 +22,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
-import json
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
-import aiosqlite
-
-from ghrah.context import hitl, recovery, turn
+from ghrah.context import turn
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.chain import ActionChain
@@ -44,15 +40,16 @@ from ghrah.context.iteration_commit import (
 from ghrah.context.message_store import MessageStore
 from ghrah.context.node import ContextNode
 from ghrah.context.persistence import ContextChanges, PersistenceBackend
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.session_runtime import SessionRuntime
 from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
+from ghrah.context.turn_store import DeliverySettlement, HitlWriteResult, TurnStore
 from ghrah.context.window import WindowManager
 from ghrah.core.window_protocol import MessageFactory
 
 if TYPE_CHECKING:
-    pass
+    from ghrah.context import recovery
+    from ghrah.context.turn import HitlOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +129,7 @@ class ContextManager:
         self._turn_abort_event: asyncio.Event | None = None
         self._convergence_lock = asyncio.Lock()
         self._pending_convergences: list[ContextChanges] = []
+        self._rollback_candidate: ContextManager | None = None
         self.execution_phase = "unknown"
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
@@ -293,14 +291,14 @@ class ContextManager:
     ) -> None:
         """复核领取事实后挂载轮次，与同进程的中止串行。"""
         async with self._convergence_lock:
-            backend = self._persistence
-            if isinstance(backend, SqliteBackend):
-                row = await backend.load_turn(self._agent_name, turn_id)
+            store = self._turn_store
+            if store is not None:
+                record = await store.load_turn(self._agent_name, turn_id)
                 if (
-                    row is None
-                    or row["status"] in turn.TERMINAL_STATUSES
-                    or row["session_id"] != session_id
-                    or row["opener_delivery_id"] != opener_delivery_id
+                    record is None
+                    or record.status in turn.TERMINAL_STATUSES
+                    or record.session_id != session_id
+                    or record.opener_delivery_id != opener_delivery_id
                 ):
                     raise turn.TurnRevokedError("claimed turn is no longer active")
             self.attach_turn(
@@ -342,7 +340,15 @@ class ContextManager:
     @property
     def has_durable_turn(self) -> bool:
         """当前执行有持久轮次，可依据现场收敛。"""
-        return self._active_turn is not None and isinstance(self._persistence, SqliteBackend)
+        return self._active_turn is not None and self._turn_store is not None
+
+    @property
+    def _turn_store(self) -> TurnStore | None:
+        """同一存储域的轮次存储；后端未提供时为 None。"""
+        backend = self._persistence
+        if backend is None or not getattr(backend, "connected", True):
+            return None
+        return backend.turn_store
 
     async def open_turn(self, *, opener_delivery_id: str | None = None) -> str | None:
         """为直接收到的输入开启轮次。"""
@@ -350,12 +356,10 @@ class ContextManager:
             uuid4().hex, self._agent_name, self.active_session_id, opener_delivery_id, "self"
         )
         async with self._convergence_lock:
-            if isinstance(self._persistence, SqliteBackend) and self._persistence.connected:
+            store = self._turn_store
+            if store is not None:
                 try:
-                    async with self._persistence.transaction() as db:
-                        now = datetime.now(UTC).isoformat()
-                        await turn.normalize_open_turns(db, agent_name=self._agent_name, now=now)
-                        await turn.insert_turn_placeholder(db, active, opened_at=now)
+                    await store.open_turn(active)
                 except Exception:
                     logger.warning(
                         "Failed to persist direct turn %s", active.turn_id, exc_info=True
@@ -375,23 +379,19 @@ class ContextManager:
         self.execution_phase = "unknown"
         if active is not None:
             self._revoked_turns.discard(active.turn_id)
-        if (
-            active is None
-            or active.owner == "mm"
-            or not isinstance(self._persistence, SqliteBackend)
-        ):
+        if active is None or active.owner == "mm":
+            return
+        store = self._turn_store
+        if store is None:
             return
         try:
             await self.wait_for_persist()
-            async with self._persistence.transaction() as db:
-                await turn.close_turn(
-                    db,
-                    turn_id=active.turn_id,
-                    status=status,
-                    closing_kind=closing_kind,
-                    end_node_id=end_node_id,
-                    closed_at=datetime.now(UTC).isoformat(),
-                )
+            await store.close_turn(
+                turn_id=active.turn_id,
+                status=status,
+                closing_kind=closing_kind,
+                end_node_id=end_node_id,
+            )
         except Exception:
             logger.warning("Failed to close turn %s", active.turn_id, exc_info=True)
 
@@ -401,7 +401,7 @@ class ContextManager:
         turn_id: str | None,
         session_id: str | None = None,
         reason: str = "",
-        settle_deliveries: recovery.SettleDeliveries | None = None,
+        settlement: DeliverySettlement | None = None,
     ) -> recovery.ConvergenceOutcome:
         """提交中止事务，登记内存收敛后唤醒旧执行。"""
         task = asyncio.create_task(
@@ -412,7 +412,7 @@ class ContextManager:
                 status="aborted",
                 closing_kind="external_abort",
                 description=reason,
-                settle_deliveries=settle_deliveries,
+                settlement=settlement,
             )
         )
         cancelled = False
@@ -433,7 +433,7 @@ class ContextManager:
         *,
         turn_id: str,
         error: Exception,
-        settle_deliveries: recovery.SettleDeliveries | None,
+        settlement: DeliverySettlement | None,
     ) -> recovery.ConvergenceOutcome:
         """依据持久现场终结失败的执行。"""
         return await self._converge_turn(
@@ -444,7 +444,7 @@ class ContextManager:
             closing_kind="error",
             description=str(error),
             error=error,
-            settle_deliveries=settle_deliveries,
+            settlement=settlement,
         )
 
     async def _converge_turn(
@@ -456,116 +456,38 @@ class ContextManager:
         status: Literal["aborted", "failed"],
         closing_kind: str,
         description: str,
-        settle_deliveries: recovery.SettleDeliveries | None,
+        settlement: DeliverySettlement | None,
         error: Exception | None = None,
     ) -> recovery.ConvergenceOutcome:
-        backend = self._persistence
-        if not isinstance(backend, SqliteBackend) or not backend.connected:
+        store = self._turn_store
+        if store is None:
             raise ValueError("persistence_unavailable")
 
         async with self._convergence_lock:
             await self.wait_for_persist()
-            async with backend.transaction() as db:
-                if turn_id is None:
-                    async with db.execute(
-                        "SELECT * FROM turns WHERE agent_name=? AND (? IS NULL OR session_id=?) "
-                        "AND status IN ('open','waiting_hitl') LIMIT 2",
-                        (self._agent_name, session_id, session_id),
-                    ) as cursor:
-                        candidates = await cursor.fetchall()
-                    if not candidates:
-                        raise ValueError("turn_not_found")
-                    if len(candidates) != 1:
-                        raise ValueError("ambiguous_active_turn")
-                    row = candidates[0]
-                else:
-                    row = await turn.load_turn_for_rollback(
-                        db, turn_id=turn_id, agent_name=self._agent_name
-                    )
-                    if session_id is not None and row["session_id"] != session_id:
-                        raise ValueError("turn_not_found")
-                if row["status"] in turn.TERMINAL_STATUSES:
-                    return recovery.ConvergenceOutcome(row)
-                resolved_id = row["turn_id"]
-                opener = row["opener_delivery_id"]
-                if opener is not None and (
-                    settle_deliveries is not None
-                    or await db.execute_fetchall(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' "
-                        "AND name='mm_delivery_results'"
-                    )
-                ):
-                    async with db.execute(
-                        "SELECT 1 FROM mm_delivery_results r JOIN mm_deliveries d "
-                        "ON d.delivery_id=r.delivery_id WHERE d.delivery_id=? AND d.turn_id=?",
-                        (opener, resolved_id),
-                    ) as cursor:
-                        if await cursor.fetchone() is not None:
-                            return recovery.ConvergenceOutcome(row, result_pending=True)
-
-                scene = await recovery.load_scene(db, row)
-                phase = (
-                    "waiting_hitl"
-                    if scene.pending_hitl
-                    else self.execution_phase
-                    if self.active_turn_id == resolved_id
-                    else "unknown"
-                )
-                changes = await recovery.plan_convergence(
-                    db, row, scene, reason=reason, phase=phase, error=error
-                )
-                if changes is not None:
-                    await backend.apply_changes_in_transaction(db, changes)
-                metadata = {
-                    "abort_reason": description,
-                    "abort_phase": phase,
-                    **recovery.diagnosis_metadata(changes),
-                }
-                opts = {
-                    "turn_id": resolved_id,
-                    "end_node_id": scene.last["id"] if scene.last is not None else None,
-                    "closed_at": datetime.now(UTC).isoformat(),
-                }
-                if status == "aborted":
-                    updated = await turn.abort_turn(
-                        db, **opts, metadata_patch={**metadata, "aborted_by": "user"}
-                    )
-                else:
-                    await db.execute(
-                        "UPDATE turns SET metadata=json_patch(metadata,?) WHERE turn_id=?",
-                        (json.dumps(metadata), resolved_id),
-                    )
-                    updated = await turn.close_turn(
-                        db, **opts, status="failed", closing_kind=closing_kind
-                    )
-                if updated is None:
-                    raise RuntimeError("Active turn changed during convergence")
-                released = 0
-                if settle_deliveries is not None:
-                    delivery_state = "interrupted" if status == "aborted" else "failed"
-                    released = await settle_deliveries(
-                        db,
-                        turn_id=resolved_id,
-                        opener_delivery_id=opener,
-                        opener_state=delivery_state,
-                        terminal_state=delivery_state,
-                        opener_error="aborted_by_user" if status == "aborted" else description,
-                    )
-
-            if changes is not None:
-                if self.in_iteration or self.active_turn is not None:
-                    self._pending_convergences.append(changes)
-                else:
-                    self._install_convergence(changes)
-            if status == "aborted":
-                self.request_turn_abort(resolved_id)
-            return recovery.ConvergenceOutcome(
-                updated,
-                changes,
-                changed=True,
-                cancelled_hitl=scene.pending_hitl,
-                released_deliveries=released,
+            outcome = await store.converge_turn(
+                agent_name=self._agent_name,
+                turn_id=turn_id,
+                session_id=session_id,
+                reason=reason,
+                status=status,
+                closing_kind=closing_kind,
+                description=description,
+                execution_phase=self.execution_phase,
+                active_turn_id=self.active_turn_id,
+                error=error,
+                settlement=settlement,
             )
+            changes = outcome.changes
+            if outcome.changed:
+                if changes is not None:
+                    if self.in_iteration or self.active_turn is not None:
+                        self._pending_convergences.append(changes)
+                    else:
+                        self._install_convergence(changes)
+                if status == "aborted":
+                    self.request_turn_abort(outcome.record.turn_id)
+            return outcome
 
     def _install_convergence(self, changes: ContextChanges) -> None:
         self._ensure_not_in_iteration("install a convergence branch")
@@ -602,54 +524,25 @@ class ContextManager:
             self._pending_convergences.clear()
             if revoked or active is None:
                 return None
-            backend = self._persistence
-            if isinstance(backend, SqliteBackend) and backend.connected:
+            store = self._turn_store
+            if store is not None:
                 try:
-                    row = await backend.load_turn(self._agent_name, active.turn_id)
+                    record = await store.load_turn(self._agent_name, active.turn_id)
                 except Exception:
                     logger.warning(
                         "Could not read persisted closure for %s", active.turn_id, exc_info=True
                     )
                     return None
-                return turn.ordinary_closure(row)
+                return turn.ordinary_closure(record)
             return turn.TurnClosure(
                 active.turn_id, active.session_id, status, closing_kind, end_node_id
             )
 
     async def _apply_pending_diagnoses(self, agent_name: str) -> None:
-        backend = self._persistence
-        if not isinstance(backend, SqliteBackend):
+        store = self._turn_store
+        if store is None:
             return
-        async with backend.transaction() as db:
-            async with db.execute(
-                "SELECT * FROM turns WHERE agent_name=? AND "
-                "(status IN ('open','waiting_hitl') OR "
-                "json_type(metadata,'$.crash_diagnosis')='object') ORDER BY opened_at",
-                (agent_name,),
-            ) as cursor:
-                rows = await cursor.fetchall()
-            for row in rows:
-                metadata = json.loads(row["metadata"])
-                marker = metadata.pop("crash_diagnosis", None)
-                scene = await recovery.load_scene(db, row)
-                phase = (
-                    marker["phase"]
-                    if marker
-                    else ("waiting_hitl" if scene.pending_hitl else "unknown")
-                )
-                changes = await recovery.plan_convergence(
-                    db, row, scene, reason="crash", phase=phase, crash_marker=marker
-                )
-                if changes is not None:
-                    await backend.apply_changes_in_transaction(db, changes)
-                metadata.update(recovery.diagnosis_metadata(changes))
-                await db.execute(
-                    "UPDATE turns SET metadata=? WHERE turn_id=?",
-                    (json.dumps(metadata), row["turn_id"]),
-                )
-            await turn.normalize_open_turns(
-                db, agent_name=agent_name, now=datetime.now(UTC).isoformat()
-            )
+        await store.apply_pending_diagnoses(agent_name)
 
     def ensure_rollback_idle(self, turn_id: str) -> None:
         """运行中立即返回忙碌，避免回滚请求等到审批结束才执行。"""
@@ -658,9 +551,9 @@ class ContextManager:
         if self._in_iteration or self._active_turn is not None:
             raise turn.RollbackError("turn_busy")
 
-    def _rollback_backend(
+    def _rollback_store(
         self, turn_id: str, target: turn.RollbackTarget, node_id: str | None
-    ) -> SqliteBackend:
+    ) -> TurnStore:
         if (
             target not in ("base", "node")
             or (target == "node") != (node_id is not None)
@@ -668,9 +561,46 @@ class ContextManager:
         ):
             raise turn.RollbackError("invalid_rollback_target")
         self.ensure_rollback_idle(turn_id)
-        if not isinstance(self._persistence, SqliteBackend) or not self._persistence.connected:
+        store = self._turn_store
+        if store is None:
             raise turn.RollbackError("persistence_unavailable")
-        return self._persistence
+        return store
+
+    def _rollback_branch_factory(
+        self, turn_id: str
+    ) -> Callable[[turn.RollbackPoint, str], tuple[ActionBranch, ContextChanges]]:
+        """构造在事务内按回滚点创建新分支的纯内存回调。"""
+
+        def create_branch(
+            point: turn.RollbackPoint, session_id: str
+        ) -> tuple[ActionBranch, ContextChanges]:
+            try:
+                runtime = self._get_runtime(session_id, error_type=KeyError)
+            except KeyError as exc:
+                raise turn.RollbackError("turn_session_missing") from exc
+            candidate = copy.copy(runtime)
+            candidate.branches = runtime.branches.copy()
+            branch = candidate.create_branch(
+                name=f"rollback-{turn_id[:8]}",
+                parent_branch_id=point.branch_id,
+                fork_point_node_id=point.node_id,
+                metadata={
+                    "is_rollback": True,
+                    "rollback_from_branch_id": point.previous_branch_id,
+                    "rollback_from_node_id": point.previous_head_id,
+                    "rollback_to_node_id": point.node_id,
+                    "turn_id": turn_id,
+                },
+            )
+            candidate.activate_branch(branch.branch_id)
+            self._rollback_candidate = candidate
+            return branch, ContextChanges(
+                agent_name=self._agent_name,
+                sessions=(candidate.session,),
+                branches=(branch,),
+            )
+
+        return create_branch
 
     async def rollback_turn(
         self,
@@ -678,78 +608,38 @@ class ContextManager:
         turn_id: str,
         target: turn.RollbackTarget,
         node_id: str | None = None,
-        release_inputs: turn.TurnInputs | None = None,
+        settlement: DeliverySettlement | None = None,
     ) -> turn.RollbackOutcome:
         """从已关闭轮次分叉，在同一事务内更新分支、轮次和待处理输入。"""
-        backend = self._rollback_backend(turn_id, target, node_id)
+        store = self._rollback_store(turn_id, target, node_id)
         await self.wait_for_persist()
+        self._rollback_candidate = None
 
         async def apply() -> turn.RollbackOutcome:
-            async with backend.transaction() as db:
-                row = await turn.load_turn_for_rollback(
-                    db, turn_id=turn_id, agent_name=self._agent_name
-                )
-                if row["status"] == "rolled_back":
-                    return turn.replay_rollback(row, target, node_id)
-                point = await turn.resolve_rollback_point(db, row, target, node_id)
-                session_id = row["session_id"]
+            outcome = await store.rollback_turn(
+                agent_name=self._agent_name,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+                create_branch=self._rollback_branch_factory(turn_id),
+                settlement=settlement,
+            )
+            branch = outcome.branch
+            if branch is not None:
+                session_id = branch.session_id
+                candidate = self._rollback_candidate
+                self._rollback_candidate = None
                 try:
-                    runtime = self._get_runtime(session_id, error_type=KeyError)
-                except KeyError as exc:
-                    raise turn.RollbackError("turn_session_missing") from exc
-                candidate = copy.copy(runtime)
-                candidate.branches = runtime.branches.copy()
-                branch = candidate.create_branch(
-                    name=f"rollback-{turn_id[:8]}",
-                    parent_branch_id=point.branch_id,
-                    fork_point_node_id=point.node_id,
-                    metadata={
-                        "is_rollback": True,
-                        "rollback_from_branch_id": point.previous_branch_id,
-                        "rollback_from_node_id": point.previous_head_id,
-                        "rollback_to_node_id": point.node_id,
-                        "turn_id": turn_id,
-                    },
-                )
-                candidate.activate_branch(branch.branch_id)
-                await turn.rollback_turn(
-                    db,
-                    turn_id=turn_id,
-                    agent_name=self._agent_name,
-                    target=target,
-                    point=point,
-                    new_branch_id=branch.branch_id,
-                    rolled_back_at=datetime.now(UTC).isoformat(),
-                )
-                await backend.apply_changes_in_transaction(
-                    db,
-                    ContextChanges(
-                        agent_name=self._agent_name,
-                        sessions=(candidate.session,),
-                        branches=(branch,),
-                    ),
-                )
-                released = (
-                    await release_inputs(
-                        db, turn_id=turn_id, opener_delivery_id=row["opener_delivery_id"]
-                    )
-                    if release_inputs is not None
-                    else []
-                )
-                row = await turn.record_released_inputs(
-                    db, turn_id=turn_id, released_delivery_ids=released
-                )
-
-            try:
-                self._session_runtimes[session_id] = candidate
-                if session_id == self._active_session_id:
-                    self._restore_active_context()
-            except Exception as exc:
-                logger.exception("Failed to load committed rollback for turn %s", turn_id)
-                raise RuntimeError(
-                    "rollback applied but runtime reload failed; restart required"
-                ) from exc
-            return turn.RollbackOutcome(row, branch)
+                    assert candidate is not None
+                    self._session_runtimes[session_id] = candidate
+                    if session_id == self._active_session_id:
+                        self._restore_active_context()
+                except Exception as exc:
+                    logger.exception("Failed to load committed rollback for turn %s", turn_id)
+                    raise RuntimeError(
+                        "rollback applied but runtime reload failed; restart required"
+                    ) from exc
+            return outcome
 
         # 等事务提交并同步内存后，才允许取消释放 Runner。
         task = asyncio.create_task(apply())
@@ -772,54 +662,41 @@ class ContextManager:
         turn_id: str,
         target: turn.RollbackTarget,
         node_id: str | None = None,
-        pending_inputs: turn.TurnInputs | None = None,
+        settlement: DeliverySettlement | None = None,
     ) -> dict[str, Any]:
         """从已提交的数据计算回滚目标和影响。"""
-        backend = self._rollback_backend(turn_id, target, node_id)
+        store = self._rollback_store(turn_id, target, node_id)
         await self.wait_for_persist()
-        async with aiosqlite.connect(
-            backend.db_path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
-        ) as db:
-            db.row_factory = aiosqlite.Row
-            row = await turn.load_turn_for_rollback(
-                db, turn_id=turn_id, agent_name=self._agent_name
-            )
-            point = await turn.resolve_rollback_point(db, row, target, node_id)
-            truncated, crosses_compact = await turn.count_truncated_nodes(
-                db, row, target_node_id=point.node_id
-            )
-            released = (
-                await pending_inputs(
-                    db, turn_id=turn_id, opener_delivery_id=row["opener_delivery_id"]
-                )
-                if pending_inputs is not None
-                else []
-            )
+        preview = await store.preview_rollback(
+            agent_name=self._agent_name,
+            turn_id=turn_id,
+            target=target,
+            node_id=node_id,
+            settlement=settlement,
+        )
         return {
-            "turn_id": turn_id,
-            "session_id": row["session_id"],
-            "target": target,
-            "target_node_id": point.node_id,
-            "target_branch_id": point.branch_id,
-            "target_is_compact": point.target_is_compact,
-            "base_node_id": row["base_node_id"],
-            "start_node_id": row["start_node_id"],
-            "end_node_id": row["end_node_id"],
-            "truncated_node_count": truncated,
-            "crosses_compact": crosses_compact,
-            "head_unchanged": point.previous_head_id == point.node_id,
-            "released_delivery_ids": released,
+            "turn_id": preview.turn_id,
+            "session_id": preview.session_id,
+            "target": preview.target,
+            "target_node_id": preview.target_node_id,
+            "target_branch_id": preview.target_branch_id,
+            "target_is_compact": preview.target_is_compact,
+            "base_node_id": preview.base_node_id,
+            "start_node_id": preview.start_node_id,
+            "end_node_id": preview.end_node_id,
+            "truncated_node_count": preview.truncated_node_count,
+            "crosses_compact": preview.crosses_compact,
+            "head_unchanged": preview.head_unchanged,
+            "released_delivery_ids": preview.released_delivery_ids,
         }
 
     async def normalize_turns(self) -> None:
         """恢复上下文时归一属于该 Agent 的遗留轮次。"""
-        if not isinstance(self._persistence, SqliteBackend):
+        store = self._turn_store
+        if store is None:
             return
         try:
-            async with self._persistence.transaction() as db:
-                await turn.normalize_open_turns(
-                    db, agent_name=self._agent_name, now=datetime.now(UTC).isoformat()
-                )
+            await store.normalize_turns(self._agent_name)
         except Exception:
             logger.warning("Failed to normalize turns for %s", self._agent_name, exc_info=True)
 
@@ -833,47 +710,32 @@ class ContextManager:
         reason: str,
         options: dict[str, Any],
         deadline_at: str | None,
-    ) -> hitl.HITLWriteResult:
+    ) -> HitlWriteResult:
         """在持久轮次内登记审批，返回事务提交后的结果。"""
         self.check_turn_revoked()
         active = self._active_turn
-        if not isinstance(self._persistence, SqliteBackend):
-            return hitl.HITLWriteResult()
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
         if active is None:
-            return hitl.HITLWriteResult(error="no_active_turn")
+            return HitlWriteResult(error="no_active_turn")
         try:
-            async with self._persistence.transaction() as db:
-                await turn.require_active(db, active.turn_id)
-                now = datetime.now(UTC).isoformat()
-                row = await hitl.insert_pending(
-                    db,
-                    turn_id=active.turn_id,
-                    promise_id=promise_id,
-                    ability_name=ability_name,
-                    tool_call_id=tool_call_id,
-                    tool_call=tool_call,
-                    reason=reason,
-                    options=options,
-                    last_node_id=self.active_head.id,
-                    now=now,
-                    deadline_at=deadline_at,
-                )
-                if row is not None:
-                    changed = await turn.set_waiting_hitl(db, active.turn_id, now)
-                    return hitl.HITLWriteResult(
-                        persisted=True,
-                        changed=changed,
-                        turn_id=active.turn_id,
-                        status="pending",
-                        session_id=row["session_id"],
-                        delivery_id=row["delivery_id"],
-                    )
-            raise turn.TurnRevokedError("turn is no longer active")
+            return await store.open_hitl_request(
+                turn_id=active.turn_id,
+                promise_id=promise_id,
+                ability_name=ability_name,
+                tool_call_id=tool_call_id,
+                tool_call=tool_call,
+                reason=reason,
+                options=options,
+                last_node_id=self.active_head.id,
+                deadline_at=deadline_at,
+            )
         except turn.TurnRevokedError:
             raise
         except Exception:
             logger.warning("Failed to persist HITL request %s", promise_id, exc_info=True)
-        return hitl.HITLWriteResult(error="unconfirmed")
+        return HitlWriteResult(error="unconfirmed")
 
     async def resolve_hitl_request(
         self,
@@ -882,58 +744,44 @@ class ContextManager:
         approved: bool,
         resolved_by: str | None,
         resolution: Any,
-    ) -> hitl.HITLWriteResult:
+    ) -> HitlWriteResult:
         """原子记录人工审批结果。"""
         return await self._finish_hitl_request(
             promise_id, "approved" if approved else "rejected", resolved_by, resolution
         )
 
-    async def expire_hitl_request(self, promise_id: str) -> hitl.HITLWriteResult:
+    async def expire_hitl_request(self, promise_id: str) -> HitlWriteResult:
         """标记审批到期，返回竞争中先提交的终态。"""
         return await self._finish_hitl_request(promise_id, "expired", None, {})
 
-    async def read_hitl_request(self, promise_id: str) -> hitl.HITLWriteResult:
+    async def read_hitl_request(self, promise_id: str) -> HitlWriteResult:
         """用独立只读连接读取已提交的审批，避免观察到写事务中的状态。"""
-        backend = self._persistence
-        if not isinstance(backend, SqliteBackend):
-            return hitl.HITLWriteResult()
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
         try:
-            async with SqliteBackend(backend.db_path, read_only=True) as reader:
-                row = await reader.load_hitl_request(self._agent_name, promise_id)
-            if row is not None:
-                return hitl.HITLWriteResult(
-                    persisted=True,
-                    turn_id=row["turn_id"],
-                    status=row["status"],
-                    resolution=json.loads(row["resolution"]),
-                )
+            return await store.read_hitl_request(self._agent_name, promise_id)
         except Exception:
             logger.warning("Failed to read HITL request %s", promise_id, exc_info=True)
-            return hitl.HITLWriteResult(error="unconfirmed")
-        return hitl.HITLWriteResult()
+            return HitlWriteResult(error="unconfirmed")
 
     async def _finish_hitl_request(
-        self, promise_id: str, status: hitl.HitlOutcome, resolved_by: str | None, resolution: Any
-    ) -> hitl.HITLWriteResult:
-        if not isinstance(self._persistence, SqliteBackend):
-            return hitl.HITLWriteResult()
+        self, promise_id: str, status: HitlOutcome, resolved_by: str | None, resolution: Any
+    ) -> HitlWriteResult:
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
         try:
-            async with self._persistence.transaction() as db:
-                result = await hitl.resolve_cas(
-                    db,
-                    agent_name=self._agent_name,
-                    promise_id=promise_id,
-                    status=status,
-                    resolved_by=resolved_by,
-                    resolution=resolution,
-                    now=datetime.now(UTC).isoformat(),
-                )
-                if result.changed and result.turn_id is not None:
-                    await turn.set_open(db, result.turn_id)
-                return result
+            return await store.finish_hitl_request(
+                agent_name=self._agent_name,
+                promise_id=promise_id,
+                status=status,
+                resolved_by=resolved_by,
+                resolution=resolution,
+            )
         except Exception:
             logger.warning("Failed to update HITL request %s", promise_id, exc_info=True)
-            return hitl.HITLWriteResult(error="unconfirmed")
+            return HitlWriteResult(error="unconfirmed")
 
     @property
     def persistence(self) -> PersistenceBackend | None:
@@ -1563,25 +1411,14 @@ class ContextManager:
 
     def _turn_committer(self, *, idle_compact: bool = False) -> IterationCommitter | None:
         committer = get_iteration_committer(self)
-        backend = self._persistence
+        store = self._turn_store
         active = self._active_turn
-        if (
-            committer is not None
-            or not isinstance(backend, SqliteBackend)
-            or not backend.connected
-            or (active is None and not idle_compact)
-        ):
+        if committer is not None or store is None or (active is None and not idle_compact):
             return committer
+        turn_id = active.turn_id if active is not None else None
 
         async def commit(changes: ContextChanges) -> None:
-            async with backend.transaction() as db:
-                if active is not None:
-                    await turn.require_active(db, active.turn_id)
-                elif await turn.has_active_turn(db, self._agent_name):
-                    raise turn.CompactClaimedError("A turn was claimed during idle compaction")
-                await backend.apply_changes_in_transaction(db, changes)
-                if active is not None:
-                    await turn.backfill_start(db, changes.nodes[0])
+            await store.commit_iteration(changes, turn_id=turn_id, idle_compact=idle_compact)
 
         return commit
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from ghrah.context.hitl import HITLWriteResult
+    from ghrah.context.turn_store import HitlWriteResult
 
 __all__ = [
     "WindowableBlock",
@@ -158,7 +158,7 @@ class ContextManagerProtocol(Protocol):
         reason: str,
         options: dict[str, Any],
         deadline_at: str | None,
-    ) -> HITLWriteResult: ...
+    ) -> HitlWriteResult: ...
 
     async def resolve_hitl_request(
         self,
@@ -167,10 +167,10 @@ class ContextManagerProtocol(Protocol):
         approved: bool,
         resolved_by: str | None,
         resolution: Any,
-    ) -> HITLWriteResult: ...
+    ) -> HitlWriteResult: ...
 
-    async def expire_hitl_request(self, promise_id: str) -> HITLWriteResult: ...
+    async def expire_hitl_request(self, promise_id: str) -> HitlWriteResult: ...
 
-    async def read_hitl_request(self, promise_id: str) -> HITLWriteResult: ...
+    async def read_hitl_request(self, promise_id: str) -> HitlWriteResult: ...
 
     def require_turn(self, expected_turn_id: str | None) -> None: ...

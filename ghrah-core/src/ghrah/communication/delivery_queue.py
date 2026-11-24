@@ -322,7 +322,7 @@ async def settle_stranded_deliveries(
                 opener_delivery_id=row["delivery_id"],
                 terminal_state="interrupted",
             )
-            closure = turn.ordinary_closure(closed)
+            closure = turn.ordinary_closure(turn.turn_record(closed) if closed else None)
         settled.append((row, closure))
     return settled
 

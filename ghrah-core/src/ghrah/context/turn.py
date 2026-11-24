@@ -15,6 +15,7 @@ import aiosqlite
 from ghrah.context import hitl
 from ghrah.context.branch import ActionBranch
 from ghrah.context.node import ContextNode
+from ghrah.context.turn_store import TurnRecord
 
 TurnCloseStatus = Literal["closed", "failed", "interrupted"]
 TurnTerminalStatus = Literal[TurnCloseStatus, "rolled_back", "aborted"]
@@ -63,22 +64,42 @@ class TurnClosure:
     end_node_id: str | None
 
     @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> TurnClosure:
+    def from_record(cls, record: TurnRecord) -> TurnClosure:
         """从已终结的持久轮次构造关闭通知。"""
         return cls(
-            row["turn_id"],
-            row["session_id"],
-            row["status"],
-            row["closing_kind"],
-            row["end_node_id"],
+            record.turn_id,
+            record.session_id,
+            record.status,
+            record.closing_kind or "",
+            record.end_node_id,
         )
 
 
-def ordinary_closure(row: aiosqlite.Row | None) -> TurnClosure | None:
+def turn_record(row: aiosqlite.Row) -> TurnRecord:
+    """把 ``turns`` 表的行转换为类型化记录。"""
+    return TurnRecord(
+        turn_id=row["turn_id"],
+        agent_name=row["agent_name"],
+        session_id=row["session_id"],
+        opener_delivery_id=row["opener_delivery_id"],
+        status=row["status"],
+        closing_kind=row["closing_kind"],
+        opened_at=row["opened_at"],
+        closed_at=row["closed_at"],
+        start_node_id=row["start_node_id"],
+        base_node_id=row["base_node_id"],
+        end_node_id=row["end_node_id"],
+        branch_id=row["branch_id"],
+        end_branch_id=row["end_branch_id"],
+        metadata=json.loads(row["metadata"] or "{}"),
+    )
+
+
+def ordinary_closure(record: TurnRecord | None) -> TurnClosure | None:
     """提取普通关闭事实。显式中止由其提交方通知。"""
-    if row is None or row["status"] not in _CLOSE_STATUSES:
+    if record is None or record.status not in _CLOSE_STATUSES:
         return None
-    return TurnClosure.from_row(row)
+    return TurnClosure.from_record(record)
 
 
 async def insert_turn_placeholder(
@@ -339,19 +360,19 @@ class RollbackPoint:
 
 @dataclass(frozen=True)
 class RollbackOutcome:
-    """回滚行和本次新建的分支。重放只返回持久行。"""
+    """回滚记录和本次新建的分支。重放只返回持久记录。"""
 
-    row: aiosqlite.Row
+    record: TurnRecord
     branch: ActionBranch | None = None
 
     def as_payload(self) -> dict[str, Any]:
         """从持久回滚记录生成 Core 能力回执。"""
-        metadata = json.loads(self.row["metadata"])
+        metadata = self.record.metadata
         return {
-            "turn_id": self.row["turn_id"],
-            "session_id": self.row["session_id"],
-            "status": self.row["status"],
-            "closing_kind": self.row["closing_kind"],
+            "turn_id": self.record.turn_id,
+            "session_id": self.record.session_id,
+            "status": self.record.status,
+            "closing_kind": self.record.closing_kind,
             "target": metadata["rollback_target"],
             "target_node_id": metadata["rollback_to_node_id"],
             "branch_id": metadata["rollback_branch_id"],
@@ -386,7 +407,7 @@ def replay_rollback(
         or metadata.get("rollback_to_node_id") != expected_node_id
     ):
         raise RollbackError("rollback_conflict")
-    return RollbackOutcome(row)
+    return RollbackOutcome(turn_record(row))
 
 
 async def resolve_rollback_point(

@@ -27,6 +27,8 @@ from ghrah.communication.delivery_queue import (
     display_state,
     has_turns,
     needs_delivery_repair,
+    pending_turn_input_ids,
+    release_turn_inputs,
     release_unowned_inline_waits,
     settle_stranded_deliveries,
     settle_terminal_turns,
@@ -58,6 +60,7 @@ from ghrah.context import recovery, turn
 from ghrah.context.persistence.changes import ContextChanges
 from ghrah.context.persistence.serialization import deserialize_action_results
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.persistence.sqlite_turn_store import SqliteTurnStore
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mm_meta (
@@ -144,7 +147,94 @@ _DELIVERY_INDEXES = (
 )
 
 
-class SqliteMessageStore:
+class SqliteDeliverySettlement:
+    """在轮次宿主事务内结算投递。
+
+    对外只暴露 :class:`~ghrah.context.turn_store.DeliverySettlement` 协议；
+    同域的 :class:`SqliteTurnStore` 通过 ``_settle_in_transaction`` 等内部方法
+    在已持有的事务内调用，不再另行开锁。
+    """
+
+    __slots__ = ("_store",)
+
+    def __init__(self, store: SqliteMessageStore) -> None:
+        self._store = store
+
+    async def converge(
+        self,
+        *,
+        turn_id: str,
+        opener_delivery_id: str | None,
+        opener_state: str,
+        opener_error: str,
+        terminal_state: str,
+    ) -> int:
+        async with self._store.transaction() as db:
+            return await self.converge_in_transaction(
+                db,
+                turn_id=turn_id,
+                opener_delivery_id=opener_delivery_id,
+                opener_state=opener_state,
+                opener_error=opener_error,
+                terminal_state=terminal_state,
+            )
+
+    async def release_inputs(self, *, turn_id: str, opener_delivery_id: str | None) -> list[str]:
+        async with self._store.transaction() as db:
+            return await self.release_inputs_in_transaction(
+                db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
+            )
+
+    async def pending_inputs(self, *, turn_id: str, opener_delivery_id: str | None) -> list[str]:
+        async with self._store.transaction() as db:
+            return await self.pending_inputs_in_transaction(
+                db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
+            )
+
+    @staticmethod
+    async def converge_in_transaction(
+        db: aiosqlite.Connection,
+        *,
+        turn_id: str,
+        opener_delivery_id: str | None,
+        opener_state: str,
+        opener_error: str,
+        terminal_state: str,
+    ) -> int:
+        """在轮次宿主事务内收敛开轮投递并释放未消费注入。"""
+        await settle_turn_opener(
+            db,
+            turn_id=turn_id,
+            opener_delivery_id=opener_delivery_id,
+            state=opener_state,
+            error=opener_error,
+        )
+        if opener_delivery_id is not None:
+            await release_unowned_inline_waits(db, parent_delivery_id=opener_delivery_id)
+        released = await settle_turn_deliveries(
+            db,
+            turn_id=turn_id,
+            opener_delivery_id=opener_delivery_id,
+            terminal_state=terminal_state,
+        )
+        return len(released)
+
+    @staticmethod
+    async def release_inputs_in_transaction(
+        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+    ) -> list[str]:
+        return await release_turn_inputs(db, turn_id=turn_id, opener_delivery_id=opener_delivery_id)
+
+    @staticmethod
+    async def pending_inputs_in_transaction(
+        db: aiosqlite.Connection, *, turn_id: str, opener_delivery_id: str | None
+    ) -> list[str]:
+        return await pending_turn_input_ids(
+            db, turn_id=turn_id, opener_delivery_id=opener_delivery_id
+        )
+
+
+class SqliteMessageStore(SqliteTurnStore):
     """管理一个 SQLite 消息存储域的写连接和原子操作。"""
 
     def __init__(self, db_path: str | Path, scope_id: str) -> None:
@@ -155,15 +245,27 @@ class SqliteMessageStore:
         self._owner: sqlite3.Connection | None = None
         self._closing = False
         self._context_writer = self.context_backend()
+        self._settlement = SqliteDeliverySettlement(self)
+
+    @property
+    def delivery_settlement(self) -> SqliteDeliverySettlement:
+        """本存储域的投递结算能力，供轮次事务在同事务内调用。"""
+        return self._settlement
 
     def context_backend(self, _agent_config: object = None) -> SqliteBackend:
-        """为本域的 Agent 建立上下文存储。"""
-        return SqliteBackend(self.db_path)
+        """为本域的 Agent 建立上下文存储，并挂载同域的轮次存储。"""
+        backend = SqliteBackend(self.db_path)
+        backend.turn_store = self
+        return backend
 
     def validate_context_backend(self, backend: object) -> None:
         """复核上下文是否可以参加本域事务。"""
         if not isinstance(backend, SqliteBackend) or backend.db_path.resolve() != self.db_path:
             raise ValueError("Atomic receive requires a same-file SqliteBackend")
+
+    async def _apply_chain_changes(self, db: aiosqlite.Connection, changes: ContextChanges) -> None:
+        """在消息存储的事务内写入链增量。"""
+        await self._context_writer.apply_changes_in_transaction(db, changes)
 
     async def open(self, *, prepare_context: bool) -> None:
         """取得独占所有权，初始化并恢复消息库。"""
@@ -685,7 +787,8 @@ class SqliteMessageStore:
                     terminal_state="completed",
                 )
         return SavedDeliveryResult(
-            needs_completion=True, turn_closure=turn.ordinary_closure(closed)
+            needs_completion=True,
+            turn_closure=turn.ordinary_closure(turn.turn_record(closed) if closed else None),
         )
 
     async def finish_delivery(self, delivery_id: str) -> str | None:
@@ -854,7 +957,7 @@ class SqliteMessageStore:
                     ) as cursor:
                         stored = await cursor.fetchone()
                     if stored is not None and stored["status"] == "aborted":
-                        await self.converge_turn_deliveries(
+                        await SqliteDeliverySettlement.converge_in_transaction(
                             db,
                             turn_id=delivery["turn_id"],
                             opener_delivery_id=stored["opener_delivery_id"],
@@ -915,7 +1018,9 @@ class SqliteMessageStore:
                 if delivery is None:
                     return None
                 return RecoveredDelivery(
-                    delivery["message_id"], delivery["recipient_id"], turn.ordinary_closure(closed)
+                    delivery["message_id"],
+                    delivery["recipient_id"],
+                    turn.ordinary_closure(turn.turn_record(closed) if closed else None),
                 )
             except BaseException:
                 await db.rollback()
@@ -1039,34 +1144,6 @@ class SqliteMessageStore:
                 "WHERE delivery_id=?",
                 (delivery_id,),
             )
-
-    @staticmethod
-    async def converge_turn_deliveries(
-        db: aiosqlite.Connection,
-        *,
-        turn_id: str,
-        opener_delivery_id: str | None,
-        opener_state: str,
-        opener_error: str,
-        terminal_state: str,
-    ) -> int:
-        """在轮次宿主事务内收敛开轮投递并释放未消费注入。"""
-        await settle_turn_opener(
-            db,
-            turn_id=turn_id,
-            opener_delivery_id=opener_delivery_id,
-            state=opener_state,
-            error=opener_error,
-        )
-        if opener_delivery_id is not None:
-            await release_unowned_inline_waits(db, parent_delivery_id=opener_delivery_id)
-        released = await settle_turn_deliveries(
-            db,
-            turn_id=turn_id,
-            opener_delivery_id=opener_delivery_id,
-            terminal_state=terminal_state,
-        )
-        return len(released)
 
     async def prepare_outbound(self, submission: MessageSubmission) -> OutboundPreparation:
         """只读解析会话路由并校验已有受理，返回可用于迭代提交的草稿。"""

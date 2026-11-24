@@ -15,6 +15,7 @@ from ghrah.protocol.enums import CommandType
 from ghrah.protocol.problem import ProblemCode
 
 from ghrah.chat.message import ChatMessage
+from ghrah.communication.sqlite_message_store import SqliteDeliverySettlement
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.context.manager import ContextManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
@@ -395,13 +396,16 @@ async def test_rollback_transaction_failure_is_atomic(
                 "WHEN NEW.status='rolled_back' BEGIN SELECT RAISE(IGNORE); END"
             )
     else:
-        release = mm.release_turn_inputs
+        settlement = SqliteDeliverySettlement
+        release = settlement.release_inputs_in_transaction
 
         async def fail_after_release(db, **kwargs):
             assert len(await release(db, **kwargs)) == 2
             raise RuntimeError("release failed")
 
-        monkeypatch.setattr(mm, "release_turn_inputs", fail_after_release)
+        monkeypatch.setattr(
+            settlement, "release_inputs_in_transaction", staticmethod(fail_after_release)
+        )
 
     before = snapshot(backend.db_path)
     with pytest.raises(CoreApiError) as rejected:
@@ -476,14 +480,15 @@ async def test_cancelled_rollback_waits_for_committed_memory(
 ):
     agent, backend, mm, port = rollback_runtime
     entered, finish = asyncio.Event(), asyncio.Event()
-    release = mm.release_turn_inputs
+    settlement = SqliteDeliverySettlement
+    release = settlement.release_inputs_in_transaction
 
     async def pause(db, **kwargs):
         entered.set()
         await finish.wait()
         return await release(db, **kwargs)
 
-    monkeypatch.setattr(mm, "release_turn_inputs", pause)
+    monkeypatch.setattr(settlement, "release_inputs_in_transaction", staticmethod(pause))
     kwargs = {"agent_id": "agent", "turn_id": closed_turn["turn_id"]}
     operation = asyncio.create_task(port.turns.rollback(**kwargs))
     try:

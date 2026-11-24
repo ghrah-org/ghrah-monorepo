@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,11 +43,31 @@ from ghrah.context.persistence.serialization import (
     serialize_branch,
     serialize_node,
 )
+from ghrah.context.persistence.sqlite_turn_store import SqliteTurnStore
 from ghrah.context.turn import backfill_start
+from ghrah.context.turn_store import TurnStore
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["SqliteBackend"]
+
+
+class _BackendTurnStore(SqliteTurnStore):
+    """把轮次事务桥接到宿主 :class:`SqliteBackend` 的写锁与连接。"""
+
+    def __init__(self, backend: SqliteBackend) -> None:
+        self._backend = backend
+
+    @property
+    def db_path(self) -> Path:
+        return self._backend.db_path
+
+    def transaction(self) -> AbstractAsyncContextManager[aiosqlite.Connection]:
+        return self._backend.transaction()
+
+    async def _apply_chain_changes(self, db: aiosqlite.Connection, changes: ContextChanges) -> None:
+        await self._backend.apply_changes_in_transaction(db, changes)
+
 
 # 节点表查询的列名列表，保持 SELECT 和 _row_to_dict 一致
 _NODE_COLUMNS = (
@@ -261,6 +281,9 @@ class SqliteBackend(PersistenceBackend):
         self._read_only = read_only
         self._context_schema_present = True
         self._schema_version = 0
+        # 独立链库默认自带轮次存储：链表与 turns/hitl 表同文件，共用本后端的事务。
+        # 受管消息运行时由同一存储域的消息存储覆盖为同域实例。
+        self.turn_store: TurnStore | None = None if read_only else _BackendTurnStore(self)
 
     @property
     def db_path(self) -> Path:
