@@ -5,14 +5,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
-from ghrah.protocol.views.core import AgentStartView
+from ghrah.protocol.views.core import AgentAssemblySpec, AgentStartView
 
+from ghrah.subject.errors import StableError
+from ghrah.subject.project import manager as project_manager
 from ghrah.subject.project.manager import ProjectManager
 from ghrah.subject.project.models import make_project_record
+from ghrah.subject.project.store import ConcurrentModificationError
 from ghrah.subject.template_store import AgentTemplateConfig, TemplateStore
 
 AGENT_ID = "a" * 32
@@ -39,6 +44,7 @@ class _Handle:
 
     def __init__(self) -> None:
         self.specs: list[Any] = []
+        self.stopped: list[str] = []
 
     def __getattr__(self, item: str) -> Any:
         raise AssertionError(f"建 Agent 不应调用 {item}")
@@ -51,6 +57,10 @@ class _Handle:
             recovery_mode="created",
             incarnation_id="inc-1",
         )
+
+    async def stop_assembly(self, agent_id: str) -> dict[str, Any]:
+        self.stopped.append(agent_id)
+        return {"success": True}
 
 
 class _Transport:
@@ -125,10 +135,16 @@ async def test_instantiation_pins_version_and_counts(
 
     assert result["success"] is True, result
     record = store.record.agents[0]
+    assert record.agent_id == AGENT_ID
+    assert record.project_id == project_id
     assert record.name == "weekly"
+    assert record.presentation.title == "周报助手"
+    assert record.desired_state == record.runtime_status == "running"
     # 记录只钉模板身份与版本，不复制配置
     assert record.origin is not None
     assert (record.origin.template_id, record.origin.revision) == (template.template_id, 1)
+    config_fields = {"manifest_ref", "system_prompt", "abilities", "endpoint_name"}
+    assert config_fields.isdisjoint(record.model_dump())
     # 装配输入来自模板
     assert handle.specs[0].config.prompt.system_prompt == "先列事实"
     # 该版本计数 +1
@@ -187,3 +203,63 @@ async def test_missing_template_is_refused_without_touching_project(
     assert store.record.version == before
     assert store.record.agents == []
     assert handle.specs == []
+
+
+async def test_stale_project_version_is_refused_before_creating_in_core(
+    wired: tuple[ProjectManager, TemplateStore, _ProjectStore, _Handle],
+) -> None:
+    manager, templates, store, handle = wired
+    template = await templates.create(_config("先列事实"))
+    project = store.record
+
+    with pytest.raises(ConcurrentModificationError, match="expected version"):
+        await manager.create_agent(
+            project.project_id, _spec(template.template_id, 1), expected_version=project.version + 1
+        )
+
+    assert handle.specs == []
+    assert store.record == project
+
+
+async def test_create_records_stopped_agent_and_stops_core_instance(
+    wired: tuple[ProjectManager, TemplateStore, _ProjectStore, _Handle],
+) -> None:
+    manager, templates, store, handle = wired
+    template = await templates.create(_config("先列事实"))
+    spec = _spec(template.template_id, 1).model_copy(update={"desired_state": "stopped"})
+
+    result = await manager.create_agent(store.record.project_id, spec)
+
+    assert result["success"] is True, result
+    assert handle.stopped == [AGENT_ID]
+    record = store.record.agents[0]
+    assert record.desired_state == record.runtime_status == "stopped"
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+async def test_core_creation_failure_does_not_register_agent(
+    wired: tuple[ProjectManager, TemplateStore, _ProjectStore, _Handle],
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: bool,
+) -> None:
+    manager, templates, store, handle = wired
+    template = await templates.create(_config("先列事实"))
+    project = store.record
+
+    async def create(_spec: AgentAssemblySpec) -> AgentStartView:
+        if timeout:
+            await asyncio.Event().wait()
+        raise RuntimeError("agent_exists")
+
+    monkeypatch.setattr(project_manager, "CREATE_TIMEOUT_SECONDS", 0.05)
+    create_mock = AsyncMock(side_effect=create)
+    monkeypatch.setattr(handle, "create_assembly", create_mock)
+
+    with pytest.raises(StableError) as error:
+        await manager.create_agent(project.project_id, _spec(template.template_id, 1))
+
+    assert create_mock.await_count == 1
+    assert error.value.code == ("agent_create_timeout" if timeout else "agent_create_failed")
+    if not timeout:
+        assert "agent_exists" in error.value.detail
+    assert store.record == project

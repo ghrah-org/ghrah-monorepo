@@ -1,30 +1,21 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""一次性创建服务：模板快照 → 装配输入 → Core 创建 → AgentRecord。
-
-用假模板源与假创建入口验证编排口径，不起真实 Core：
-记录里只有身份/展示/来源，配置一个字都不留；授权不在 Subject 侧写。
-"""
+"""验证从指定模板版本准备 Core 装配输入。"""
 
 from __future__ import annotations
 
-import asyncio
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from ghrah.protocol.views.core import AgentStartView
 
 from ghrah.subject.agents.creation import (
-    CreateAgentRequest,
     CreationError,
-    create_agent,
+    prepare_agent_assembly,
 )
 from ghrah.subject.agents.render import GrantedPackage
 from ghrah.subject.template_store.models import AgentTemplateConfig, AgentTemplateRecord
 
-_NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
 _WORKSPACES = {"default": "/ws"}
 
 _SNAPSHOT: dict[str, Any] = {
@@ -106,152 +97,45 @@ def _record_from(snapshot: dict[str, Any]) -> AgentTemplateRecord:
     )
 
 
-def _creator(captured: list[Any]):
-    async def create(spec):
-        captured.append(spec)
-        return AgentStartView(
-            agent_id="a" * 32, name=spec.name, recovery_mode="created", incarnation_id="inc-1"
-        )
-
-    return create
-
-
-async def test_creates_record_without_configuration() -> None:
-    captured: list[Any] = []
-    result = await create_agent(
-        CreateAgentRequest(template_id="t" * 32, revision=3, name="weekly"),
-        templates=_Templates(_SNAPSHOT),
-        workspaces=_WORKSPACES,
-        available=_GRANTED,
-        create=_creator(captured),
-        now=_NOW,
-    )
-
-    assert result.agent_id == "a" * 32
-    assert result.recovery_mode == "created"
-    record = result.record
-    assert record.agent_id == "a" * 32
-    assert record.name == "weekly"
-    assert record.presentation.title == "周报助手"
-    assert record.presentation.tags == ["writing"]
-    assert record.origin is not None
-    assert (record.origin.template_id, record.origin.revision) == ("t" * 32, 3)
-    dumped = record.model_dump(mode="json")
-    for forbidden in ("manifest_ref", "system_prompt", "abilities", "endpoint_name"):
-        assert forbidden not in dumped
-
-
-async def test_reads_the_requested_revision_not_current() -> None:
+async def test_prepares_spec_and_metadata_from_requested_revision() -> None:
     templates = _Templates(_SNAPSHOT)
-    await create_agent(
-        CreateAgentRequest(template_id="t" * 32, revision=7, name="weekly"),
+    result = await prepare_agent_assembly(
+        template_id="t" * 32,
+        revision=7,
+        agent_name="weekly",
         templates=templates,
         workspaces=_WORKSPACES,
         available=_GRANTED,
-        create=_creator([]),
-        now=_NOW,
     )
+
     assert templates.asked == [("t" * 32, 7)]
+    assert result.spec.name == "weekly"
+    assert result.spec.config is not None
+    assert result.spec.config.model.endpoint_name == "default-llm"
+    assert [member.member for member in result.spec.members] == ["ghrah.fs.read_file"]
+    assert result.metadata.title == "周报助手"
+    assert result.metadata.tags == ["writing"]
 
 
-async def test_missing_revision_is_not_found() -> None:
+@pytest.mark.parametrize(
+    ("snapshot", "available", "code"),
+    [
+        (None, _GRANTED, "template_not_found"),
+        ({**_SNAPSHOT, "archived_at": "2026-11-17T00:00:00Z"}, _GRANTED, "template_archived"),
+        ({**_SNAPSHOT, "model": {"endpoint_name": None}}, _GRANTED, "assembly_not_ready"),
+        (_SNAPSHOT, [], "no_granted_members"),
+    ],
+)
+async def test_preparation_errors_keep_stable_codes(
+    snapshot: dict[str, Any] | None, available: list[GrantedPackage], code: str
+) -> None:
     with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates(None),
+        await prepare_agent_assembly(
+            template_id="t" * 32,
+            revision=1,
+            agent_name="weekly",
+            templates=_Templates(snapshot),
             workspaces=_WORKSPACES,
-            available=_GRANTED,
-            create=_creator([]),
+            available=available,
         )
-    assert error.value.code == "template_not_found"
-
-
-async def test_archived_template_is_rejected() -> None:
-    with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates({**_SNAPSHOT, "archived_at": "2026-11-17T00:00:00Z"}),
-            workspaces=_WORKSPACES,
-            available=_GRANTED,
-            create=_creator([]),
-        )
-    assert error.value.code == "template_archived"
-
-
-async def test_render_errors_become_creation_codes() -> None:
-    with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates({**_SNAPSHOT, "model": {"endpoint_name": None}}),
-            workspaces=_WORKSPACES,
-            available=_GRANTED,
-            create=_creator([]),
-        )
-    assert error.value.code == "assembly_not_ready"
-
-
-async def test_core_failure_is_wrapped() -> None:
-    async def boom(spec):  # noqa: ANN001, ARG001
-        raise RuntimeError("agent_exists")
-
-    with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates(_SNAPSHOT),
-            workspaces=_WORKSPACES,
-            available=_GRANTED,
-            create=boom,
-        )
-    assert error.value.code == "agent_create_failed"
-    assert "agent_exists" in error.value.detail
-
-
-async def test_no_granted_members_fails_before_calling_core() -> None:
-    """空成员集合在 Subject 侧就拒绝，不把必然失败的规格送进 Core。"""
-    captured: list[Any] = []
-    with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates(_SNAPSHOT),
-            workspaces=_WORKSPACES,
-            available=[],
-            create=_creator(captured),
-            now=_NOW,
-        )
-    assert error.value.code == "no_granted_members"
-    assert captured == []
-
-
-async def test_desired_state_is_recorded_as_is() -> None:
-    result = await create_agent(
-        CreateAgentRequest(
-            template_id="t" * 32, revision=1, name="weekly", desired_state="stopped"
-        ),
-        templates=_Templates(_SNAPSHOT),
-        workspaces=_WORKSPACES,
-        available=_GRANTED,
-        create=_creator([]),
-        now=_NOW,
-    )
-    assert result.record.desired_state == "stopped"
-
-
-async def test_hung_core_call_becomes_a_timeout_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Core 的 spawn 卡住时必须折成超时错误，不能无限挂住 HTTP 请求。"""
-    from ghrah.subject.agents import creation
-
-    monkeypatch.setattr(creation, "CREATE_TIMEOUT_SECONDS", 0.05)
-
-    async def never(spec):  # noqa: ANN001, ARG001
-        await asyncio.sleep(10)
-        return None
-
-    with pytest.raises(CreationError) as error:
-        await create_agent(
-            CreateAgentRequest(template_id="t" * 32, revision=1, name="weekly"),
-            templates=_Templates(_SNAPSHOT),
-            workspaces=_WORKSPACES,
-            available=_GRANTED,
-            create=never,
-        )
-    assert error.value.code == "agent_create_timeout"
+    assert error.value.code == code
