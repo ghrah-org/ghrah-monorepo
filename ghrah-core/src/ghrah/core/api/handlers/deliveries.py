@@ -19,14 +19,14 @@ from ghrah.core.api.interfaces import (
     DeliveriesRetryRequest,
     RoomsRecoverRequest,
 )
-from ghrah.core.read.mailbox import MailboxReadStore
+from ghrah.core.read.queries import MailboxQueries
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_delivery_handlers"]
 
 
 def make_delivery_handlers(
-    store: MailboxReadStore,
+    store: MailboxQueries,
     registry: RuntimeRegistry,
 ) -> dict[str, Handler]:
     """构造 ``deliveries`` 分组处理器。

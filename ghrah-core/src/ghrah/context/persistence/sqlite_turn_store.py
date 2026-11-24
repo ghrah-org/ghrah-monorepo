@@ -52,13 +52,16 @@ class SqliteTurnStore:
 
         return SqliteBackend(self.db_path, read_only=True)
 
-    @staticmethod
     def _in_transaction(
+        self,
         settlement: DeliverySettlement | None,
     ) -> tuple[SettlementMethod | None, SettlementMethod | None, SettlementMethod | None]:
         """取得结算方的事务内入口；跨域或不支持同事务的结算方被拒绝。"""
         if settlement is None:
             return None, None, None
+        shares_storage_with = getattr(settlement, "shares_storage_with", None)
+        if not callable(shares_storage_with) or not shares_storage_with(self):
+            raise TypeError("Delivery settlement does not share this storage domain")
         methods: tuple[SettlementMethod | None, ...] = tuple(
             getattr(settlement, name, None)  # type: ignore[misc]
             for name in (
@@ -110,7 +113,7 @@ class SqliteTurnStore:
                 closed_at=datetime.now(UTC).isoformat(),
             )
 
-    async def commit_iteration(
+    async def commit_context_iteration(
         self, changes: ContextChanges, *, turn_id: str | None, idle_compact: bool
     ) -> None:
         """校验轮次执行权后与链增量一起提交。"""
@@ -430,7 +433,7 @@ class SqliteTurnStore:
             resolution=result.resolution,
         )
 
-    async def read_hitl_request(self, agent_name: str, promise_id: str) -> HitlWriteResult:
+    async def read_hitl_request(self, agent_name: str | None, promise_id: str) -> HitlWriteResult:
         """用独立只读连接读取已提交的审批，避免观察到写事务中的状态。"""
         async with self._read_only() as reader:
             row = await reader.load_hitl_request(agent_name, promise_id)

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Any
 
 import aiosqlite
@@ -126,7 +126,7 @@ def display_state(item: dict[str, Any]) -> str:
 
 
 def delivery_projection(
-    row: aiosqlite.Row, *, position: int, blocker: aiosqlite.Row | None
+    row: aiosqlite.Row, *, position: int, blocker: aiosqlite.Row | Mapping[str, Any] | None
 ) -> dict[str, Any]:
     """从同一快照中的记录和顺序门证据派生投递视图。"""
     item = dict(row)

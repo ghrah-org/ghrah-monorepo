@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ghrah.protocol.errors import ApiError
 from ghrah.protocol.payloads.entity import (
     AgentEntityCreatePayload,
     AgentEntityListPayload,
@@ -326,9 +327,18 @@ class ProjectManager:
             return _err(str(e))
 
     async def _handle_entity(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return _ok(
-            await self.agents.execute(AgentEntityPayload.model_validate(_strip_envelope(payload)))
-        )
+        try:
+            return _ok(
+                await self.agents.execute(
+                    AgentEntityPayload.model_validate(_strip_envelope(payload))
+                )
+            )
+        except ApiError as exc:
+            problem = exc.problem
+            code = problem.code.value.lower()
+            if problem.detail == "mailbox_project_mismatch":
+                code = problem.detail
+            return _err_code(code, problem.detail or "")
 
     async def _handle_entity_create(self, payload: dict[str, Any]) -> dict[str, Any]:
         entity = await self.agents.create(

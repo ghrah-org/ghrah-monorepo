@@ -237,6 +237,7 @@ async def test_dispatch_command_reaches_started_unit_only(
 
         return await MessageManager(
             db_path,
+            adopt_legacy_chain=True,
             project_id="default",
             agent_ids=(),
             session_routing=True,

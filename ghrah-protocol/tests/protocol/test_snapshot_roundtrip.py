@@ -57,7 +57,7 @@ from ghrah.protocol.views.core import (
     MessageAcceptanceView,
     SessionCatalogView,
 )
-from ghrah.protocol.views.observer_room import TurnDetailView
+from ghrah.protocol.views.observer_room import RoomTranscriptView, TurnDetailView
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -80,6 +80,7 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "HistoryView": HistoryView,
     "HitlRequestListView": HitlRequestListView,
     "TurnDetailView": TurnDetailView,
+    "RoomTranscriptView": RoomTranscriptView,
     "MessageAcceptanceView": MessageAcceptanceView,
     "TurnOpenedPayload": TurnOpenedPayload,
     "TurnWaitingHitlPayload": TurnWaitingHitlPayload,

@@ -335,14 +335,36 @@ class AbilityAccessStore:
         runs: Callable[[str], str | None],
         read_limit: int = 65536,
         reclaim_stale: bool = False,
+        read_only: bool = False,
+        immutable: bool = False,
     ) -> AbilityAccessStore:
-        """显式初始化作用域表；不修改既有上下文 schema 或启动 Agent。"""
+        """打开关系库，写入口负责建表和迁移，读入口只接受当前 schema。"""
         if type(read_limit) is not int or not 1 <= read_limit <= 65536:
             raise ValueError("内容单次读取上限必须在 1..65536 内")
-        db = await aiosqlite.connect(str(path), isolation_level=None)
+        if immutable and not read_only:
+            raise ValueError("Immutable ability databases require read-only access")
+        filename = str(path)
+        if read_only:
+            filename = Path(path).resolve().as_uri() + "?mode=ro"
+            if immutable:
+                filename += "&immutable=1"
+        db = await aiosqlite.connect(filename, uri=read_only, isolation_level=None)
         db.row_factory = aiosqlite.Row
         try:
             await db.execute("PRAGMA busy_timeout=5000")
+            if read_only:
+                await db.execute("PRAGMA query_only=ON")
+                tables = await db.execute_fetchall(
+                    "SELECT 1 FROM sqlite_master WHERE name='ability_tree_schema' AND type='table'"
+                )
+                if not tables:
+                    raise AccessError("unavailable")
+                rows = await db.execute_fetchall("SELECT version FROM ability_tree_schema")
+                if not rows or rows[0][0] != _SCHEMA_VERSION:
+                    raise AccessError("ability_schema_not_current")
+                store = cls(db, scope_id, operators, runs)
+                store.read_limit = read_limit
+                return store
             await db.execute("BEGIN IMMEDIATE")
             try:
                 async with db.execute(

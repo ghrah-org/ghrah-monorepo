@@ -37,7 +37,10 @@ async def test_pending_visible_before_events_and_resolution_is_idempotent(tmp_pa
     async with SqliteBackend(path) as backend:
         cm = ContextManager("agent", persistence=backend)
         await cm.persist()
-        async with MessageManager(path, project_id="p", agent_ids=("agent",)) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("agent",)
+        ) as mm:
+            mm.validate_context_backend(backend)
             turn_id = await cm.open_turn()
             port = build_core_port(scope_id="p", db_path=str(path))
             unit = CoreUnit(CoreUnitConfig(message_manager=mm))
@@ -159,7 +162,10 @@ async def test_turn_close_cancels_pending_and_startup_orphans_other_requests(tmp
         active_turn = await cm.open_turn()
         await request("orphan", "2199-01-01T00:00:00+00:00")
         await request("late", "2000-01-01T00:00:00+00:00")
-        async with MessageManager(path, project_id="p", agent_ids=("agent",)) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("agent",)
+        ) as mm:
+            mm.validate_context_backend(backend)
             assert (await backend.load_turn("agent", active_turn))["status"] == "interrupted"
             expected = {"cancel": "cancelled", "orphan": "orphaned", "late": "expired"}
             for promise, status in expected.items():

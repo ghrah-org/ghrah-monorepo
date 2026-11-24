@@ -3,7 +3,7 @@
 > 本文是平台层的事实基线：**只写当前实现**，每条关键论断都带 `文件路径:行号`。
 > 代码与本文冲突时以代码为准，并回来改本文。不写路线图、不写历史沿革。
 >
-> 校准基线：`ghrah-monorepo` @ `08983d7`（2026-11-13），工作区干净。
+> 全文原校准基线为 `ghrah-monorepo` @ `08983d7`。本次复核范围为 Core 存储域、轮次审批与 Room 读面，依据 `ghrah-message-manager` 自 `325ea0f` 起的 SQLite 组合读面及审计修正。
 >
 > **路径约定**：`file:line` 一律相对仓库根。少数条目为**包内相对路径**的简写
 > （如 `corpus.py`、`ports/core.py`、`payloads/system.py`），按所在章节的包定位：
@@ -56,7 +56,7 @@ ghrah 是一个**多智能体运行时**的 monorepo。它把"Agent 怎么想"�
 
 | # | 原则 | 具体含义 | 落地位置 |
 | --- | --- | --- | --- |
-| 1 | **单一权威** | 每份被多方使用的状态只有一条写路径；其余副本只能是派生，且必须能从权威重建 | Core `ContextManager` 的 sqlite 是链与消息的写入权威（`ghrah-core/src/ghrah/context/manager.py`） |
+| 1 | **单一权威** | 每份被多方使用的状态只有一条写路径；其余副本只能是派生，且必须能从权威重建 | Core 的 SQLite 运行时存储域持有链与消息的写事务（`ghrah-core/src/ghrah/communication/sqlite_message_store.py:282`） |
 | 2 | **派生可重建** | 副本不得独立写；重建指令必须存在且幂等 | Observer store 重连时经命令面重新拉取；Subject 侧读链历史只调用能力 |
 | 3 | **跨模块单一入口** | 模块之间零 import；一切能力调用经端口 | `ghrah-protocol/src/ghrah/protocol/ports/core.py` + `ghrah-core/src/ghrah/core/api/facade.py` |
 | 4 | **零隐式行为** | 新能力必须显式声明（清单 / 配置 / 白名单），不做"顺便帮你做了" | 能力必须登记进 `CORE_INTERFACES` / `CORE_CATALOG_INTERFACES` 且有处理器，否则启动即失败（`ghrah-core/src/ghrah/core/api/runtime.py:25`、`:41`） |
@@ -81,9 +81,9 @@ graph TB
     XPort -.->|"CORE_CATALOG 目录读面（无作用域）"| CATALOG
 
     subgraph CORE["ghrah-core（同进程，认知半区）"]
-        FACADE["CorePort 实例（每项目一个）<br/>→ CoreRuntime<br/>48 条作用域能力"]
-        CATALOG["CoreCatalogPort → CoreCatalogRuntime<br/>5 条目录能力"]
-        H["handlers × 10 组 + 目录 1 组"]
+        FACADE["CorePort 实例（每项目一个）<br/>→ CoreRuntime<br/>68 条作用域接口"]
+        CATALOG["CoreCatalogPort → CoreCatalogRuntime<br/>8 条目录接口"]
+        H["作用域接口与全局目录处理器"]
         AG["Supervisor / ActorAgent<br/>驱动循环 / ContextManager"]
         FACADE --> H
         CATALOG --> H
@@ -823,7 +823,7 @@ TS 镜像包是 `ghrah-observer-webui/packages/protocol`（pnpm workspace 成员
 
 **② 消费方的业务代码里，提供方的名字一次都不出现。** Subject 侧读 Core 数据只经端口：`units/ledger.py:17`–`:18` import `CorePort` 与 `CORE_PORT`，`:83` 用 `self._ctx.get(CORE_PORT, strict=False)` 取端口；`runtime/port_transport.py:21` import `CORE_PORT`，模块头写明「所有对『某个 Agent 的运行时操作』都转成 `CORE_PORT` 的能力调用」，返回值统一是协议视图的 `model_dump`，「与观察端/WS 契约同源，不再有第二套形状」（`:4`–`:12`）。
 
-**③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。** 全仓 Subject 侧对 `ghrah.core` 的 import 只有两处，全部在函数体内：`units/core_cluster.py:234`（`from ghrah.core.wiring import build_core_catalog, build_core_port`）、`core_cluster/registry.py:472`；`core_cluster.py:235` 紧接着 import 的是协议包的 `CORE_CATALOG` / `CORE_PORT`。`core_cluster.py:253`–`:282` 就是「Core 端口实例的唯一装配点」：`_make_port` 调 `build_core_port(...)`、`build_core_catalog(...)` 造目录端口，然后 `ctx.provide(CORE_PORT, ports)` / `ctx.provide(CORE_CATALOG, catalog)`。**依赖声明存在（`ghrah-subject/pyproject.toml` 的 `dependencies` 含 `ghrah-core`），但 import 被压到装配层这一个人为窄口**——这是本仓区分「可以依赖」与「可以 import」的实际做法。
+**③ 唯一允许 import 提供方的地方是装配函数内部，而且是懒 import。** 全仓 Subject 侧对 `ghrah.core` 的 import 只有两处，全部在函数体内：`units/core_cluster.py:267` 引入 Core 工厂，`core_cluster/registry.py:531` 引入 Core 单元装配类型。`units/core_cluster.py:286`–`:327` 定义项目和目录端口的装配：`_make_port` 调 `build_core_port(...)`、`build_core_catalog(...)` 造目录端口，然后 `ctx.provide(CORE_PORT, ports)` / `ctx.provide(CORE_CATALOG, catalog)`。**依赖声明存在（`ghrah-subject/pyproject.toml` 的 `dependencies` 含 `ghrah-core`），但 import 被压到装配层这一个人为窄口**——这是本仓区分「可以依赖」与「可以 import」的实际做法。
 
 **④ 端口形状若住在提供方，消费方会被迫在 import 期拉起提供方。** 反推一遍：`CorePort` 若定义在 `ghrah-core`，则 `units/ledger.py`（一个普通的读投影 Unit）在模块导入时就要 `import ghrah.core...`，于是「只读账本」这一段的 import 依赖会牵入整个 Core 装配面；`port_transport.py` 同理。而现在的形态下，`ledger.py`/`port_transport.py` 的 import 只有协议包与标准库，它们在只有 `pydantic` + `ghrah-plugin` 的环境里就能被导入与测试——这正是 `ghrah-protocol/pyproject.toml:9`–`:12` 依赖集合的意义，也解释了为什么 `ghrah-protocol` 的测试不依赖任何提供方（`tests/test_port_contract.py`、`tests/test_interface.py` 全程只用端口面类型）。
 
@@ -855,7 +855,7 @@ uv run python -c "from ghrah.protocol.envelope import PAYLOAD_MAP,COMMAND_PAYLOA
 | 分页 | 返回 `Page[T]` | 保留 |
 | 长动作 | 返回 `Operation` | 保留 |
 
-保留下来的不是传输细节，而是**资源命名纪律**：每条能力必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 48 条作用域能力会退化成无法猜的 RPC 集合。
+保留下来的不是传输细节，而是**资源命名纪律**：每条能力必须落到一个名词分组上，命名可预测（`nodes.get` 而不是 `getNodeById`），否则 68 条作用域接口会退化成无法猜的 RPC 集合。
 
 ### 4.2 三个抽象与一次调用的四步
 
@@ -894,48 +894,56 @@ wiring       → 全部
 
 | 路径 | 职责 |
 | --- | --- |
-| `core/read/chain.py` | 只读链库：`ChainReadStore(db_path)`、`ChainDatabaseUnavailableError` |
-| `core/read/mailbox.py` | 只读信箱/投递：`MailboxReadStore(db_path, scope_id)` 与三类未找到异常 |
+| `core/read/chain.py` | 从存储域读取链节点、分支和会话目录 |
+| `core/read/mailbox.py` | 从存储域读取实体信箱、投递与队列 |
+| `core/read/turn.py` / `core/read/transcript.py` | 轮次与审批查询，按页批量读取 Room 所引用的运行时事实 |
+| `core/runtime_storage.py` | 作用域存储装配契约与 SQLite 默认工厂 |
 | `core/read/ability.py` | 能力关系库读面：`AbilityReadStore(*, db_path, scope_id=…)`、`AbilityConflictError`、`AbilityUnavailableError` |
 | `core/read/ability_catalog.py` | 能力包目录读面：`CatalogError`（`not_found` / `invalid_request` / `unavailable` 三值） |
-| `core/api/interfaces.py` | `CORE_INTERFACES`：48 条作用域能力声明；`CORE_CATALOG_INTERFACES`：5 条目录能力声明 |
-| `core/api/handlers/` | 10 个处理器模块：`nodes`、`sessions`、`session_write`、`branches`、`mailbox`、`deliveries`、`manifests`、`abilities`、`agents`、`messages`；`build_handlers(chain, mailbox, abilities, registry)` 汇总作用域能力，`build_catalog_handlers(abilities)` 汇总目录能力 |
+| `core/api/interfaces.py` | `CORE_INTERFACES`：68 条作用域接口声明；`CORE_CATALOG_INTERFACES`：8 条目录接口声明 |
+| `core/api/handlers/` | `build_handlers` 汇总作用域接口，`build_catalog_handlers` 汇总目录接口 |
 | `core/api/runtime.py` | `CoreRuntime(InterfaceRuntime)` / `CoreCatalogRuntime` + `build_runtime` / `build_catalog_runtime`：各自绑定清单、翻译表、异常工厂 |
 | `core/api/errors.py` | `CoreApiError` + `translate()` 翻译表 |
-| `core/api/facade.py` | `CoreFacade`（作用域端口实现）与 10 个分组实现类；`_call` / `aclose` |
+| `core/api/facade.py` | `CoreFacade`（作用域端口实现）与各分组的门面实现；`_call` / `aclose` |
 | `core/api/catalog.py` | `CoreCatalog`（`CoreCatalogPort` 实现，无作用域）；`_call` / `aclose` |
 | `core/wiring.py` | `build_core_port(...)`（作用域端口）与 `build_core_catalog(...)`（目录端口）：装配层的两个唯一入口 |
 
-**读面与集群生命周期解耦，作用域在构造期固定**：三个读 store 在 `build_core_port` 里按该作用域的数据根（`db_path`）与不透明 token（`scope_id`）直接构造，不需要先挂载 `CoreUnit`。因此读取一个已停止 Agent 的历史不会复活项目；也因为作用域是构造参数而不是方法参数，调用方无法在两次调用之间切换作用域。带运行时状态的能力（`agents.runtime`、`abilities.tree`、`agents.tools`）是例外：它们经 `RuntimeRegistry` 读活跃单元，离线时按各自视图返回 `offline` 或抛 `NOT_FOUND`。
+作用域在 `build_core_port` 装配时固定。链、信箱、轮次和 Room 查询共享存储域的只读资源，按请求取得快照。写运行时由注册表按需启动。能力授权库独立装配，依赖活动单元的能力视图继续从注册表解析运行状态。`ghrah-core/src/ghrah/core/runtime_storage.py:20`。
 
 ### 4.4 能力面规模
 
-口径：`len(CORE_INTERFACES) == 48`（作用域能力），`len(CORE_CATALOG_INTERFACES) == 5`（目录能力）；作用域分组数等于 `CorePort` 上的属性数（10），目录能力不分组、直接挂在 `CoreCatalogPort` 的方法上。
+登记表包含 68 条作用域接口，分属 13 组。目录端口另有 8 条接口。`ghrah-core/src/ghrah/core/api/interfaces.py:751`、`ghrah-core/src/ghrah/core/api/interfaces.py:840`。
 
 | 分组 | 条数 | 说明 |
 | --- | --- | --- |
-| `nodes` | 1 | 单节点读取 |
-| `sessions` | 8 | 目录 / 历史 / 头节点 / 元数据 / 创建 / 激活 / 归档 / 删除 |
-| `branches` | 5 | 列表 / 分叉 / 激活 / 归档 / 删除 |
-| `mailbox` | 6 | 概览 / 分页列表 / 单条 / 外部发布 / 通知发布 / Room 投影补齐 |
-| `deliveries` | 3 | 读取 / 重试 / 恢复 |
-| `abilities` | 11 | 树 / 变更流 / 管理总览 / 包分组 / 实例 / 成员内容 / 可用性 / 授予 / 撤销 / 绑工具 / 解绑工具 |
-| `agents` | 9 | 创建 / 按模板创建 / 读取 / 列表 / 删除 / 运行时 / 工具 / 压缩 / 重置 |
-| `messages` | 3 | 发送 / 广播 / 委派 |
-| `rooms` | 1 | 投影修复 |
-| `manifests` | 1 | manifest 解析 |
+| `nodes` | 1 | 按 ID 读取节点 |
+| `turns` | 6 | 轮次查询、详情、终止、回滚和预览 |
+| `hitl` | 2 | 读取审批状态与待处理列表 |
+| `sessions` | 8 | 目录、历史、Head、元数据和会话管理 |
+| `branches` | 5 | 分支查询与管理 |
+| `mailbox` | 6 | 信箱概览、分页、单条、发布及投影补齐 |
+| `deliveries` | 5 | 投递详情、队列、取消、重试和续跑 |
+| `rooms` | 1 | 修复 Room 投影 |
+| `transcript` | 1 | 批读 Room 引用的消息、投递和轮次 |
+| `manifests` | 1 | 解析 Agent 声明 |
+| `abilities` | 13 | 能力目录、授权、成员和工具关系 |
+| `agents` | 16 | Agent 实例配置、组装、生命周期和工具 |
+| `messages` | 3 | 发送、广播和委派 |
 
-目录能力（`CORE_CATALOG_INTERFACES`，无作用域，`CoreCatalogPort` 的五个方法）：
+目录接口由全局 Core 目录端口提供。
 
 | 接口 | 说明 |
 | --- | --- |
+| `shell.validate_allow` | 检查命令放行声明 |
+| `shell.builtin_rules` | 读取内置放行规则 |
 | `abilities.packages` | 已安装能力包目录 |
 | `abilities.package_detail` | 单个能力包详情 |
-| `abilities.package_version_profile` | 单个能力包版本的画像 |
-| `abilities.package_mcp_probe` | 只读探测该版本声明的 MCP 服务 |
-| `abilities.package_groups` | 全局包分组（不绑定项目） |
+| `abilities.package_version_profile` | 单个能力包版本画像 |
+| `abilities.package_mcp_probe` | 探测包版本声明的 MCP 服务 |
+| `abilities.package_groups` | 全局能力包分组 |
+| `abilities.package_import` | 导入能力包归档 |
 
-登记表本身是唯一权威：`ghrah-core/src/ghrah/core/api/interfaces.py`（`CORE_INTERFACES` 在 `:543`，`CORE_CATALOG_INTERFACES` 在 `:612`）。名字规律是 `<分组>.<动作>`；作用域接口与 `CorePort` 的属性名、方法名一一对应，目录接口与 `CoreCatalogPort` 的方法一一对应。`abilities.package_groups` 在两份清单里各有一条：作用域形态注入项目 token，目录形态是全局读面（见 §4.5）。
+`abilities.package_groups` 同时有作用域形态和全局目录形态。作用域由装配层固定到 `CorePort`，全局调用直接使用 `CoreCatalogPort`。
 
 `messages.append` 与 `mailbox.publish_external` 都接受可选的 `content_blocks`。直聊经
 前者投递，房间的人类消息经后者受理。Subject 在调用前校验内容块和项目内的附件引用。
@@ -970,7 +978,7 @@ async def _call(self, capability: str, **kwargs: Any) -> dict[str, Any]:
 - 越权参数化不可能——一个实例只有一个作用域，跨作用域调用必须先取另一个实例；
 - 不存在"忘了调 `project()`"这种失败态，因为不存在未绑定实例。
 
-全局读面（能力包目录等 5 项）拆成独立的 `CoreCatalogPort`（实现 `ghrah-core/src/ghrah/core/api/catalog.py:32`）：没有作用域、不打开数据库、不建单元，因此**零项目时也可用**。同名接口 `abilities.package_groups` 在目录端口上是全局形态，在作用域端口上是项目形态。
+全局读面（能力包目录等 8 项）拆成独立的 `CoreCatalogPort`（实现 `ghrah-core/src/ghrah/core/api/catalog.py:32`）：没有作用域、不打开数据库、不建单元，因此**零项目时也可用**。同名接口 `abilities.package_groups` 在目录端口上是全局形态，在作用域端口上是项目形态。
 
 ### 4.6 装配与生命周期
 
@@ -981,12 +989,16 @@ def build_core_port(  # 作用域端口：每个 Project 一个实例
     *,
     scope_id: str,
     db_path: str,
+    storage_factory: RuntimeStorageFactory | None = None,
+    adopt_legacy_chain: bool = False,
+    immutable_reads: bool = False,
     config_factory: ConfigFactory | None = None,
     unit_factory: UnitFactory | None = None,
     manager_factory: ManagerFactory | None = None,
     manifest_resolver: ManifestResolver | None = None,
     install_root: str | None = None,
     agentconf_db_path: str | None = None,
+    ability_db_path: str | None = None,
     grant_policy: Any = None,
     config_hook: ConfigHook | None = None,
     emit: Callable[[str, dict[str, Any]], None] | None = None,
@@ -1002,15 +1014,12 @@ def build_core_catalog(  # 目录端口：无作用域，进程内一个
 ) -> CoreCatalog: ...
 ```
 
-作用域端口的组装顺序（`ghrah-core/src/ghrah/core/wiring.py:133`–`:162`）：
+作用域端口由装配工厂固定存储域与生命周期，并核对注入存储的作用域和规范化路径。`ghrah-core/src/ghrah/core/wiring.py:69`。
 
-1. `ChainReadStore(db_path)` —— 链库只读；
-2. `MailboxReadStore(db_path, scope_id)` —— 信箱/投递只读；
-3. `RuntimeRegistry(scope_id=…, config_factory=…, manager_factory=…, manifest_resolver=…, config_hook=…)` —— 单作用域活跃单元注册表，也是 `agents.*` / `abilities.tree` 的运行时真相；
-4. `AbilityReadStore(db_path=…, scope_id=…, resolve_run=registry.run_id_for, resolve_tools=registry.tools_for, install_root=…)`；
-5. `registry.set_ability_store_factory(...)` —— 授权关系库由 Core 自持，`reclaim_stale=True` 回收上一进程异常退出留下的 pending 占位；
-6. `CoreRuntime(build_handlers(chain, mailbox, abilities, registry))` —— 此处校验 48 条作用域能力与处理器齐全；
-7. `CoreFacade(runtime=…, scope_id=…, closer=lambda: _close_all(registry.aclose, chain.aclose, abilities.aclose))`。
+1. `RuntimeStorageFactory` 为作用域提供链、轮次、信箱与 Room 查询，以及启动消息管理器的入口。默认实现 `SqliteRuntimeStorage` 共用一个 `SqliteMessageStore`。`ghrah-core/src/ghrah/core/runtime_storage.py:40`。
+2. `RuntimeRegistry` 按需向存储域取得写资源。链、信箱、轮次和 Room 查询在单元启动前即可调用。`ghrah-core/src/ghrah/core/wiring.py:131`。
+3. `AbilityReadStore` 独立持有授权关系库。默认与运行时 SQLite 文件共用路径，也可用 `ability_db_path` 明确指定。运行态由注册表解析。离线查询只校验已有授权 schema。`ghrah-core/src/ghrah/core/wiring.py:143`。
+4. `CoreRuntime` 验证作用域接口和处理器一一对应。关闭端口时依次释放注册表、存储读资源和能力授权库。`ghrah-core/src/ghrah/core/wiring.py:155`。
 
 目录端口只需三步：`AbilityReadStore(db_path=Path(""), scope_id=None, install_root=…)`（**不打开数据库**）→ `CoreCatalogRuntime(build_catalog_handlers(abilities))` → `CoreCatalog(runtime=…, closer=…`）。
 
@@ -1065,7 +1074,7 @@ port = ports.for_project(project_id)  # -> CorePort（按项目懒建/缓存）
 catalog = ctx.get(CORE_CATALOG)  # -> CoreCatalogPort（无作用域）
 ```
 
-`ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28` 的 `CorePorts` 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，`for_project` 懒建、`close_project` 关闭并移除、`aclose` 关闭全部。`CoreClusterUnit` 在 `init` 里构造 `CorePorts(_make_port)`（`units/core_cluster.py:253`–`:272`）与目录端口，并 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:277`–`:278`）；端口生命周期因此跟随 `CoreClusterUnit`。
+`ghrah-subject/src/ghrah/subject/runtime/core_ports.py:28` 的 `CorePorts` 是唯一构造端口实例的地方：它持有「项目 → 端口实例」缓存与「项目 → 数据根定位符」登记，`for_project` 懒建、`close_project` 关闭并移除、`aclose` 关闭全部。`CoreClusterUnit` 在 `init` 里构造 `CorePorts(_make_port)`（`units/core_cluster.py:286`–`:316`）与目录端口，并 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:322`–`:323`）；端口生命周期因此跟随 `CoreClusterUnit`。
 
 `ghrah-subject/src/ghrah/subject/runtime/port_transport.py` 把历史的 cluster 命令面适配到端口：`PortClusterTransport` 实现 `CoreClusterRegistryService`、维护 `cluster_id → project_id` 映射、把命令转成能力调用（`port_for` 取端口实例，`:497`）；`PortMailbox` 是只实现实际用到的成员的最小替身（不给旁路留口子）；`build_port_transport(ctx)` 从 ctx 取注册表构造传输层（`:563`）。
 
@@ -1089,7 +1098,7 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 
 1. **生命周期钩子默认空实现且必须幂等**（`unit/base.py:107-114` 的 docstring 明写 idempotent）。挂载桥的 disposer 只调 `stop()`（`runtime/ouroboros_bridge.py:112-115`）。
 2. **`handle_command` 的默认回执是失败**（`unit/base.py:116-127`）：未覆写该命令的单元不会静默返回成功，而是 `{"success": False, "error": "Command '…' is not implemented by unit '…'"}`。
-3. **`meta.provides` 只是声明面**：挂载桥的 `inject` 只从 `meta.requires` 派生（`runtime/ouroboros_bridge.py:96-97`），`provides` 不参与激活判定。因此实际 `ctx.provide` 与声明可以不一致，例如 `taskstore` 声明为空却在 `init` 里 provide 两个键（`units/taskstore.py:70-73` 与 `:108-109`）；`core_cluster_registry` 声明 `CORE_CLUSTER_REGISTRY`/`CORE_PORT`/`CORE_CATALOG` 三键并与实际 provide 一致（`units/core_cluster.py:152-155` 与 `:277-282`）。
+3. **`meta.provides` 只是声明面**：挂载桥的 `inject` 只从 `meta.requires` 派生（`runtime/ouroboros_bridge.py:96-97`），`provides` 不参与激活判定。因此实际 `ctx.provide` 与声明可以不一致，例如 `taskstore` 声明为空却在 `init` 里 provide 两个键（`units/taskstore.py:70-73` 与 `:108-109`）；`core_cluster_registry` 声明 `CORE_CLUSTER_REGISTRY`/`CORE_PORT`/`CORE_CATALOG` 三键并与实际 provide 一致（`units/core_cluster.py:180` 与 `:322-327`）。
 4. **`CommandContext` 在真实分发路径上是占位**：`_register_routes` 固定传 `CommandContext.internal()`（`runtime/ouroboros_bridge.py:146`），因为 Ouroboros listener 是单参签名；`request_id` / `session_id` 改由适配层合并进 payload（`units/websocket_observer_endpoint.py:56-68`）。
 
 ### 5.2 builtin 单元清单与职责
@@ -1120,7 +1129,7 @@ Subject 是**效果半区**：工作区、沙箱命令、任务、项目、Room�
 
 #### `core_cluster`（`units/core_cluster.py`）
 
-- 职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。`init` 里构造 `CorePorts(_make_port)`（按项目懒建端口实例）与无作用域目录端口，分别 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:277`–`:278`），再构造 `PortClusterTransport` 并 provide 到 `CORE_CLUSTER_REGISTRY`（`:282`）。
+- 职责：把「某项目的运行时」映射成 Core 能力端口调用，自身不创建 Agent 进程。`init` 里构造 `CorePorts(_make_port)`（按项目懒建端口实例）与无作用域目录端口，分别 provide 到 `CORE_PORT` / `CORE_CATALOG`（`:322`–`:323`），再构造 `PortClusterTransport` 并 provide 到 `CORE_CLUSTER_REGISTRY`（`:282`）。
 - 21 条命令 = `_PROJECT_AGENT_COMMANDS`（`:46-70`），是从 Subject 到 Core 的**唯一 Agent 运行命令面**。
 - 三道守卫，顺序固定：`register_ability` / `unregister_ability` 直接拒（`:347-353`，指向授权关系库）→ 命令名白名单（`:359-364`）→ `_project()` 校验项目存在/未归档/ACTIVE（`:417-440`）。`_RUNTIME_REVIVING_COMMANDS`（`:101-118`）要求项目处于 `ACTIVE`，防止一条消息惰性复活 stopped 项目；`_NO_MOUNT_COMMANDS`（`:122`，含 `get_agent_info` / `session_list` / `terminate_agent`）在无运行实例时走免挂载回执（`:384-385`、`:442-470`）。
 - 命令到端口的落地：`handle.dispatch(command, core_payload)`（`:397`），`PortClusterTransport` 里是一张「命令名 → 能力调用」的显式映射表（`runtime/port_transport.py:305-411`）。
@@ -1426,16 +1435,12 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 
 ### 6.3 `api/`：`CoreFacade`、`CoreCatalog` 与能力面（两种端口）
 
-`CoreFacade` 是 `CorePort` 的唯一实现（`api/facade.py:83`），门面刻意做薄：装箱 → 转交 → 建模型，不含业务判断、不碰存储、不决定错误语义（`:4-8`）。
+`CoreFacade` 固定作用域。每个分组把请求装箱后提交 `CoreRuntime`，并将结果转换为协议视图。`ghrah-core/src/ghrah/core/api/facade.py:100`。
 
-- 10 个分组属性：`nodes` / `sessions` / `branches` / `mailbox` / `deliveries` / `rooms` / `manifests` / `abilities` / `agents` / `messages`（`:121-167`）。
-- 构造入参固定作用域（`scope_id`，`:95-118`）；`_call` 只转交（`:177-189`），不再注入任何项目字段——内部命令载荷的作用域由单元入口补齐（§4.5）。
-- 接口清单 `CORE_INTERFACES`（`api/interfaces.py:543`）：实测 **48** 条，分组分布 `abilities 11 / agents 9 / sessions 8 / mailbox 6 / branches 5 / deliveries 3 / messages 3 / nodes 1 / rooms 1 / manifests 1`。
-- 目录端口 `CoreCatalog`（`api/catalog.py:32`）实现 `CoreCatalogPort`，收敛点 `CoreCatalogRuntime`，清单 `CORE_CATALOG_INTERFACES`（`api/interfaces.py:612`）：**5** 条。
-- 收敛点 `api/runtime.py:25` / `:41` 的两个 `InterfaceRuntime` 子类在构造时校验「清单 == 处理器集合」；处理器由 `api/handlers/__init__.py:32` 的 `build_handlers(chain, mailbox, abilities, registry)` 与 `:63` 的 `build_catalog_handlers(abilities)` 分别汇总。
-- 装配入口是 `build_core_port(...)`（`wiring.py:96-162`）与 `build_core_catalog(...)`（`wiring.py:165-189`）。
+作用域和目录的清单分别由 `build_handlers` 与 `build_catalog_handlers` 装配。核心运行时构造时复核清单与处理器集合，接口规模见 §4.4。`ghrah-core/src/ghrah/core/api/handlers/__init__.py:33`、`ghrah-core/src/ghrah/core/api/handlers/__init__.py:71`。
 
-**「端口」的边界**：Subject 只知道两个字符串键 `core.port` / `core.catalog`（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），由 `core_cluster_registry` 单元在 init 时 provide（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:277-282`）；48 条作用域能力 + 5 条目录能力、10 个分组、存储与 Supervisor 全部留在 Core 内，Subject 取到的只是端口对象（用法 `ghrah-subject/src/ghrah/subject/units/ledger.py:83`）。
+Subject 通过 `core.port` 取得项目端口，通过 `core.catalog` 取得全局目录。装配入口为 `build_core_port` 和 `build_core_catalog`。`ghrah-subject/src/ghrah/subject/units/core_cluster.py:297`、`ghrah-core/src/ghrah/core/wiring.py:69`、`ghrah-core/src/ghrah/core/wiring.py:168`。
+
 
 ### 6.4 进程内 `/v1` 控制面（已退役）
 
@@ -1453,7 +1458,7 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 
 接线点在 `CoreUnit._init`（`unit.py:590-596`）：宿主 `ctx` 有 `serial` 时才构造 `SerialRoomBridge(serial)` 与 `HostCommandPort(HostCommandBridge(serial))`；没有 `serial`（standalone 或 §6.2 的 `UnitContext`）时二者均为 `None`，`send` 工具与宿主命令会明确报错而不是静默失败。
 
-授权边界：允许集来自 `CoreUnitConfig.host_command_grants`（`unit.py:227-230`），由装配方（Subject）写入；Core 不认识任何领域命令名或包身份（`host_command_port.py:5-13`）。注入粒度是**成员级**：只在命中 grants 的成员调用路径上下发 scoped 端口（`_resolve_host_command_port`，`ghrah-core/src/ghrah/agents/base.py:1822`），避免共授其它 operation 绕过授权。
+授权边界：允许集来自 `CoreUnitConfig.host_command_grants`（`unit.py:227-230`），由装配方（Subject）写入；Core 不认识任何领域命令名或包身份（`host_command_port.py:5-13`）。注入粒度是**成员级**：只在命中 grants 的成员调用路径上下发 scoped 端口（`_resolve_host_command_port`，`ghrah-core/src/ghrah/agents/base.py:2018`），避免共授其它 operation 绕过授权。
 
 ### 6.6 Supervisor / Agent actor / 驱动循环入口
 
@@ -1463,7 +1468,7 @@ Core 是**认知半区**：Agent 生命周期、模型调用、上下文窗口�
 | --- | --- | --- |
 | `SupervisorActor` | `ghrah-core/src/ghrah/communication/supervisor.py:48` | 集群内 Agent 的全部生命周期与消息路由：`spawn_agent`(:166)、`check_spawn`(:196)、`spawn_reservation`(:221)、`terminate_agent`(:485)、`list_agents`(:510)、`route_message`(:598)、`send`(:713)、`broadcast`(:762)、`delegate`(:831)、session/branch 组(:891-1045)、`health_check`(:1047)、`shutdown`(:1069) |
 | `SupervisorProtocol` | `ghrah-core/src/ghrah/core/supervisor_protocol.py:21` | 能力执行层只依赖此协议，不反向依赖 `communication` |
-| `ActorAgent` | `ghrah-core/src/ghrah/agents/base.py:137` | 单个 Agent 的消息接收与驱动：`receive`(:570)、`receive_atomic`(:581)、`_receive_once`(:670)、`_drive_loop`(:866)、`_action`(:1357)、`request_compact`(:845)、`_await_tool_results`(:1588) |
+| `ActorAgent` | `ghrah-core/src/ghrah/agents/base.py:152` | 单个 Agent 的消息接收与驱动。`receive`（`:590`）、`receive_atomic`（`:601`）、`_receive_once`（`:725`）、`_drive_loop`（`:1022`）、`_action`（`:1538`）、`request_compact`（`:994`）、`_await_tool_results`（`:1779`） |
 | `AgentRunner` | `ghrah-core/src/ghrah/agents/runner.py:33` | 把同一 Agent 的操作串行化（`run` :50，`busy` :46） |
 | `AgentBuilder` | `ghrah-core/src/ghrah/agents/builder.py:303` | `from_config` 是唯一构造入口，负责窗口/上下文/环境段渲染 |
 | `AgentEntity` | `ghrah-core/src/ghrah/agents/entity.py:107` | 实体端口：`context` / `mailbox` / `abilities` 三个子面 + `start` / `stop` / `configure_model` |
@@ -1538,52 +1543,52 @@ CoreUnit 只持有 Supervisor，不把它注册成服务（`unit.py:577`），�
 
 1. **重建**：新建一个空 `ActionChain`，对传入的每个节点调 `ingest_node` 重新建索引；`ingest_node` 会复核 `agent_name` 与 `session_id`，因此跨 session 的脏数据在这一步就被拒绝（`ghrah-core/src/ghrah/context/chain.py:135`）。
 2. **校验**：`__post_init__` 走 `validate()`，于是"恢复"本身就等价于"对已落库数据重跑全部不变量"——坏 checkpoint 在读出来时失败，而不是等到下一次提交。
-3. **复用**：它同时是只读读面的构造器。`ChainReadStore.head()` / `history()` 用 `restore` 拼出 Branch 头与历史（`ghrah-core/src/ghrah/core/read/chain.py:226`、`ghrah-core/src/ghrah/core/read/chain.py:272`），`ContextCheckpoint.__post_init__` 也用它按 session 逐个校验（`ghrah-core/src/ghrah/context/persistence/checkpoint.py:54`）。也就是说：**恢复与校验是同一段代码，没有第二条路径**。
+3. **回放与查询**。会话恢复由 `SessionRuntime.restore` 重建内存聚合。只读 Head 和历史由 SQLite 按索引和分支窗口查询。`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:893`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:910`。
 
-补充约束：`ContextCheckpoint` 只做全局 ID 唯一性 + 每 session 拓扑闭包（`ghrah-core/src/ghrah/context/persistence/checkpoint.py:33`），`ContextManager.restore` 再把跨 session 的运行时表装回去（`ghrah-core/src/ghrah/context/manager.py:1597`）。
+补充约束：`ContextCheckpoint` 只做全局 ID 唯一性 + 每 session 拓扑闭包（`ghrah-core/src/ghrah/context/persistence/checkpoint.py:33`），`ContextManager.restore` 再把跨 session 的运行时表装回去（`ghrah-core/src/ghrah/context/manager.py:2147`）。
 
 ### 7.3 ContextManager 的提交路径
 
-`ContextManager` 是门面：`StateManager`（事务性状态）+ `MessageStore`（运行时消息）+ `dict[str, SessionRuntime]`（多 Session）+ 可选 `PersistenceBackend`（`ghrah-core/src/ghrah/context/manager.py:59`）。
+`ContextManager` 是门面：`StateManager`（事务性状态）+ `MessageStore`（运行时消息）+ `dict[str, SessionRuntime]`（多 Session）+ 可选 `PersistenceBackend`（`ghrah-core/src/ghrah/context/manager.py:63`）。
 
 #### 7.3.1 一次迭代的完整链路
 
 | 步骤 | 调用 | 做什么 | 落点 |
 | --- | --- | --- | --- |
-| 1 | `begin_iteration()` | 开状态事务、清空 `_pending_messages`、置 `_in_iteration` | `ghrah-core/src/ghrah/context/manager.py:725` |
-| 2 | `apply_state_changes(changes)` | 变更只进 `StateManager` 的 pending 区，返回合并后的**预期**状态（深拷贝） | `ghrah-core/src/ghrah/context/manager.py:739` |
-| 2' | `add_messages(msgs)` | 迭代中进 `_pending_messages` 缓冲；迭代外直接进 `MessageStore` | `ghrah-core/src/ghrah/context/manager.py:757` |
-| 3 | `commit_iteration(...)` | 见下 7 步 | `ghrah-core/src/ghrah/context/manager.py:771` |
-| 3' | `commit_iteration_async(...)` | 持久优先的原子版本 | `ghrah-core/src/ghrah/context/manager.py:854` |
-| 4 | 自动持久化 | `auto_persist=True` 时后台调度增量变更 | `ghrah-core/src/ghrah/context/manager.py:848`、`ghrah-core/src/ghrah/context/manager.py:1661` |
-| 失败 | `rollback_iteration(error)` | 回滚状态事务 + 新建并激活 `retry-N` Branch | `ghrah-core/src/ghrah/context/manager.py:963` |
-| 兜底 | `ensure_iteration_closed()` | 取消逃逸时强制关掉残留事务（不建 Branch、不落库） | `ghrah-core/src/ghrah/context/manager.py:931` |
+| 1 | `begin_iteration()` | 开状态事务、清空 `_pending_messages`、置 `_in_iteration` | `ghrah-core/src/ghrah/context/manager.py:1250` |
+| 2 | `apply_state_changes(changes)` | 变更只进 `StateManager` 的 pending 区，返回合并后的**预期**状态（深拷贝） | `ghrah-core/src/ghrah/context/manager.py:1267` |
+| 2' | `add_messages(msgs)` | 迭代中进 `_pending_messages` 缓冲；迭代外直接进 `MessageStore` | `ghrah-core/src/ghrah/context/manager.py:1285` |
+| 3 | `commit_iteration(...)` | 见下 7 步 | `ghrah-core/src/ghrah/context/manager.py:1299` |
+| 3' | `commit_iteration_async(...)` | 持久优先的原子版本 | `ghrah-core/src/ghrah/context/manager.py:1385` |
+| 4 | 自动持久化 | `auto_persist=True` 时后台调度增量变更 | `ghrah-core/src/ghrah/context/manager.py:1379`、`ghrah-core/src/ghrah/context/manager.py:2219` |
+| 失败 | `rollback_iteration(error)` | 回滚状态事务 + 新建并激活 `retry-N` Branch | `ghrah-core/src/ghrah/context/manager.py:1511` |
+| 兜底 | `ensure_iteration_closed()` | 取消逃逸时强制关掉残留事务（不建 Branch、不落库） | `ghrah-core/src/ghrah/context/manager.py:1479` |
 
-`commit_iteration` 内部固定七步（`ghrah-core/src/ghrah/context/manager.py:780`，代码步骤编号见 `ghrah-core/src/ghrah/context/manager.py:812`–`ghrah-core/src/ghrah/context/manager.py:846`）：
+`commit_iteration` 内部固定七步（`ghrah-core/src/ghrah/context/manager.py:1308`，代码步骤编号见 `ghrah-core/src/ghrah/context/manager.py:1342`–`ghrah-core/src/ghrah/context/manager.py:1377`）：
 
-1. 若给 `state_changes`，先并入事务（`ghrah-core/src/ghrah/context/manager.py:813`）；
-2. `StateManager.commit()` 拿到新状态（`ghrah-core/src/ghrah/context/manager.py:817`）；
-3. `_pending_messages` 落进 `MessageStore`（`ghrah-core/src/ghrah/context/manager.py:820`）；
-4. 本轮 delta = `_pending_messages`；**普通提交节点不写 `messages_snapshot`**（`ghrah-core/src/ghrah/context/manager.py:823`）；
-5. 合并 `llm_metadata` 与本轮压缩审计记录进节点 metadata（`ghrah-core/src/ghrah/context/manager.py:826`、`ghrah-core/src/ghrah/context/manager.py:831`）；
-6. `SessionRuntime.commit_node` 建节点并前移 Head（`ghrah-core/src/ghrah/context/manager.py:836`）；
-7. 清空迭代状态（`ghrah-core/src/ghrah/context/manager.py:845`）。
+1. 若给 `state_changes`，先并入事务（`ghrah-core/src/ghrah/context/manager.py:1343`）；
+2. `StateManager.commit()` 拿到新状态（`ghrah-core/src/ghrah/context/manager.py:1347`）；
+3. `_pending_messages` 落进 `MessageStore`（`ghrah-core/src/ghrah/context/manager.py:1350`）；
+4. 本轮 delta = `_pending_messages`；**普通提交节点不写 `messages_snapshot`**（`ghrah-core/src/ghrah/context/manager.py:1353`）；
+5. 合并 `llm_metadata` 与本轮压缩审计记录进节点 metadata（`ghrah-core/src/ghrah/context/manager.py:1356`、`ghrah-core/src/ghrah/context/manager.py:1361`）；
+6. `SessionRuntime.commit_node` 建节点并前移 Head（`ghrah-core/src/ghrah/context/manager.py:1366`）；
+7. 清空迭代状态（`ghrah-core/src/ghrah/context/manager.py:1376`）。
 
-`ability_names` 缺省时写 `["unknown"]`、`action_results` 置空（`ghrah-core/src/ghrah/context/manager.py:805`）——这是显式约定，不是补默认值。
+`ability_names` 缺省时写 `["unknown"]`、`action_results` 置空（`ghrah-core/src/ghrah/context/manager.py:1335`）——这是显式约定，不是补默认值。
 
 #### 7.3.2 `commit_iteration_async`：先落库再推进内存
 
-它只在**有持久提交器**时才有区别；没有则退化为 `commit_iteration`（`ghrah-core/src/ghrah/context/manager.py:870`）。
+持久模式使用当前投递提交器或轮次存储提交器，内存模式调用 `commit_iteration`（`ghrah-core/src/ghrah/context/manager.py:1402`）。
 
 | 阶段 | 动作 | 落点 |
 | --- | --- | --- |
 | 取提交器 | `get_iteration_committer(self)`：从 `ContextVar` 里取，且只认**同一个 ContextManager 实例**，避免嵌套 Agent 串用 | `ghrah-core/src/ghrah/context/iteration_commit.py:43` |
-| 排空前的写 | `await wait_for_persist()`，防止更早的后台变更在持久提交后覆盖新 head | `ghrah-core/src/ghrah/context/manager.py:875` |
-| 候选视图 | `_commit_candidate()`：copy 顶层 + deep copy 当前 session runtime / state / message store，并把 `_auto_persist` 关掉 | `ghrah-core/src/ghrah/context/manager.py:880` |
-| 候选上提交 | 在候选上跑同一个 `commit_iteration`（候选内存里的 Head 已前移，但权威实例未动） | `ghrah-core/src/ghrah/context/manager.py:877` |
-| 持久提交 | `ContextChanges(sessions=…, nodes=(node,), branches=…).` 交给提交器；`asyncio.shield` 保证 COMMIT 期间被取消也拿到明确结果 | `ghrah-core/src/ghrah/context/manager.py:896`、`ghrah-core/src/ghrah/context/manager.py:907` |
-| 安装内存 | 只有持久成功后，才把候选的 `_session_runtimes` / `_state_manager` / `_message_store` / 锚点等整组装回权威实例 | `ghrah-core/src/ghrah/context/manager.py:913` |
-| 取消语义 | 若期间被取消，装完内存后重新抛 `CancelledError`（不假装回滚） | `ghrah-core/src/ghrah/context/manager.py:923` |
+| 排空前的写 | `await wait_for_persist()`，防止更早的后台变更在持久提交后覆盖新 head | `ghrah-core/src/ghrah/context/manager.py:1407` |
+| 候选视图 | `_commit_candidate()`：copy 顶层 + deep copy 当前 session runtime / state / message store，并把 `_auto_persist` 关掉 | `ghrah-core/src/ghrah/context/manager.py:1427` |
+| 候选上提交 | 在候选上跑同一个 `commit_iteration`（候选内存里的 Head 已前移，但权威实例未动） | `ghrah-core/src/ghrah/context/manager.py:1409` |
+| 持久提交 | `ContextChanges(sessions=…, nodes=(node,), branches=…).` 交给提交器；`asyncio.shield` 保证 COMMIT 期间被取消也拿到明确结果 | `ghrah-core/src/ghrah/context/manager.py:1443`、`ghrah-core/src/ghrah/context/manager.py:1454` |
+| 安装内存 | 只有持久成功后，才把候选的 `_session_runtimes` / `_state_manager` / `_message_store` / 锚点等整组装回权威实例 | `ghrah-core/src/ghrah/context/manager.py:1460` |
+| 取消语义 | 若期间被取消，装完内存后重新抛 `CancelledError`（不假装回滚） | `ghrah-core/src/ghrah/context/manager.py:1471` |
 
 提交器由 `durable_iteration_scope` 安装（`ghrah-core/src/ghrah/context/iteration_commit.py:29`），作用域里还挂两个旁路：`discard_iteration_effects`（回滚/取消时丢弃未提交的出站变更，`ghrah-core/src/ghrah/context/iteration_commit.py:49`）与 `get_delivery_finisher`（最终结果持久收尾，`ghrah-core/src/ghrah/context/iteration_commit.py:56`）。
 
@@ -1591,11 +1596,11 @@ CoreUnit 只持有 Supervisor，不把它注册成服务（`unit.py:577`），�
 
 | 路径 | 触发 | 写什么 | 落点 |
 | --- | --- | --- | --- |
-| 自动增量 | `auto_persist=True` 时的 commit / 建 Session / 建 Branch / 切换 / 归档 / 删除 / 回滚 / reset | 只写**本次变化**的 session / branch / node / active 指针 | `ghrah-core/src/ghrah/context/manager.py:1678`、`ghrah-core/src/ghrah/context/manager.py:1661` |
-| 显式全量 | 调用方 `await persist()` | 先 `wait_for_persist`，再用 `list_node_ids` 差集只补未落库节点 | `ghrah-core/src/ghrah/context/manager.py:1517`、`ghrah-core/src/ghrah/context/manager.py:1537` |
-| 恢复 | 调用方 `await restore(agent_name)` | 读 `load_checkpoint(snapshot_payloads="boundaries")` 后重建全部运行时 | `ghrah-core/src/ghrah/context/manager.py:1571` |
+| 自动增量 | `auto_persist=True` 时的 commit / 建 Session / 建 Branch / 切换 / 归档 / 删除 / 回滚 / reset | 只写**本次变化**的 session / branch / node / active 指针 | `ghrah-core/src/ghrah/context/manager.py:2236`、`ghrah-core/src/ghrah/context/manager.py:2219` |
+| 显式全量 | 调用方 `await persist()` | 先 `wait_for_persist`，再用 `list_node_ids` 差集只补未落库节点 | `ghrah-core/src/ghrah/context/manager.py:2066`、`ghrah-core/src/ghrah/context/manager.py:2086` |
+| 恢复 | 调用方 `await restore(agent_name)` | 读 `load_checkpoint(snapshot_payloads="boundaries")` 后重建全部运行时 | `ghrah-core/src/ghrah/context/manager.py:2120` |
 
-`_schedule_changes` 的排序保证是这一段的关键：每个后台任务先 `await` 它创建时刻的**全部前驱任务**，再拿 `_persist_lock` 调 `apply_changes`（`ghrah-core/src/ghrah/context/manager.py:1686`、`ghrah-core/src/ghrah/context/manager.py:1690`）。因此同一 Agent 的增量按调度顺序串行落地，不会出现"旧 head 覆盖新 head"。任务失败只打 warning，不抛给主循环（`ghrah-core/src/ghrah/context/manager.py:1692`）。
+`_schedule_changes` 的排序保证是这一段的关键：每个后台任务先 `await` 它创建时刻的**全部前驱任务**，再拿 `_persist_lock` 调 `apply_changes`（`ghrah-core/src/ghrah/context/manager.py:2244`、`ghrah-core/src/ghrah/context/manager.py:2248`）。因此同一 Agent 的增量按调度顺序串行落地，不会出现"旧 head 覆盖新 head"。任务失败只打 warning，不抛给主循环（`ghrah-core/src/ghrah/context/manager.py:2250`）。
 
 ### 7.4 PersistenceBackend 与 SqliteBackend
 
@@ -1617,58 +1622,37 @@ CoreUnit 只持有 Supervisor，不把它注册成服务（`unit.py:577`），�
 
 #### 7.4.2 SqliteBackend 的 schema
 
-版本标记 `context_schema.version = 3`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:79`）。表结构口径：**7 张表 + 8 个索引**（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:74`）：
+当前链库版本为 `context_schema.version = 4`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:104`）。基础链表从 `_SCHEMA_SQL` 定义（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:99`）：
 
 | 表 | 主键 | 关键列 | 落点 |
 | --- | --- | --- | --- |
-| `context_schema` | `singleton`（恒 1，CHECK 约束） | `version` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:75` |
-| `runs` | `run_id` | `created_at`、`updated_at`、`metadata` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:81` |
-| `agents` | `agent_name` | `run_id`（外键 → `runs`）、时间戳 | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:88` |
-| `sessions` | `session_id` | `root_node_id`、`active_branch_id`、`lifecycle`、`origin_*`、`system_prompt`、`metadata` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:95` |
-| `branches` | `branch_id` | `session_id`（外键 + ON DELETE CASCADE）、`head_node_id`、`lifecycle`、`parent_branch_id`、`fork_point_node_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:111` |
-| `nodes` | `id` | `parent_id`、`agent_name`（外键）、`session_id`、`iteration`、`is_snapshot`、`messages_delta`、`messages_snapshot`、`action_results`、`created_on_branch_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:123` |
-| `chain_meta` | `agent_name`（外键） | `active_session_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:141` |
+| `context_schema` | `singleton`（恒 1，CHECK 约束） | `version` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:100` |
+| `runs` | `run_id` | `created_at`、`updated_at`、`metadata` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:106` |
+| `agents` | `agent_name` | `run_id`（外键 → `runs`）、时间戳 | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:113` |
+| `sessions` | `session_id` | `root_node_id`、`active_branch_id`、`lifecycle`、`origin_*`、`system_prompt`、`metadata` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:120` |
+| `branches` | `branch_id` | `session_id`（外键 + ON DELETE CASCADE）、`head_node_id`、`lifecycle`、`parent_branch_id`、`fork_point_node_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:136` |
+| `nodes` | `id` | `parent_id`、`agent_name`（外键）、`session_id`、`iteration`、`is_snapshot`、`messages_delta`、`messages_snapshot`、`action_results`、`created_on_branch_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:148` |
+| `chain_meta` | `agent_name`（外键） | `active_session_id` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:167` |
 
-索引覆盖 `nodes` 的 `agent_name` / `parent_id` / `(session_id, created_on_branch_id)` / `(agent_name, iteration)` / `session_id`，以及 `agents.run_id`、`sessions.agent_name`、`branches.session_id`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:147`）。
+`nodes.turn_id` 引用持久轮次。SQLite 另用 `turns` 保存轮次状态与链锚点，用 `hitl_requests` 保存审批请求和持久裁定。`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:184`。
 
-JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` / `messages_snapshot` / `action_results` / `metadata`），只在 SQL 参数边界做一次 `json.loads` / `json.dumps`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:376`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:759`）。
+索引覆盖 `nodes` 的 `agent_name` / `parent_id` / `(session_id, created_on_branch_id)` / `(agent_name, iteration)` / `session_id`，以及 `agents.run_id`、`sessions.agent_name`、`branches.session_id`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:173`）。
 
-#### 7.4.3 `read_only` 开关
+JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` / `messages_snapshot` / `action_results` / `metadata`），只在 SQL 参数边界做一次 `json.loads` / `json.dumps`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:560`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:1073`）。
 
-构造参数 `read_only: bool = False`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:188`）。它改变的是**连接方式与建库行为**，不是 SQL 内容：
+#### 7.4.3 SQLite 读连接与快照
 
-| 行为 | 可写连接 | `read_only=True` |
-| --- | --- | --- |
-| 连接串 | 普通文件路径，`isolation_level=None` | `file:...?mode=ro` + `uri=True`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:252`） |
-| 建目录 | `mkdir(parents=True, exist_ok=True)` | 不做（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:295` 只在可写分支） |
-| `PRAGMA` | `journal_mode=WAL`、`busy_timeout=5000`、`foreign_keys=ON`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:301`） | `query_only=ON`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:256`） |
-| schema 处理 | 缺表则 `executescript(_SCHEMA_SQL)`，版本不对抛错（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:337`） | 只校验：读 `sqlite_master`；缺 `context_schema` 且存在 `sessions` / `chain_meta` / `nodes` / `branches` 任一表 → 抛 `Unsupported context database schema`；版本 ≠ 3 → 同一错误；库为空则标记 `_context_schema_present=False` 并直接返回（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:261`） |
-| `run` 登记 | `INSERT OR IGNORE INTO runs`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:339`） | 不写（"不得建库、迁移 schema 或插入新的 run"，`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:250`） |
+`SqliteReadDomain` 为每次查询打开独立的只读连接，并在一个短事务内核对域归属及查询所需的表。批量 Room facts 和轮次详情各自使用同一个快照。库缺失时返回空态，链 schema v3 和 v4 可读。`ghrah-core/src/ghrah/context/persistence/sqlite_read.py:41`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:393`。
 
-只读连接里有两个容易踩的细节，代码里显式注释了：
+常规只读连接使用 `mode=ro`、`query_only=ON`，并遵守 SQLite 的 WAL 锁与旁文件规则。装配方读取已冻结且包含全部提交的归档副本时可显式启用 `immutable_reads`。SQLite 运行时适配器会拒绝在该模式启动写侧。`ghrah-core/src/ghrah/context/persistence/sqlite_read.py:58`、`ghrah-core/src/ghrah/communication/sqlite_message_store.py:352`。
 
-- schema 校验包在一次性 `BEGIN` / `COMMIT` 里，**校验完必须结束事务**——WAL 下未结束的读事务会把快照钉在连接建立时刻，之后所有读取都看不到新提交（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:257`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:288`）。
-- `_context_schema_present=False` 时，各读方法直接返回空值而不是抛错（`load_session_catalog` 返回空目录、`has_checkpoint` 返回 `False`、`load_node` 返回 `None`）——"库还没建"是正常状态（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:522`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:639`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:681`）。
+#### 7.4.4 域写事务与独立链库
 
-生产读面正是这条路径：`ChainReadStore` 用 `SqliteBackend(db_path=..., read_only=True)` 懒开连接（`ghrah-core/src/ghrah/core/read/chain.py:101`），`AbilityReadStore` 同理（`ghrah-core/src/ghrah/core/read/ability.py:117`）。
+受管 Agent 的链 checkpoint、自动持久化、轮次、审批和投递结算委托给同一个 SQLite 域写连接。写域在初始化事务内校验现有标记、登记新域、升级 schema 和恢复运行态。没有域标记的既有链库需要宿主确认归属并显式允许认领。`ghrah-core/src/ghrah/communication/sqlite_message_store.py:335`、`ghrah-core/src/ghrah/communication/sqlite_message_store.py:357`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:296`。
 
-#### 7.4.4 写锁与 `BEGIN IMMEDIATE`
+独立链库的 `SqliteBackend` 用自己的 `asyncio.Lock` 和 `BEGIN IMMEDIATE` 提交事务，并在进入事务时复核 `mm_meta`。受管链的 `apply_changes_in_transaction` 同时核对 SQLite 文件和当前域写连接。`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:510`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:448`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:601`。
 
-写路径有三层保护：
-
-| 层 | 实现 | 落点 |
-| --- | --- | --- |
-| 进程内 | `asyncio.Lock` `_write_lock`，`apply_changes` / `delete_checkpoint` 都先取锁 | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:197`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:410`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:694` |
-| SQLite 事务 | `BEGIN IMMEDIATE` 立即取写锁，失败 `rollback` 后原样抛 | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:417` |
-| 跨连接 | `PRAGMA busy_timeout=5000`，让并发写在 WAL 单写者下**等待**而非立刻 `SQLITE_BUSY` | `ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:303` |
-
-`apply_changes_in_transaction(db, changes)` 是**同文件既有事务的宿主**入口（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:424`）：它先断言 `db.in_transaction`，再核对 `PRAGMA database_list` 里 `main` 的路径与本后端一致（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:430`），然后才写。这条检查保证"跨库事务"不能借这个函数混进来。
-
-写语句的幂等语义分工明确：
-
-- `sessions` / `branches` 用 `ON CONFLICT DO UPDATE`（可变：`head_node_id`、`lifecycle`、`active_branch_id`，`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:451`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:483`）；
-- `nodes` 用 `ON CONFLICT(id) DO NOTHING`，且按 `iteration` 升序插入（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:501`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:505`）——节点不可变，重复写是空操作；
-- `chain_meta` 用 `ON CONFLICT DO UPDATE` 维护 active 指针（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:509`）。
+`sessions`、`branches` 和 `chain_meta` 通过 UPSERT 更新可变指针。节点按迭代顺序插入，重复的节点 ID 保留已有事实。`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:633`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:665`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:687`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:694`。
 
 #### 7.4.5 读侧查询方法（表）
 
@@ -1676,18 +1660,18 @@ JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` 
 
 | 方法 | 命中表 | 返回 |
 | --- | --- | --- |
-| `load_checkpoint(agent, *, snapshot_payloads)` | `chain_meta` + `sessions` + `branches` + `nodes` | `ContextCheckpoint \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:602`） |
-| `load_chain_meta(agent)` | `chain_meta` + `sessions` + `branches`（**不碰 nodes**） | `ContextChainMeta \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:646`） |
-| `load_session_catalog(agent)` | `chain_meta` + `sessions` + `branches`（JOIN sessions，双重 `lifecycle!='deleted'` 过滤） | `dict`：`{active_session_id, sessions[], branches[]}`，元素已序列化成 JSON 形状（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:519`） |
-| `load_node(agent, node_id)` | `nodes`（`agent_name` + `id` 精确命中） | `ContextNode \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:667`） |
-| `has_checkpoint(agent)` | `chain_meta`（`SELECT 1 ... LIMIT 1`） | `bool`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:636`） |
-| `list_node_ids(agent)` | `nodes`（只取 `id` 列） | `set[str]`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:659`） |
-| `list_agents()` | `agents` | `list[str]`，按字母排序（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:711`） |
+| `load_checkpoint(agent, *, snapshot_payloads)` | `chain_meta` + `sessions` + `branches` + `nodes` | `ContextCheckpoint \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:858`） |
+| `load_chain_meta(agent)` | `chain_meta` + `sessions` + `branches`（**不碰 nodes**） | `ContextChainMeta \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:968`） |
+| `load_session_catalog(agent)` | `chain_meta` + `sessions` + `branches`（JOIN sessions，双重 `lifecycle!='deleted'` 过滤） | `dict`：`{active_session_id, sessions[], branches[]}`，元素已序列化成 JSON 形状（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:775`） |
+| `load_node(agent, node_id)` | `nodes`（`agent_name` + `id` 精确命中） | `ContextNode \| None`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:989`） |
+| `has_checkpoint(agent)` | `chain_meta`（`SELECT 1 ... LIMIT 1`） | `bool`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:958`） |
+| `list_node_ids(agent)` | `nodes`（只取 `id` 列） | `set[str]`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:981`） |
+| `list_agents()` | `agents` | `list[str]`，按字母排序（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:1024`） |
 
 两处细节值得单独记：
 
-- `load_checkpoint` 的节点查询是 `WHERE agent_name = ? ORDER BY session_id, iteration, timestamp`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:621`）——排序键里带 `timestamp` 而不是仅 `iteration`，因此同 Agent 多 Session 时节点顺序稳定。
-- `load_session_catalog` 与 `load_chain_meta` 共用内部 `_load_catalog_rows`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:556`），后者**以 `chain_meta` 有行为前提**：没有该行就返回 `None`，即"这个 Agent 从未持久化过 active 指针"。两者的差别只在前者对 `lifecycle='deleted'` 的 Session/Branch 做了过滤，后者不做。
+- `load_checkpoint` 的节点查询是 `WHERE agent_name = ? ORDER BY session_id, iteration, timestamp`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:879`）——排序键里带 `timestamp` 而不是仅 `iteration`，因此同 Agent 多 Session 时节点顺序稳定。
+- `load_session_catalog` 为用户目录过滤已删除会话和分支。`load_chain_meta` 通过 `_load_catalog_rows` 读取持久元数据，包含已删除记录。`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:775`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:812`。
 
 #### 7.4.6 `SnapshotPayloads` 的取值与含义
 
@@ -1695,11 +1679,11 @@ JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` 
 
 | 取值 | 含义 | 实现 |
 | --- | --- | --- |
-| `all` | 保留全部 `messages_snapshot`（默认，完全兼容） | 原样查 `_NODE_COLUMNS`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:67`） |
-| `boundaries` | **只**保留语义边界节点的载荷：Root（`parent_id IS NULL`）与 compact 节点（`metadata.$.node_kind = 'compact'`），其余一律 `NULL` | SQL 层 `CASE WHEN ... THEN messages_snapshot ELSE NULL END`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:57`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:69`） |
-| `none` | 全部不加载载荷，只需要拓扑/元数据时用 | `NULL AS messages_snapshot`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:62`） |
+| `all` | 保留全部 `messages_snapshot`（默认，完全兼容） | 原样查 `_NODE_COLUMNS`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:92`） |
+| `boundaries` | **只**保留语义边界节点的载荷：Root（`parent_id IS NULL`）与 compact 节点（`metadata.$.node_kind = 'compact'`），其余一律 `NULL` | SQL 层 `CASE WHEN ... THEN messages_snapshot ELSE NULL END`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:81`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:94`） |
+| `none` | 全部不加载载荷，只需要拓扑/元数据时用 | `NULL AS messages_snapshot`（`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:86`） |
 
-为什么要区分"边界"：`messages_snapshot` 是**独立回放起点**。普通提交节点不带快照（消息可由 delta 累加），只有 Root 与 compact 节点丢弃了历史、必须靠快照才能重建（`ghrah-core/src/ghrah/context/message_store.py:10`）。因此 `boundaries` 是"足够回放、但不读全量列"的最小口径，`ContextManager.restore` 与所有只读读面都用它（`ghrah-core/src/ghrah/context/manager.py:1584`、`ghrah-core/src/ghrah/core/read/chain.py:217`）。
+为什么要区分"边界"：`messages_snapshot` 是**独立回放起点**。普通提交节点不带快照（消息可由 delta 累加），只有 Root 与 compact 节点丢弃了历史、必须靠快照才能重建（`ghrah-core/src/ghrah/context/message_store.py:10`）。因此 `boundaries` 是"足够回放、但不读全量列"的最小口径，`ContextManager.restore` 与分支历史窗口查询采用该策略（`ghrah-core/src/ghrah/context/manager.py:2134`、`ghrah-core/src/ghrah/context/persistence/sqlite_backend.py:910`）。
 
 内存后端（`memory` / `json_file`）没有 SQL 投影层，用等价的纯函数 `project_snapshot_payloads` 在 Python 侧剥载荷，判据一致（`ghrah-core/src/ghrah/context/persistence/checkpoint.py:67`、`ghrah-core/src/ghrah/context/persistence/checkpoint.py:72`）。
 
@@ -1724,25 +1708,25 @@ JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` 
 
 | 方法 | 职责 | 落点 |
 | --- | --- | --- |
-| `record_window_occupied(real_input_tokens)` | 记录最近一次真实 LLM 调用的 `input_tokens` 锚点；**这是唯一计量权威**，估算值不参与 | `ghrah-core/src/ghrah/context/manager.py:1117` |
-| `record_real_usage(usage)` | 在锚点之上留存 output/cache 拆分并累计三值（成本口径） | `ghrah-core/src/ghrah/context/manager.py:1132` |
-| `evaluate_compaction_decision()` | 产出审计用决策 `{occupied, threshold, needs_compaction}`；未配阈值或无 WindowManager 时返回 `None` | `ghrah-core/src/ghrah/context/manager.py:1150` |
-| `check_compact_trigger()` | 驱动循环每轮开头调用的**触发门**：手动标志优先，其次活体锚点 ≥ `max_tokens × threshold`，空窗跳过标志置位时抑制 | `ghrah-core/src/ghrah/context/manager.py:1173` |
-| `request_compact()` / `compact_requested` / `consume_compact_request()` | 手动请求标志的置位、只读与消费 | `ghrah-core/src/ghrah/context/manager.py:1201`、`ghrah-core/src/ghrah/context/manager.py:1208`、`ghrah-core/src/ghrah/context/manager.py:1275` |
-| `skip_compact_until_reanchor()` | 空窗时置位，抑制"锚点仍超阈值"导致的反复空转；下一次 `record_window_occupied` 清除 | `ghrah-core/src/ghrah/context/manager.py:1193` |
+| `record_window_occupied(real_input_tokens)` | 记录最近一次真实 LLM 调用的 `input_tokens` 锚点；**这是唯一计量权威**，估算值不参与 | `ghrah-core/src/ghrah/context/manager.py:1657` |
+| `record_real_usage(usage)` | 在锚点之上留存 output/cache 拆分并累计三值（成本口径） | `ghrah-core/src/ghrah/context/manager.py:1672` |
+| `evaluate_compaction_decision()` | 产出审计用决策 `{occupied, threshold, needs_compaction}`；未配阈值或无 WindowManager 时返回 `None` | `ghrah-core/src/ghrah/context/manager.py:1690` |
+| `check_compact_trigger()` | 驱动循环每轮开头调用的**触发门**：手动标志优先，其次活体锚点 ≥ `max_tokens × threshold`，空窗跳过标志置位时抑制 | `ghrah-core/src/ghrah/context/manager.py:1713` |
+| `request_compact()` / `compact_requested` / `consume_compact_request()` | 手动请求标志的置位、只读与消费 | `ghrah-core/src/ghrah/context/manager.py:1741`、`ghrah-core/src/ghrah/context/manager.py:1748`、`ghrah-core/src/ghrah/context/manager.py:1824` |
+| `skip_compact_until_reanchor()` | 空窗时置位，抑制"锚点仍超阈值"导致的反复空转；下一次 `record_window_occupied` 清除 | `ghrah-core/src/ghrah/context/manager.py:1733` |
 
-触发阈值算法恒为 `int(window_manager.max_tokens * compact_threshold)`（`ghrah-core/src/ghrah/context/manager.py:1165`、`ghrah-core/src/ghrah/context/manager.py:1190`）。锚点只在两处失效：Head 变更（`_restore_active_context`）与回滚（`ghrah-core/src/ghrah/context/manager.py:717`、`ghrah-core/src/ghrah/context/manager.py:1010`）——失效后 `needs_compaction` 恒 `False`（`ghrah-core/src/ghrah/context/manager.py:1166`）。
+触发阈值算法恒为 `int(window_manager.max_tokens * compact_threshold)`（`ghrah-core/src/ghrah/context/manager.py:1705`、`ghrah-core/src/ghrah/context/manager.py:1730`）。锚点只在两处失效：Head 变更（`_restore_active_context`）与回滚（`ghrah-core/src/ghrah/context/manager.py:1242`、`ghrah-core/src/ghrah/context/manager.py:1558`）——失效后 `needs_compaction` 恒 `False`（`ghrah-core/src/ghrah/context/manager.py:1706`）。
 
-**易混淆点**：节点 metadata 里的 `needs_compaction` 只是审计记录，不参与触发判定（`ghrah-core/src/ghrah/context/manager.py:1179` 的注释即此意，触发只看 `check_compact_trigger`）。
+**易混淆点**：节点 metadata 里的 `needs_compaction` 只是审计记录，不参与触发判定（`ghrah-core/src/ghrah/context/manager.py:1719` 的注释即此意，触发只看 `check_compact_trigger`）。
 
 #### 7.6.2 提交
 
 | 方法 | 与普通提交的差异 | 落点 |
 | --- | --- | --- |
-| `commit_compact_node(snapshot_messages, metadata)` | 注入 `node_kind="compact"`；`messages_snapshot` = 压缩视图 deepcopy；`messages_delta=[]`、`ability_names=["compact"]`、`is_snapshot=True`；提交后按 `_restore_active_context` 模式重建 store 并置锚点 `None` | `ghrah-core/src/ghrah/context/manager.py:1213` |
-| `commit_compact_node_async(...)` | 同一套候选视图 + 持久优先语义 | `ghrah-core/src/ghrah/context/manager.py:1261` |
+| `commit_compact_node(snapshot_messages, metadata)` | 注入 `node_kind="compact"`；`messages_snapshot` = 压缩视图 deepcopy；`messages_delta=[]`、`ability_names=["compact"]`、`is_snapshot=True`；提交后按 `_restore_active_context` 模式重建 store 并置锚点 `None` | `ghrah-core/src/ghrah/context/manager.py:1753` |
+| `commit_compact_node_async(...)` | 同一套候选视图 + 持久优先语义 | `ghrah-core/src/ghrah/context/manager.py:1803` |
 
-两条都要求"不在迭代事务内"，否则抛 `RuntimeError`（`ghrah-core/src/ghrah/context/manager.py:1237`、`ghrah-core/src/ghrah/context/manager.py:1268`）；`_commit_durable_candidate` 成功后若节点 `node_kind == "compact"`，会顺手清掉手动请求标志（`ghrah-core/src/ghrah/context/manager.py:921`）。
+两条都要求"不在迭代事务内"，否则抛 `RuntimeError`（`ghrah-core/src/ghrah/context/manager.py:1778`、`ghrah-core/src/ghrah/context/manager.py:1816`）；`_commit_durable_candidate` 成功后若节点 `node_kind == "compact"`，会顺手清掉手动请求标志（`ghrah-core/src/ghrah/context/manager.py:1469`）。
 
 压缩视图的**纯函数**都在 `ghrah-core/src/ghrah/context/compact.py`，编排（LLM 调用、节点提交、事件发布）在驱动侧：
 
@@ -1757,7 +1741,7 @@ JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` 
 
 #### 7.6.3 观测
 
-`get_window_status()`（`ghrah-core/src/ghrah/context/manager.py:1285`）是窗口状态的唯一观测出口，返回 14 个键，分三组：
+`get_window_status()`（`ghrah-core/src/ghrah/context/manager.py:1834`）是窗口状态的唯一观测出口，返回 14 个键，分三组：
 
 | 组 | 键 | 口径 |
 | --- | --- | --- |
@@ -1765,22 +1749,24 @@ JSON 列一律以 TEXT 存（`ability_names` / `agent_state` / `messages_delta` 
 | 预算 | `budget_tokens`、`budget_source`、`compact_threshold`、`compact_keep_recent`、`compact_method` | 无 WindowManager 时 `budget_tokens=0`、`budget_source=None`、`compact_threshold=None` |
 | 真实用量 | `last_real_input_tokens` / `output` / `cache_read` / `cache_write`、`cumulative_input` / `cumulative_output` / `cumulative_cache_read` | 累计值 compact 不清零，`reset` 随 ContextManager 重建归零 |
 
-`peek_pending_compaction()` 是只读窥视（不排水），排水仍由 `commit_iteration` 的合并逻辑负责（`ghrah-core/src/ghrah/context/manager.py:1317`、`ghrah-core/src/ghrah/context/manager.py:831`）。压缩审计记录的产生点是 `get_llm_messages` 里的 `drain_compaction_records()`（`ghrah-core/src/ghrah/context/manager.py:1059`）。
+`peek_pending_compaction()` 是只读窥视（不排水），排水仍由 `commit_iteration` 的合并逻辑负责（`ghrah-core/src/ghrah/context/manager.py:1866`、`ghrah-core/src/ghrah/context/manager.py:1361`）。压缩审计记录的产生点是 `get_llm_messages` 里的 `drain_compaction_records()`（`ghrah-core/src/ghrah/context/manager.py:1607`）。
 
-### 7.7 读侧端口
+### 7.7 运行时存储域与读侧端口
 
-只读入口是 `ChainReadStore`（`ghrah-core/src/ghrah/core/read/chain.py:52`）：按项目懒开只读连接、不缓存数据（缓存会让 `head_node_id` 落后刚提交的写，`ghrah-core/src/ghrah/core/read/chain.py:12`）。
+调度层通过 `DeliveryStore` 提交受理、领取、迭代和结果收尾，通过 `MessageQuery` 查询本地 worker 所需的投递事实。SQLite 实现在同一写连接上提交投递、消费和 ActionChain 变化。每次写侧打开都发出新的执行凭证，提交时会同时检查凭证、投递、领取次数和轮次。`ghrah-core/src/ghrah/communication/message_manager.py:90`、`ghrah-core/src/ghrah/communication/storage.py:221`、`ghrah-core/src/ghrah/communication/sqlite_message_store.py:282`。
 
-| 方法 | 底层调用 | 返回 |
+`ContextManager` 通过 `TurnStore` 处理轮次、审批和回滚。SQLite 的轮次实现把链锚点、审批和所需投递结算放进同一事务。独立链库使用自己的写事务，受管 Agent 委托当前存储域。`ghrah-core/src/ghrah/context/turn_store.py:116`、`ghrah-core/src/ghrah/context/persistence/sqlite_turn_store.py:36`。
+
+| CorePort 查询 | 数据范围与兼容语义 | 实现 |
 | --- | --- | --- |
-| `node(project_id, agent_id, node_id)` | `load_node` | `NodeView \| None`（`ghrah-core/src/ghrah/core/read/chain.py:106`） |
-| `catalog(project_id, agent_id)` | `load_session_catalog` | `SessionCatalogView`（永不为 `None`；无库时 `availability="offline"`，`ghrah-core/src/ghrah/core/read/chain.py:125`） |
-| `meta(project_id, agent_id)` | `load_session_catalog` | `ChainMetaView`（`ghrah-core/src/ghrah/core/read/chain.py:148`） |
-| `branches(project_id, agent_id, session_id)` | `load_session_catalog` | `list[BranchView] \| None`（session 不存在返回 `None`，`ghrah-core/src/ghrah/core/read/chain.py:169`） |
-| `head(project_id, agent_id, session_id, branch_id)` | `load_checkpoint(boundaries)` + `SessionRuntime.restore` | `str \| None`（`ghrah-core/src/ghrah/core/read/chain.py:195`） |
-| `history(project_id, agent_id, session_id, branch_id, limit)` | 同上 + `runtime.get_history` | `HistoryView \| None`（`ghrah-core/src/ghrah/core/read/chain.py:239`） |
+| `nodes.get` | 以稳定 Agent ID 和节点 ID 精确定位 | `ghrah-core/src/ghrah/core/read/chain.py:53` |
+| `sessions.catalog` / `sessions.meta` / `branches.list` | 只读会话和分支元数据，用户目录过滤软删除记录 | `ghrah-core/src/ghrah/core/read/chain.py:71` |
+| `sessions.head` | 按分区和分支索引读取 Head，显式 ID 可读取软删除分支 | `ghrah-core/src/ghrah/core/read/chain.py:136` |
+| `sessions.history` | 从分支 Head 向前读取请求窗口 | `ghrah-core/src/ghrah/core/read/chain.py:158` |
+| `turns.detail` | 同一快照中的轮次、节点、等待时长和统计 | `ghrah-core/src/ghrah/core/read/turn.py:196` |
+| `transcript.facts` | 一次快照批读 Room 页引用的消息、投递和轮次 | `ghrah-core/src/ghrah/core/read/transcript.py:244` |
 
-分区键纪律：持久层的参数名叫 `agent_name`，但写入的是**稳定 Agent ID**；本模块统一用 `agent_id` 命名，避免把显示名传进去读空（`ghrah-core/src/ghrah/core/read/chain.py:15`）。
+数据库列名 `agent_name` 存储稳定 Agent ID。读库归属由存储域按持久标记校验，没有域标记的独立链库由宿主的绑定映射确定读取范围，声明归属后方可迁入写域。`ghrah-core/src/ghrah/communication/sqlite_message_store.py:335`。
 
 ---
 
@@ -1962,17 +1948,17 @@ source 成员不得声明 `mcp`，MCP 成员不得声明 `entry`，两个方向�
 1. 物化结束时把 surface 挂到工具表上：`abilities.tool_surface = surface`，并追加一个 `RunScriptTool`（`ghrah-core/src/ghrah/ability/access/startup.py:667`、`ghrah-core/src/ghrah/ability/access/startup.py:668`）。
 2. Builder 把它注入 Agent：`tool_surface=getattr(abilities, "tool_surface", None)`（`ghrah-core/src/ghrah/agents/builder.py:372`）。
 3. **有 surface 时显式清空 `_bound_tools`**：`agent._bound_tools = []`，理由写在注释里——"首次生成前从当前授权和模型窗口装配，不把全量定义先配置给模型"（`ghrah-core/src/ghrah/agents/builder.py:378`–`ghrah-core/src/ghrah/agents/builder.py:380`）。
-4. 每轮 action 开头重建：`await self.refresh_tool_projection()`（`ghrah-core/src/ghrah/agents/base.py:1373`）。
-5. `refresh_tool_projection` 优先走 surface 分支：`tools = await self._tool_surface.refresh(window)`，只有定义变化时才 `_refresh_bound_tools()` → `llm.configure_tools(...)`（`ghrah-core/src/ghrah/agents/base.py:457`、`ghrah-core/src/ghrah/agents/base.py:463`、`ghrah-core/src/ghrah/agents/base.py:478`、`ghrah-core/src/ghrah/agents/base.py:447`）。
+4. 每轮 action 开头重建：`await self.refresh_tool_projection()`（`ghrah-core/src/ghrah/agents/base.py:1555`）。
+5. `refresh_tool_projection` 优先走 surface 分支：`tools = await self._tool_surface.refresh(window)`，只有定义变化时才 `_refresh_bound_tools()` → `llm.configure_tools(...)`（`ghrah-core/src/ghrah/agents/base.py:477`、`ghrah-core/src/ghrah/agents/base.py:483`、`ghrah-core/src/ghrah/agents/base.py:498`、`ghrah-core/src/ghrah/agents/base.py:467`）。
 
 路径 A 仍然在四个位置被消费，所以不能说它"不在生产链路"：
 
 | 位置 | 用什么 | 落点 |
 | --- | --- | --- |
-| 无 surface 的装配（`_tool_table_projector` 模式） | 遍历 `_abilities` 调 `ability.bind_tool()`，按投影器给的可见名过滤 | `ghrah-core/src/ghrah/agents/base.py:494`、`ghrah-core/src/ghrah/agents/base.py:500` |
-| surface 刷新异常回退 | 只保留循环控制成员（`conversation` / `end_task`）的 `bind_tool()` | `ghrah-core/src/ghrah/agents/base.py:472` |
+| 无 surface 的装配（`_tool_table_projector` 模式） | 遍历 `_abilities` 调 `ability.bind_tool()`，按投影器给的可见名过滤 | `ghrah-core/src/ghrah/agents/base.py:514`、`ghrah-core/src/ghrah/agents/base.py:520` |
+| surface 刷新异常回退 | 只保留循环控制成员（`conversation` / `end_task`）的 `bind_tool()` | `ghrah-core/src/ghrah/agents/base.py:492` |
 | surface 总是追加的 `extras` | 无 `member_reference` 的控制能力 + `RunScriptTool` 的 `bind_tool()` | `ghrah-core/src/ghrah/ability/surface/runtime.py:151`、`ghrah-core/src/ghrah/ability/surface/runtime.py:167` |
-| 注册期静态收集 | `register_ability` 把 `bind_tool()` 追加进 `_bound_tools` | `ghrah-core/src/ghrah/agents/base.py:246` |
+| 注册期静态收集 | `register_ability` 把 `bind_tool()` 追加进 `_bound_tools` | `ghrah-core/src/ghrah/agents/base.py:262` |
 
 #### 8.3.3 工具名与预算
 
@@ -2153,7 +2139,7 @@ Hook 裁决有四条分支（`ghrah-core/src/ghrah/ability/execution/executor.py
 
 | 文件 | 提供什么 | 落点 |
 | --- | --- | --- |
-| `ability.py` | `AbilityReadStore`（按项目懒开关系库；以读面为主，另有四个写操作的薄封装 `grant` / `revoke` / `enable_tool` / `disable_tool`）、`AbilityConflictError`、`AbilityUnavailableError` | `ghrah-core/src/ghrah/core/read/ability.py:69` |
+| `ability.py` | `AbilityReadStore`（按项目懒开关系库；以读面为主，另有四个写操作的薄封装 `grant` / `revoke` / `enable_tool` / `disable_tool`）、`AbilityConflictError`、`AbilityUnavailableError` | `ghrah-core/src/ghrah/core/read/ability.py:106` |
 | `ability_admin.py` | `build_admin_view`（管理总览装配）、`read_content`（成员内容分块） | `ghrah-core/src/ghrah/core/read/ability_admin.py:120`、`ghrah-core/src/ghrah/core/read/ability_admin.py:228` |
 | `ability_catalog.py` | 包目录 / 包详情 / 实例清单 / 包分组；`CatalogError` | `ghrah-core/src/ghrah/core/read/ability_catalog.py:166`、`ghrah-core/src/ghrah/core/read/ability_catalog.py:223`、`ghrah-core/src/ghrah/core/read/ability_catalog.py:340`、`ghrah-core/src/ghrah/core/read/ability_catalog.py:687` |
 
@@ -2161,28 +2147,28 @@ Hook 裁决有四条分支（`ghrah-core/src/ghrah/ability/execution/executor.py
 
 | 方法 | 返回 | 是否查库 |
 | --- | --- | --- |
-| `tree(project_id, agent_id)` | `AbilityTreeView`（含运行时装配状态，单元必须在线） | 是（`ghrah-core/src/ghrah/core/read/ability.py:126`） |
-| `admin(...)` | `AbilityAdminView` | 是（`ghrah-core/src/ghrah/core/read/ability.py:141`） |
-| `content(..., alias, member, offset, limit)` | 内容分块；未授权 `None` | 是（`ghrah-core/src/ghrah/core/read/ability.py:161`） |
-| `packages()` | `AbilityPackageCatalogView` | 否（`ghrah-core/src/ghrah/core/read/ability.py:185`） |
-| `package_detail(namespace, name)` | `AbilityPackageDetailView` | 否（`ghrah-core/src/ghrah/core/read/ability.py:189`） |
-| `package_groups(project_id?, agent_id?)` | `AbilityPackageGroupsView`；无 project 时是全局视图 | 视参数（`ghrah-core/src/ghrah/core/read/ability.py:193`） |
-| `instances(project_id)` | `AbilityInstancesView`；链库未建时返回空清单 | 是（`ghrah-core/src/ghrah/core/read/ability.py:209`） |
-| `status(project_id)` | `AbilityApiStatus`：如实声明 `tree` / `grants_write` 可用，`versions_*` / `packages_*` / `surface_write` 不可用 | 否（`ghrah-core/src/ghrah/core/read/ability.py:218`） |
-| `changes(project_id, after_seq, limit)` | `AbilityChangesPage`（`next_after_seq` 是下一页游标） | 是（`ghrah-core/src/ghrah/core/read/ability.py:328`） |
-| `grant` / `revoke` / `enable_tool` / `disable_tool` | `AbilityTreeChangeResult`（写后重读视图 + revision） | 是（`ghrah-core/src/ghrah/core/read/ability.py:246`） |
+| `tree(agent_id)` | `AbilityTreeView`（含运行时装配状态，单元必须在线） | 是（`ghrah-core/src/ghrah/core/read/ability.py:221`） |
+| `admin(...)` | `AbilityAdminView` | 是（`ghrah-core/src/ghrah/core/read/ability.py:235`） |
+| `content(..., alias, member, offset, limit)` | 内容分块；未授权 `None` | 是（`ghrah-core/src/ghrah/core/read/ability.py:255`） |
+| `packages()` | `AbilityPackageCatalogView` | 否（`ghrah-core/src/ghrah/core/read/ability.py:278`） |
+| `package_detail(namespace, name)` | `AbilityPackageDetailView` | 否（`ghrah-core/src/ghrah/core/read/ability.py:282`） |
+| `package_groups(agent_id?)` | `AbilityPackageGroupsView`；无作用域时是全局视图 | 视参数（`ghrah-core/src/ghrah/core/read/ability.py:307`） |
+| `instances()` | `AbilityInstancesView`；链库未建时返回空清单 | 是（`ghrah-core/src/ghrah/core/read/ability.py:424`） |
+| `status()` | `AbilityApiStatus`：如实声明 `tree` / `grants_write` 可用，`versions_*` / `packages_*` / `surface_write` 不可用 | 否（`ghrah-core/src/ghrah/core/read/ability.py:439`） |
+| `changes(after_seq, limit)` | `AbilityChangesPage`（`next_after_seq` 是下一页游标） | 是（`ghrah-core/src/ghrah/core/read/ability.py:567`） |
+| `grant` / `revoke` / `enable_tool` / `disable_tool` | `AbilityTreeChangeResult`（写后重读视图 + revision） | 是（`ghrah-core/src/ghrah/core/read/ability.py:463`） |
 
-两处语义细节：
+授权库保存授权关系。离线读仅打开现有关系库，写运行时负责初始化、版本升级和回收。`ghrah-core/src/ghrah/core/read/ability.py:200`。
 
-- **离线读不伪造运行时事实**：端口不假设 Agent 在跑。未注入 `resolve_run` 时 run 恒为 `None`；装配根注入的是活动单元的 run（`registry.run_id_for`，离线返回 `None`）（`ghrah-core/src/ghrah/core/read/ability.py:102`、`ghrah-core/src/ghrah/core/wiring.py:150`）。需要"当前是否在跑 / 可见工具表"时走 `agents.runtime`。
-- **写后重读**：四个写操作统一经 `_write` → 成功后 `store.view(...)` 回读（`ghrah-core/src/ghrah/core/read/ability.py:286`、`ghrah-core/src/ghrah/core/read/ability.py:314`）；`conflict` 错误被翻成 `AbilityConflictError`，携带最新 `revision` 与视图供调用方重读后重试（`ghrah-core/src/ghrah/core/read/ability.py:298`、`ghrah-core/src/ghrah/core/read/ability.py:56`）。
+- **离线读的运行时事实**：端口不假设 Agent 在跑。未注入 `resolve_run` 时 run 恒为 `None`；装配根注入的是活动单元的 run（`registry.run_id_for`，离线返回 `None`）（`ghrah-core/src/ghrah/core/read/ability.py:164`、`ghrah-core/src/ghrah/core/wiring.py:146`）。需要"当前是否在跑 / 可见工具表"时走 `agents.runtime`。
+- **写后重读**：四个写操作统一经 `_write` → 成功后 `store.view(...)` 回读（`ghrah-core/src/ghrah/core/read/ability.py:525`、`ghrah-core/src/ghrah/core/read/ability.py:554`）；`conflict` 错误被翻成 `AbilityConflictError`，携带最新 `revision` 与视图供调用方重读后重试（`ghrah-core/src/ghrah/core/read/ability.py:550`、`ghrah-core/src/ghrah/core/read/ability.py:93`）。
 
 `build_admin_view` 的装配输入只有两个外部事实：`runtime_tools`（离线为 `None`）与 `grant_policy`（未配置为 `None`）（`ghrah-core/src/ghrah/core/read/ability_admin.py:10`、`ghrah-core/src/ghrah/core/read/ability_admin.py:120`）。它把 `lifecycle.state` 判成 `unassembled` / `running` / `stopped` 三态，并用"授权投影的名字集合 − 运行时工具表"算出 `pending_respawn.added/removed`；`added` 非空时置 `requires_respawn=True` 并给出"新增授权需下次启动生效"的原因（`ghrah-core/src/ghrah/core/read/ability_admin.py:179`、`ghrah-core/src/ghrah/core/read/ability_admin.py:191`、`ghrah-core/src/ghrah/core/read/ability_admin.py:86`）。
 
 ### 8.7 未核实项
 
 1. **`tool_list` 这个名字**：全仓 `*.py` 检索无 `tool_list` / `list_tools` / `tools_list` 符号。本文件把"给模型的工具清单"解释为 `ToolSurfaceRuntime.refresh()`（`ghrah-core/src/ghrah/ability/surface/runtime.py:137`）。若原意另有所指，需补一次定点确认。
-2. **`_skill_catalog_digest`**：全仓只在 `ghrah-core/src/ghrah/context/manager.py:719` 出现一次（仅赋值 `None`），`__init__` 中没有初始化、也没有任何读取方；该属性当前的实际作用未核实。
+2. **`_skill_catalog_digest`**：全仓只在 `ghrah-core/src/ghrah/context/manager.py:1244` 出现一次（仅赋值 `None`），`__init__` 中没有初始化、也没有任何读取方；该属性当前的实际作用未核实。
 3. **`persistence/prune.py`**：`ghrah-core/src/ghrah/context/persistence/` 下存在该模块，本章未纳入分析范围，其与 `delete_checkpoint` 的关系未核实。
 4. **`snapshot_payloads="boundaries"` 对 `memory`/`json_file` 的实测行为**：代码路径明确（`ghrah-core/src/ghrah/context/persistence/checkpoint.py:72`），但本章未运行验证。
 5. **协议侧 `ability_control.py` 的字段级约束**：本章只用到该模块的视图类型名与 `format` 取值，未逐字段核对每个视图的必填与取值范围。
@@ -2233,8 +2219,9 @@ Root 本身由 `project_root_locator`（`file://` locator）唯一标识，经 `
 
 | 路径 | 判定 | 行为 | 位置 |
 | --- | --- | --- | --- |
-| 在线 | cluster handle 存在且 `is_connected` | 全部操作经 `handle`（spawn/terminate/context/mailbox/runtime 快照） | `ghrah-subject/src/ghrah/subject/project/entities.py:133`、`:142` |
-| 离线 | 无 handle | 只允许只读降级：`context.list_sessions` / `context.get_history` 用 `SqliteBackend(read_only=True)` 直读 `db/action-chains.sqlite3`；`mailbox.*` 用 `MailboxReader` 只读；写类操作一律 `agent_offline` / `agent_not_running` | `ghrah-subject/src/ghrah/subject/project/entities.py:172`、`:214`、`:314` |
+| 在线 | cluster handle 存在且 `is_connected` | 实体启停和在线 context 操作经 cluster handle | `ghrah-subject/src/ghrah/subject/project/entities.py:132`、`:171` |
+| 离线 | 无在线 Agent | 会话目录和有界链历史经项目 CorePort 读取，运行时专属的操作返回离线错误 | `ghrah-subject/src/ghrah/subject/project/entities.py:171`、`:201` |
+| 信箱 | 以稳定 Agent ID 寻址 | 在线和离线都经项目 CorePort 读取，保留旧实体回执的形状 | `ghrah-subject/src/ghrah/subject/project/entities.py:216` |
 
 ```mermaid
 flowchart LR
@@ -2252,17 +2239,17 @@ flowchart LR
 
 Room 有**两个写入口但只有一条消息权威**。正文的权威属于 Core 的 MessageManager（MM），Room 侧只保存"消息引用 + 展示态"。
 
-**发布路径（`room_send`）**。命令先进 `RoomManager._handle_send`（`ghrah-subject/src/ghrah/subject/room/manager.py:419`）：写时校验 author 必须是 human 或 room 成员 agent（`:426`），`data.targets ⊆ agent 成员`（`:431`、`:502`）。装配了 `publish` 回调时（生产路径）改走 `RoomUnit` 的 publish（`ghrah-subject/src/ghrah/subject/units/room.py:141`）：
+**发布路径（`room_send`）**。命令校验作者与目标成员，再由宿主注入的发布回调持久受理。`ghrah-subject/src/ghrah/subject/room/manager.py:437`、`ghrah-subject/src/ghrah/subject/units/room.py:160`。
 
-1. 先由 MM **持久受理**消息：human 走 `send_external`，agent 走 `send(NOTIFICATION)`，幂等键 `room:{room_id}:{request_id|uuid}`（`ghrah-subject/src/ghrah/subject/units/room.py:161`、`:174`、`:183`）；
-2. 再 `recover_room_projections()` 让 MM 侧唯一投影入口写引用日志（`ghrah-subject/src/ghrah/subject/units/room.py:191`）；
-3. 回读 `get_log_by_id(room_id, "mm:{message_id}:{room_id}")`，拿不到则返回"已受理、投影待完成"（`:192`、`:196`）。
+1. 人类消息经 `send_external` 受理，Agent 日志经 `send(NOTIFICATION)` 受理。幂等键形如 `room:房间 ID:请求 ID`。`ghrah-subject/src/ghrah/subject/units/room.py:213`。
+2. `recover_room_projections()` 按消息存储的投影记录追加 Room 引用。`ghrah-core/src/ghrah/communication/message_manager.py:840`。
+3. 从 Room 按引用 ID 回读日志并补正文。引用尚未落账时，回执返回已受理的消息 ID。`ghrah-subject/src/ghrah/subject/units/room.py:234`。
 
-**`RoomStore`** 两张表（`ghrah-subject/src/ghrah/subject/room/store.py:46`）：`subject_rooms`（元数据 + `members` JSON + `seq_watermark` + 乐观锁 `version` + `archived_at`）与 `subject_room_logs`（append-only，主键 `(room_id, seq)`）。三个关键机制：
+**`RoomStore`** 两张表（`ghrah-subject/src/ghrah/subject/room/store.py:59`）：`subject_rooms`（元数据 + `members` JSON + `seq_watermark` + 乐观锁 `version` + `archived_at`）与 `subject_room_logs`（append-only，主键 `(room_id, seq)`）。三个关键机制：
 
-- **seq 单点分配**：`append_log` 在同一个 `asyncio.Lock` 临界区内读 watermark、`+1`、插行、推进水位（`ghrah-subject/src/ghrah/subject/room/store.py:272`）；推进水位不 bump `version`（`:280`）。
-- **引用幂等**：带 `mm_message_id` 的记录以 `mm:{message_id}:{room_id}` 为 `id` 唯一，重复追加返回已有行（`ghrah-subject/src/ghrah/subject/room/store.py:294`）。
-- **投影读通**：日志行不含正文，`_hydrate_reference` 以只读方式打开该项目的 `action-chains.sqlite3`，从 `mm_messages` / `mm_deliveries` 取回 `content`、投递态与 `room_data`，并校验"作者一致 + 消息属于该 room"（`ghrah-subject/src/ghrah/subject/room/manager.py:515`）。单条引用失配只丢该条并计数，不让整个列表不可读（`:404`、`:411`）。
+- **seq 单点分配**：`append_log` 在同一个 `asyncio.Lock` 临界区内读 watermark、`+1`、插行、推进水位（`ghrah-subject/src/ghrah/subject/room/store.py:286`）；推进水位不 bump `version`（`:280`）。
+- **引用幂等**：带 `mm_message_id` 的记录以 `mm:{message_id}:{room_id}` 为 `id` 唯一，重复追加返回已有行（`ghrah-subject/src/ghrah/subject/room/store.py:308`）。
+- **投影读通**。Subject 先核验 Room 和项目，并将页内引用传给 `CorePort.transcript.facts`。Core 校验消息作者及 Room 归属后批量返回正文、投递和轮次。`room_get_log` 跳过单条缺失引用，REST transcript 保留缺失引用的条目与分页位置。`ghrah-subject/src/ghrah/subject/room/manager.py:412`、`ghrah-subject/src/ghrah/subject/units/room_control.py:28`。
 
 **`room_filter` 的边界**。它是一个"能力结果 → RoomLog"的**显式白名单 Filter**，四道闸全部显式（`ghrah-subject/src/ghrah/subject/units/room_filter.py:5`）：
 
@@ -2275,7 +2262,7 @@ Room 有**两个写入口但只有一条消息权威**。正文的权威属于 C
 
 白名单默认 `("conversation", "end_task")`（`ghrah-subject/src/ghrah/subject/config.py:256`），可由 `GHRAH_SUBJECT_ROOM_FILTER_ABILITIES` 覆盖（`ghrah-subject/src/ghrah/subject/config.py:646`）；`enabled=False` 时 unit 完全不挂载（`ghrah-subject/src/ghrah/subject/units/__init__.py:118`）。落账调用的是 `room_send` 命令本身（`author_type=agent`），因此完整走校验 + seq 分配 + 广播，且**不投递**（作者即发送者）（`ghrah-subject/src/ghrah/subject/units/room_filter.py:211`）。同一节点重放靠 per-node LRU（容量 4096）去重（`:40`、`:103`）。
 
-Room 命令面共 **12** 条（`_HANDLERS` 口径，`ghrah-subject/src/ghrah/subject/room/manager.py:638`）。
+Room 命令面共 **12** 条（`_HANDLERS` 口径，`ghrah-subject/src/ghrah/subject/room/manager.py:697`）。
 
 ### 9.3 Task：三表权威与 legacy 任务库是两套独立存储
 
@@ -2450,38 +2437,23 @@ flowchart TD
 | 事实 | 写侧权威 | 读侧投影 | 重建指令 | 防第二写路径的机制 |
 | --- | --- | --- | --- | --- |
 | ActionChain / session / branch / messages | Core `ContextManager` 的 sqlite（按项目 `db/action-chains.sqlite3`） | Subject `LedgerUnit`（只读端口）；Observer `action-chains`/`changes`/`chat` | `get_chain_history`（Observer `getChainHistory`） | Ledger `provides=frozenset()` 且注释"读永远走 Core 端口，不留全局库读后门"（`ghrah-subject/src/ghrah/subject/units/ledger.py:42`） |
-| HITL pending | Core `HITLPromiseRegistry`（`promise_id → (agent, ability, tool_call_id)`） | Observer `hitl` store 只持 `promise_id` 与展示字段 | `hitl_request` 事件重放即重建 | Observer 不复制三元组；回程只凭 `promise_id`（`ghrah-core/src/ghrah/core/hitl.py:215`） |
+| HITL pending | Core `TurnStore` 持久审批 | Observer `hitl` 展示字段 | `CorePort.hitl.list_pending` 与 `hitl_request` 事件 | 审批裁定在轮次事务中提交。`ghrah-core/src/ghrah/context/persistence/sqlite_turn_store.py:36`。 |
 | Project 定义（含 agents / task_ids / recovery） | `ProjectStore`（`subject.db`） | `DesiredStateStore` 派生缓存；Observer `projects`/`agents` | `project_list` 全量刷新 + `project_*` 事件 | `_save_desired` 只从 `ProjectStore` 重建，失败仅告警（`ghrah-subject/src/ghrah/subject/units/project.py:157`）；desired cache 注释"绝不反向覆盖"（`ghrah-subject/src/ghrah/subject/recovery/reconciler.py:141`） |
-| Room 元数据 / 成员 / seq | `RoomStore`（每项目 `db/rooms.sqlite3`） | Observer `rooms` | `room_list` + `room_get_log` | 乐观锁 `version`（`ghrah-subject/src/ghrah/subject/room/store.py:161`）；seq 只由 `append_log` 在锁内分配 |
-| Room 日志正文 | Core `MessageManager`（`mm_messages` / `mm_deliveries`） | Room 日志行只存 `mm_message_id` 引用 | `room_get_log`（逐条 `_hydrate_reference`） | 落账先经 MM 受理，再写引用（`ghrah-subject/src/ghrah/subject/units/room.py:174`）；`room_filter` 对 MM 投递节点直接返回（`ghrah-subject/src/ghrah/subject/units/room_filter.py:100`） |
+| Room 元数据 / 成员 / seq | `RoomStore`（每项目 `db/rooms.sqlite3`） | Observer `rooms` | `room_list` + `room_get_log` | 乐观锁 `version`（`ghrah-subject/src/ghrah/subject/room/store.py:175`）；seq 只由 `append_log` 在锁内分配 |
+| Room 日志正文 | Core `MessageManager`（`mm_messages` / `mm_deliveries`） | Room 日志行只存 `mm_message_id` 引用 | `room_get_log` / REST transcript 通过 Core 批读 | 落账先经 MM 受理，再写引用（`ghrah-subject/src/ghrah/subject/units/room.py:213`）；`room_filter` 对 MM 投递节点直接返回（`ghrah-subject/src/ghrah/subject/units/room_filter.py:100`） |
 | 域任务（`subject_tasks`） | TaskUnit / `TaskStore` | Observer `tasks`（legacy 事件） | `task_list` | 单 unit 单写；`ProjectScopedTaskStore` 冻结即抛 `ProjectArchivedError`（`ghrah-subject/src/ghrah/subject/project/scoped_stores.py:52`） |
 | 归因 tasks / claims / evidence | `ghrah-taskstore` 三表 | Observer `tasks.claims`/`evidence` | `task_dump`（全量替换 claims/evidence） | 内核是唯一写路径；`task_list_claims` 只 upsert claim，不碰 tasks 投影（`ghrah-observer-webui/packages/observer-core/src/bind.ts:353`） |
 | Workspace 注册 | `WorkspaceStore`（无 marker） | `WorkspaceManager` 内存索引 | `start()` 从 store 重建（+ 回填） | 索引只是缓存：`_reload_from_store` / `_backfill_store_from_memory` 双向收敛（`ghrah-subject/src/ghrah/subject/sandbox/workspace.py:141`） |
 | Ability 授权关系 | Core `AbilityAccessStore`（`ability_*` 表） | Observer `ability-admin` | REST 查询 + `markStale` | 授权只在 spawn 时核定并物化，运行期不重读配置（`ghrah-subject/src/ghrah/subject/config.py:353`） |
 | wire 契约 | `ghrah-protocol`（Python） | `packages/protocol`（TS） | 快照 + 一致性测试 | 双侧同步，禁止单侧手改 |
 
-三张 store 的写并发口径一致：均为 `asyncio.Lock` 串行 + `version` 乐观锁（`ghrah-subject/src/ghrah/subject/project/store.py:238`、`ghrah-subject/src/ghrah/subject/room/store.py:161`、`ghrah-taskstore/src/ghrah/taskstore/store.py:260`）。
+三张 store 的写并发口径一致：均为 `asyncio.Lock` 串行 + `version` 乐观锁（`ghrah-subject/src/ghrah/subject/project/store.py:238`、`ghrah-subject/src/ghrah/subject/room/store.py:175`、`ghrah-taskstore/src/ghrah/taskstore/store.py:260`）。
 
-### 11.2 链历史的读取路径：只经 CorePort
+### 11.2 链历史的读取路径
 
-`get_chain_history` 的当前实现是"调用方"而不是"第二读者"：
+Ledger 命令用 `project_get` 校验项目内 Agent 归属，再经 `CorePorts.for_project` 调用 `port.sessions.history`。会话缺失返回空历史，其他端口错误继续传播。`ghrah-subject/src/ghrah/subject/units/ledger.py:129`、`ghrah-subject/src/ghrah/subject/units/ledger.py:158`。
 
-1. 命令名集合 `CHAIN_HISTORY_COMMANDS` 只有一条（`ghrah-protocol/src/ghrah/protocol/routing.py:137`）；
-2. `LedgerUnit` 不发布任何实例级服务（`provides=frozenset()`），取端口经 `ctx.get(CORE_PORT)` → `ports.for_project(project_id)`（`ghrah-subject/src/ghrah/subject/units/ledger.py:83`、`:86`）；
-3. 真正读历史的是 `port.sessions.history(agent_id, session_id, branch_id, limit)`（`ghrah-subject/src/ghrah/subject/units/ledger.py:129`），端口契约在 `ghrah-protocol/src/ghrah/protocol/ports/core.py:97`；
-4. 会话不存在按"空历史"返回而不是报错：只吞 `NOT_FOUND`，其它 `ApiError` 继续上抛（`ghrah-subject/src/ghrah/subject/units/ledger.py:135`）；
-5. 归属先解析后读：`_resolve_persistence_key` 用 `project_get` 校验 `agent_id` 唯一命中且 `name` 一致，否则 `agent_project_mismatch` / `agent_identity_mismatch`（`ghrah-subject/src/ghrah/subject/units/ledger.py:158`）。
-
-**目录检查结论**：仓库内**不存在** `ghrah-subject/src/ghrah/subject/ledger/` 目录（`Test-Path` 返回 `False`；`ghrah-subject/src/ghrah/subject/` 下当前只有 `core_cluster`、`manifest_store`、`project`、`recovery`、`room`、`runtime`、`sandbox`、`server`、`shipped_abilities`、`task`、`unit`、`units`、`workspace` 等目录）。也就是说链历史在 Subject 侧没有独立包、没有本地库、没有派生 store，只有一个命令处理器。
-
-边界内的例外（同一事实的只读降级，不是第二权威，也没有写侧）：
-
-| 场景 | 读法 | 位置 |
-| --- | --- | --- |
-| AgentEntity 在 runtime 离线时读 `context.list_sessions` / `context.get_history` | `SqliteBackend(path, read_only=True)` 直读 `db/action-chains.sqlite3` | `ghrah-subject/src/ghrah/subject/project/entities.py:181`、`:186` |
-| Room 日志投影补正文 | `aiosqlite.connect("file:{path}?mode=ro", uri=True)` 读 `mm_messages` / `mm_deliveries` | `ghrah-subject/src/ghrah/subject/room/manager.py:524` |
-
-两处都是显式 `read_only` / `mode=ro`，都发生在"端口不可达"或"只取 MM 侧正文"的场景，写路径仍然唯一。
+离线 Agent 实体句柄通过同一个项目端口读取会话目录、历史和信箱，并为旧调用者恢复既有返回形状。Subject 在装配层绑定项目根路径。Core 校验存储域并提供只读快照。`ghrah-subject/src/ghrah/subject/project/entities.py:171`、`ghrah-subject/src/ghrah/subject/project/entities.py:201`、`ghrah-subject/src/ghrah/subject/project/entities.py:216`。
 
 ### 11.3 事件不是权威
 
@@ -2519,7 +2491,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 生产侧（Core） | 发布前只补不透明 `agent_id`；**不再判定归属**（M1） | —（缺失归属由转发侧丢弃） | `ghrah-core/src/ghrah/core/unit.py:396` |
 | 转发侧（Subject EventBus） | 用 ProjectStore 权威映射（`project_id_for_agent`）补齐 `project_id`（含嵌套 session） | 补齐失败或缺 `agent_id` → **丢弃 + 计数** `dropped_unattributed_events`，不猜归属、不污染 Observer 的 Project 分桶 | `ghrah-subject/src/ghrah/subject/server/event_bus.py::_attribute` |
-| 命令侧（Subject unit） | 每个写边界把显示名归一为 project 内稳定 id（Room join/leave/send、Task create/update/assign、Workspace、Ledger） | 多义或越界 → `ambiguous ...` / `agent_project_mismatch` / `agent_identity_mismatch` | `ghrah-subject/src/ghrah/subject/units/room.py:260`、`ghrah-subject/src/ghrah/subject/units/task.py:136`、`ghrah-subject/src/ghrah/subject/units/workspace.py:172`、`ghrah-subject/src/ghrah/subject/units/ledger.py:177` |
+| 命令侧（Subject unit） | 每个写边界把显示名归一为 project 内稳定 id（Room join/leave/send、Task create/update/assign、Workspace、Ledger） | 多义或越界 → `ambiguous ...` / `agent_project_mismatch` / `agent_identity_mismatch` | `ghrah-subject/src/ghrah/subject/units/room.py:305`、`ghrah-subject/src/ghrah/subject/units/task.py:136`、`ghrah-subject/src/ghrah/subject/units/workspace.py:172`、`ghrah-subject/src/ghrah/subject/units/ledger.py:177` |
 | 客户端 | 用 `projectId + agentId` 作 store 键；推送型快照只补缺失、不回退已落地状态 | 无完整 key 的 target 不参与同步（`hasCompleteAgentKey`） | `ghrah-observer-webui/packages/observer-core/src/scope.ts:53`、`ghrah-observer-webui/packages/observer-core/src/bind.ts:490` |
 
 `mergePushedAgentSessions` / `mergePushedSessionBranches` 是这套契约的推论：事件已落地的状态优先，推送的旧快照只补缺失实体与未覆盖指针，防止"离散事件先到、全量快照晚到"造成回退（`ghrah-observer-webui/packages/observer-core/src/bind.ts:490`、`:518`）。
@@ -2611,12 +2583,12 @@ Core 侧的 `SupervisorActor` 只管 agent 生命周期（`spawn_agent` 带串�
 
 | 环节 | 事实 | 位置 |
 | --- | --- | --- |
-| 装配注入 | Core 自持授权库工厂固定 `reclaim_stale=True`，注释写明"进程启动即停机核对" | `ghrah-core/src/ghrah/core/wiring.py:60`、`:62` |
+| 装配注入 | Core 独立装配授权库并启用 `reclaim_stale` | `ghrah-core/src/ghrah/core/wiring.py:151` |
 | 语义 | `startup_registration` 发现该 agent 已有注册行时：`reclaim_stale=False` → `AccessError("conflict")`；`True` → 告警并 `DELETE` 该行后重新登记 | `ghrah-core/src/ghrah/ability/access/store.py:469`、`:472` |
 | 为什么必须回收 | "上一进程异常退出留下的 pending 占位必须释放，否则同一主体永远无法重新 spawn" | `ghrah-core/src/ghrah/ability/access/store.py:474` |
 | 收尾 | 上下文退出时按 token 复核：已提交 → `state='active'`；未提交 → 删除占位（失败即 `conflict`） | `ghrah-core/src/ghrah/ability/access/store.py:511` |
 
-HITL 侧的 pending 是另一回事，必须分开记：`HITLPromiseRegistry` 与 `HITLFutureStore` 都是**进程内 dict，无持久化、无启动回收**（`ghrah-core/src/ghrah/core/hitl.py:223`、`:66`）。结论：进程崩溃时正在等待的 HITL 询问随进程消失，Observer 侧那条 `promise_id` 再无对应的 Core 未来可 resolve。此时 `hitl_response` 在未被任何 CoreUnit 持有该 promise 时逐级穿透、最终由宿主兜底为 `Unknown command`（`ghrah-core/src/ghrah/core/unit.py:1430`、`:1418`），Observer 拿到的是失败回执而不是静默成功（`sendHitlResponse` 用 request 而非 fire-and-forget 的原因，见 `ghrah-observer-webui/packages/observer-core/src/client.ts:318`）。进程重启后是否仍有指向同一 `promise_id` 的残留在 UI 上（例如断线重连后的旧审批卡片），未核实。
+审批的等待状态和终态由 `hitl_requests` 保存。Core 通过轮次存储登记并裁定，进程内等待收到的是已提交的结果。启动恢复按持久轮次及审批事实收敛。`ghrah-core/src/ghrah/context/persistence/sqlite_turn_store.py:36`、`ghrah-core/src/ghrah/core/read/turn.py:225`。
 
 ### 12.5 `close_project` / `restore_project`：冻结语义
 
@@ -2630,7 +2602,7 @@ Project 生命周期通过一个**作用域资源协议**下发，签名为三�
 | `ProjectScopedRoomStore` | 同构：快照 `room → project`、冻结、关闭 `RoomStore` | `ghrah-subject/src/ghrah/subject/project/scoped_stores.py:241`、`:261` |
 | `LedgerUnit` | 项目加入 `_frozen_projects` 并丢弃缓存的端口引用；`_port_for_project` 见冻结即 `resource_archived` | `ghrah-subject/src/ghrah/subject/units/ledger.py:78`、`:62` |
 
-冻结是**纵深防御**：即使上层漏了状态判断，命中的 store 也会在取库句柄时拒绝。命令层还有一层前置闸：Room 写命令先查父 Project 的 `archived_at`/`deleted_at`（`ghrah-subject/src/ghrah/subject/room/manager.py:139`）；Task 命令同理（`ghrah-subject/src/ghrah/subject/units/task.py:105`）；Project 自身的 9 条 mutation 命令先过 `_get_active_project`（`archived_at != None` → `resource_archived`）（`ghrah-subject/src/ghrah/subject/project/manager.py:338`）。
+冻结是**纵深防御**：即使上层漏了状态判断，命中的 store 也会在取库句柄时拒绝。命令层还有一层前置闸：Room 写命令先查父 Project 的 `archived_at`/`deleted_at`（`ghrah-subject/src/ghrah/subject/room/manager.py:155`）；Task 命令同理（`ghrah-subject/src/ghrah/subject/units/task.py:105`）；Project 自身的 9 条 mutation 命令先过 `_get_active_project`（`archived_at != None` → `resource_archived`）（`ghrah-subject/src/ghrah/subject/project/manager.py:338`）。
 
 `archive` / `restore` / `delete` 的顺序是被刻意排过的：
 
@@ -2657,9 +2629,9 @@ flowchart TD
 | restore 顺序 | 先 `validate_owner` 确认 Root 仍归该项目 → `store.restore`（保持 `stopped`，**不自动启动**运行资源）→ `restore_project` 解冻 → 发事件 | `ghrah-subject/src/ghrah/subject/project/manager.py:707`、`:712`、`:714` |
 | delete 顺序 | 先查 room 数（非空且未 `cascade_rooms` → `project_has_rooms`）→ shutdown cluster → close 资源（未归档才回滚解冻）→ `paths.purge`（验 owner 后 rmtree）→ `hard_delete`（版本锁）→ `evict_project` | `ghrah-subject/src/ghrah/subject/project/manager.py:746`、`:749`、`:751`、`:760`、`:765`、`:768` |
 | 启动时冻结 | `ProjectUnit.start` 对已归档项目先 `register_project_root` 再 `close_project`，故重启后归档项目仍是冻结态 | `ghrah-subject/src/ghrah/subject/units/project.py:117`、`:122` |
-| Room 侧同构 | `RoomUnit.start` 对 archived/deleted 项目做同一套 register + close，再 `migrate_all` | `ghrah-subject/src/ghrah/subject/units/room.py:224`、`:233` |
+| Room 侧同构 | `RoomUnit.start` 对 archived/deleted 项目做同一套 register + close，再 `migrate_all` | `ghrah-subject/src/ghrah/subject/units/room.py:269`、`:233` |
 
-"冻结"只冻结**写与运行时**，不冻结读：`project_get` 显式 `include_archived=True`（系统设置页需要看到归档项目）（`ghrah-subject/src/ghrah/subject/project/manager.py:645`），Room 的 `_handle_get` 也允许读归档 room（`ghrah-subject/src/ghrah/subject/room/manager.py:203`）。这与"归档 = 资源可用性轴、`deleted_at` 仅兼容读取"的模型一致（`ghrah-subject/src/ghrah/subject/project/models.py:233`）。
+"冻结"只冻结**写与运行时**，不冻结读：`project_get` 显式 `include_archived=True`（系统设置页需要看到归档项目）（`ghrah-subject/src/ghrah/subject/project/manager.py:645`），Room 的 `_handle_get` 也允许读归档 room（`ghrah-subject/src/ghrah/subject/room/manager.py:219`）。这与"归档 = 资源可用性轴、`deleted_at` 仅兼容读取"的模型一致（`ghrah-subject/src/ghrah/subject/project/models.py:233`）。
 
 ## 13. 配置、启动与运维
 
@@ -2765,7 +2737,7 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 | `.ghrah-project.json` | 归属标记 `{project_id, schema_version}` | `ProjectPaths.initialize` | `paths.py:160-163`；`validate_owner` 在 `:197-206` |
 | `db/tasks.sqlite3` | 本项目任务表 | `ProjectScopedTaskStore` → `TaskStore` | `paths.py:102-104`；`scoped_stores.py:51-63` |
 | `db/rooms.sqlite3` | 本项目 Room 表 | `ProjectScopedRoomStore` → `RoomStore` | `paths.py:106-108`；`scoped_stores.py:229`；`project/manager.py:409` |
-| `db/action-chains.sqlite3` | Core 的 ActionChain/session/branch 权威 | Core `SqliteBackend`，路径由 registry 从 Project Root 派生 | `paths.py:110-112`；`core_cluster/registry.py:561-564`；`units/core_cluster.py:295` |
+| `db/action-chains.sqlite3` | Core 的链、轮次、审批和消息权威 | 受管写入交由 Core 的 SQLite 存储域，Subject 从 Project Root 提供路径 | `project/paths.py:110-112`、`units/core_cluster.py:286-307` |
 | `manifests/agents/*.yaml` | Agent 实例 manifest 落点（仅作为字段值） | 无写入实现（见 14.5） | `paths.py:118-120`；`project/manager.py:801-807` |
 | `manifests/` | 上述文件的父目录 | 仅 `initialize` 建目录 | `paths.py:114-116`、`:149-158` |
 | `memory/` | 目录 | 仅 `initialize` 建目录，无读写方（见 14.5） | `paths.py:122-124` |
@@ -2819,7 +2791,7 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 ### 14.1 `SUBJECT_PORT` 只有定义，没有协议与提供方
 
 - 现状：`SUBJECT_PORT = "subject.port"` 定义并再导出（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`ports/__init__.py:18-22`）。全仓 `*.py` grep `SUBJECT_PORT` 只命中 `keys.py`、`ports/__init__.py` 与一处测试文案（`ghrah-subject/tests/test_module_boundary.py:200`，该文案提到的 `SubjectPort` 协议并不存在）。没有任何 `SubjectPort` Protocol 定义，也没有任何 `ctx.provide("subject.port", ...)`。
-- 对照：`CORE_PORT` 有协议（`ports/core.py:427`）与提供方（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:316`）。
+- 对照：`CORE_PORT` 有协议（`ports/core.py:427`）与提供方（`ghrah-subject/src/ghrah/subject/units/core_cluster.py:322`）。
 - 影响：该键是不可消费的空声明；读 `keys.py` 会误以为 Subject 侧能力面已端口化，实际跨模块调用仍只有 Core 一个方向，`SUBJECT_PORT` 永远不会有提供方响应。
 
 ### 14.2 `ghrah-subject` 仍依赖 `ghrah-core`，模块边界基线仍有 35 条
@@ -2896,7 +2868,7 @@ Project Root 内部布局由 `ProjectPaths` 唯一定义（`project/paths.py:82-
 
 ### 14.9 同一个容器键在两个包里各写一份字面量
 
-- 现状：`CORE_PORT = "core.port"` / `CORE_CATALOG = "core.catalog"` 在协议包（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），Subject 又在服务键表里重新写了两份同值字面量并加注释说明"名字就是协议包的 `core.port` / `core.catalog`"（`ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278`、`:280`）。两处都有使用方：`units/core_cluster.py:277-282` 用协议常量 provide，`units/ability_control.py`、`units/agent_control.py` 用 Subject 常量 requires。
+- 现状：`CORE_PORT = "core.port"` / `CORE_CATALOG = "core.catalog"` 在协议包（`ghrah-protocol/src/ghrah/protocol/ports/keys.py:13`、`:10`），Subject 又在服务键表里重新写了两份同值字面量并加注释说明"名字就是协议包的 `core.port` / `core.catalog`"（`ghrah-subject/src/ghrah/subject/runtime/service_keys.py:278`、`:280`）。两处都有使用方：`units/core_cluster.py:322-327` 用协议常量 provide，`units/ability_control.py`、`units/agent_control.py` 用 Subject 常量 requires。
 - 影响：容器键本应只有一处真相（`keys.py:4` 的 docstring 即如此声明），现值靠字面量相等维持；任一侧改名都不会在静态检查期报错，只在运行期表现为"依赖未满足 / service not found"。
 
 ### 14.10 内置链挂载 TaskStore 与"目标形态是插件"自相矛盾

@@ -10,13 +10,14 @@ import asyncio
 import json
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import aiosqlite
 
@@ -55,6 +56,7 @@ from ghrah.communication.storage import (
     PreparedMessage,
     RecoveredDelivery,
     ResumeCheckpoint,
+    RoomProjection,
     SavedDeliveryResult,
     TurnInput,
 )
@@ -62,7 +64,10 @@ from ghrah.context import recovery, turn
 from ghrah.context.persistence.changes import ContextChanges
 from ghrah.context.persistence.serialization import deserialize_action_results
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.persistence.sqlite_read import SqliteReadDomain, StorageScopeMismatchError
 from ghrah.context.persistence.sqlite_turn_store import SqliteTurnStore
+
+_SCOPE_COLUMN = "project_id"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mm_meta (
@@ -149,18 +154,56 @@ _DELIVERY_INDEXES = (
 )
 
 
+async def _has_message_scope(
+    db: aiosqlite.Connection,
+    allow_uninitialized: bool,
+    *,
+    scope_id: str,
+) -> bool:
+    """校验消息库归属。只有独立链库可以缺少消息归属标记。"""
+    tables = await db.execute_fetchall(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mm_meta'"
+    )
+    if not tables:
+        return False
+    rows = await db.execute_fetchall(f"SELECT {_SCOPE_COLUMN} FROM mm_meta WHERE singleton=1")
+    if not rows and allow_uninitialized:
+        return False
+    if not rows or rows[0][0] != scope_id:
+        raise StorageScopeMismatchError("mailbox_project_mismatch")
+    return True
+
+
+def sqlite_message_reads(
+    db_path: str | Path,
+    scope_id: str,
+    *,
+    immutable: bool = False,
+) -> SqliteReadDomain:
+    """把消息表的既有归属标记接入链和消息只读快照。"""
+    return SqliteReadDomain(
+        db_path,
+        scope_id,
+        check_scope=partial(_has_message_scope, scope_id=scope_id),
+        immutable=immutable,
+    )
+
+
 class SqliteDeliverySettlement:
     """在轮次宿主事务内结算投递。
 
     对外只暴露 :class:`~ghrah.context.turn_store.DeliverySettlement` 协议；
-    同域的 :class:`SqliteTurnStore` 通过 ``_settle_in_transaction`` 等内部方法
-    在已持有的事务内调用，不再另行开锁。
+    同域的 :class:`SqliteTurnStore` 在已持有的事务内调用 ``*_in_transaction`` 方法。
     """
 
     __slots__ = ("_store",)
 
     def __init__(self, store: SqliteMessageStore) -> None:
         self._store = store
+
+    def shares_storage_with(self, store: SqliteTurnStore) -> bool:
+        """校验轮次与投递结算属于同一个受管存储实例。"""
+        return store is self._store
 
     async def converge(
         self,
@@ -239,14 +282,27 @@ class SqliteDeliverySettlement:
 class SqliteMessageStore(SqliteTurnStore):
     """管理一个 SQLite 消息存储域的写连接和原子操作。"""
 
-    def __init__(self, db_path: str | Path, scope_id: str) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        scope_id: str,
+        *,
+        adopt_legacy_chain: bool = False,
+        immutable_reads: bool = False,
+    ) -> None:
         self.db_path = Path(db_path).resolve()
         self.scope_id = scope_id
+        self._adopt_legacy_chain = adopt_legacy_chain
+        self._immutable_reads = immutable_reads
+        self.reads = sqlite_message_reads(self.db_path, scope_id, immutable=immutable_reads)
         self.lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self.connection: aiosqlite.Connection | None = None
         self._owner: sqlite3.Connection | None = None
         self._closing = False
-        self._context_writer = self.context_backend()
+        self._execution_token = object()
+        self._context_writer = SqliteBackend(self.db_path)
+        self._context_writer.bind_write_domain(self.transaction, lambda: self.connection, self)
         self._settlement = SqliteDeliverySettlement(self)
 
     @property
@@ -256,24 +312,60 @@ class SqliteMessageStore(SqliteTurnStore):
 
     def context_backend(self, _agent_config: object = None) -> SqliteBackend:
         """为本域的 Agent 建立上下文存储，并挂载同域的轮次存储。"""
-        backend = SqliteBackend(self.db_path)
-        backend.turn_store = self
+        backend = SqliteBackend(self.db_path, run_id=self._context_writer.run_id)
+        backend.bind_write_domain(self.transaction, lambda: self.connection, self)
         return backend
 
     def validate_context_backend(self, backend: object) -> None:
         """复核上下文是否可以参加本域事务。"""
-        if not isinstance(backend, SqliteBackend) or backend.db_path.resolve() != self.db_path:
+        if (
+            not isinstance(backend, SqliteBackend)
+            or backend.db_path.resolve() != self.db_path
+            or backend.read_only
+        ):
             raise ValueError("Atomic receive requires a same-file SqliteBackend")
+        if isinstance(backend.turn_store, SqliteMessageStore) and backend.turn_store is not self:
+            raise ValueError("Atomic receive requires a same-domain SqliteBackend")
+        backend.bind_write_domain(self.transaction, lambda: self.connection, self)
 
     async def _apply_chain_changes(self, db: aiosqlite.Connection, changes: ContextChanges) -> None:
         """在消息存储的事务内写入链增量。"""
         await self._context_writer.apply_changes_in_transaction(db, changes)
 
+    async def _check_startup_metadata(self, db: aiosqlite.Connection) -> None:
+        """在任何 DDL 前确认持久归属和可接受的版本。"""
+        try:
+            claimed = await _has_message_scope(db, True, scope_id=self.scope_id)
+        except StorageScopeMismatchError as exc:
+            raise ValueError("Message database scope/schema mismatch") from exc
+        if claimed:
+            rows = await db.execute_fetchall("SELECT version FROM mm_meta WHERE singleton=1")
+            if not rows or rows[0][0] not in range(1, 8):
+                raise ValueError("Message database scope/schema mismatch")
+        elif not self._adopt_legacy_chain:
+            rows = await db.execute_fetchall(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_schema'"
+            )
+            if rows:
+                raise ValueError("Unscoped legacy chain database requires explicit adoption")
+
     async def open(self, *, prepare_context: bool) -> None:
         """取得独占所有权，初始化并恢复消息库。"""
+        async with self._lifecycle_lock:
+            await self._open(prepare_context=prepare_context)
+
+    async def _open(self, *, prepare_context: bool) -> None:
+        if self._immutable_reads:
+            raise RuntimeError("An immutable runtime database cannot start a writer")
         if self.connection is not None or self._owner is not None:
             raise RuntimeError("MessageManager is already open")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            links = self.db_path.stat().st_nlink
+        except FileNotFoundError:
+            links = 1
+        if links != 1:
+            raise ValueError("Managed SQLite database requires a single file path")
         owner = sqlite3.connect(str(self.db_path) + ".owner", timeout=0, isolation_level=None)
         try:
             owner.execute("BEGIN EXCLUSIVE")
@@ -283,30 +375,21 @@ class SqliteMessageStore(SqliteTurnStore):
         self._owner = owner
         self._closing = False
         try:
-            if prepare_context:
-                async with self.context_backend() as backend:
-                    await backend.initialize()
-            self.connection = await aiosqlite.connect(self.db_path)
+            self._execution_token = object()
+            self.connection = await aiosqlite.connect(self.db_path, isolation_level=None)
             self.connection.row_factory = aiosqlite.Row
+            await self._check_startup_metadata(self.connection)
             await self.connection.execute("PRAGMA journal_mode=WAL")
             await self.connection.execute("PRAGMA synchronous=NORMAL")
             await self.connection.execute("PRAGMA foreign_keys=ON")
             await self.connection.execute("PRAGMA busy_timeout=5000")
-            await self.connection.executescript(_SCHEMA)
             async with self.transaction() as db:
-                row = await (await db.execute("SELECT * FROM mm_meta")).fetchone()
-                if row is None:
-                    await db.execute("INSERT INTO mm_meta VALUES (1, ?, 7)", (self.scope_id,))
-                elif row["project_id"] != self.scope_id or row["version"] not in (
-                    1,
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7,
-                ):
-                    raise ValueError("Message database scope/schema mismatch")
+                await self._check_startup_metadata(db)
+                if prepare_context:
+                    await self._context_writer.initialize_in_transaction(db)
+                for statement in _SCHEMA.strip().rstrip(";").split(";"):
+                    await db.execute(statement)
+                await db.execute("INSERT OR IGNORE INTO mm_meta VALUES (1, ?, 7)", (self.scope_id,))
                 for table, column in (
                     ("mm_messages", "origin_node_id"),
                     ("mm_deliveries", "consumed_node_id"),
@@ -376,10 +459,17 @@ class SqliteMessageStore(SqliteTurnStore):
                 await settle_terminal_turns(db)
                 await db.execute(
                     "UPDATE mm_deliveries SET state='interrupted', error=? "
-                    "WHERE state='processing'",
+                    "WHERE state='processing' AND NOT EXISTS "
+                    "(SELECT 1 FROM mm_delivery_results r "
+                    "WHERE r.delivery_id=mm_deliveries.delivery_id)",
                     ("Previous process stopped before durable completion",),
                 )
                 with_turns = await self._has_turn_schema(db)
+                if with_turns and not prepare_context:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO runs (run_id) VALUES (?)",
+                        (self._context_writer.run_id,),
+                    )
                 preserve_aborted = (
                     " AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id=mm_deliveries.turn_id "
                     "AND t.status='aborted')"
@@ -402,7 +492,8 @@ class SqliteMessageStore(SqliteTurnStore):
                     await settle_terminal_turns(db)
                 await release_unowned_inline_waits(db)
         except BaseException:
-            await self.close()
+            self.stop_accepting()
+            await self._wait_for_close(self._close_resources)
             raise
 
     def stop_accepting(self) -> None:
@@ -412,15 +503,36 @@ class SqliteMessageStore(SqliteTurnStore):
     async def close(self) -> None:
         """释放写连接和独占锁。"""
         self.stop_accepting()
-        async with self.lock:
+        await self._wait_for_close(self._close_serialized)
+
+    async def _close_serialized(self) -> None:
+        async with self._lifecycle_lock:
+            self.stop_accepting()
+            await self._close_resources()
+
+    @staticmethod
+    async def _wait_for_close(close: Callable[[], Coroutine[None, None, None]]) -> None:
+        task = asyncio.create_task(close())
+        cancelled = False
+        while True:
             try:
-                if self.connection is not None:
-                    connection, self.connection = self.connection, None
-                    await connection.close()
-            finally:
-                if self._owner is not None:
-                    self._owner.close()
-                    self._owner = None
+                await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _close_resources(self) -> None:
+        async with self.lock:
+            if self.connection is not None:
+                await self.connection.close()
+                self.connection = None
+            if self._owner is not None:
+                self._owner.close()
+                self._owner = None
 
     def require_connection(self) -> aiosqlite.Connection:
         """为尚未迁移的 SQLite 操作借用写连接。"""
@@ -552,7 +664,13 @@ class SqliteMessageStore(SqliteTurnStore):
             ).fetchone()
         return row is not None
 
-    async def pending_room_projections(self, limit: int) -> tuple[tuple[str, int], ...]:
+    async def is_final_hitl_request(self, promise_id: str) -> bool:
+        """从域内只读快照确认已裁定的审批请求。"""
+        async with self.reads.chain_snapshot() as (reader, _):
+            row = await reader.load_hitl_request(None, promise_id) if reader else None
+        return row is not None and row["status"] != "pending"
+
+    async def pending_room_projections(self, limit: int) -> tuple[RoomProjection, ...]:
         """读取待确认的 Room 投影及其已失败次数。"""
         async with self.lock:
             rows = await (
@@ -562,7 +680,7 @@ class SqliteMessageStore(SqliteTurnStore):
                     (limit,),
                 )
             ).fetchall()
-        return tuple((row[0], int(row[1] or 0)) for row in rows)
+        return tuple(RoomProjection(row[0], int(row[1] or 0)) for row in rows)
 
     async def complete_room_projection(self, message_id: str) -> None:
         """标记 Room 投影已确认。"""
@@ -684,6 +802,7 @@ class SqliteMessageStore(SqliteTurnStore):
                         agent_id=agent_id,
                         attempt=row["attempts"] + 1,
                         turn_id=turn_id,
+                        domain_token=self._execution_token,
                     ),
                     message=record,
                     target_session_id=target_session,
@@ -810,7 +929,7 @@ class SqliteMessageStore(SqliteTurnStore):
             if delivery["turn_id"]:
                 await turn.backfill_start(db, node)
             for draft in drafts:
-                await self.insert_message(
+                message_id = await self.insert_message(
                     db,
                     draft.sender_id,
                     draft.recipient_ids,
@@ -827,7 +946,7 @@ class SqliteMessageStore(SqliteTurnStore):
                 if draft.metadata.get("inline_reply"):
                     await db.execute(
                         "INSERT OR IGNORE INTO mm_inline_waits VALUES (?, ?, 'waiting')",
-                        (draft.message_id, execution.delivery_id),
+                        (message_id, execution.delivery_id),
                     )
             for request_id, consumed in inline_updates.items():
                 cursor = await db.execute(
@@ -1040,10 +1159,10 @@ class SqliteMessageStore(SqliteTurnStore):
             ).fetchall()
         return tuple(row[0] for row in rows)
 
-    @staticmethod
-    def _require_execution(delivery: aiosqlite.Row, execution: DeliveryExecution) -> None:
+    def _require_execution(self, delivery: aiosqlite.Row, execution: DeliveryExecution) -> None:
         if (
-            delivery["recipient_id"] != execution.agent_id
+            execution.domain_token is not self._execution_token
+            or delivery["recipient_id"] != execution.agent_id
             or delivery["attempts"] != execution.attempt
             or delivery["turn_id"] != execution.turn_id
         ):
@@ -1102,13 +1221,18 @@ class SqliteMessageStore(SqliteTurnStore):
                 delivery = await (
                     await db.execute(
                         "SELECT turn_id, last_node_id, consumed_node_id, message_id, "
-                        "recipient_id, attempts FROM mm_deliveries WHERE delivery_id=?",
+                        "recipient_id, attempts, EXISTS (SELECT 1 FROM mm_delivery_results r "
+                        "WHERE r.delivery_id=d.delivery_id) AS result_ready "
+                        "FROM mm_deliveries d WHERE delivery_id=?",
                         (delivery_id,),
                     )
                 ).fetchone()
                 if delivery is not None and execution is not None:
                     self._require_execution(delivery, execution)
-                if delivery is not None and delivery["turn_id"]:
+                if delivery is None or delivery["result_ready"]:
+                    await db.rollback()
+                    return None
+                if delivery["turn_id"]:
                     async with db.execute(
                         "SELECT status, opener_delivery_id FROM turns WHERE turn_id=?",
                         (delivery["turn_id"],),
@@ -1144,10 +1268,7 @@ class SqliteMessageStore(SqliteTurnStore):
                     # 否则调度器会反复领取同一行形成热循环。
                     await db.execute(
                         "UPDATE mm_deliveries SET state=?, error=?, resume_requested=0 "
-                        "WHERE delivery_id=? AND (state IN ('processing', 'pending') OR "
-                        "(state IN ('failed', 'interrupted') AND EXISTS "
-                        "(SELECT 1 FROM mm_delivery_results r "
-                        "WHERE r.delivery_id=mm_deliveries.delivery_id)))",
+                        "WHERE delivery_id=? AND state IN ('processing', 'pending')",
                         (state.value, error, delivery_id),
                     )
                 closed = None
@@ -1303,6 +1424,11 @@ class SqliteMessageStore(SqliteTurnStore):
                 (delivery_id,),
             )
 
+    def _message_id(self, sender: str, key: str) -> str:
+        """使预检和受理为同一幂等键发出相同的未落库消息 ID。"""
+        identity = json.dumps(["ghrah-message", self.scope_id, sender, key])
+        return uuid5(NAMESPACE_URL, identity).hex
+
     async def prepare_outbound(self, submission: MessageSubmission) -> OutboundPreparation:
         """只读解析会话路由并校验已有受理，返回可用于迭代提交的草稿。"""
         async with self.lock:
@@ -1328,7 +1454,7 @@ class SqliteMessageStore(SqliteTurnStore):
                     raise ValueError("Idempotency key conflicts with an accepted payload")
         return OutboundPreparation(
             draft=PreparedMessage(
-                existing_id or uuid4().hex,
+                existing_id or self._message_id(submission.sender_id, submission.idempotency_key),
                 submission.sender_id,
                 submission.recipient_ids,
                 submission.content,
@@ -1349,6 +1475,9 @@ class SqliteMessageStore(SqliteTurnStore):
         target_sessions = submission.target_sessions
         delivery_policy = submission.delivery_policy
         await_reply = submission.await_reply
+        supplied = dict(target_sessions or {})
+        if set(supplied) - set(targets):
+            raise ValueError("target_sessions contains a non-recipient")
         async with self.transaction() as db:
             if submission.external_sender:
                 source_session = None
@@ -1369,6 +1498,8 @@ class SqliteMessageStore(SqliteTurnStore):
                         )
                     ).fetchall()
                     routes = {row[0]: row[1] for row in rows}
+                    if any(routes.get(target) != session for target, session in supplied.items()):
+                        raise ValueError("Idempotency key conflicts with target session")
                 else:
                     for target in targets:
                         session = (target_sessions or {}).get(
@@ -1565,8 +1696,14 @@ class SqliteMessageStore(SqliteTurnStore):
         if row is not None:
             if row["payload"] != payload:
                 raise ValueError("Idempotency key conflicts with an existing payload")
+            if origin_node_id is not None:
+                await db.execute(
+                    "UPDATE mm_messages SET origin_node_id=? "
+                    "WHERE message_id=? AND origin_node_id IS NULL",
+                    (origin_node_id, row["message_id"]),
+                )
             return str(row["message_id"])
-        message_id = message_id or uuid4().hex
+        message_id = message_id or self._message_id(sender, key)
         await db.execute(
             "INSERT INTO mm_messages "
             "(message_id, sender_id, content, kind, reply_to, "

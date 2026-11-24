@@ -41,7 +41,9 @@ async def agent_for(backend, agent_id, replies, *, restore=False):
 
 
 def manager_for(path):
-    return MessageManager(path, project_id="p", agent_ids=("a", "b"), session_routing=True)
+    return MessageManager(
+        path, adopt_legacy_chain=True, project_id="p", agent_ids=("a", "b"), session_routing=True
+    )
 
 
 @pytest.mark.parametrize("abort_mode", ["local", "other_context", "turn_only"])
@@ -115,7 +117,7 @@ async def test_abort_wakes_inline_wait_and_releases_worker(tmp_path, monkeypatch
             if abort_mode == "local":
                 await sender.abort_turn(turn_id=parent.turn_id)
             else:
-                async with SqliteBackend(path) as other_backend:
+                async with mm.context_backend(None) as other_backend:
                     other = ContextManager("a", persistence=other_backend)
                     await other.abort_turn(
                         turn_id=parent.turn_id,
@@ -292,6 +294,7 @@ async def test_acceptance_freezes_sessions_and_late_reply_preserves_active_selec
         a1 = a._context_manager.active_session_id
         b1 = b._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -355,6 +358,7 @@ async def test_offline_delivery_keeps_session_after_reopen(tmp_path):
         b, _ = await agent_for(backend, "b", [])
         b1 = b._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -368,6 +372,7 @@ async def test_offline_delivery_keeps_session_after_reopen(tmp_path):
     async with SqliteBackend(path) as backend:
         b, llm = await agent_for(backend, "b", ["done"], restore=True)
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             await mm.bind_atomic(b)
             await mm.dispatch_pending()
             (delivery,) = await mm.get_deliveries(request.message_id)
@@ -384,6 +389,7 @@ async def test_new_session_request_independent_of_old_session_queue(tmp_path):
         b, llm = await agent_for(backend, "b", ["new task done"])
         b1 = b._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             first = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -446,6 +452,7 @@ async def test_reply_to_closed_request_session_is_saved_and_blocked(tmp_path):
         b, _ = await agent_for(backend, "b", ["done"])
         a1 = a._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -477,6 +484,7 @@ async def test_prepared_outbound_records_actual_execution_session(tmp_path):
         a1 = a._context_manager.active_session_id
         b1 = b._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -521,7 +529,9 @@ async def test_legacy_unscoped_message_is_not_guessed_in_strict_mode(tmp_path):
     async with SqliteBackend(path) as backend:
         await agent_for(backend, "a", [])
         b, llm = await agent_for(backend, "b", [])
-        async with MessageManager(path, project_id="p", agent_ids=("a", "b")) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("a", "b")
+        ) as mm:
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -530,6 +540,7 @@ async def test_legacy_unscoped_message_is_not_guessed_in_strict_mode(tmp_path):
                 idempotency_key="legacy",
             )
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             await mm.bind_atomic(b)
             await mm.dispatch_pending()
             (delivery,) = await mm.get_deliveries(request.message_id)
@@ -547,6 +558,7 @@ async def test_failed_input_releases_old_session_queue(tmp_path):
         b, llm = await agent_for(backend, "b", ["old-session reply"])
         old_session = b._context_manager.active_session_id
         async with manager_for(path) as mm:
+            mm.validate_context_backend(backend)
             failed = await mm.send_external(
                 sender="user",
                 recipient_ids=("b",),

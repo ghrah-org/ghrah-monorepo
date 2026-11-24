@@ -1930,7 +1930,7 @@ class ActorAgent:
             # 中止是控制流，不是路由失败：不得创建 retry-* 分支或写链。
             raise
         except Exception as e:
-            if cm.in_iteration:
+            if cm.in_iteration and not cm.has_durable_turn:
                 cm.rollback_iteration(e)
             raise
         finally:

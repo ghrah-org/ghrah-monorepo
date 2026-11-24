@@ -75,6 +75,9 @@ async def test_foreign_settlement_is_rejected_inside_turn_transaction(tmp_path):
 
             with pytest.raises(TypeError, match="does not share this storage domain"):
                 await cm.abort_turn(turn_id=turn_id, settlement=ForeignSettlement())
+            other_domain = SqliteMessageStore(path, "p")
+            with pytest.raises(TypeError, match="does not share this storage domain"):
+                await cm.abort_turn(turn_id=turn_id, settlement=other_domain.delivery_settlement)
             record = await store.load_turn("a", turn_id)
             assert record is not None and record.status == "open"
         finally:

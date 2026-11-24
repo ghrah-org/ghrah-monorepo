@@ -151,6 +151,7 @@ class DeliveryExecution:
     agent_id: str
     attempt: int
     turn_id: str | None
+    domain_token: object
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,14 @@ class TurnInput:
     metadata: dict
 
 
+@dataclass(frozen=True)
+class RoomProjection:
+    """尚待同步至宿主的消息及已失败次数。"""
+
+    message_id: str
+    attempts: int
+
+
 class MessageQuery(Protocol):
     """同一存储域的类型化读查询。
 
@@ -238,7 +247,9 @@ class MessageQuery(Protocol):
 
     async def inline_wait_is_active(self, message_id: str, parent_delivery_id: str) -> bool: ...
 
-    async def pending_room_projections(self, limit: int) -> tuple[tuple[str, int], ...]: ...
+    async def is_final_hitl_request(self, promise_id: str) -> bool: ...
+
+    async def pending_room_projections(self, limit: int) -> tuple[RoomProjection, ...]: ...
 
     async def complete_room_projection(self, message_id: str) -> None: ...
 

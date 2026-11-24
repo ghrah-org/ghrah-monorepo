@@ -291,9 +291,13 @@ async def test_reply_and_completion_commit_atomically(tmp_path):
         request = await send_request(manager)
         await manager.dispatch_pending()
         assert await manager.get_replies(request.message_id) == ()
-        assert (await manager.get_deliveries(request.message_id))[0].state == DeliveryState.FAILED
+        assert (await manager.get_deliveries(request.message_id))[
+            0
+        ].state == DeliveryState.PROCESSING
         delivery = (await manager.get_deliveries(request.message_id))[0]
         assert delivery.result_ready
+        with pytest.raises(TimeoutError):
+            await manager.wait_replies(request.message_id, timeout=0.02)
         with pytest.raises(ValueError, match="not retryable"):
             await manager.retry(delivery.delivery_id)
         async with aiosqlite.connect(path) as db:

@@ -21,7 +21,8 @@ from ghrah.core.api.interfaces import (
     MailboxRecoverProjectionsRequest,
     MailboxSummaryRequest,
 )
-from ghrah.core.read.mailbox import MailboxReadStore, MailboxUnavailableError
+from ghrah.core.read.mailbox import MailboxUnavailableError
+from ghrah.core.read.queries import MailboxQueries
 
 __all__ = ["make_mailbox_handlers"]
 
@@ -42,7 +43,7 @@ def _manager(registry: Any, capability: str) -> Any:
     return manager
 
 
-def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, Handler]:
+def make_mailbox_handlers(store: MailboxQueries, registry: Any) -> dict[str, Handler]:
     """构造 ``mailbox`` 分组处理器。
 
     Args:

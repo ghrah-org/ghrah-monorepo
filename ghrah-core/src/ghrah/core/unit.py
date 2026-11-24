@@ -81,7 +81,6 @@ from ghrah.ability.surface.config import (
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.context.manager import ContextManager
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.context.turn import RollbackError
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
@@ -1931,20 +1930,16 @@ class CoreUnit:
         """识别本作用域已结束的 promise，保留其它单元的待审批命令穿透。"""
         try:
             if self._config.message_manager is not None:
-                path = self._config.message_manager.db_path
-                async with SqliteBackend(path, read_only=True) as reader:
-                    row = await reader.load_hitl_request(None, promise_id)
-                    return row is not None and row["status"] != "pending"
+                return await self._config.message_manager.is_final_hitl_request(promise_id)
             supervisor = self._require_supervisor()
             if isinstance(supervisor, SupervisorActor):
                 for agent in await supervisor.list_agents():
                     handle = await supervisor.get_agent_handle_by_id(agent["agent_id"])
                     cm = getattr(handle, "_context_manager", None)
-                    if isinstance(cm, ContextManager) and isinstance(cm.persistence, SqliteBackend):
-                        async with SqliteBackend(cm.persistence.db_path, read_only=True) as reader:
-                            row = await reader.load_hitl_request(agent["agent_id"], promise_id)
-                        if row is not None:
-                            return row["status"] != "pending"
+                    if isinstance(cm, ContextManager):
+                        result = await cm.read_hitl_request(promise_id)
+                        if result.persisted:
+                            return result.status not in (None, "pending")
         except Exception:
             logger.warning("Could not read final HITL state for %s", promise_id, exc_info=True)
         return False
@@ -1993,7 +1988,11 @@ class CoreUnit:
         turn_id = None
         durably_resolved = False
         cm = getattr(agent_handle, "_context_manager", None)
-        if isinstance(cm, ContextManager) and isinstance(cm.persistence, SqliteBackend):
+        if (
+            isinstance(cm, ContextManager)
+            and cm.persistence is not None
+            and cm.persistence.turn_store is not None
+        ):
             if active_promise is None:
                 return self._err("No pending HITL request matches the response")
             stored = await cm.resolve_hitl_request(

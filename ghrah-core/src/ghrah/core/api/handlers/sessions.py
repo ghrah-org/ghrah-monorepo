@@ -17,12 +17,12 @@ from ghrah.core.api.interfaces import (
     SessionsHistoryRequest,
     SessionsMetaRequest,
 )
-from ghrah.core.read.chain import ChainReadStore
+from ghrah.core.read.queries import ChainQueries
 
 __all__ = ["make_session_handlers"]
 
 
-def make_session_handlers(store: ChainReadStore) -> dict[str, Handler]:
+def make_session_handlers(store: ChainQueries) -> dict[str, Handler]:
     """构造 ``sessions`` 分组处理器。
 
     Args:

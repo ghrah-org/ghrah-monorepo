@@ -61,7 +61,14 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     SessionView,
 )
-from ghrah.protocol.views.observer_room import TurnCardView, TurnDetailView, TurnStatsView
+from ghrah.protocol.views.observer_room import (
+    RoomTranscriptView,
+    TranscriptDeliveryView,
+    TranscriptEntryView,
+    TurnCardView,
+    TurnDetailView,
+    TurnStatsView,
+)
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -425,6 +432,43 @@ SAMPLES: dict[str, object] = {
         ],
     ),
 }
+
+
+SAMPLES["RoomTranscriptView"] = RoomTranscriptView(
+    project_id="project",
+    room_id="room",
+    entries=[
+        TranscriptEntryView(
+            entry_id="entry",
+            seq=3,
+            author="user",
+            author_type="human",
+            timestamp=1.0,
+            message_id="message",
+            content="请继续",
+            insert_before_turn_id="turn",
+            injection_step=2,
+            human_state="injected",
+            deliveries=[
+                TranscriptDeliveryView(
+                    delivery_id="inject",
+                    message_id="message",
+                    recipient_id="agent",
+                    state="pending",
+                    turn_id="turn",
+                    delivery_policy="inject",
+                    display_state="consumed",
+                    injection_step=2,
+                )
+            ],
+        )
+    ],
+    turns=[SAMPLES["TurnDetailView"].turn],  # type: ignore[attr-defined]
+    latest_seq=4,
+    next_since_seq=3,
+    has_more=True,
+    read_at="2026-11-24T09:00:00+00:00",
+)
 
 
 def main() -> None:

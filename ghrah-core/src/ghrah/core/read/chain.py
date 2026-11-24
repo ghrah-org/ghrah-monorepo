@@ -21,9 +21,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 from ghrah.protocol.views.core import (
     BranchView,
     ChainMetaView,
@@ -34,64 +31,23 @@ from ghrah.protocol.views.core import (
 )
 
 from ghrah.context.persistence import serialize_node
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.persistence.sqlite_read import SqliteReadDomain
 
 __all__ = ["ChainReadStore", "ChainDatabaseUnavailableError"]
 
 
 class ChainDatabaseUnavailableError(RuntimeError):
-    """项目链库不存在或不可打开。
+    """注入的链查询后端可用此异常表示库不可用，端口会映射为 NOT_FOUND。
 
-    这是**正常情况**（项目尚未产生任何链数据），不是故障：
-    调用方应返回 ``NOT_FOUND`` 而不是 ``INTERNAL``。
+    SQLite 文件尚未创建时直接按查询返回空值或空目录。
     """
 
 
 class ChainReadStore:
-    """作用域固定的链读取器（构造时给定库路径，实例即作用域）。
+    """将本存储域的链查询转换为 Core 视图。"""
 
-    返回 DTO，不返回内部对象——转换发生在最靠近存储的这一层。
-
-    Args:
-        db_path: ActionChain sqlite 的路径（装配层按作用域解析后注入）
-    """
-
-    def __init__(self, db_path: str | Path) -> None:
-        self._db_path = Path(db_path)
-        self._slot: SqliteBackend | None = None
-        self._lock = asyncio.Lock()
-
-    async def _backend(self) -> SqliteBackend:
-        """取（或懒建）本作用域的只读连接。
-
-        Returns:
-            已连接的只读 backend
-
-        Raises:
-            ChainDatabaseUnavailableError: 链库文件不存在
-        """
-        backend = await self._maybe_backend()
-        if backend is None:
-            raise ChainDatabaseUnavailableError(str(self._db_path))
-        return backend
-
-    async def _maybe_backend(self) -> SqliteBackend | None:
-        """取（或懒建）只读连接；本作用域还没有链库时返回 ``None``。
-
-        「文件不存在」是**正常状态**（尚未产生链数据），不是故障——
-        由调用方决定它对应「空结果」还是 ``NOT_FOUND``。
-
-        Returns:
-            只读 backend，或 ``None``
-        """
-        async with self._lock:
-            if self._slot is None:
-                if not self._db_path.is_file():
-                    return None
-                backend = SqliteBackend(db_path=self._db_path, read_only=True)
-                await backend.connect()
-                self._slot = backend
-            return self._slot
+    def __init__(self, domain: SqliteReadDomain) -> None:
+        self._domain = domain
 
     async def node(self, *, agent_id: str, node_id: str) -> NodeView | None:
         """读取单个节点（精确查询，不加载整条链）。
@@ -103,13 +59,13 @@ class ChainReadStore:
         Returns:
             节点视图；不存在时返回 ``None``
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return None
-        node = await backend.load_node(agent_id, node_id)
-        if node is None:
-            return None
-        return NodeView.model_validate(serialize_node(node))
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return None
+            node = await backend.load_node(agent_id, node_id)
+            if node is None:
+                return None
+            return NodeView.model_validate(serialize_node(node))
 
     async def catalog(self, *, agent_id: str) -> SessionCatalogView:
         """读取会话目录与分支表。
@@ -122,16 +78,16 @@ class ChainReadStore:
         Returns:
             会话目录（永远不是 ``None``）
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return SessionCatalogView(availability="offline")
-        raw = await backend.load_session_catalog(agent_id)
-        return SessionCatalogView(
-            availability="offline",
-            active_session_id=raw["active_session_id"],
-            sessions=[SessionView.model_validate(item) for item in raw["sessions"]],
-            branches=[BranchView.model_validate(item) for item in raw["branches"]],
-        )
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return SessionCatalogView(availability="offline")
+            raw = await backend.load_session_catalog(agent_id)
+            return SessionCatalogView(
+                availability="offline",
+                active_session_id=raw["active_session_id"],
+                sessions=[SessionView.model_validate(item) for item in raw["sessions"]],
+                branches=[BranchView.model_validate(item) for item in raw["branches"]],
+            )
 
     async def meta(self, *, agent_id: str) -> ChainMetaView:
         """读取链目录元数据（active 指针 + 会话/分支表，不含节点）。
@@ -142,16 +98,16 @@ class ChainReadStore:
         Returns:
             元数据（永远不是 ``None``；无链数据时为空表）
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return ChainMetaView(agent_id=agent_id)
-        raw = await backend.load_session_catalog(agent_id)
-        return ChainMetaView(
-            agent_id=agent_id,
-            active_session_id=raw["active_session_id"],
-            sessions=[SessionView.model_validate(item) for item in raw["sessions"]],
-            branches=[BranchView.model_validate(item) for item in raw["branches"]],
-        )
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return ChainMetaView(agent_id=agent_id)
+            raw = await backend.load_session_catalog(agent_id)
+            return ChainMetaView(
+                agent_id=agent_id,
+                active_session_id=raw["active_session_id"],
+                sessions=[SessionView.model_validate(item) for item in raw["sessions"]],
+                branches=[BranchView.model_validate(item) for item in raw["branches"]],
+            )
 
     async def branches(self, *, agent_id: str, session_id: str) -> list[BranchView] | None:
         """列出某会话下的分支。
@@ -163,18 +119,18 @@ class ChainReadStore:
         Returns:
             分支列表；会话不存在时返回 ``None``
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return None
-        raw = await backend.load_session_catalog(agent_id)
-        sessions = {str(item["session_id"]) for item in raw["sessions"]}
-        if session_id not in sessions:
-            return None
-        return [
-            BranchView.model_validate(item)
-            for item in raw["branches"]
-            if str(item["session_id"]) == session_id
-        ]
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return None
+            raw = await backend.load_session_catalog(agent_id)
+            sessions = {str(item["session_id"]) for item in raw["sessions"]}
+            if session_id not in sessions:
+                return None
+            return [
+                BranchView.model_validate(item)
+                for item in raw["branches"]
+                if str(item["session_id"]) == session_id
+            ]
 
     async def head(
         self,
@@ -193,10 +149,10 @@ class ChainReadStore:
         Returns:
             头节点 id；会话或分支不存在时返回 ``None``
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return None
-        return await backend.load_branch_head(agent_id, session_id, branch_id)
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return None
+            return await backend.load_branch_head(agent_id, session_id, branch_id)
 
     async def history(
         self,
@@ -217,26 +173,20 @@ class ChainReadStore:
         Returns:
             链历史；会话或分支不存在时返回 ``None``
         """
-        backend = await self._maybe_backend()
-        if backend is None:
-            return None
-        history = await backend.load_branch_history(agent_id, session_id, branch_id, limit=limit)
-        if history is None:
-            return None
-        active_session_id, nodes = history
-        return HistoryView(
-            agent_name=agent_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            branch_id=branch_id,
-            active_session_id=active_session_id,
-            nodes=[NodeView.model_validate(serialize_node(node)) for node in nodes],
-        )
-
-    async def aclose(self) -> None:
-        """关闭只读连接（幂等）。"""
-        async with self._lock:
-            backend = self._slot
-            self._slot = None
-        if backend is not None:
-            await backend.close()
+        async with self._domain.chain_snapshot() as (backend, _):
+            if backend is None:
+                return None
+            history = await backend.load_branch_history(
+                agent_id, session_id, branch_id, limit=limit
+            )
+            if history is None:
+                return None
+            active_session_id, nodes = history
+            return HistoryView(
+                agent_name=agent_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                branch_id=branch_id,
+                active_session_id=active_session_id,
+                nodes=[NodeView.model_validate(serialize_node(node)) for node in nodes],
+            )

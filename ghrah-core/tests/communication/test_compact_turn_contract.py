@@ -49,7 +49,9 @@ async def test_claim_moves_idle_compaction_into_claimed_turn(tmp_path, when, mon
         agent = await seeded_agent(backend, llm)
         cm = agent._context_manager
         await cm.persist()
-        mm = MessageManager(path, project_id="p", agent_ids=("b",), session_routing=True)
+        mm = MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("b",), session_routing=True
+        )
         await mm.open(start_dispatcher=False)
         agent._supervisor = SupervisorActor(message_manager=mm)
         await mm.bind_atomic(agent)
@@ -114,7 +116,13 @@ async def test_aborting_summary_prevents_compact_commit(tmp_path, with_mm):
         cm.request_compact()
         mm = None
         if with_mm:
-            mm = MessageManager(path, project_id="p", agent_ids=("b",), session_routing=True)
+            mm = MessageManager(
+                path,
+                adopt_legacy_chain=True,
+                project_id="p",
+                agent_ids=("b",),
+                session_routing=True,
+            )
             await mm.open(start_dispatcher=False)
             agent._supervisor = SupervisorActor(message_manager=mm)
             await mm.bind_atomic(agent)

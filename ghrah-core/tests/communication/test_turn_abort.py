@@ -23,7 +23,6 @@ from ghrah.communication.message_manager import _ATOMIC, _AtomicDelivery
 from ghrah.communication.storage import DeliveryExecution
 from ghrah.context import ContextManager, turn
 from ghrah.context.persistence import ContextChanges
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.events import HITLRequestEvent
 from ghrah.core.message import AgentMessage
@@ -220,7 +219,9 @@ async def test_late_atomic_writes_are_rejected_without_partial_effects(rollback_
         sessions=(candidate.get_active_session(),),
         branches=(candidate.get_active_session_branch(),),
     )
-    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
+    scope = _AtomicDelivery(
+        mm, DeliveryExecution(opener_id, "agent", 0, turn_id, mm._sqlite._execution_token), [], cm
+    )
     result = await port.turns.abort(agent_id="agent", turn_id=turn_id)
     assert result.aborted and result.incomplete_node_id is None
     before = snapshot(backend.db_path)
@@ -280,7 +281,7 @@ async def test_abort_defers_to_existing_result_and_reports_scope_errors(rollback
     before = snapshot(backend.db_path)
     receipt = await port.turns.abort(agent_id="agent", session_id=cm.active_session_id)
     assert receipt.result_pending and not receipt.aborted
-    async with SqliteBackend(backend.db_path) as other_backend:
+    async with mm.context_backend(None) as other_backend:
         other = ContextManager("agent", persistence=other_backend)
         outcome = await other.abort_turn(turn_id=turn_id)
         assert outcome.result_pending and not outcome.changed
@@ -353,8 +354,11 @@ async def test_failure_converges_from_last_committed_member(rollback_runtime, mo
         assert cm.active_head.id == view.end_node_id
 
 
-async def test_routed_ability_revocation_leaves_no_retry_branch(rollback_runtime, monkeypatch):
-    """中止是控制流：路由 ability 被吊销时不得创建 retry-* 分支或写链。"""
+@pytest.mark.parametrize("revoked", [True, False])
+async def test_routed_ability_failure_leaves_no_retry_branch(
+    rollback_runtime, monkeypatch, revoked
+):
+    """持久轮次中的路由失败不能绕过收敛事务写入重试分支。"""
     agent, backend, _, _ = rollback_runtime
     cm = agent._context_manager
     turn_id = await cm.open_turn()
@@ -362,17 +366,21 @@ async def test_routed_ability_revocation_leaves_no_retry_branch(rollback_runtime
     branches_before = len(cm.list_branches(session_id))
     db_before = snapshot(backend.db_path)["branches"]
 
-    async def revoked_ability(*args, **kwargs):
-        cm.request_turn_abort(turn_id)
-        raise turn.TurnRevokedError("revoked during routed ability")
+    async def fail_ability(*args, **kwargs):
+        if revoked:
+            cm.request_turn_abort(turn_id)
+            raise turn.TurnRevokedError("revoked during routed ability")
+        raise RuntimeError("routed ability failed")
 
     monkeypatch.setitem(agent._abilities, "end_task", SimpleNamespace(name="end_task"))
     monkeypatch.setattr(agent, "_build_ability_call", lambda *args, **kwargs: (object(), object()))
-    monkeypatch.setattr(agent._ability_executor, "execute_ability", revoked_ability)
+    monkeypatch.setattr(agent._ability_executor, "execute_ability", fail_ability)
 
-    with pytest.raises(turn.TurnRevokedError):
+    with pytest.raises(turn.TurnRevokedError if revoked else RuntimeError):
         await agent._execute_routed_ability({}, "end_task")
 
+    assert not cm.in_iteration
+    await cm.persist()
     assert len(cm.list_branches(session_id)) == branches_before
     assert snapshot(backend.db_path)["branches"] == db_before
 
@@ -405,7 +413,9 @@ async def test_cross_process_abort_revokes_atomic_commit(rollback_runtime):
         sessions=(candidate.get_active_session(),),
         branches=(candidate.get_active_session_branch(),),
     )
-    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
+    scope = _AtomicDelivery(
+        mm, DeliveryExecution(opener_id, "agent", 0, turn_id, mm._sqlite._execution_token), [], cm
+    )
     before = snapshot(backend.db_path)
     with pytest.raises(turn.TurnRevokedError):
         await mm._apply_atomic(scope, changes)
@@ -436,7 +446,7 @@ async def test_abort_without_local_settler_releases_next_delivery(rollback_runti
     await asyncio.wait_for(entered.wait(), 3)
     later = await send(mm, "later")
     (claimed,) = await mm.get_deliveries(opener.message_id)
-    async with SqliteBackend(backend.db_path) as other_backend:
+    async with mm.context_backend(None) as other_backend:
         other = ContextManager("agent", persistence=other_backend)
         assert (await other.abort_turn(turn_id=claimed.turn_id)).changed
     worker = mm._workers["agent"]

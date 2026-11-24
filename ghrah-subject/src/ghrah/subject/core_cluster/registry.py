@@ -528,9 +528,6 @@ def default_core_unit_factory(
     或本参数注入）。
     """
     from ghrah.communication import MessageManager
-    from ghrah.context.persistence.sqlite_backend import (  # type: ignore[import-untyped]
-        SqliteBackend,
-    )
     from ghrah.core.unit import (  # type: ignore[import-untyped]
         CoreUnitConfig,
         create_core_unit,
@@ -548,12 +545,15 @@ def default_core_unit_factory(
                 raise ValueError("Project message database owner conflict")
             path = ProjectPaths.from_locator(locator).action_chain_db_path
             if existing is None:
+                paths = ProjectPaths.from_locator(locator)
+                adopt_legacy_chain = paths.permits_legacy_chain_adoption(project_id)
                 manager = MessageManager(
                     path,
                     project_id=project_id,
                     agent_ids=(),
                     session_routing=True,
                     allow_persisted_agents=True,
+                    adopt_legacy_chain=adopt_legacy_chain,
                 )
                 await manager.open(prepare_context=True)
                 if room_projector is not None:
@@ -562,7 +562,11 @@ def default_core_unit_factory(
                 managers[project_id] = existing
             existing[2].add(cluster_id)
             memberships[cluster_id] = project_id
-            unit._config = replace(unit._config, message_manager=existing[1])
+            unit._config = replace(
+                unit._config,
+                message_manager=existing[1],
+                persistence_factory=existing[1].context_backend,
+            )
             # builtin 模式：授权关系库按项目共享（观测端管理面与 Core 执行面
             # 必须看到同一实例）；cluster 重启不重开、不关闭，统一由
             # registry.stop() 收口。
@@ -617,10 +621,6 @@ def default_core_unit_factory(
         """按项目构造 CoreUnitConfig（供旧工厂与端口装配共用）。"""
         if not project_root_locator:
             raise ValueError("project_root_locator required")
-        core_db_path = str(ProjectPaths.from_locator(project_root_locator).action_chain_db_path)
-
-        def persistence_factory(agent_config: Any) -> Any:
-            return SqliteBackend(db_path=core_db_path)
 
         async def shell_cwd_provider() -> str | None:
             if shell_cwd_lookup is None:
@@ -644,7 +644,6 @@ def default_core_unit_factory(
             hitl_consecutive_timeout_limit=config.hitl_policy.hitl_consecutive_timeout_limit,
             hitl_degraded_timeout=config.hitl_policy.hitl_degraded_timeout,
             environment_injection=config.hitl_policy.environment_injection,
-            persistence_factory=persistence_factory,
             # 实例配置快照：运行期配置权威落在项目 Root 内，与链库同目录。
             agent_instances_path=str(
                 ProjectPaths.from_locator(project_root_locator).db_dir / "agents.sqlite3"

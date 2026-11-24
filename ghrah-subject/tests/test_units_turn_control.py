@@ -17,6 +17,7 @@ from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
     OBSERVER_ENDPOINT,
+    PROJECT_MANAGER,
     PROJECT_STORE,
 )
 from ghrah.subject.units import mount_builtin_units
@@ -91,7 +92,22 @@ async def test_reads_committed_history_without_starting_core(tmp_path: Path, mon
             with monkeypatch.context() as patch:
                 patch.setattr(SqliteBackend, "load_checkpoint", reject_full_checkpoint)
                 nodes = await client.get(f"{branches_url}/{branch_id}/nodes", params={"limit": 2})
+                entity_history = await ctx.get(PROJECT_MANAGER.name).handle_command(
+                    "agent_entity",
+                    {
+                        "project_id": project.project_id,
+                        "agent_id": agent.agent_id,
+                        "operation": {
+                            "type": "context.get_history",
+                            "session_id": session_id,
+                            "branch_id": branch_id,
+                            "limit": 2,
+                        },
+                    },
+                )
             assert nodes.status_code == 200
+            assert entity_history["success"], entity_history
+            assert entity_history["data"]["nodes"] == nodes.json()["nodes"]
             assert [node["id"] for node in nodes.json()["nodes"]] == [
                 chain.active_head.parent_id,
                 chain.active_head.id,

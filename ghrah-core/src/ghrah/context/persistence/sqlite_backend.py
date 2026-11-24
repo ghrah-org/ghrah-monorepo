@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -269,10 +269,18 @@ class SqliteBackend(PersistenceBackend):
         run_id: str | None = None,
         *,
         read_only: bool = False,
+        immutable: bool = False,
     ) -> None:
         if db_path is None:
             db_path = Path.home() / ".ghrah" / "data" / "ghrah.db"
+        if immutable and not read_only:
+            raise ValueError("Immutable context databases require read-only access")
         self._db_path = Path(db_path)
+        self._immutable = immutable
+        self._domain_transaction: (
+            Callable[[], AbstractAsyncContextManager[aiosqlite.Connection]] | None
+        ) = None
+        self._domain_connection: Callable[[], aiosqlite.Connection | None] | None = None
         self._run_id = run_id or _generate_run_id()
         self._db: aiosqlite.Connection | None = None
         self._initialized = False
@@ -285,6 +293,24 @@ class SqliteBackend(PersistenceBackend):
         # 受管消息运行时由同一存储域的消息存储覆盖为同域实例。
         self.turn_store: TurnStore | None = None if read_only else _BackendTurnStore(self)
 
+    def bind_write_domain(
+        self,
+        transaction: Callable[[], AbstractAsyncContextManager[aiosqlite.Connection]],
+        connection: Callable[[], aiosqlite.Connection | None],
+        turn_store: TurnStore,
+    ) -> None:
+        """让受管链的写操作借用所属存储域事务。"""
+        if self._read_only:
+            raise ValueError("A read-only context backend cannot bind a writer")
+        self._domain_transaction = transaction
+        self._domain_connection = connection
+        self.turn_store = turn_store
+
+    @property
+    def read_only(self) -> bool:
+        """是否显式构造为无写能力的查询后端。"""
+        return self._read_only
+
     @property
     def db_path(self) -> Path:
         """数据库文件路径。"""
@@ -294,6 +320,11 @@ class SqliteBackend(PersistenceBackend):
     def connected(self) -> bool:
         """连接是否已建立。"""
         return self._db is not None
+
+    @property
+    def has_context_schema(self) -> bool:
+        """已连接的库是否含链 schema。"""
+        return self.connected and self._context_schema_present
 
     @property
     def run_id(self) -> str:
@@ -333,64 +364,57 @@ class SqliteBackend(PersistenceBackend):
         if self._db is not None:
             raise RuntimeError("Database already connected.")
 
-        if self._read_only:
-            # 实体离线查询不得建库、迁移 schema 或插入新的 run。
-            self._db = await aiosqlite.connect(
-                self._db_path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
-            )
+        if self._read_only or self._domain_transaction is not None:
+            uri = self._db_path.resolve().as_uri() + "?mode=ro"
+            if self._immutable:
+                uri += "&immutable=1"
+            self._db = await aiosqlite.connect(uri, uri=True, isolation_level=None)
             self._db.row_factory = aiosqlite.Row
-            try:
-                await self._db.execute("PRAGMA query_only=ON")
-                # schema 校验用一次性读事务，校验完必须结束：WAL 下未结束的读事务
-                # 会把快照钉在连接建立时刻，之后所有读取都看不到新提交
-                # （链历史因此永远缺「启动之后」写入的节点）。
-                await self._db.execute("BEGIN")
-                table = await (
-                    await self._db.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' "
-                        "AND name='context_schema'"
-                    )
-                ).fetchone()
-                self._context_schema_present = table is not None
-                if not self._context_schema_present:
-                    legacy = await (
-                        await self._db.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table' "
-                            "AND name IN ('sessions', 'chain_meta', 'nodes', 'branches')"
-                        )
-                    ).fetchone()
-                    if legacy is not None:
-                        raise RuntimeError("Unsupported context database schema")
-                    self._initialized = True
-                    return
-                row = await (
-                    await self._db.execute("SELECT version FROM context_schema WHERE singleton=1")
-                ).fetchone()
-                if row is None or row[0] not in (3, 4):
-                    raise RuntimeError("Unsupported context database schema")
-                self._schema_version = row[0]
-                self._initialized = True
-            except BaseException:
-                await self.close()
-                raise
-            finally:
-                # 结束校验事务，让后续每次读取都拿到最新已提交快照。
-                db = self._db
-                if db is not None and db.in_transaction:
-                    await db.execute("COMMIT")
+            await self._initialize_read_connection(self._db)
             return
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # isolation_level=None 启用手动事务控制，避免隐式事务冲突
-        self._db = await aiosqlite.connect(str(self._db_path), isolation_level=None)
-        # 启用 Row 工厂，支持列名访问
-        self._db.row_factory = aiosqlite.Row
-        # 启用 WAL 模式，支持并发读写
-        await self._db.execute("PRAGMA journal_mode=WAL")
-        # 多 agent 各持独立连接写同一 db：WAL 单写者下并发写等待而非立即 SQLITE_BUSY
-        await self._db.execute("PRAGMA busy_timeout=5000")
-        await self._db.execute("PRAGMA foreign_keys=ON")
+        db = await aiosqlite.connect(str(self._db_path), isolation_level=None)
+        self._db = db
+        db.row_factory = aiosqlite.Row
+        try:
+            if await self._has_managed_marker(db):
+                self.turn_store = None
+                await self._initialize_read_connection(db)
+                return
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA busy_timeout=5000")
+            await db.execute("PRAGMA foreign_keys=ON")
+        except BaseException:
+            await self.close()
+            raise
         logger.debug("SQLite database connected: %s", self._db_path)
+
+    async def _initialize_read_connection(self, db: aiosqlite.Connection) -> None:
+        """识别已有链 schema，并及时结束这次只读快照。"""
+        try:
+            await db.execute("PRAGMA query_only=ON")
+            await db.execute("BEGIN")
+            rows = await db.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('context_schema','sessions','chain_meta','nodes','branches')"
+            )
+            names = {row[0] for row in rows}
+            self._context_schema_present = "context_schema" in names
+            if self._context_schema_present:
+                rows = await db.execute_fetchall(
+                    "SELECT version FROM context_schema WHERE singleton=1"
+                )
+                if not rows or rows[0][0] not in (3, 4):
+                    raise RuntimeError("Unsupported context database schema")
+                self._schema_version = rows[0][0]
+            elif names:
+                raise RuntimeError("Unsupported context database schema")
+            self._initialized = True
+            await db.rollback()
+        except BaseException:
+            await self.close()
+            raise
 
     async def initialize(self) -> None:
         """显式准备已连接数据库的 schema，无需读取虚构的 Agent checkpoint。"""
@@ -413,35 +437,54 @@ class SqliteBackend(PersistenceBackend):
         for statement in _TURN_SCHEMA_SQL.strip().rstrip(";").split(";"):
             await db.execute(statement)
 
+    @staticmethod
+    async def _has_managed_marker(db: aiosqlite.Connection) -> bool:
+        rows = await db.execute_fetchall(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mm_meta'"
+        )
+        return bool(rows)
+
+    @classmethod
+    async def _require_standalone_write(cls, db: aiosqlite.Connection) -> None:
+        if await cls._has_managed_marker(db):
+            raise RuntimeError("Managed SQLite context writes require the storage domain")
+
+    async def initialize_in_transaction(self, db: aiosqlite.Connection) -> None:
+        """由事务宿主准备链表及 run，建表、升级与域初始化同步提交。"""
+        if self._domain_connection is not None:
+            if db is not self._domain_connection():
+                raise ValueError("Transaction does not belong to the context storage domain")
+        else:
+            await self._require_standalone_write(db)
+        tables = await db.execute_fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+        existing = {row[0] for row in tables}
+        if "context_schema" in existing:
+            rows = await db.execute_fetchall("SELECT version FROM context_schema WHERE singleton=1")
+            if not rows or rows[0][0] not in (3, 4):
+                raise RuntimeError("Unsupported context database schema; rebuild explicitly")
+            version = rows[0][0]
+        else:
+            if existing - {name for name in existing if name.startswith(("mm_", "ability_"))}:
+                raise RuntimeError(
+                    "Legacy context database schema detected; delete it and rebuild explicitly"
+                )
+            for statement in _SCHEMA_SQL.strip().rstrip(";").split(";"):
+                await db.execute(statement)
+            version = 4
+        await self._ensure_v4_schema(db)
+        if version == 3:
+            await db.execute("UPDATE context_schema SET version=4 WHERE singleton=1")
+        await db.execute("INSERT OR IGNORE INTO runs (run_id) VALUES (?)", (self._run_id,))
+
     async def _initialize_schema(self) -> None:
-        """初始化或在一个事务内升级链库。"""
+        """在独立链事务内初始化 schema。"""
         assert self._db is not None
         db = self._db
         try:
             await db.execute("BEGIN IMMEDIATE")
-            cursor = await db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-            existing_tables = {row["name"] for row in await cursor.fetchall()}
-            if existing_tables:
-                if "context_schema" not in existing_tables:
-                    raise RuntimeError(
-                        "Legacy context database schema detected; delete it and rebuild explicitly"
-                    )
-                row = await (
-                    await db.execute("SELECT version FROM context_schema WHERE singleton=1")
-                ).fetchone()
-                if row is None or row[0] not in (3, 4):
-                    raise RuntimeError("Unsupported context database schema; rebuild explicitly")
-                version = row[0]
-            else:
-                for statement in _SCHEMA_SQL.strip().rstrip(";").split(";"):
-                    await db.execute(statement)
-                version = 4
-            await self._ensure_v4_schema(db)
-            if version == 3:
-                await db.execute("UPDATE context_schema SET version=4 WHERE singleton=1")
-            await db.execute("INSERT OR IGNORE INTO runs (run_id) VALUES (?)", (self._run_id,))
+            await self.initialize_in_transaction(db)
             await db.commit()
         except BaseException:
             await db.rollback()
@@ -468,10 +511,16 @@ class SqliteBackend(PersistenceBackend):
         """持有后端写锁的独立写事务。"""
         if self._read_only:
             raise RuntimeError("A read-only backend cannot start a write transaction")
+        if self._domain_transaction is not None:
+            async with self._domain_transaction() as db:
+                yield db
+            return
         async with self._write_lock:
             db = await self._ensure_db()
+            await self._require_standalone_write(db)
             try:
                 await db.execute("BEGIN IMMEDIATE")
+                await self._require_standalone_write(db)
                 yield db
                 await db.commit()
             except BaseException:
@@ -560,6 +609,11 @@ class SqliteBackend(PersistenceBackend):
         if Path(main[2]).resolve() != self._db_path.resolve():
             raise ValueError("Transaction database does not match context backend")
 
+        if self._domain_connection is not None:
+            if db is not self._domain_connection():
+                raise ValueError("Transaction does not belong to the context storage domain")
+        else:
+            await self._require_standalone_write(db)
         await self._ensure_agent(db, changes.agent_name)
         for branch_id in changes.delete_branch_ids:
             await db.execute("DELETE FROM branches WHERE branch_id = ?", (branch_id,))
@@ -961,22 +1015,11 @@ class SqliteBackend(PersistenceBackend):
 
     async def delete_checkpoint(self, agent_name: str) -> None:
         """在单个事务中删除指定 Agent 的完整 v2 checkpoint。"""
-        async with self._write_lock:
-            await self._delete_checkpoint(agent_name)
-
-    async def _delete_checkpoint(self, agent_name: str) -> None:
-        """持有后端写锁时删除 checkpoint。"""
-        db = await self._ensure_db()
-        await db.execute("BEGIN IMMEDIATE")
-        try:
+        async with self.transaction() as db:
             await db.execute("DELETE FROM chain_meta WHERE agent_name = ?", (agent_name,))
             await db.execute("DELETE FROM nodes WHERE agent_name = ?", (agent_name,))
             await db.execute("DELETE FROM sessions WHERE agent_name = ?", (agent_name,))
             await db.execute("DELETE FROM agents WHERE agent_name = ?", (agent_name,))
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
 
     async def list_agents(self) -> list[str]:
         """列出所有有持久化数据的 agent 名称。

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from ghrah.context import ContextManager, turn
 from ghrah.context.persistence import ContextChanges
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.persistence.sqlite_read import SqliteReadDomain
 from ghrah.context.session_runtime import SessionRuntime
 from ghrah.core.read.turn import TurnReadStore
 
@@ -76,9 +77,11 @@ async def test_first_compact_member_anchors_turn(tmp_path):
         )
         assert row["branch_id"] == row["end_branch_id"] == branch
         assert (await backend.load_node("agent", compact.id)).turn_id == active.turn_id
-        detail = await TurnReadStore(db_path=backend.db_path).detail(
-            agent_id="agent", turn_id=active.turn_id
-        )
+        domain = SqliteReadDomain(backend.db_path)
+        try:
+            detail = await TurnReadStore(domain).detail(agent_id="agent", turn_id=active.turn_id)
+        finally:
+            await domain.aclose()
         assert detail is not None
         assert [node.id for node in detail.nodes] == [compact.id, ordinary.id]
         stats = detail.turn.stats

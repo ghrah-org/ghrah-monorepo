@@ -31,7 +31,7 @@ from ghrah.core.api.interfaces import (
     TurnRollbackPreviewRequest,
     TurnRollbackRequest,
 )
-from ghrah.core.read.turn import TurnReadStore
+from ghrah.core.read.queries import TurnQueries
 from ghrah.core.units.registry import RuntimeRegistry
 
 _ROLLBACK_CODES = {
@@ -45,7 +45,7 @@ _ROLLBACK_CODES = {
 }
 
 
-def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[str, Handler]:
+def make_turn_handlers(store: TurnQueries, agents: RuntimeRegistry) -> dict[str, Handler]:
     """将轮次操作装入端口处理器表。"""
 
     async def get(request: TurnGetRequest) -> TurnView:
@@ -139,7 +139,7 @@ def make_turn_handlers(store: TurnReadStore, agents: RuntimeRegistry) -> dict[st
     }
 
 
-def make_hitl_handlers(store: TurnReadStore) -> dict[str, Handler]:
+def make_hitl_handlers(store: TurnQueries) -> dict[str, Handler]:
     """将审批查询装入端口处理器表。"""
 
     async def get(request: HitlGetRequest) -> HitlRequestView:

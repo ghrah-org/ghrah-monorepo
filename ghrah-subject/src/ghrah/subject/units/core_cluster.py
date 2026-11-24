@@ -153,6 +153,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
         *,
         unit_factory: Callable[[str, str, str], Any] | None = None,
         llm_factory: Callable[[Any], Any] | None = None,
+        storage_factory: Callable[[str, str], Any] | None = None,
+        ability_db_path: Callable[[str, str], str | None] | None = None,
     ) -> None:
         self._config = config
         # 测试可注入假工厂；生产默认工厂在 init 时构造（需 ctx 取 MANIFEST_STORE
@@ -161,6 +163,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
         # 可选 per-cluster LLM 工厂透传（None = Core 内建默认 agentconf 解析）；
         # 显式 unit_factory 优先，本参数被忽略（工厂自持全部 CoreUnitConfig）。
         self._llm_factory = llm_factory
+        self._storage_factory = storage_factory
+        self._ability_db_path = ability_db_path
         self._transport: Any | None = None
         self._ports: Any | None = None
         self._catalog: Any | None = None
@@ -284,10 +288,22 @@ class CoreClusterRegistryUnit(SubjectUnit):
             locator = _locator_for(project_id)
             if not locator:
                 raise ValueError(f"project locator unavailable: {project_id}")
-            db_path = str(ProjectPaths.from_locator(locator).action_chain_db_path)
+            paths = ProjectPaths.from_locator(locator)
+            adopt_legacy_chain = (
+                self._storage_factory is None and paths.permits_legacy_chain_adoption(project_id)
+            )
             return build_core_port(
                 scope_id=project_id,
-                db_path=db_path,
+                db_path=str(paths.action_chain_db_path),
+                storage_factory=(
+                    (lambda scope_id: self._storage_factory(scope_id, locator))
+                    if self._storage_factory
+                    else None
+                ),
+                adopt_legacy_chain=adopt_legacy_chain,
+                ability_db_path=(
+                    self._ability_db_path(project_id, locator) if self._ability_db_path else None
+                ),
                 config_factory=lambda: _build_config(project_id, locator),
                 install_root=self._config.ability.install_root,
                 agentconf_db_path=self._config.agentconf_db_path,

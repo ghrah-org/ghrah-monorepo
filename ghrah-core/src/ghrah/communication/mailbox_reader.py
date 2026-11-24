@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
 
@@ -20,48 +21,47 @@ from ghrah.communication.delivery_queue import (
     project_delivery,
 )
 from ghrah.communication.delivery_queue import display_state as _display_state  # noqa: F401
+from ghrah.communication.sqlite_message_store import sqlite_message_reads
+from ghrah.context.persistence.sqlite_read import SqliteReadDomain, StorageScopeMismatchError
 
 
 class MailboxReader:
     """通过同文件只读事务查询单个实体的消息，生命周期限定在一次查询。"""
 
-    def __init__(self, db_path: Path, identity: AgentIdentity) -> None:
-        self._path = db_path
+    def __init__(self, source: Path | SqliteReadDomain, identity: AgentIdentity) -> None:
+        self._domain = (
+            source
+            if isinstance(source, SqliteReadDomain)
+            else sqlite_message_reads(source, identity.project_id)
+        )
+        if self._domain.scope_id != identity.project_id:
+            raise ValueError("mailbox_project_mismatch")
         self._identity = identity
         self._db: aiosqlite.Connection | None = None
+        self._snapshot: (
+            AbstractAsyncContextManager[tuple[aiosqlite.Connection | None, bool]] | None
+        ) = None
 
     async def __aenter__(self) -> MailboxReader:
-        """只打开既有数据库，验证项目归属，不建表或恢复 worker。"""
-        self._db = await aiosqlite.connect(
-            self._path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
-        )
-        self._db.row_factory = aiosqlite.Row
+        """借用本域的一次只读消息快照。"""
+        snapshot = self._domain.message_snapshot()
         try:
-            await self._db.execute("PRAGMA query_only=ON")
-            await self._db.execute("BEGIN")
-            tables = await (
-                await self._db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='mm_meta'"
-                )
-            ).fetchone()
-            if tables is None:
-                raise ValueError("mailbox_unavailable")
-            meta = await (
-                await self._db.execute("SELECT project_id FROM mm_meta WHERE singleton=1")
-            ).fetchone()
-            if meta is None or meta[0] != self._identity.project_id:
-                raise ValueError("mailbox_project_mismatch")
-        except BaseException:
-            await self._db.close()
-            self._db = None
-            raise
+            db, has_messages = await snapshot.__aenter__()
+        except StorageScopeMismatchError as exc:
+            raise ValueError(str(exc)) from exc
+        if db is None or not has_messages:
+            await snapshot.__aexit__(None, None, None)
+            raise ValueError("mailbox_unavailable")
+        self._db = db
+        self._snapshot = snapshot
         return self
 
     async def __aexit__(self, *args: object) -> None:
-        """关闭只读事务连接。"""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
+        """关闭消息快照。"""
+        self._db = None
+        if self._snapshot is not None:
+            snapshot, self._snapshot = self._snapshot, None
+            await snapshot.__aexit__(None, None, None)
 
     async def summary(self) -> dict[str, Any]:
         """按实体统计各投递状态与发送消息数。"""

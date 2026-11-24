@@ -80,7 +80,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
-from ghrah.protocol.views.observer_room import TurnDetailView
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView, TurnDetailView
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 __all__ = [
@@ -784,6 +784,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("deliveries.retry", DeliveriesRetryRequest, AckView),
         Interface("deliveries.resume", DeliveriesResumeRequest, AckView),
         Interface("rooms.recover", RoomsRecoverRequest, AckView),
+        Interface("transcript.facts", RoomFactsQuery, TranscriptFactsView),
         Interface("manifests.resolve", ManifestsResolveRequest, AgentSpecView),
         Interface("abilities.tree", AbilitiesTreeRequest, AbilityTreeView),
         Interface("abilities.changes", AbilitiesChangesRequest, AbilityChangesPage),

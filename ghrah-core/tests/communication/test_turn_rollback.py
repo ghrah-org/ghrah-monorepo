@@ -18,7 +18,6 @@ from ghrah.chat.message import ChatMessage
 from ghrah.communication.sqlite_message_store import SqliteDeliverySettlement
 from ghrah.communication.supervisor import SupervisorActor
 from ghrah.context.manager import ContextManager
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.unit import CoreUnit, CoreUnitConfig
 from ghrah.core.units.context import UnitContext
@@ -530,7 +529,7 @@ async def test_rollback_recovers_when_execution_stops_before_events(
     kwargs = {"agent_id": "agent", "turn_id": row["turn_id"]}
     with pytest.raises(asyncio.CancelledError):
         await port.turns.rollback(**kwargs)
-    async with SqliteBackend(backend.db_path) as reopened:
+    async with mm.context_backend(None) as reopened:
         cm = ContextManager("agent", persistence=reopened)
         await cm.restore("agent")
         persisted = await reopened.load_turn("agent", row["turn_id"])

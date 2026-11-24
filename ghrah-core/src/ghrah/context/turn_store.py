@@ -131,7 +131,7 @@ class TurnStore(Protocol):
         end_node_id: str | None,
     ) -> None: ...
 
-    async def commit_iteration(
+    async def commit_context_iteration(
         self, changes: ContextChanges, *, turn_id: str | None, idle_compact: bool
     ) -> None: ...
 
@@ -200,4 +200,6 @@ class TurnStore(Protocol):
         resolution: Any,
     ) -> HitlWriteResult: ...
 
-    async def read_hitl_request(self, agent_name: str, promise_id: str) -> HitlWriteResult: ...
+    async def read_hitl_request(
+        self, agent_name: str | None, promise_id: str
+    ) -> HitlWriteResult: ...

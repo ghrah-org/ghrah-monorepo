@@ -35,7 +35,11 @@ async def runtime(tmp_path):
         )
         await agent._context_manager.persist()
         async with MessageManager(
-            path, project_id="p", agent_ids=("agent",), session_routing=True
+            path,
+            adopt_legacy_chain=True,
+            project_id="p",
+            agent_ids=("agent",),
+            session_routing=True,
         ) as mm:
             await mm.bind_atomic(agent)
             yield agent, backend, mm
@@ -227,8 +231,10 @@ async def test_atomic_claim_requires_turn_schema(runtime):
         await mm.dispatch_pending()
     (pending,) = await mm.get_deliveries(request.message_id)
     assert (pending.state, pending.attempts, pending.turn_id) == (DeliveryState.PENDING, 0, None)
-    async with SqliteBackend(backend.db_path) as migrated:
-        await migrated.initialize()
+    await mm.unbind("agent")
+    await mm.close()
+    await mm.open(start_dispatcher=False, prepare_context=True)
+    await mm.bind_atomic(agent)
     await asyncio.wait_for(mm.dispatch_pending(), 3)
     (delivery,) = await mm.get_deliveries(request.message_id)
     assert delivery.state == DeliveryState.COMPLETED

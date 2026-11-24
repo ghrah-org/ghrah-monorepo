@@ -1418,7 +1418,9 @@ class ContextManager:
         turn_id = active.turn_id if active is not None else None
 
         async def commit(changes: ContextChanges) -> None:
-            await store.commit_iteration(changes, turn_id=turn_id, idle_compact=idle_compact)
+            await store.commit_context_iteration(
+                changes, turn_id=turn_id, idle_compact=idle_compact
+            )
 
         return commit
 

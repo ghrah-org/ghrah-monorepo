@@ -27,6 +27,8 @@ from ghrah.protocol.views.core import (
 )
 
 from ghrah.communication.mailbox_reader import MailboxReader
+from ghrah.communication.sqlite_message_store import sqlite_message_reads
+from ghrah.context.persistence.sqlite_read import SqliteReadDomain
 
 __all__ = [
     "DeliveryNotFoundError",
@@ -59,23 +61,22 @@ class MailboxBadPageSizeError(ValueError):
 
 
 class MailboxReadStore:
-    """作用域固定的信箱读取器（构造时给定库路径与作用域）。
+    """将本存储域的信箱查询转换为 Core 视图。"""
 
-    Args:
-        db_path: ActionChain sqlite 的路径（与 chain 共用同一文件）
-        scope_id: 作用域标识，用于 reader 的项目归属校验
-    """
+    def __init__(self, domain: SqliteReadDomain | str | Path, scope_id: str | None = None) -> None:
+        if isinstance(domain, SqliteReadDomain):
+            self._domain = domain
+        else:
+            if scope_id is None:
+                raise ValueError("Mailbox scope is required")
+            self._domain = sqlite_message_reads(domain, scope_id)
 
-    def __init__(self, db_path: str | Path, scope_id: str) -> None:
-        self._db_path = Path(db_path)
-        self._scope_id = scope_id
-
-    async def _reader(self, agent_id: str) -> MailboxReader:
-        """构建并打开一次查询用的 reader（上下文管理器由调用方负责）。"""
-        path = self._db_path
-        if not path.is_file():
-            raise MailboxUnavailableError(str(path))
-        return MailboxReader(path, AgentIdentity(project_id=self._scope_id, agent_id=agent_id))
+    def _reader(self, agent_id: str) -> MailboxReader:
+        """准备一次实体可见性受限的信箱查询。"""
+        assert self._domain.scope_id is not None
+        return MailboxReader(
+            self._domain, AgentIdentity(project_id=self._domain.scope_id, agent_id=agent_id)
+        )
 
     async def summary(self, *, agent_id: str) -> MailboxSummaryView:
         """读取信箱概览。
@@ -90,7 +91,7 @@ class MailboxReadStore:
             MailboxUnavailableError: 消息库不存在
             MailboxProjectMismatchError: 项目归属不一致
         """
-        reader = await self._reader(agent_id)
+        reader = self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.summary()
@@ -112,7 +113,7 @@ class MailboxReadStore:
             MessageNotFoundError: 消息不存在或不可见
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(agent_id)
+        reader = self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.get_message(message_id)
@@ -134,7 +135,7 @@ class MailboxReadStore:
             DeliveryNotFoundError: 投递不存在或不可见
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(agent_id)
+        reader = self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.get_delivery(delivery_id)
@@ -144,7 +145,7 @@ class MailboxReadStore:
 
     async def queue(self, *, agent_id: str, session_id: str | None) -> DeliveryQueueView:
         """读取指定会话的当前排队与轮内投递。"""
-        reader = await self._reader(agent_id)
+        reader = self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.queue(session_id)
@@ -175,7 +176,7 @@ class MailboxReadStore:
             MailboxBadPageSizeError: ``limit`` 越界
             MailboxUnavailableError: 消息库不存在
         """
-        reader = await self._reader(agent_id)
+        reader = self._reader(agent_id)
         try:
             async with reader:
                 raw = await reader.list_messages(inbox=inbox, limit=limit, before_seq=before_seq)

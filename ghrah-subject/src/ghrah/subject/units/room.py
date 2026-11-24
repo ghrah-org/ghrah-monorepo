@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from ghrah.protocol.types import SendMessagePayload
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.scoped_stores import ProjectScopedRoomStore
@@ -17,6 +18,7 @@ from ghrah.subject.room.content_blocks import resolve_content_attachments
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
+    CORE_PORT_SERVICE,
     PROJECT_MANAGER,
     ROOM_MANAGER,
     ROOM_STORE,
@@ -43,7 +45,7 @@ class RoomUnit(SubjectUnit):
         self._project_manager: Any | None = None
         self._meta = UnitMeta(
             name="room",
-            requires=frozenset({PROJECT_MANAGER, CORE_CLUSTER_REGISTRY}),
+            requires=frozenset({PROJECT_MANAGER, CORE_CLUSTER_REGISTRY, CORE_PORT_SERVICE}),
             provides=frozenset({ROOM_MANAGER, ROOM_STORE}),
             routes=RouteSpec(commands=ROOM_COMMANDS),
         )
@@ -63,6 +65,15 @@ class RoomUnit(SubjectUnit):
         project_manager = ctx.get(PROJECT_MANAGER.name)
         self._project_manager = project_manager
         cluster_registry = ctx.get(CORE_CLUSTER_REGISTRY.name)
+        ports = ctx.get(CORE_PORT_SERVICE.name)
+
+        async def read_facts(
+            project_id: str,
+            locator: str,
+            query: RoomFactsQuery,
+        ) -> TranscriptFactsView:
+            ports.remember_locator(project_id, locator)
+            return await ports.for_project(project_id).transcript.facts(query)
 
         async def project_roots() -> dict[str, str]:
             result = await project_manager.handle_command("project_list", {"archived": None})
@@ -153,6 +164,7 @@ class RoomUnit(SubjectUnit):
             project = await project_get(room.project_id)
             if not project:
                 return {"success": False, "error": "Room project unavailable", "data": None}
+            ports.remember_locator(room.project_id, project["project_root_locator"])
             raw_blocks = payload.data.get("content_blocks")
             blocks: list[dict[str, Any]] | None = (
                 raw_blocks if isinstance(raw_blocks, list) and raw_blocks else None
@@ -232,13 +244,16 @@ class RoomUnit(SubjectUnit):
             return {
                 "success": True,
                 "error": None,
-                "data": {"entry": (await self._manager._hydrate_reference(entry)).to_wire()},
+                "data": {
+                    "entry": (await self._manager.hydrate_log_entry(room, project, entry)).to_wire()
+                },
             }
 
         self._manager = RoomManager(
             self._store,
             on_event=self._emit_event,
             project_get=project_get,
+            read_facts=read_facts,
             deliver=deliver,
             publish=publish
             if callable(getattr(cluster_registry, "get_message_manager", None))

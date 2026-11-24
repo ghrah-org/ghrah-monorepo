@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ from ghrah.protocol.ability_tree import (
     UnbindToolRequest,
 )
 
-from ghrah.ability.access import AbilityAccessStore, AccessIdentity
+from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
 from ghrah.ability.package.archive import ArchiveError, detect_format, extract_package
 from ghrah.ability.package.installed_store import parse_full_name
 from ghrah.ability.package.installer import (
@@ -130,6 +131,7 @@ class AbilityReadStore:
         install_root: str | None = None,
         agentconf_db_path: str | None = None,
         reclaim_stale: bool = False,
+        immutable: bool = False,
     ) -> None:
         self._db_path = Path(db_path)
         self._scope_id = scope_id
@@ -139,6 +141,7 @@ class AbilityReadStore:
         self._install_root = install_root
         self._agentconf_db_path = agentconf_db_path
         self._reclaim_stale = reclaim_stale
+        self._immutable = immutable
         self._store: AbilityAccessStore | None = None
         self._lock = asyncio.Lock()
 
@@ -164,20 +167,25 @@ class AbilityReadStore:
             return None
         return self._resolve_run(agent_id)
 
-    async def store(self) -> AbilityAccessStore:
+    async def store(self, *, create: bool = False) -> AbilityAccessStore:
         """取（或懒打开）本作用域的能力关系库。
+
+        Args:
+            create: 由写运行时启动时创建显式指定的授权库。
 
         Raises:
             AbilityUnavailableError: 实例未绑定作用域，或关系库文件不存在
         """
         scope_id = self._scope_id
-        if scope_id is None:
-            raise AbilityUnavailableError("能力读面未绑定作用域")
+        if scope_id is None or self._immutable:
+            raise AbilityUnavailableError("能力关系库不可写")
         async with self._lock:
             if self._store is not None:
                 return self._store
             if not self._db_path.is_file():
-                raise AbilityUnavailableError(str(self._db_path))
+                if not create:
+                    raise AbilityUnavailableError(str(self._db_path))
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
             store = await AbilityAccessStore.open(
                 self._db_path,
                 scope_id,
@@ -187,6 +195,28 @@ class AbilityReadStore:
             )
             self._store = store
             return store
+
+    @asynccontextmanager
+    async def _reader(self) -> AsyncIterator[AbilityAccessStore]:
+        if self._store is not None:
+            # 在线授权视图还需要写宿主已登记的成员后端和版本可用性。
+            yield self._store
+            return
+        operator = self._operator()
+        if not self._db_path.is_file():
+            raise AbilityUnavailableError(str(self._db_path))
+        store = await AbilityAccessStore.open(
+            self._db_path,
+            operator.scope_id,
+            operators=frozenset({_DEPLOYMENT_OPERATOR}),
+            runs=self._run_of,
+            read_only=True,
+            immutable=self._immutable,
+        )
+        try:
+            yield store
+        finally:
+            await store.close()
 
     async def tree(self, *, agent_id: str) -> AbilityTreeView:
         """读取某 Agent 的能力树。
@@ -199,8 +229,8 @@ class AbilityReadStore:
         Returns:
             能力树视图
         """
-        store = await self.store()
-        return await store.view(self._operator(), agent_id)
+        async with self._reader() as store:
+            return await store.view(self._operator(), agent_id)
 
     async def admin(
         self,
@@ -211,16 +241,16 @@ class AbilityReadStore:
         """装配某 Agent 的能力管理总览。"""
         from ghrah.core.read.ability_admin import build_admin_view
 
-        store = await self.store()
-        operator = self._operator()
-        runtime_tools = self._resolve_tools(agent_id) if self._resolve_tools else None
-        return await build_admin_view(
-            store,
-            operator,
-            agent_id,
-            runtime_tools=runtime_tools,
-            grant_policy=grant_policy if grant_policy is not None else self._grant_policy,
-        )
+        async with self._reader() as store:
+            operator = self._operator()
+            runtime_tools = self._resolve_tools(agent_id) if self._resolve_tools else None
+            return await build_admin_view(
+                store,
+                operator,
+                agent_id,
+                runtime_tools=runtime_tools,
+                grant_policy=grant_policy if grant_policy is not None else self._grant_policy,
+            )
 
     async def content(
         self,
@@ -234,16 +264,16 @@ class AbilityReadStore:
         """读取某授权下的成员内容；未授权返回 ``None``。"""
         from ghrah.core.read.ability_admin import read_content
 
-        store = await self.store()
-        return await read_content(
-            store,
-            self._operator(),
-            agent_id,
-            alias=alias,
-            member=member,
-            offset=offset,
-            limit=limit,
-        )
+        async with self._reader() as store:
+            return await read_content(
+                store,
+                self._operator(),
+                agent_id,
+                alias=alias,
+                member=member,
+                offset=offset,
+                limit=limit,
+            )
 
     async def packages(self) -> AbilityPackageCatalogView:
         """已安装能力包目录（全局，不查库）。"""
@@ -278,15 +308,15 @@ class AbilityReadStore:
         """能力包分组视图；实例未绑定作用域时只返回全局发行版视图。"""
         if self._scope_id is None:
             return await build_package_groups(self._install_root)
-        store = await self.store()
-        operator = self._operator()
-        return await build_package_groups(
-            self._install_root,
-            store=store,
-            operator=operator,
-            project_id=self._scope_id,
-            agent_id=agent_id,
-        )
+        async with self._reader() as store:
+            operator = self._operator()
+            return await build_package_groups(
+                self._install_root,
+                store=store,
+                operator=operator,
+                project_id=self._scope_id,
+                agent_id=agent_id,
+            )
 
     async def package_import(
         self, *, archive_path: str, source_name: str
@@ -399,10 +429,12 @@ class AbilityReadStore:
         """
         operator = self._operator()
         try:
-            store = await self.store()
-        except AbilityUnavailableError:
+            async with self._reader() as store:
+                return await build_instances_view(store, operator)
+        except (AbilityUnavailableError, AccessError) as exc:
+            if isinstance(exc, AccessError) and str(exc) != "unavailable":
+                raise
             return AbilityInstancesView(project_id=operator.scope_id)
-        return await build_instances_view(store, operator)
 
     async def status(self) -> AbilityApiStatus:
         """读取能力管理面的可用性（作用域级，不查库）。
@@ -542,12 +574,12 @@ class AbilityReadStore:
         Returns:
             变更分页（``next_after_seq`` 为下一页游标）
         """
-        store = await self.store()
-        rows = await store.changes(
-            self._operator(),
-            after_seq=after_seq,
-            limit=limit,
-        )
+        async with self._reader() as store:
+            rows = await store.changes(
+                self._operator(),
+                after_seq=after_seq,
+                limit=limit,
+            )
         from ghrah.core.read.ability_admin import build_change_view
 
         items = [build_change_view(row) for row in rows]

@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
+from ghrah.core.wiring import build_core_port
 from ghrah.protocol.types import RoomSubjectType
+from ghrah.protocol.views.observer_room import RoomFactsQuery
 
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.room.store import RoomStore
@@ -1037,10 +1039,12 @@ async def test_room_send_non_message_event_without_message_still_accepted(tmp_pa
 
 
 def _write_mm_db(root: Path, messages: list[dict[str, Any]]) -> None:
-    """在 Project Root 下造一份最小 MM sqlite（供 ``_hydrate_reference`` 只读）。"""
+    """在 Project Root 下创建用于离线兼容测试的旧 MM 表。"""
     db_dir = root / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_dir / "action-chains.sqlite3") as conn:
+        conn.execute("CREATE TABLE mm_meta (singleton INTEGER, project_id TEXT, version INTEGER)")
+        conn.execute("INSERT INTO mm_meta VALUES (1, 'proj-1', 1)")
         conn.execute(
             "CREATE TABLE mm_messages ("
             "message_id TEXT PRIMARY KEY, sender_id TEXT, content TEXT, metadata TEXT)"
@@ -1087,7 +1091,17 @@ async def _hydrate_manager(tmp_path: Path, root: Path) -> RoomManager:
             "agents": [{"agent_id": "architect", "name": "architect", "cluster_id": "c1"}],
         }
 
-    return RoomManager(store, project_get=project_get)
+    async def read_facts(project_id: str, locator: str, query: RoomFactsQuery):
+        port = build_core_port(
+            scope_id=project_id,
+            db_path=str(Path(locator) / "db" / "action-chains.sqlite3"),
+        )
+        try:
+            return await port.transcript.facts(query)
+        finally:
+            await port.aclose()
+
+    return RoomManager(store, project_get=project_get, read_facts=read_facts)
 
 
 async def test_hydrate_reference_copies_blocks_from_mm_metadata(tmp_path: Path) -> None:

@@ -46,6 +46,7 @@ from ghrah.protocol.ports.core import (
     RoomOperations,
     SessionId,
     SessionOperations,
+    TranscriptOperations,
     TurnOperations,
 )
 from ghrah.protocol.views.common import (
@@ -89,7 +90,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
-from ghrah.protocol.views.observer_room import TurnDetailView
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView, TurnDetailView
 
 from ghrah.core.api.runtime import CoreRuntime
 
@@ -128,6 +129,7 @@ class CoreFacade:
         self._mailbox = _Mailbox(self)
         self._deliveries = _Deliveries(self)
         self._rooms = _Rooms(self)
+        self._transcript = _Transcript(self)
         self._manifests = _Manifests(self)
         self._abilities = _Abilities(self)
         self._agents = _Agents(self)
@@ -174,6 +176,11 @@ class CoreFacade:
     def rooms(self) -> RoomOperations:
         """Room 投影维护。"""
         return self._rooms
+
+    @property
+    def transcript(self) -> TranscriptOperations:
+        """Room 日志与运行时事实的批量读面。"""
+        return self._transcript
 
     @property
     def manifests(self) -> ManifestOperations:
@@ -667,6 +674,17 @@ class _Manifests:
         """解析 manifest 引用。"""
         raw = await self._facade._call("manifests.resolve", manifest_ref=manifest_ref)
         return AgentSpecView.model_validate(raw)
+
+
+class _Transcript:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def facts(self, query: RoomFactsQuery) -> TranscriptFactsView:
+        """读取 Room 引用的运行时事实。"""
+        return TranscriptFactsView.model_validate(
+            await self._facade._call("transcript.facts", **query.model_dump())
+        )
 
 
 class _Rooms:

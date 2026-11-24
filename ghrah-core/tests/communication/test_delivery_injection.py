@@ -4,18 +4,25 @@
 """消息受理、迭代边界注入与排队的持久契约。"""
 
 import asyncio
+import sqlite3
 
 import pytest
 from ghrah.protocol.payloads.entity import AgentIdentity
+from ghrah.protocol.views.observer_room import (
+    RoomFactsQuery,
+    RoomMessageReference,
+    RoomNodeReference,
+)
 
 from ghrah.communication import DeliveryState
 from ghrah.communication.mailbox_reader import MailboxReader
 from ghrah.core.read.mailbox import MailboxReadStore
+from ghrah.core.wiring import build_core_port
 
 pytest_plugins = ["test_turn_lifecycle"]
 
 
-async def accept(mm, key, *, policy="inject", await_reply=False):
+async def accept(mm, key, *, policy="inject", await_reply=False, room_id=None):
     return await mm.send_external(
         sender="user",
         recipient_ids=("agent",),
@@ -23,6 +30,7 @@ async def accept(mm, key, *, policy="inject", await_reply=False):
         idempotency_key=key,
         delivery_policy=policy,
         await_reply=await_reply,
+        metadata={"room_id": room_id} if room_id else None,
     )
 
 
@@ -119,13 +127,21 @@ async def test_two_injections_commit_with_opener_in_one_node(runtime, monkeypatc
         return await original()
 
     monkeypatch.setattr(agent, "_ensure_llm", pause)
-    first = await accept(mm, "opener", policy="queue", await_reply=True)
+    first = await accept(mm, "opener", policy="queue", await_reply=True, room_id="room")
     await asyncio.wait_for(entered.wait(), 1)
-    second = await accept(mm, "one")
-    third = await accept(mm, "two")
+    second = await accept(mm, "one", room_id="room")
+    third = await accept(mm, "two", room_id="room")
     turn_id = second.deliveries[0].turn_id
     assert turn_id == third.deliveries[0].turn_id
-    release.set()
+    port = build_core_port(scope_id="p", db_path=str(backend.db_path))
+    try:
+        active = RoomFactsQuery(room_id="room", active_agent_ids=["agent"], include_turns=True)
+        assert [card.turn_id for card in (await port.transcript.facts(active)).turns] == [turn_id]
+        foreign = active.model_copy(update={"room_id": "different-room"})
+        assert (await port.transcript.facts(foreign)).turns == []
+    finally:
+        release.set()
+        await port.aclose()
     await mm.dispatch_pending()
     deliveries = [
         (await mm.get_deliveries(request.message_id))[0] for request in (first, second, third)
@@ -138,6 +154,47 @@ async def test_two_injections_commit_with_opener_in_one_node(runtime, monkeypatc
     assert len(await backend.list_turns("agent", None, None, 50)) == 1
     assert await mm.get_replies(second.message_id) == ()
     assert await mm.get_replies(third.message_id) == ()
+
+    (reply,) = await mm.get_replies(first.message_id)
+    query = RoomFactsQuery(
+        room_id="room",
+        messages=[
+            RoomMessageReference(message_id=request.message_id, author="user")
+            for request in (first, second, third)
+        ]
+        + [RoomMessageReference(message_id=reply.message_id, author="agent")],
+        nodes=[RoomNodeReference(node_id=node.id, agent_id="agent")],
+        include_turns=True,
+    )
+    port = build_core_port(scope_id="p", db_path=str(backend.db_path))
+    try:
+        facts = await port.transcript.facts(query)
+        (card,) = facts.turns
+        assert card.turn_id == turn_id
+        assert card.opener_message_id == first.message_id
+        assert card.stats == (await port.turns.detail(agent_id="agent", turn_id=turn_id)).turn.stats
+        assert {d.message_id: d.injection_step for d in facts.deliveries} == {
+            first.message_id: None,
+            second.message_id: 1,
+            third.message_id: 1,
+            reply.message_id: None,
+        }
+        assert {m.message_id: m.turn_id for m in facts.messages} == {
+            first.message_id: None,
+            second.message_id: None,
+            third.message_id: None,
+            reply.message_id: turn_id,
+        }
+        assert (node.id, "agent", turn_id) in {
+            (fact.node_id, fact.agent_id, fact.turn_id) for fact in facts.node_turns
+        }
+        legacy = await port.transcript.facts(query.model_copy(update={"messages": []}))
+        assert [(fact.node_id, fact.turn_id) for fact in legacy.node_turns] == [(node.id, turn_id)]
+        foreign = query.model_copy(update={"room_id": "different-room", "messages": []})
+        assert (await port.transcript.facts(foreign)).node_turns == []
+
+    finally:
+        await port.aclose()
 
 
 @pytest.mark.parametrize("terminal", ["closed", "failed", "interrupted"])
@@ -181,7 +238,7 @@ async def test_terminal_turn_releases_unconsumed_and_settles_consumed(runtime, t
     )
 
 
-async def test_completion_pending_blocks_even_a_failed_predecessor(runtime, monkeypatch):
+async def test_completion_failure_preserves_result_and_blocks_successor(runtime, monkeypatch):
     agent, backend, mm = runtime
     finish = mm._finish_result
 
@@ -192,7 +249,7 @@ async def test_completion_pending_blocks_even_a_failed_predecessor(runtime, monk
     first = await accept(mm, "first", policy="queue", await_reply=True)
     await mm.dispatch_pending()
     prior = (await mm.get_deliveries(first.message_id))[0]
-    assert prior.result_ready and prior.state == DeliveryState.FAILED
+    assert prior.result_ready and prior.state == DeliveryState.PROCESSING
     later = await accept(mm, "later", policy="queue", await_reply=True)
     await mm.dispatch_pending()
     pending = (await mm.get_deliveries(later.message_id))[0]
@@ -207,8 +264,21 @@ async def test_completion_pending_blocks_even_a_failed_predecessor(runtime, monk
     with pytest.raises(RuntimeError, match="completion_pending"):
         await mm.wait_replies(later.message_id)
     await mm.cancel(pending.delivery_id)
+    assert await mm.recover_completions() == 0
+    with pytest.raises(TimeoutError):
+        await mm.wait_replies(first.message_id, timeout=0.02)
+    # 升级前可能已经将有结果的投递误记为失败，等待者仍应等待收尾。
+    async with mm._sqlite.transaction() as db:
+        await db.execute(
+            "UPDATE mm_deliveries SET state='failed' WHERE delivery_id=?", (prior.delivery_id,)
+        )
+    waiter = asyncio.create_task(mm.wait_replies(first.message_id, tolerate_errors=True))
+    await asyncio.sleep(0.01)
+    assert not waiter.done()
     monkeypatch.setattr(mm, "_finish_result", finish)
-    await mm.dispatch_pending()
+    assert await mm.recover_completions() == 1
+    assert len(await asyncio.wait_for(waiter, timeout=1)) == 1
+    assert await mm.recover_completions() == 0
     assert (await mm.get_deliveries(first.message_id))[0].state == DeliveryState.COMPLETED
     assert len(await mm.get_replies(first.message_id)) == 1
 
@@ -299,16 +369,28 @@ async def test_waiting_hitl_injection_consumes_only_after_approval(runtime, monk
 
 
 @pytest.mark.parametrize(
-    "fault", ["closed", "head_changed", "input_changed", "missing_opener", "new_attempt"]
+    "fault",
+    [
+        "closed",
+        "head_changed",
+        "input_changed",
+        "missing_opener",
+        "new_attempt",
+        "chain_write",
+        "outbound_write",
+        "inline_reservation",
+        "outbound_replay",
+    ],
 )
-async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
+async def test_atomic_iteration_commits_or_rolls_back_all_facts(runtime, fault):
     from ghrah.chat.message import ChatMessage
     from ghrah.communication.message_manager import _AtomicDelivery
-    from ghrah.communication.storage import DeliveryExecution
+    from ghrah.communication.storage import DeliveryExecution, MessageKind, MessageSubmission
     from ghrah.context.persistence import ContextChanges
 
     agent, backend, mm = runtime
-    await mm.unbind("agent")
+    await mm.close()
+    await mm.open(start_dispatcher=False)
     cm = agent._context_manager
     turn_id = await cm.open_turn()
     opener = await accept(mm, "opener", policy="queue")
@@ -329,8 +411,28 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
         messages.insert(0, ChatMessage.user("opener", metadata={"delivery_id": opener_id}))
     cm.add_messages(messages)
     node = cm.commit_iteration()
-    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
+    scope = _AtomicDelivery(
+        mm, DeliveryExecution(opener_id, "agent", 0, turn_id, mm._sqlite._execution_token), [], cm
+    )
     scope.consumed_deliveries.add(input_id)
+    outbound = MessageSubmission(
+        sender_id="agent",
+        recipient_ids=("agent",),
+        content="follow-up",
+        kind=MessageKind.REQUEST,
+        idempotency_key="outbound",
+        session_routing=True,
+        sender_session_id=cm.active_session_id,
+        metadata={"inline_reply": True},
+    )
+    draft = (await mm._delivery_store.prepare_outbound(outbound)).draft
+    if fault in {"outbound_write", "inline_reservation", "outbound_replay"}:
+        scope.drafts.append(draft)
+    if fault == "inline_reservation":
+        scope.inline_updates["missing-reservation"] = True
+    if fault == "outbound_replay":
+        accepted = await mm._delivery_store.accept_message(outbound)
+        assert accepted.message_id == draft.message_id
     async with mm._sqlite.transaction() as db:
         if fault == "closed":
             await db.execute("UPDATE turns SET status='closed' WHERE turn_id=?", (turn_id,))
@@ -347,14 +449,39 @@ async def test_atomic_injection_failure_rolls_back_all_inputs(runtime, fault):
             await db.execute(
                 "UPDATE mm_deliveries SET attempts=attempts+1 WHERE delivery_id=?", (opener_id,)
             )
+        elif fault == "chain_write":
+            await db.execute(
+                "CREATE TRIGGER reject_node BEFORE INSERT ON nodes "
+                "BEGIN SELECT RAISE(ABORT, 'reject node'); END"
+            )
+        elif fault == "outbound_write":
+            await db.execute(
+                "CREATE TRIGGER reject_message BEFORE INSERT ON mm_messages "
+                "BEGIN SELECT RAISE(ABORT, 'reject outbound'); END"
+            )
     changes = ContextChanges(
         agent_name="agent",
         nodes=(node,),
         sessions=(cm.get_active_session(),),
         branches=(cm.get_active_session_branch(),),
     )
-    with pytest.raises(RuntimeError):
+    if fault == "outbound_replay":
         await mm._apply_atomic(scope, changes)
+        assert (await mm.get_message(draft.message_id)).origin_node_id == node.id
+        assert await mm._query.inline_wait_is_active(draft.message_id, opener_id)
+        return
+
+    branch = cm.get_active_session_branch()
+    head_before = await backend.load_branch_head("agent", cm.active_session_id, branch.branch_id)
+    with pytest.raises((RuntimeError, sqlite3.IntegrityError)):
+        await mm._apply_atomic(scope, changes)
+    assert (
+        await backend.load_branch_head("agent", cm.active_session_id, branch.branch_id)
+        == head_before
+    )
+    with pytest.raises(KeyError):
+        await mm.get_message(draft.message_id)
+    assert not await mm._query.inline_wait_is_active(draft.message_id, opener_id)
     assert await backend.load_node("agent", node.id) is None
     assert (await mm.get_deliveries(opener.message_id))[0].consumed_node_id is None
     assert (await mm.get_deliveries(incoming.message_id))[0].consumed_node_id is None
@@ -378,7 +505,9 @@ async def test_compact_commits_without_loading_or_consuming_injections(runtime):
             (turn_id, opener_id),
         )
     compact = cm.commit_compact_node([])
-    scope = _AtomicDelivery(mm, DeliveryExecution(opener_id, "agent", 0, turn_id), [], cm)
+    scope = _AtomicDelivery(
+        mm, DeliveryExecution(opener_id, "agent", 0, turn_id, mm._sqlite._execution_token), [], cm
+    )
     scope.consumed_deliveries.add(incoming.deliveries[0].delivery_id)
     changes = ContextChanges(
         agent_name="agent",

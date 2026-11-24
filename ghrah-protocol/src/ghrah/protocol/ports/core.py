@@ -71,7 +71,7 @@ from ghrah.protocol.views.core import (
     TurnRollbackView,
     TurnView,
 )
-from ghrah.protocol.views.observer_room import TurnDetailView
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView, TurnDetailView
 
 __all__ = [
     "AbilityOperations",
@@ -81,6 +81,7 @@ __all__ = [
     "BranchOperations",
     "CoreCatalogPort",
     "CorePort",
+    "TranscriptOperations",
     "TurnOperations",
     "HitlOperations",
     "DeliveriesOperations",
@@ -535,6 +536,14 @@ class ManifestOperations(Protocol):
         ...
 
 
+class TranscriptOperations(Protocol):
+    """批量读取经宿主校验的 Room 日志引用。"""
+
+    async def facts(self, query: RoomFactsQuery) -> TranscriptFactsView:
+        """在本作用域的同一快照内读取 Room 消息、投递和轮次。"""
+        ...
+
+
 class TurnOperations(Protocol):
     """查询、预览和回滚轮次。"""
 
@@ -647,6 +656,9 @@ class CorePort(Protocol):
 
     @property
     def rooms(self) -> RoomOperations: ...
+
+    @property
+    def transcript(self) -> TranscriptOperations: ...
 
     @property
     def manifests(self) -> ManifestOperations: ...

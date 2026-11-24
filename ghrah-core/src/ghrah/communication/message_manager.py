@@ -104,10 +104,12 @@ class MessageManager:
         poll_interval: float = 0.1,
         session_routing: bool = False,
         allow_persisted_agents: bool = False,
+        adopt_legacy_chain: bool = False,
         _store: SqliteMessageStore | None = None,
     ) -> None:
+        scope_id = project_id
         if (
-            not project_id.strip()
+            not scope_id.strip()
             or isinstance(agent_ids, str)
             or (not agent_ids and not allow_persisted_agents)
             or any(not item.strip() for item in agent_ids)
@@ -116,9 +118,11 @@ class MessageManager:
         if not 0 < poll_interval < float("inf"):
             raise ValueError("poll_interval must be positive and finite")
         path = Path(db_path).resolve()
-        if _store is not None and (_store.db_path != path or _store.scope_id != project_id):
+        if _store is not None and (_store.db_path != path or _store.scope_id != scope_id):
             raise ValueError("Message store path/scope mismatch")
-        self._sqlite = _store or SqliteMessageStore(path, project_id)
+        self._sqlite = _store or SqliteMessageStore(
+            path, scope_id, adopt_legacy_chain=adopt_legacy_chain
+        )
         self._delivery_store: DeliveryStore = self._sqlite
         self._query: MessageQuery = self._sqlite
         self._agent_ids = frozenset(agent_ids)
@@ -140,6 +144,18 @@ class MessageManager:
         self._wake = asyncio.Event()
         self._closing = False
         self._repair_retry_at = 0.0
+
+    @classmethod
+    def from_store(cls, store: SqliteMessageStore) -> MessageManager:
+        """为装配好的 SQLite 存储域创建受管消息运行时。"""
+        return cls(
+            store.db_path,
+            project_id=store.scope_id,
+            agent_ids=(),
+            session_routing=True,
+            allow_persisted_agents=True,
+            _store=store,
+        )
 
     @property
     def db_path(self) -> Path:
@@ -344,6 +360,10 @@ class MessageManager:
     def delivery_settlement(self) -> DeliverySettlement:
         """本存储域的投递结算能力，供轮次事务在同事务内结算投递。"""
         return self._sqlite.delivery_settlement
+
+    async def is_final_hitl_request(self, promise_id: str) -> bool:
+        """识别本消息存储域已裁定的审批请求。"""
+        return await self._query.is_final_hitl_request(promise_id)
 
     async def has_active_turn(self, agent_id: str) -> bool:
         """检查调度器是否已为该接收方持久领取一轮。"""
@@ -597,14 +617,20 @@ class MessageManager:
                     DeliveryState.BLOCKED,
                 }
                 if all(d.state == DeliveryState.COMPLETED for d in deliveries) or (
-                    tolerate_errors and all(d.state in terminal for d in deliveries)
+                    tolerate_errors
+                    and all(
+                        d.state in terminal
+                        and (not d.result_ready or d.state == DeliveryState.COMPLETED)
+                        for d in deliveries
+                    )
                 ):
                     return await self.get_replies(message_id)
                 bad = next(
                     (
                         d
                         for d in deliveries
-                        if d.state
+                        if not d.result_ready
+                        and d.state
                         in (DeliveryState.FAILED, DeliveryState.INTERRUPTED, DeliveryState.BLOCKED)
                     ),
                     None,
@@ -616,7 +642,7 @@ class MessageManager:
                     )
                 if not tolerate_errors:
                     for delivery in deliveries:
-                        if delivery.state != DeliveryState.PENDING:
+                        if delivery.state != DeliveryState.PENDING or delivery.result_ready:
                             continue
                         blocker = await self.get_queue_blocker(delivery.delivery_id)
                         if blocker is not None:
@@ -792,8 +818,7 @@ class MessageManager:
         for delivery_id in deliveries:
             try:
                 completed += int(await self._finish_result(delivery_id))
-            except Exception as exc:
-                await self._record_failure(delivery_id, DeliveryState.FAILED, str(exc))
+            except Exception:
                 logger.warning("Completion recovery failed: %s", delivery_id, exc_info=True)
         if completed:
             self._wake.set()
@@ -824,13 +849,14 @@ class MessageManager:
             return 0
         async with self._projection_lock:
             completed = 0
-            for message_id, attempts in await self._query.pending_room_projections(limit):
+            for projection in await self._query.pending_room_projections(limit):
+                message_id = projection.message_id
                 try:
                     await self._room_projector(await self.get_message(message_id))
                     await self._query.complete_room_projection(message_id)
                     completed += 1
                 except Exception as exc:
-                    failed = attempts + 1
+                    failed = projection.attempts + 1
                     exhausted = failed >= ROOM_PROJECTION_MAX_ATTEMPTS
                     await self._query.record_room_projection_failure(
                         message_id, attempts=failed, error=str(exc), exhausted=exhausted
@@ -1071,7 +1097,13 @@ class MessageManager:
             execution, FinalDeliveryResult(result.content, result_node_id, result.content_blocks)
         )
         if saved.needs_completion:
-            await self._finish_result(execution.delivery_id)
+            try:
+                await self._finish_result(execution.delivery_id)
+            except Exception:
+                # 结果和轮次已经提交。由收尾恢复重试，且照常发布轮次闭合。
+                logger.warning(
+                    "Completion remains pending: %s", execution.delivery_id, exc_info=True
+                )
         return saved.turn_closure
 
     async def _finish_atomic(self, scope: _AtomicDelivery, result: AgentMessage) -> None:

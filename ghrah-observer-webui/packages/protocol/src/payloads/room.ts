@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { z } from "zod";
+import { TurnCardSchema } from "./turn.js";
 
 // ─── Room Payloads ───
 
@@ -145,3 +146,54 @@ export type RoomEventPayload = z.infer<typeof RoomEventPayloadSchema>;
 export type RoomDeletedEventPayload = z.infer<typeof RoomDeletedEventPayloadSchema>;
 export type RoomMemberEventPayload = z.infer<typeof RoomMemberEventPayloadSchema>;
 export type RoomLogEventPayload = z.infer<typeof RoomLogEventPayloadSchema>;
+
+/** Room transcript REST 视图，与 Python observer_room 对齐。 */
+export const TranscriptDeliverySchema = z.object({
+  delivery_id: z.string(),
+  message_id: z.string(),
+  recipient_id: z.string(),
+  state: z.string(),
+  error: z.string().nullable(),
+  blocked_reason: z.string().nullable(),
+  turn_id: z.string().nullable(),
+  delivery_policy: z.string(),
+  display_state: z.string(),
+  queue_position: z.number().int().nonnegative(),
+  queue_reason: z.string().nullable(),
+  cancelable: z.boolean(),
+  injection_step: z.number().int().positive().nullable(),
+});
+
+export const TranscriptEntrySchema = z.object({
+  entry_id: z.string(),
+  seq: z.number().int(),
+  author: z.string(),
+  author_type: RoomSubjectTypeSchema,
+  timestamp: z.number(),
+  message_id: z.string().nullable(),
+  content: z.string(),
+  content_blocks: z.array(z.record(z.unknown())).nullable(),
+  targets: z.array(z.string()),
+  deliveries: z.array(TranscriptDeliverySchema),
+  turn_id: z.string().nullable(),
+  insert_before_turn_id: z.string().nullable(),
+  injection_step: z.number().int().positive().nullable(),
+  human_state: z.string().nullable(),
+  node_id: z.string().nullable(),
+});
+
+export const RoomTranscriptSchema = z.object({
+  project_id: z.string(),
+  room_id: z.string(),
+  entries: z.array(TranscriptEntrySchema),
+  turns: z.array(TurnCardSchema),
+  next_before_seq: z.number().int().nullable(),
+  next_since_seq: z.number().int().nullable(),
+  latest_seq: z.number().int(),
+  has_more: z.boolean(),
+  read_at: z.string(),
+});
+
+export type TranscriptDeliveryView = z.infer<typeof TranscriptDeliverySchema>;
+export type TranscriptEntryView = z.infer<typeof TranscriptEntrySchema>;
+export type RoomTranscriptView = z.infer<typeof RoomTranscriptSchema>;

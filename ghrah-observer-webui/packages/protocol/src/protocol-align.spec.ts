@@ -56,6 +56,7 @@ import {
   TurnWaitingHitlPayloadSchema,
   TurnClosedPayloadSchema,
   TurnDetailSchema,
+  RoomTranscriptSchema,
   HITLResponsePayloadSchema,
   ListAgentsPayloadSchema,
   PersistDeletePayloadSchema,
@@ -541,4 +542,26 @@ describe("ActionNode typed schema alignment", () => {
     expect(parsed.lifecycle).toBe("open");
     expect(parsed.head_node_id).toBe("node-001");
   });
+});
+
+it("RoomTranscriptSchema preserves the Python REST snapshot", () => {
+  const snapshot = loadSnapshot("RoomTranscriptView");
+  expect(RoomTranscriptSchema.parse(snapshot)).toEqual(snapshot);
+});
+
+it("RoomTranscriptSchema rejects unknown authors and non-positive injection steps", () => {
+  const snapshot = RoomTranscriptSchema.parse(loadSnapshot("RoomTranscriptView"));
+  const [entry] = snapshot.entries;
+  expect(
+    RoomTranscriptSchema.safeParse({
+      ...snapshot,
+      entries: [{ ...entry, author_type: "system" }],
+    }).success,
+  ).toBe(false);
+  expect(
+    RoomTranscriptSchema.safeParse({
+      ...snapshot,
+      entries: [{ ...entry, injection_step: 0 }],
+    }).success,
+  ).toBe(false);
 });

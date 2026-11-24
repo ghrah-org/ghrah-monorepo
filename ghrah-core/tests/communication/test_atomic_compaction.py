@@ -97,7 +97,9 @@ async def test_atomic_compaction_preserves_pending_input_and_then_completes(tmp_
             cm.record_window_occupied(1500)
         elif trigger != "emergency":
             cm.request_compact()
-        async with MessageManager(path, project_id="p", agent_ids=("a", "b")) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("a", "b")
+        ) as mm:
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),
@@ -139,7 +141,9 @@ async def test_compact_write_failure_keeps_old_head_and_retry_has_one_input(tmp_
         cm = agent._context_manager
         old_head = cm.active_head.id
         cm.request_compact()
-        async with MessageManager(path, project_id="p", agent_ids=("a", "b")) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("a", "b")
+        ) as mm:
             async with aiosqlite.connect(path) as db:
                 await db.execute(
                     "CREATE TRIGGER reject_compact BEFORE INSERT ON nodes "
@@ -202,7 +206,9 @@ async def main():
         agent = await ns['seeded_agent'](backend, ns['CompactLLM']())
         agent._event_publisher = Publisher()
         agent._context_manager.request_compact()
-        async with MessageManager(sys.argv[1], project_id='p', agent_ids=('a','b')) as mm:
+        async with MessageManager(
+            sys.argv[1], project_id='p', agent_ids=('a','b'), adopt_legacy_chain=True,
+        ) as mm:
             await mm.send(sender_id='a', recipient_ids=('b',), content='input',
                 kind=MessageKind.REQUEST, idempotency_key='input')
             await mm.bind_atomic(agent)
@@ -230,7 +236,9 @@ asyncio.run(main())
         cm = agent._context_manager
         await cm.restore("b")
         assert cm.active_head.metadata["node_kind"] == "compact"
-        async with MessageManager(path, project_id="p", agent_ids=("a", "b")) as mm:
+        async with MessageManager(
+            path, adopt_legacy_chain=True, project_id="p", agent_ids=("a", "b")
+        ) as mm:
             request = await mm.send(
                 sender_id="a",
                 recipient_ids=("b",),

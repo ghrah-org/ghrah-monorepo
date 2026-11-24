@@ -446,3 +446,12 @@ export {
   type DeliveryQueueEntryView,
   type DeliveryQueueView,
 } from "./payloads/delivery.js";
+
+export {
+  RoomTranscriptSchema,
+  type RoomTranscriptView,
+  TranscriptDeliverySchema,
+  type TranscriptDeliveryView,
+  TranscriptEntrySchema,
+  type TranscriptEntryView,
+} from "./payloads/room.js";
