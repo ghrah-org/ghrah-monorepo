@@ -401,4 +401,136 @@ describe("ConnectionsConfigPage", () => {
     expect(shown.text()).toContain("Max context");
     wrapper.unmount();
   });
+
+  it("shows MCP servers with vendor, secret, ability, search and expandable detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path.endsWith("/status")) {
+          return json({ format: "ghrah.agentconf-control.status.v1", schema_version: 6 });
+        }
+        if (path.endsWith("/mcp-providers")) {
+          return json({
+            format: "ghrah.agentconf-control.mcp-providers.v1",
+            providers: [
+              {
+                format: "ghrah.agentconf-control.mcp-provider.v1",
+                id: "p1",
+                name: "aliyun",
+                vendor: "Alibaba Cloud",
+                api_key_configured: true,
+                default_binding: null,
+                revision: 1,
+                created_at: "2026-11-24T00:00:00+00:00",
+                updated_at: "2026-11-24T00:00:00+00:00",
+              },
+            ],
+          });
+        }
+        if (path.endsWith("/mcp-servers")) {
+          return json({
+            format: "ghrah.agentconf-control.mcp-servers.v1",
+            servers: [
+              {
+                format: "ghrah.agentconf-control.mcp-server.v1",
+                id: "s1",
+                name: "aliyun_mcp",
+                transport: "streamable_http",
+                revision: 1,
+                command: null,
+                args: [],
+                env: {},
+                cwd: null,
+                url: "https://example.test/mcp",
+                headers: {},
+                protocol_version_hint: null,
+                options: {},
+                connect_timeout: null,
+                auth_mode: "provider",
+                provider_id: "p1",
+                binding_mode: null,
+                binding: null,
+                reference_configured: true,
+                created_at: "2026-11-24T00:00:00+00:00",
+                updated_at: "2026-11-24T00:00:00+00:00",
+              },
+            ],
+          });
+        }
+        if (path.endsWith("/ability-packages")) {
+          return json({
+            format: "ghrah.ability-control.packages.v1",
+            installed_available: true,
+            packages: [{ namespace: "mcp", name: "aliyun_mcp", version: "0.0.1" }],
+          });
+        }
+        return json({
+          format: "ghrah.ability-control.package-version.v1",
+          namespace: "mcp",
+          name: "aliyun_mcp",
+          full_name: "mcp.aliyun_mcp",
+          version: "0.0.1",
+          origin: "installed",
+          definition_origin: "mcp",
+          title: "Alibaba MCP",
+          description: "MCP tools",
+          lock_state: "ok",
+          problem: null,
+          shadowed_builtin: false,
+          verify: null,
+          mcp: { server: "aliyun_mcp", fetched_at: "2026-11-24T00:00:00+00:00", stale: false },
+          operations: [
+            {
+              key: "search",
+              title: "Search",
+              description: "Search",
+              input_schema: { type: "object" },
+              output_schema: {},
+              effects: [],
+              tags: [],
+              resources: {},
+              permissions: {},
+              expose: true,
+              execution: {
+                mode: "request",
+                timeout_ms: 30000,
+                cancellation: "cooperative",
+                on_revoke: "drain",
+                retry: "never",
+              },
+              mcp: { server: "aliyun_mcp", tool: "search" },
+              entry: null,
+            },
+          ],
+          skills: [],
+        });
+      }),
+    );
+    const wrapper = mount(ConnectionsConfigPage);
+    await flushPromises();
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "MCP")!
+      .trigger("click");
+    await flushPromises();
+    await wrapper
+      .findAll("[role=tab]")
+      .find((tab) => tab.text() === "MCP servers")!
+      .trigger("click");
+    await flushPromises();
+    await flushPromises();
+    const table = wrapper.get("[data-testid=connection-list]");
+    expect(table.text()).toContain("Alibaba Cloud");
+    expect(table.text()).toContain("Secret stored");
+    expect(table.text()).toContain("mcp.aliyun_mcp");
+    await wrapper.get("[data-testid=connection-list] tbody button").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("1 members");
+    expect(wrapper.text()).toContain("search");
+    await wrapper.get('input[type="search"]').setValue("missing");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Nothing here yet.");
+    wrapper.unmount();
+  });
 });
