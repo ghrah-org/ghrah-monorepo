@@ -127,6 +127,8 @@
 
 ## 6. 归档
 
+- [MCP 集成设计 v2（HTML 归档，内嵌「添加 MCP」可交互 Demo）](design/mcp-integration-design.html)：2026-11-24 快照，含实现期补充的模板 MCP 成员类型修复（§15）；源稿在本地 `plans/planning/`，不随仓分发。
+
 **[archive/](archive/README.md)** 收录 `docs/` 原有的 4 份 `2026-10-26-*` scheme 系列文档。它们描述的是迁到 `ghrah/scheme/` 的**半程状态**（自称"20 份 yaml 并入 4 份容器"，而今天是 5 份容器），已被 `f8ff157` 这一轮重构再次推翻，**不要照着写代码**。逐份判决见 [archive/README.md](archive/README.md) §2。
 
 本次重写所依据的另 **16 份** 2026-10-12 ~ 2026-10-28 旧稿（`能力系统建设设计方案.md`、`ability加载架构.md`、`skill-system-porting-guide.md` 等）**不随仓分发**：它们属于仓外私有资料库 `doc/archive/`，判定理由已全部吸收进 `ghrah-07` §2，回仓查证时只需读 `ghrah-07`。

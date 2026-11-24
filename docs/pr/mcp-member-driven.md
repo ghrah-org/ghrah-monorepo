@@ -40,6 +40,7 @@ MCP 从「内置 `ghrah.mcp` 包 + 模型可见 `mcp_call` + 包级 binding」�
   - `scripts/fix_mcp_template_member_types.py`：把存量模板中误存的 MCP 成员类型修正为 `mcp`，写前自动备份 `subject.db`。
 - **文档**
   - 更新架构、能力、成员规范、模板与数据存储文档；删除已退役内置 MCP 包的描述。
+  - 生成 [MCP 集成设计 HTML 归档](../design/mcp-integration-design.html)，内嵌可交互的前端 Demo，并补充模板 MCP 成员类型修复。
 
 ### 文件结构
 
