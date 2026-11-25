@@ -21,7 +21,6 @@ from ghrah.subject.config import (
     TransportKindConfig,
 )
 from ghrah.subject.runtime.assembly import assemble_subject
-from ghrah.subject.runtime.service_keys import SubjectServiceKey
 from ghrah.subject.sandbox import (
     AgentWorkspace,
     CommandResult,
@@ -31,6 +30,7 @@ from ghrah.subject.sandbox import (
     WorkspaceManager,
     WorkspaceStatus,
 )
+from ghrah.subject.service_key import SubjectServiceKey
 from ghrah.subject.unit.base import RouteSpec, SubjectUnit, UnitMeta
 
 __all__ = [

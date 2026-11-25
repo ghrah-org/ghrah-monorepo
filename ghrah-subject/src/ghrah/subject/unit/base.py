@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from ghrah.subject.runtime.service_keys import SubjectServiceKey
+from ghrah.subject.service_key import SubjectServiceKey
 
 __all__ = [
     "CommandContext",

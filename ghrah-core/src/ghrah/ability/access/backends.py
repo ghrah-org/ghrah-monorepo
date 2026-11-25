@@ -148,10 +148,6 @@ def _required_str(arguments: Mapping[str, Any], name: str) -> None:
         raise AccessError("invalid_change")
 
 
-def _core_list_abilities(arguments: Mapping[str, Any]) -> None:
-    _optional_str(arguments, "full_name")
-
-
 def _core_load_skill(arguments: Mapping[str, Any]) -> None:
     _required_str(arguments, "full_name")
     _optional_str(arguments, "path")
@@ -171,22 +167,6 @@ def _core_recall_context(arguments: Mapping[str, Any]) -> None:
 
 def _core_no_arguments(arguments: Mapping[str, Any]) -> None:
     """无参数成员：接受空映射；多余参数由实现侧契约拒绝。"""
-
-
-def _mcp_check(
-    member: str,
-    arguments: Mapping[str, Any],
-    roots: tuple[str, ...],
-    instance_root: str,
-) -> None:
-    """MCP 成员：server / tool 必须为非空字符串，arguments 必须是对象。"""
-    for name in ("server", "tool"):
-        value = arguments.get(name)
-        if not isinstance(value, str) or not value.strip():
-            raise AccessError("invalid_change")
-    payload = arguments.get("arguments")
-    if payload is not None and not isinstance(payload, Mapping):
-        raise AccessError("invalid_change")
 
 
 _FS_PATH_ARGUMENTS: dict[str, tuple[str, ...]] = {
@@ -213,10 +193,9 @@ _CLUSTER_OPTIONAL: dict[str, tuple[str, ...]] = {
 }
 
 _CORE_ARGUMENTS: dict[str, Any] = {
-    "search_tools": lambda args: _required_str(args, "query"),
+    "search_tools": _core_no_arguments,
     "describe_tool": lambda args: _required_str(args, "name"),
     "execute_tool": lambda args: _required_str(args, "name"),
-    "list_abilities": _core_list_abilities,
     "load_skill": _core_load_skill,
     "recall_context": _core_recall_context,
     "session_info": _core_no_arguments,
@@ -234,7 +213,6 @@ for _member, _args in _FS_PATH_ARGUMENTS.items():
 _register(SHELL_CONTRACT, "execute_command", ("working_dir",), _shell_check)
 for _member in (*_CLUSTER_REQUIRED, *_CLUSTER_OPTIONAL):
     _register(CLUSTER_CONTRACT, _member, (), _cluster_check)
-_register(MCP_CONTRACT, "mcp_call", (), _mcp_check)
 for _member in _CORE_ARGUMENTS:
     _register(CORE_CONTRACT, _member, (), _core_check)
 

@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -49,11 +50,13 @@ from ghrah.protocol.types import (
 )
 from pydantic import ValidationError
 
-from ghrah.subject.agents.creation import CreateAgentRequest, CreationError, create_agent
+from ghrah.subject.agents.creation import CreationError, prepare_agent_assembly
 from ghrah.subject.errors import StableError
 from ghrah.subject.project.entities import AgentEntityManager
 from ghrah.subject.project.isolation import validate_workspace_locators_non_nested
 from ghrah.subject.project.models import (
+    AgentOrigin,
+    AgentPresentation,
     AgentRecord,
     ProjectRecord,
     ProjectStatus,
@@ -86,10 +89,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CREATE_TIMEOUT_SECONDS = 45.0
+
 # server 装配层（units/websocket_observer_endpoint.py 的 _EngineDispatchAdapter）
 # 会把 request_id/session_id 信封字段注入 payload 副本；ProjectCreatePayload /
 # ProjectUpdatePayload 为 extra="forbid" strict 模型，验证前需剥离。
 _ENVELOPE_KEYS = frozenset({"request_id", "session_id"})
+
+
+def _dump_pending_tasks() -> None:
+    """Core 创建超时时记录存活协程栈，便于定位卡点。"""
+    tasks = [task for task in asyncio.all_tasks() if not task.done()]
+    logger.error("create_agent 超时：仍有 %d 个协程在跑", len(tasks))
+    for task in tasks:
+        logger.error("-- task %s", task.get_name())
+        for frame in task.get_stack():
+            logger.error(
+                "   %s:%s in %s",
+                frame.f_code.co_filename,
+                frame.f_lineno,
+                frame.f_code.co_name,
+            )
 
 
 class ProjectLock:
@@ -874,38 +894,65 @@ class ProjectManager:
                 raise StableError("project_unavailable", project_id)
             if any(a.name == spec.name for a in project.agents):
                 raise StableError("agent_name_exists", spec.name)
+            expected = project.version if expected_version is None else expected_version
+            if (conflict := self._check_expected_version(project, expected)) is not None:
+                raise ConcurrentModificationError(conflict["error"])
             templates = self._template_store() if self._template_store is not None else None
             if templates is None:
                 raise StableError(
                     "template_store_unavailable", "agent template store is not mounted"
                 )
+            try:
+                prepared = await prepare_agent_assembly(
+                    template_id=spec.template_id,
+                    revision=spec.revision,
+                    agent_name=spec.name,
+                    templates=templates,
+                    workspaces=self._workspace_roots(project),
+                    initial_bindings=(
+                        None if spec.initial_bindings is None else tuple(spec.initial_bindings)
+                    ),
+                )
+            except CreationError as error:
+                raise StableError(error.code, error.detail) from error
+
             handle = await self._cluster_transport.ensure_cluster(
                 project_id,
                 project_id=project_id,
                 project_root_locator=project.project_root_locator,
             )
             try:
-                created = await create_agent(
-                    CreateAgentRequest(
-                        template_id=spec.template_id,
-                        revision=spec.revision,
-                        name=spec.name,
-                        desired_state=spec.desired_state,
-                        initial_bindings=(
-                            None if spec.initial_bindings is None else tuple(spec.initial_bindings)
-                        ),
-                    ),
-                    templates=templates,
-                    workspaces=self._workspace_roots(project),
-                    available=None,
-                    create=handle.create_assembly,
+                created = await asyncio.wait_for(
+                    handle.create_assembly(prepared.spec), timeout=CREATE_TIMEOUT_SECONDS
                 )
-            except CreationError as error:
-                raise StableError(error.code, error.detail) from error
-            record = created.record.model_copy(
-                update={"project_id": project.project_id, "agent_id": created.agent_id}
+            except TimeoutError as error:
+                _dump_pending_tasks()
+                raise StableError(
+                    "agent_create_timeout",
+                    f"agent assembly did not finish in {CREATE_TIMEOUT_SECONDS:.0f}s",
+                ) from error
+            except Exception as error:  # noqa: BLE001
+                raise StableError("agent_create_failed", str(error)) from error
+
+            metadata = prepared.metadata
+            now = datetime.now(UTC)
+            record = AgentRecord(
+                agent_id=created.agent_id,
+                project_id=project.project_id,
+                name=spec.name,
+                presentation=AgentPresentation(
+                    title=metadata.title,
+                    description=metadata.description,
+                    tags=list(metadata.tags),
+                    icon=metadata.icon,
+                    deprecated=metadata.deprecated,
+                ),
+                origin=AgentOrigin(template_id=spec.template_id, revision=spec.revision),
+                desired_state=spec.desired_state,
+                runtime_status="running",
+                created_at=now,
+                updated_at=now,
             )
-            expected = expected_version if expected_version is not None else project.version
             updated = await self._store.update(
                 project_id,
                 expected,

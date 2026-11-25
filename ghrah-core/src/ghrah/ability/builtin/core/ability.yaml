@@ -261,251 +261,6 @@ members:
     path: ghrah/core/operations/execute_tool.py
 - namespace: ghrah
   name: core
-  member: ghrah.core.list_abilities
-  type: operation
-  version: null
-  ability_type: kernel
-  axes:
-    visible: true
-    bind: true
-  data:
-    title: List Abilities
-    description: List this Agent's granted Operations and Skills from the current authorization view. Pass an exact full_name for one entry. Skill names match load_skill's alias/skill input; Skill details include only granted attachment paths.
-    input_schema:
-      additionalProperties: false
-      properties:
-        full_name:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Optional exact entry name returned by this tool; omit to list granted entries.
-      type: object
-    output_schema:
-      $defs:
-        GrantedAttachmentOutput:
-          additionalProperties: false
-          description: 获授 Skill 的一个附件。
-          properties:
-            key:
-              description: Attachment key
-              type: string
-            member:
-              description: Granted member address
-              type: string
-            path:
-              description: Package-relative path
-              type: string
-            media_type:
-              description: Media type
-              type: string
-            size:
-              description: Size in bytes
-              type: integer
-            digest:
-              description: Content digest
-              type: string
-            available:
-              description: Whether the attachment may be executed
-              type: boolean
-          required:
-          - key
-          - member
-          - path
-          - media_type
-          - size
-          - digest
-          - available
-          type: object
-        ListedAbilityOutput:
-          additionalProperties: false
-          description: 目录模式下的一条 Operation。
-          properties:
-            full_name:
-              description: alias/operations/key
-              type: string
-            kind:
-              description: Entry kind
-              type: string
-            description:
-              description: Operation description
-              type: string
-            availability:
-              description: ready, unavailable, or unknown
-              type: string
-          required:
-          - full_name
-          - kind
-          - description
-          - availability
-          type: object
-        ListedSkillOutput:
-          additionalProperties: false
-          description: 目录模式下的一条 Skill。
-          properties:
-            full_name:
-              description: alias/skill
-              type: string
-            kind:
-              description: Entry kind
-              type: string
-            description:
-              description: Skill description
-              type: string
-          required:
-          - full_name
-          - kind
-          - description
-          type: object
-      additionalProperties: false
-      properties:
-        abilities:
-          anyOf:
-          - items:
-              $ref: '#/$defs/ListedAbilityOutput'
-            type: array
-          - type: 'null'
-          default: null
-          description: Granted operations, when full_name was omitted
-        skills:
-          anyOf:
-          - items:
-              $ref: '#/$defs/ListedSkillOutput'
-            type: array
-          - type: 'null'
-          default: null
-          description: Granted skills, when full_name was omitted
-        count:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          default: null
-          description: Total granted entries before truncation
-        truncated:
-          anyOf:
-          - type: boolean
-          - type: 'null'
-          default: null
-          description: Whether either list was cut at 100
-        sources:
-          anyOf:
-          - additionalProperties:
-              type: boolean
-            type: object
-          - type: 'null'
-          default: null
-          description: Where the catalog was read from
-        full_name:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Exact entry, when full_name was given
-        kind:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Entry kind of the exact match
-        description:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Description of the exact match
-        alias:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Package alias of the exact match
-        member:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Member address of the exact match
-        instance_id:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Skill instance id
-        version_digest:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Committed version digest
-        input_schema:
-          anyOf:
-          - additionalProperties: true
-            type: object
-          - type: 'null'
-          default: null
-          description: Operation input schema of the exact match
-        output_schema:
-          anyOf:
-          - additionalProperties: true
-            type: object
-          - type: 'null'
-          default: null
-          description: Operation output schema of the exact match
-        availability:
-          anyOf:
-          - type: string
-          - type: 'null'
-          default: null
-          description: Availability of the exact match
-        tool_names:
-          anyOf:
-          - items:
-              type: string
-            type: array
-          - type: 'null'
-          default: null
-          description: Bound tool names of the exact operation
-        assets:
-          anyOf:
-          - items:
-              $ref: '#/$defs/GrantedAttachmentOutput'
-            type: array
-          - type: 'null'
-          default: null
-          description: Granted skill assets
-        references:
-          anyOf:
-          - items:
-              $ref: '#/$defs/GrantedAttachmentOutput'
-            type: array
-          - type: 'null'
-          default: null
-          description: Granted skill references
-        scripts:
-          anyOf:
-          - items:
-              $ref: '#/$defs/GrantedAttachmentOutput'
-            type: array
-          - type: 'null'
-          default: null
-          description: Granted skill scripts
-      type: object
-    tags:
-    - core
-    - discovery
-    effects: []
-    permissions: {}
-    resources: {}
-    execution:
-      mode: request
-      timeout_ms: 60000
-      cancellation: unsupported
-      on_revoke: drain
-      retry: never
-    expose: true
-    path: ghrah/core/operations/list_abilities.py
-- namespace: ghrah
-  name: core
   member: ghrah.core.load_skill
   type: operation
   version: null
@@ -520,7 +275,7 @@ members:
       additionalProperties: false
       properties:
         full_name:
-          description: Exact alias/skill name from the available-skills catalog or list_abilities.
+          description: Exact alias/skill name from the available-skills catalog.
           minLength: 1
           type: string
         path:
@@ -806,48 +561,60 @@ members:
     bind: true
   data:
     title: Search Tools
-    description: Search granted tools when the visible tools are insufficient. Use English keywords if needed.
+    description: List granted tools (operations and MCP members) that are visible but not bound in this Agent instance (axes.visible=true, axes.bind=false). Call bind_member to keep one in context, or execute_tool to call it directly.
     input_schema:
       additionalProperties: false
-      properties:
-        query:
-          description: Keywords; English keywords may improve matches.
-          minLength: 1
-          type: string
-        limit:
-          default: 8
-          description: Maximum number of results, at most 20.
-          maximum: 20
-          minimum: 1
-          type: integer
-      required:
-      - query
+      properties: {}
       type: object
     output_schema:
       $defs:
         SearchItem:
           additionalProperties: false
-          description: 可返回给模型的一行搜索摘要。
+          description: 当前可见但未绑定的授予成员。
           properties:
             name:
+              description: Exact tool name for describe_tool, execute_tool, or bind_member.
               type: string
-            description:
+            member:
+              description: Member full name recorded in the Agent instance snapshot.
               type: string
             package:
+              description: Package alias of the member.
               type: string
+            title:
+              description: Member title.
+              type: string
+            description:
+              description: Member description.
+              type: string
+            available:
+              description: Whether the member backend is currently available.
+              type: boolean
           required:
           - name
-          - description
+          - member
           - package
+          - title
+          - description
+          - available
           type: object
       additionalProperties: false
       properties:
-        tools:
+        status:
+          description: ok, empty, unavailable, not_found, or error.
+          type: string
+        data:
+          description: Visible but unbound granted tools.
           items:
             $ref: '#/$defs/SearchItem'
           type: array
+        reason:
+          description: Why data is empty, when it is.
+          type: string
       required:
-      - tools
+      - status
+      - data
+      - reason
       type: object
     tags:
     - core

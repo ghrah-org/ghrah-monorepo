@@ -448,8 +448,11 @@ async def test_same_member_in_two_packages_routes_by_qualified_name(store, tmp_p
     import yaml
     from _helpers import ToolScriptedLLM
 
+    from ghrah.ability.member import Member
     from ghrah.agents.builder import AgentBuilder
     from ghrah.chat.content import ToolCallBlock
+    from ghrah.core.agents import AgentInstanceStore
+    from ghrah.core.agents.bindings import MemberBindingState
     from ghrah.core.message import AgentMessage, MessageType
 
     first_module = MODULE.replace(
@@ -471,21 +474,38 @@ async def test_same_member_in_two_packages_routes_by_qualified_name(store, tmp_p
     manifest = AGENT_YAML + "  - ref: acme.other.render\nsurface: {mode: progressive}\n"
     resolved = assembly.source.resolver().resolve(parse_agent_manifest(manifest))
     resolved.config = replace(resolved.config, agent_id=AGENT, workspace_root=str(tmp_path))
+    instance_store = AgentInstanceStore(tmp_path / "agents.sqlite3")
+    await instance_store.start()
     materializer = StartupGrantMaterializer(
         store=store,
         source=assembly.source,
         actor=ACTOR,
         policy=GrantPolicy(),
         workspace_root=str(tmp_path),
+        binding_state=MemberBindingState(lambda: instance_store),
     )
     try:
         table = await materializer.materialize(agent=AGENT, resolved=resolved)
         await materializer.bind_run(AGENT, table)
+        # 可见但未绑定：两个同名成员都应在发现面里，且按限定名区分。
+        await instance_store.save(
+            agent_id=AGENT,
+            name="consumer",
+            config={},
+            members=[
+                Member.reference(
+                    member="acme.reports.render", type="operation", bind=False
+                ).to_wire(),
+                Member.reference(
+                    member="acme.other.render", type="operation", bind=False
+                ).to_wire(),
+            ],
+        )
         names = {binding.tool_name for binding in table.tools}
         assert {"reports__render", "other__render"} <= names and "render" not in names
         model = ToolScriptedLLM(
             [
-                [ToolCallBlock(id="search", name="search_tools", arguments={"query": "render"})],
+                [ToolCallBlock(id="search", name="search_tools", arguments={})],
                 [
                     ToolCallBlock(
                         id="first",
@@ -524,9 +544,10 @@ async def test_same_member_in_two_packages_routes_by_qualified_name(store, tmp_p
         }
         assert literal_eval(results["first"])["text"] == "first package"
         assert literal_eval(results["second"])["text"] == "second package"
-        assert {row["name"] for row in literal_eval(results["search"])["tools"]} == {
+        assert {row["name"] for row in literal_eval(results["search"])["data"]} == {
             "reports__render",
             "other__render",
         }
     finally:
         await materializer.close_agent_resources(AGENT)
+        await instance_store.close()

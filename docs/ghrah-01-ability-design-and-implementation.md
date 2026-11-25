@@ -3,782 +3,638 @@
 | 项 | 内容 |
 | --- | --- |
 | 文档编号 | GHRAH-DESIGN-001 |
-| 文档状态 | 现行（authoritative） |
-| 校准基线 | `ghrah-monorepo` @ `f8ff157`（2026-10-28），`ghrah-core` 0.2.0a0 |
-| 读者 | 维护能力系统的开发者、要新增能力包的开发者、评审运行时契约的架构人员 |
-| 取代 | `02-能力系统.md`、`能力系统建设设计方案.md`、`2026-10-13-ability-system-object-fields-design.md`、`2026-10-13-ability-terminology-and-structure-rulings.md`、`ability加载架构.md`、`ability架构适配设计文档.md`、`2026-10-26-ability-scheme-draft.md`、`2026-10-12-ability-command-plane-p1.md`、`2026-10-13-ability-gaps-blocking-triage.md`、`能力协议层调用依赖分析.md`（全部归档至 `docs/archive/`） |
-| 相关文档 | `ghrah-02-ability-package-guide.md`（怎么加一个成员）、`ghrah-04-skill-system.md`（skill 成员与目录注入）、`ghrah-06-code-map.md`（文件级索引）、`07-设计决策与演进留痕.md`（为什么变成现在这样） |
+| 文档状态 | 现行（authoritative，已实现） |
+| 校准基线 | `ghrah-monorepo` @ `a742fcf`（2026-11-23） |
+| 读者 | 维护能力系统的开发者、写能力包的人、评审运行时契约的架构人员 |
+| 相关文档 | `ghrah-11-member-spec.md`（成员概念唯一定义）、`ghrah-12-ability-package-layout.md`（包布局与构建/安装职责）、`ghrah-13-ability-data-store.md`（数据底座）、`ghrah-02`（新增成员手册）、`ghrah-04`（技能系统） |
 
 ## 修订记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
-| 1.0 | 2026-10-28 | 首版。以代码为准重建：定义面（`ability.yaml`）、目录池、扫盘、运行时投影、工具面、执行面、Hook、权限与 HITL、两条装配路径、不变式与已知偏差；旧设计中的注册表/挂载表/指令面概念在 §14 逐条判定为不存在 |
+| 1.0 | 2026-10-28 | 首版。以旧 `ghrah.scheme` 布局为基线描述定义面、目录池、扫盘、工具面与执行面 |
+| 2.0 | 2026-11-23 | 全文重写。基线升到 `a742fcf`：定义面 v2、授权投影 + 绑定轴、启动提交到 SQLite（运行期只读库）、工具面 static/progressive、技能目录每轮注入、执行三段、装配收敛为单一路径；旧布局与 v1 查询链在 §14 逐条判定 |
 
-## 1. 范围
+## 1 文档说明
 
-本文描述 Ghrah 能力系统（Ability System）**当前实现**的结构与契约：能力包如何被定义、如何被发现、如何被投影成模型工具、一次工具调用如何被执行、权限与人工审批在哪一层生效、以及装配期由谁把这些对象接起来。
+### 1.1 目的、范围与权威顺序
 
-**权威顺序**：代码 > 本文 > `docs/archive/` 里的历史设计稿。本文与代码冲突时以代码为准，并把冲突当作文档缺陷（见 §13.2）。文中所有 `path:line` 引用都以校准基线 commit 的行号为准，行号会随重构漂移，符号名不会——找不到行号时按符号名检索。
+本文描述能力系统**当前实现**：包如何被定义、如何加载并提交进关系库、授权事实如何投影成模型可见的工具与技能目录、一次调用如何被接纳与执行、权限与人工审批在哪一层生效、装配期由谁把这些对象接起来。
 
-**不在本文范围**：Agent 驱动循环本身（见 `ghrah-03-drive-loop.md`）、技能目录与 `SKILL.md` 的完整语义（见 `ghrah-04-skill-system.md`）、构建/启动/日志（见 `ghrah-05-build-startup-and-troubleshooting.md`）、协议与前端下发（见 `ghrah-06-code-map.md` §5）。
+**权威顺序**：代码 > 本文 > `docs/archive/` 历史稿；冲突以代码为准并当作文档缺陷修正。`member` 的数据形状以 `ghrah-11` 为准，包目录与构建/安装边界以 `ghrah-12` 为准，关系库表与读写路径以 `ghrah-13` 为准——本文不重复其逐字段定义，只在解释机制时引用。
 
-### 1.1 路径约定
+**不在范围**：驱动循环（`ghrah-03`）、`SKILL.md` 正文语义与技能包治理（`ghrah-04`）、构建/启动/日志排障（`ghrah-05`）、协议 wire 与前端（`ghrah-08`）。
 
-为压缩引用长度，本文使用下列缩写（展开后为相对 `D:\codeWorkSpace\ghrah-project\` 的真实路径）：
+### 1.2 证据约定
 
-| 缩写 | 展开 |
-| --- | --- |
-| `scheme/...` | `ghrah-monorepo/ghrah-core/src/ghrah/scheme/...` |
-| `core/...` | `ghrah-monorepo/ghrah-core/src/ghrah/core/...` |
-| `agents/...` | `ghrah-monorepo/ghrah-core/src/ghrah/agents/...` |
-| `unit.py` | `ghrah-monorepo/ghrah-core/src/ghrah/core/unit.py` |
-| `subject/...` | `ghrah-monorepo/ghrah-subject/src/ghrah/subject/...` |
+- 关键论断给「**符号名 + 文件路径**」，例：`store.surface_snapshot`，`ghrah-core/src/ghrah/ability/access/store.py`。
+- **行号只作当前校准指针**，不承诺稳定；找不到行号按符号名检索。
+- 状态只用「**已实现 / 未实施**」。
+- 路径缩写：`ability/` = `ghrah-core/src/ghrah/ability/`；`core/` = `ghrah-core/src/ghrah/core/`；`protocol/` = `ghrah-protocol/src/ghrah/protocol/`。
 
-## 2. 术语
+### 1.3 术语
 
 | 术语 | 定义 | 代码位置 |
 | --- | --- | --- |
-| 能力包 / 容器（container） | 一个含 `ability.yaml` 的目录。容器名 = `identity.name or identity.namespace`，且必须等于目录名 | `scheme/loading/ability_schema.py:294-302`、`scheme/loading/ability_scan.py:505-516` |
-| 成员（member） | 容器内三类可寻址项之一：`operations` / `skills` / `assets`，键即成员名 | `scheme/loading/ability_scan.py:255-361` |
-| 定义面（definition） | `ability.yaml` 表达的静态事实：身份、提供者槽、成员契约 | `scheme/loading/ability_schema.py` |
-| 实现面（implementation） | `operations/<key>.py` 里的实现脚本，按路径约定被 import | `scheme/loading/ability_catalog.py:166` |
-| 目录面（catalog） | 全池扫盘结果，含用户目录，收集式不抛错 | `scheme/loading/ability_scan.py:532-604` |
-| 实现面投影 | 只扫内置树、严格抛错的运行时视图 | `scheme/loading/ability_catalog.py:102-127` |
-| 运行时视图（`AbilityManifest`） | 从定义面+实现面**投影**出的旧格式对象，供列表类工具与兼容层使用 | `scheme/loading/ability_catalog.py:338-396` |
-| 工具面（tool list） | 交给模型的 function-calling schema 集合，工具名 = 成员键 | `scheme/loading/tool_list.py:107-161` |
-| handler | 成员键同名标识，用来定位实现模块与类 | `scheme/loading/ability_catalog.py:452-466` |
-| 提供者槽（provider slot） | `implementation.provider_slot`，声明本成员依赖哪个后端契约 | `scheme/loading/ability_schema.py:176-179`、`:199-200` |
-| HITL | Human-In-The-Loop，人工审批 | `scheme/permissions/hitl.py`、`scheme/execution/executor.py:651-763` |
+| 能力包（package） | 含 `ability.yaml` 的目录；身份由 `identity` 决定，**不取自目录名** | `ability/loading/ability_schema.py` `AbilityDefinition` |
+| 成员（member） | 包内可单独申请、授予、装载的最小单元：`operation` / `skill` / `mcp` | `ability/member.py` `Member` |
+| 定义面（definition） | `ability.yaml` 的静态事实：身份、成员契约、执行约束 | `ability/loading/ability_schema.py` |
+| 提交（commit） | 把定义 + 实现标识 + 内容清单 + 内容字节写入关系库 | `ability/access/store.py` `commit_version` |
+| 授权投影 | 关系库里「某 Agent 对某包获授哪些成员、各成员可见/可用」的读模型 | `ability/access/facts.py` `GrantFacts`、`protocol/ability_tree.py` |
+| 绑定轴（bind） | 成员是否常驻模型上下文；权威是实例快照 `agent_instances.members[].axes.bind` | `ability/member.py` `MemberAxes`、`core/agents/bindings.py` |
+| 工具面（surface） | 交给模型的 function-calling schema 集合 | `ability/surface/` |
+| 技能面（skill catalog） | 每轮注入的技能目录 + 按需读取正文 | `ability/loading/skill_context.py`、`ability/surface/runtime.py` |
+| HITL | Human-In-The-Loop，人工审批 | `ability/permissions/hitl.py`、`ability/execution/executor.py` |
 
-## 3. 总体结构
+## 2 能力系统的四层视角
 
-### 3.1 四个面
-
-```
-ability.yaml  ──parse──►  AbilityDefinition ──┐
-（定义面）                                     ├─► scan_ability_definitions() ──► AbilityScanResult
-                          <root>/<容器>/…  ────┘        （目录面：全池，收集 issue）
-                                                                 │
-                      内置树（rank 0） ──► load_ability_definitions()（实现面：只内置，严格抛错）
-                                                                 │
-                                        build_tool_schema() ──► ToolList（工具面：交给模型）
-                                                                 │
-                                        operations/<key>.py ──► Ability 实例 ──► AbilityExecutor
+```text
+① 定义面            ② 成员 / 授权              ③ 工具面 / 技能面            ④ 执行
+ability.yaml   →  Member + GrantFacts      →  tool_name / catalog_name  →  OperationCall
+（已构建索引）      （关系库 + 实例快照）        （每轮从库重建的投影）        + ExecutionServices
+     │                     │                          │                        │
+ 包作者声明          启动核定写入事实            模型看到什么            一次调用如何落地
 ```
 
-四个面职责互斥，**不允许**把一面的结论写回另一面：定义面不承载权限与 hook（见 §4.9），实现面不决定工具是否可见（见 §4.7），工具面不去猜实现位置（见 §8.2）。
-
-### 3.2 零缓存
-
-能力系统的所有查询 API 都**每次调用重新扫盘或重新投影**，不持有缓存：
-
-- `load_ability_definitions()` `scheme/loading/ability_catalog.py:112`
-- `load_all_builtin_manifests()` `scheme/loading/ability_catalog.py:405`
-- `operation_containers()` `scheme/loading/ability_catalog.py:460`
-- `has_handler()` `scheme/loading/ability_catalog.py:490`
-- `scan_ability_definitions()` `scheme/loading/ability_scan.py:535`
-- `load_tool_list()` `scheme/loading/tool_list.py:30`
-- `skill_context.load_skill_catalog()` `scheme/loading/skill_context.py:24`
-
-成立前提是 YAML 解析足够便宜：`load_yaml()` 显式绑定 `yaml.CSafeLoader`（`scheme/loading/ability_schema.py:91`），注释给出量化：36KB 定义从 ~75ms 降到 ~6ms（`scheme/loading/ability_schema.py:78-80`）。**新增查询 API 时不要自己加 `lru_cache`**，否则会引入"改了 `ability.yaml` 但不生效"的第二权威。
-
-> 已知文档缺陷：`scheme/loading/ability_catalog.py:20` 的模块 docstring 仍提到 `load_all_builtin_manifests.cache_clear()`，该函数并没有 `lru_cache`，同文件 `:405` 明写"每次调用都重新投影（无缓存）"。以 `:405` 为准。
-
-### 3.3 模块职责
-
-| 模块 | 职责 | 是否对外 |
-| --- | --- | --- |
-| `scheme/loading/ability_schema.py` | `ability.yaml` 的 pydantic 模型与跨字段校验；四个文件名常量 | 是（常量被 skill 层复用） |
-| `scheme/loading/ability_roots.py` | 扫描根与优先级（内置 rank 0 / 用户 rank 100） | 是 |
-| `scheme/loading/ability_scan.py` | 全池扫盘、成员装配、lock 指纹 | 是（`scan_abilities`） |
-| `scheme/loading/ability_catalog.py` | 内置树严格投影、handler→类 解析、`create_ability` | 是 |
-| `scheme/loading/catalog.py` | 能力+handler+容器+skill+issue 的合并报告 | 是（`scan_catalog`） |
-| `scheme/loading/tool_list.py` | 工具面 | 是（`load_tool_list`） |
-| `scheme/loading/ability_view.py` | `AbilityManifest` 视图模型（投影目标形态） | 内部 |
-| `scheme/loading/skill_context.py` / `skill_mcp.py` / `skill_lock.py` / `skill_fingerprint.py` | skill 成员、MCP 声明、lock | 见 `ghrah-04-skill-system.md` |
-| `scheme/loading/manifest_io.py` / `manifest_fields.py` | 旧 manifest 形态的解析与字段（遗留兼容层，见 §7.6） | 兼容 |
-| `scheme/execution/*` | `Ability` 契约、执行上下文、执行器、Hook | 是 |
-| `scheme/permissions/*` | FS 权限、命令分级、HITL hook | 是 |
-| `scheme/paths.py` / `kinds.py` / `errors.py` | 路径规格、能力分类、能力异常 | 是 |
-| `scheme/ability/<容器>/` | 能力包本身（**只放包，不含加载逻辑**，`scheme/__init__.py:19`） | 数据 |
-
-## 4. 定义面：`ability.yaml`
-
-### 4.1 位置、身份与命名
-
-- 路径：`<扫描根>/<容器名>/ability.yaml`，扫描深度固定为 1（`scheme/loading/ability_scan.py:491`）。仓库内只有 5 份：`scheme/ability/{fs,core,cluster,shell,mcp}/ability.yaml`。
-- `format` 必须是字面量 `ghrah.ability-definition`（`scheme/loading/ability_schema.py:283`），`schema_version` 必须是 `0.1-draft`（`:54`、校验 `:121-125`）。
-- 容器身份 `identity.namespace` 允许 `-` 与 `_`（`^[a-z][a-z0-9_-]*$`）；`identity.name` 只允许 `[a-z0-9_]`，**不允许连字符**（`:155-156`）——因为 `identity.name` 会参与 Python 包路径（`<容器>/operations/<key>.py`）。
-- 容器名与目录名必须相等，否则该包记一条 issue 并跳过（`scheme/loading/ability_scan.py:505-516`）。原文理由：目录名只作定位，身份以定义面为准。
-
-### 4.2 顶层字段
-
-| 字段 | 类型 | 必填 | 默认 | 行号 |
-| --- | --- | --- | --- | --- |
-| `format` | `Literal["ghrah.ability-definition"]` | 是 | — | `:283` |
-| `schema_version` | `str` | 是 | — | `:284` |
-| `identity` | `AbilityIdentity` | 是 | — | `:285` |
-| `title` | `str`（≥1） | 是 | — | `:286` |
-| `description` | `str`（≥1） | 是 | — | `:287` |
-| `provider_requirements` | `dict[str, ProviderRequirement]` | 否 | `{}` | `:288` |
-| `operations` | `dict[str, OperationDefinition]` | 否 | `{}` | `:289` |
-| `skills` | `dict[str, SkillDefinition]` | 否 | `{}` | `:290` |
-| `assets` | `dict[str, Any]` | 否 | `{}` | `:291` |
-
-所有子模型都设 `extra="forbid"`（`:153`、`:174`、`:185`、`:197`、`:206`、`:229`、`:266`、`:281`），拼错字段名直接报错，不做隐式吸收。
-
-### 4.3 `identity`
-
-| 字段 | 类型 | 必填 | 默认 | 行号 |
-| --- | --- | --- | --- | --- |
-| `namespace` | `str`，`^[a-z][a-z0-9_-]*$` | 是 | — | `:155` |
-| `name` | `str \| None`，`^[a-z][a-z0-9_]*$` | 否 | `None` | `:156` |
-| `version` | `str`（≥1） | 是 | — | `:157` |
-
-派生：`full_name` = `namespace.name`，`name` 缺席时退化为 `namespace`（`:160-168`）；`legacy_namespace` 同值（`:314-322`）；`full_name_of(key)` = `<点分身份>.<key>`（`:324-335`）。点分全名（如 `ghrah.fs.read_file`）**只**用于视图键、去重与问题定位，**不是**工具名（§8.2）。
-
-### 4.4 `provider_requirements`
-
-| 字段 | 类型 | 必填 | 默认 | 行号 |
-| --- | --- | --- | --- | --- |
-| `contract` | `str`（≥1） | 是 | — | `:176` |
-| `contract_digest` | `str \| None` | 否 | `None` | `:177` |
-| `required_capabilities` | `list[str]` | 否 | `[]` | `:179` |
-
-`contract_digest` 由发布路径从唯一规范计算填入，**作者不自签**（`:178`）。`implementation.provider_slot` 必须在 `provider_requirements` 里声明过，否则拒绝（跨字段校验 3，`:135-140`）。
-
-### 4.5 `operations.<key>` 与成员契约
-
-| 字段 | 类型 | 必填 | 默认 | 行号 |
-| --- | --- | --- | --- | --- |
-| `title` | `str`（≥1） | 是 | — | `:208` |
-| `description` | `str`（≥1） | 是 | — | `:209` |
-| `input_schema` | `dict[str, Any]` | 是 | — | `:210` |
-| `output_schema` | `dict[str, Any]` | 是 | — | `:211` |
-| `errors` | `dict[str, Any]` | 否 | `{}` | `:212` |
-| `implementation` | `OperationImplementation` | 是 | — | `:213` |
-| `effects` | `list[str]` | 否 | `[]` | `:214` |
-| `resources` | `dict[str, Any]` | 否 | `{}` | `:215` |
-| `execution` | `ExecutionSpec` | 是 | — | `:216` |
-| `expose` | `bool` | 否 | `True` | `:217` |
-
-`implementation` 两个字段都必填且 `min_length=1`：`provider_slot`（`:199`）、`operation`（`:200`）。跨字段校验 2 要求 `implementation.operation == 成员键`（`:127-132`），因此"成员键改名但实现没改"会在扫描期直接失败。
-
-### 4.6 `execution`（`ExecutionSpec`）
-
-| 字段 | 取值 | 必填 | 行号 |
+| 层 | 权威 | 产物 | 失败语义 |
 | --- | --- | --- | --- |
-| `mode` | `Literal["request"]`（首版只支持 request 语义） | 是 | `:187` |
-| `timeout_ms` | `int`，`>0` | 是 | `:188` |
-| `cancellation` | `Literal["cooperative","unsupported"]` | 是 | `:189` |
-| `on_revoke` | `Literal["drain","request_cancel"]` | 是 | `:190` |
-| `retry` | `Literal["never"]` | 是 | `:191` |
+| ① 定义面 | 已提交版本的 `ability_versions.definition` | `AbilityDefinition` / `Member` | 构建期严格报错；安装期 `index_mismatch` |
+| ② 成员 / 授权 | `ability_grants`（授予）+ `agent_instances.members`（绑定轴） | 授予地址集合与两轴 | fail-closed：不一致即拒绝 |
+| ③ 工具面 / 技能面 | ②的单向投影，不持第二份授权 | `SurfaceCatalog`、工具定义、目录文本 | 读不到即空，不猜 |
+| ④ 执行 | 装配时固定的成员引用与受信身份 | `ActionResult` | 拒绝落成 `FAILURE`，不抛异常 |
 
-**重要事实：`timeout_ms` 目前不参与执行。** 它是定义面声明，`AbilityOperation.timeout_ms` 也把它透出（`scheme/loading/ability_scan.py:229-231`），但执行器从不读取它——`execute_ability` 里没有为 `ability.execute()` 包任何超时（`scheme/execution/executor.py:400`，全文件唯一 `wait_for` 在 `:710`，只用于 HITL 等待）。内置包取值：`fs`/`core`/`cluster` 全部 `60000`，`shell`/`mcp` 为 `300000`（`scheme/ability/shell/ability.yaml:65`、`scheme/ability/mcp/ability.yaml:73`）。改这个字段不会改变运行时行为，改执行超时目前无受支持途径。
+**单向派生**：③ 只能从 ② 生成，② 只能从 ① 与显式策略生成；任何一层都不反向改写上一层（细节见 `ghrah-13` §1.1）。
 
-### 4.7 `expose` 是工具面唯一开关
+## 3 定义面 v2
 
-原文（`scheme/loading/ability_schema.py:218-222`）：`True`（缺省）表示该成员按定义面投影成一个模型工具，工具名即成员键；`False` 表示只在内部可用。**本字段是"是否进工具面"的唯一权威：实现脚本不再声明同名开关。**
+### 3.1 文件与顶层字段
 
-仓库内两个 `expose: false` 的例子：`core/ability.yaml:42`（`conversation`）与 `cluster/ability.yaml:293-297`（`send`）。二者的差别见 §7.5。
+路径固定 `<包根>/ability.yaml`（`DEFINITION_FILE_NAME`，`ability/loading/ability_schema.py`）。顶层字段由白名单固定，未知字段直接拒绝：
 
-### 4.8 `skills.<key>`
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `format` | 字面量 `ghrah.ability-definition` | 是 | 格式不对即拒绝 |
+| `schema_version` | `'1'` / `'2'` | 是 | **生成器只写 `'2'`**；`'1'` 仅存量安装根只读兼容 |
+| `identity` | `{namespace, name?, version}` | 是 | `name` 缺席时包全名退化为 `namespace` |
+| `title` / `description` | 非空串 | 是 | 目录与 UI 展示 |
+| `origin` | `source` / `mcp`（默认 `source`） | 否 | `mcp` 时成员来自远端探测快照 |
+| `mcp` | `{server}` | 否 | 仅 `origin: mcp` 允许，且只允许 `server` 一个键 |
+| `members` | 成员记录列表（v2） | 是 | 由构建生成，禁止手写 |
 
-| 字段 | 类型 | 必填 | 默认 | 行号 |
-| --- | --- | --- | --- | --- |
-| `title` | `str`（≥1） | 是 | — | `:268` |
-| `description` | `str`（≥1） | 是 | — | `:269` |
-| `body` | `SkillBody{path, media_type}` | 是 | — | `:270`、`:231-240` |
-| `tags` | `list[str]` | 否 | `[]` | `:271` |
-| `references` | `list[str]` | 否 | `[]` | `:272` |
-| `annotations` | `dict[str, Any]` | 否 | `{}` | `:273` |
+`namespace` / `name` 走 `^[a-z][a-z0-9_-]*$`；`version` 必须是 SemVer core 三段（`V1_SEMVER_PATTERN`，每段 1–9 位、无前导零、不带预发布/构建元数据）——它同时是安装路径段。
 
-约束：**一个能力包至多一个 skill 成员**（跨字段校验 4，`:136-142`），超出的报错原文为"一个能力包只支持一个 skill 成员…技能是容器的插件包，容器与技能一一对应；要装第二个技能请独立成包"。正文固定落在 `skills/SKILL.md`，因此不引入第二级目录（`:260-261`）；`title`/`description` 即"原 `SKILL.md` frontmatter 迁出的两个字段"（`:263`）。
+### 3.2 `members`：两种 wire 形状，一种运行时成员表
 
-仓库内 5 份 `ability.yaml` 全部 `skills: {}`，**没有任何打包的 skill 种子包**（全仓 `**/SKILL.md` 匹配 0 个）。技能成员只能来自用户目录，详见 `ghrah-04-skill-system.md`。
+| schema_version | `members` 形状 | 解析路径 | 现状 |
+| --- | --- | --- | --- |
+| `'2'` | **成员记录列表**，每项是 `Member.to_wire()` 形状 | `_members_list_to_tables` → 复用两段式校验 | 已实现（生成器唯一输出） |
+| `'1'` | 两段映射 `operations` / `skills` | `_from_members` | 已实现，只读兼容 |
 
-### 4.9 刻意不在定义面的两件事
+两种形状归一成同一份运行时成员表（`AbilityDefinition.operations` / `.skills`），字段级校验只写一份（`ability/loading/ability_schema.py`）。已退役的草案版式与 `0.2` 在解析期明确拒绝，不提供适配器或迁移旁路。
 
-模块 docstring 明写（`scheme/loading/ability_schema.py:11-12`）：`permissions`（授权结果）与 `hooks`（编排）不在定义面，前者属授权记录，后者随实现，暂存于 `operations/<key>.py` 的模块级常量。所以"这个能力要不要审批"在 `ability.yaml` 里查不到，只能查实现脚本或装配参数——这是当前设计的一处可读性代价，见 §13.2 偏差 D-3。
+v2 示例（能力件里的纯技能包）：
 
-`assets` 只有身份与键，没有字段级契约：`dict[str, Any]`，内容原样持有、不解释语义（`:243-244`、`scheme/loading/ability_scan.py:241-251`）。
+```yaml
+format: ghrah.ability-definition
+schema_version: '2'
+identity: {namespace: research, name: research, version: 0.1.0}
+title: research
+description: 竞品调研流程与资料索引
+members:
+  - namespace: research
+    name: research
+    member: research.research.research
+    type: skill
+    version: 0.1.0           # 内核件恒 null；能力件必填 SemVer
+    ability_type: external
+    axes: {visible: true, bind: true}
+    data:
+      title: research
+      description: 从问题拆解到资料归档的完整调研流程
+      path: research/research/0.1.0/skills/research/SKILL.md
+      media_type: text/markdown
+      assets: {}
+      references: {}
+      scripts: {}
+```
 
-### 4.10 校验与错误
+operation 成员同形状，`type: operation`，`data` 用 `path` + `input_schema` + `output_schema` + `execution` 等（见 §3.3）；`mcp` 成员用 `server` / `tool` 取代 `path`。
 
-解析入口 `parse_definition(raw: str, *, source: str) -> AbilityDefinition`（`scheme/loading/ability_schema.py:94`）：`load_yaml` → 非 `dict` 报"不是映射"（`:115-116`）→ `model_validate`（`:118`）→ 四条跨字段校验（`:121-142`）。错误类型 `ManifestValidationError`（`scheme/loading/manifest_fields.py:40`，基类 `ManifestError` `:36`）。
+### 3.3 成员 `data` 契约
 
-校验时机有两套语义，不要混淆：
+必填键与允许键按类型固定（`ability/member.py` `_REQUIRED_DATA` / `_ALLOWED_DATA`），缺一即拒绝、多一即拒绝：
 
-| 路径 | 时机 | 失败行为 |
+| 类型 | 必填 | 可选 |
 | --- | --- | --- |
-| 目录面 `scan_ability_definitions` | 每包解析一次（`scheme/loading/ability_scan.py:501`） | 记 issue 后 `continue`，不影响其他包 |
-| 实现面 `load_ability_definitions` | 同上，但把**第一条** issue 直接抛出（`scheme/loading/ability_catalog.py:124-126`） | 整次查询失败 |
+| `operation` | `title`、`description`、`path`、`input_schema`、`output_schema`、`execution` | `tags`、`effects`、`permissions`、`resources`、`expose` |
+| `skill` | `title`、`description`、`path`、`media_type` | `tags`、`assets`、`references`、`scripts` |
+| `mcp` | `title`、`description`、`server`、`tool`、`input_schema`、`output_schema`、`execution` | 同 operation，但用 `server` / `tool` 取代 `path` |
 
-## 5. 目录池与优先级
+`path` 是**相对 ability 根**的路径，自带 `<namespace>/<name>[/<version>]/` 前缀（`Member.logical_prefix`）。operation 的 `path` 必须是 `operations/<成员键>.py`（`definition_from_data` 校验），skill 正文必须是 `skills/<成员键>/SKILL.md`（`_from_members` 校验）。
 
-### 5.1 `AbilityRoot`
+`expose` 是「该成员有无工具形态」的**唯一权威**，`False` 表示只在内部可用（内置 `conversation` 即如此）。`execution` 是 `ExecutionSpec`：`mode=request`、`timeout_ms>0`、`cancellation`、`on_revoke`、`retry=never`；v1 未声明时回落 `DEFAULT_EXECUTION`。
 
-`@dataclass(frozen=True)`（`scheme/loading/ability_roots.py:70-82`）：`locator: Traversable`、`rank: int`、`source: str`、`required: bool = False`。属性：`label`（真实路径给绝对路径，包资源给 `package:ghrah.scheme.ability`，`:85-93`）、`writable`（仅 `Path` 为 `True`，`:96-102`）、`path`（包资源为 `None`，`:105-114`）。
+### 3.4 校验与错误
 
-### 5.2 两个根
+入口 `parse_definition(raw, *, source)` → `definition_from_data`（`ability/loading/ability_schema.py`）。YAML 走 `_UniqueLoader`：**拒绝重复键与 `<<` merge key**。`origin: mcp` 要求 `namespace=mcp`、必须具名、只含非空 operation 快照、成员绑定包服务器且不得声明 `entry`、不允许 `skills`；`origin: source` 时任何 `mcp` 声明都拒绝。包必须至少一个成员。错误类型统一 `ManifestValidationError`。
+
+### 3.5 内核件与能力件的差异
+
+| 维度 | 内核件（kernel） | 能力件（external） |
+| --- | --- | --- |
+| 位置 | `ability/builtin/<name>/`，随源码分发 | `<install_root>/<ns>/<name>/<version>/` |
+| 版本 | yaml 有 `identity.version`，但成员 `version` 恒 `null`，不参与选择 | 成员 `version` 必须等于 `identity.version` |
+| 安装记录 | 无 | 版本目录旁 `<version>.lock.yaml` |
+| `data.path` 前缀 | `<ns>/<name>/` | `<ns>/<name>/<version>/` |
+| 来源判定 | 位置（源码树） | 位置（安装根），同身份时安装根优先 |
+
+路径规则与落位细节见 `ghrah-12` §1–§4；本节只声明「同一套成员契约、两套落位」。
+
+## 4 成员实体
+
+### 4.1 `Member` 与两种形态
+
+`Member`（`ability/member.py`）是 Core 内部**唯一**的成员数据实体（`frozen`），字段：`namespace` / `name` / `member`（全名）/ `type` / `version` / `ability_type` / `axes` / `data`。派生：`key`、`package_full_name`、`logical_prefix()`、`package_relative_path()`、`resolve_path(builtin_root=, install_root=)`。
+
+- **定义态**（`data` 非空）：来自 `ability.yaml` / 版本画像 / 实例快照，构造期按 `type` 校验必填键与未知键。
+- **引用态**（`data` 为空）：只记录「哪个包的哪个成员、什么类型、什么轴」，用于模板勾选与授权申请；`external` 引用态可暂不写 `version`。
+
+### 4.2 `MemberAxes`：可见与绑定
+
+| visible | bind | 合法 | 语义 | 装配结果 |
+| --- | --- | --- | --- | --- |
+| `true` | `true` | ✅ | 已绑定 | schema 常驻模型上下文 |
+| `true` | `false` | ✅ | 可发现未绑定 | `search_tools` 可找到、`execute_tool` 可调用；可 `bind_member` 装上 |
+| `false` | `false` | ✅ | 隐藏 | 不进目录、不可发现 |
+| `false` | `true` | ✅ | 常驻但不进发现面 | schema 常驻上下文，但不出现在 `search_tools` 结果里（内置 `search_tools` 创建时固定此状态） |
+
+`MemberAxes.from_wire` 过渡期把历史字段 `available` 当 `bind` 读，也接受直接写 `bind`；`to_wire` 只写 `{visible, bind}`。注意**同名不同义**的另一套轴：关系库 grant 的 `axes` 是 `{visible, available}`，`available` 表示「可执行」（§6.3、§13.2 P-1）。
+
+### 4.3 全名、退化包与地址
+
+规范形态三段 `<namespace>.<ability_name>.<member_key>`。`identity.name` 省略的退化包，定义面历史给两段名 `<package>.<key>`（如 `research.research`），模板/快照用三段规名；`Member` 两种都接受（`canonical` / `legacy` 判断）。Core 在三处按等价形态兼容：成员解析回退两段、安装记录回退 `namespace`、绑定集合等价比较（`surface/runtime.py` `_member_forms`）——兼容层而非新约定，长期方向是 `identity.name` 恒有值（`ghrah-11` §3.1/§11、`ghrah-12` §2.1）。
+
+成员键字符集：operation `^[a-z][a-z0-9_]{0,63}$`；skill `^[a-z0-9]+(?:-[a-z0-9]+)*$`（允许连字符），都禁止含 `.`。
+
+授予事实按**地址**索引（`GrantFacts`）：
+
+| 成员 | 地址 |
+| --- | --- |
+| operation | `operations/<key>` |
+| skill 正文 | `skill/<key>` |
+| skill 脚本 | `skill/<key>/scripts/<script>` |
+| skill 附件 / 参考 | `skill/<key>/assets/<name>`、`skill/<key>/references/<name>` |
+
+operation 地址带复数前缀、skill 地址是单数——既有契约，不要"统一"。模型侧地址是另一套：技能正文的 `read:` 地址是 ability 根相对路径（§8.2），脚本调用地址是 `skills/<skill>/scripts/<key>`（§9.6）。
+
+## 5 加载与提交
+
+### 5.1 扫描根
+
+`ability/loading/ability_roots.py` 是「包在哪里」的唯一权威：
 
 | 根 | 位置 | rank | source | required | 可写 |
 | --- | --- | --- | --- | --- | --- |
-| 内置 | `importlib.resources.files("ghrah.scheme.ability")`，即 `scheme/ability/` | `0` | `builtin` | 是 | 否 |
-| 用户 | `Path.home()/.ghrah/skill-ability` | `100` | `skill-ability` | 否 | 是 |
+| 内置树 | `importlib.resources.files("ghrah.ability.builtin")` | 0 | `builtin` | 是 | 否 |
+| 外部目录 | 调用方显式传入（`path_root`） | 100 | `skill-ability` | 否 | 是 |
 
-常量定义在 `scheme/loading/ability_roots.py:49-66`；工厂 `builtin_root()` `:117-128`、`user_root(root=...)` `:143-159`、`path_root(path, *, rank=USER_ROOT_RANK, source=..., required=False)` `:162-180`。两个池函数：`builtin_pool()` 单元素（实现面用它，`:183-189`）、`default_pool()` = 内置 + 用户（目录面用它，`:192-200`）。
+`default_pool()` **只含内置树**（模块 docstring：「默认只扫描随产品交付的内置树，外部目录由调用方显式传入」）。没有用户级默认扫描根，也没有环境变量可改扫描根；能力件经 `CoreUnitConfig.ability_install_root` → `AbilityAssembly.select(install_root=...)` → `BuiltinAbilitySource` → `InstalledAbilityProvider` 进入装配（§12.1）。当前内置树 6 个包（`ability-builder`、`cluster`、`core`、`fs`、`mcp`、`shell`），27 个 operation、1 个 skill。
 
-### 5.3 冲突裁决：内置必胜
+### 5.2 扫描
 
-扫描按 `(rank, root.label)` 升序（`scheme/loading/ability_scan.py:554`），同名容器先出现者胜，后来者记 issue（`:567-579`）。因此 rank 0 的内置包永远赢，用户目录**不允许**同名覆盖内置。设计原文（`scheme/loading/ability_roots.py:53-57`）：否则一份外部 `fs/ability.yaml` 就能改掉文件系统能力的语义。
-
-### 5.4 覆盖途径
-
-`scheme/loading/` 内没有任何 `os.environ` 读取——**没有环境变量可改扫描根**。可用的三条路：
-
-1. `user_root(root=...)` 传参；
-2. `path_root()` 自建根；
-3. 上层装配期注入字符串路径（`core/unit.py:197`、subject 的 `SkillConfig.root`）。
-
-`ghrah.skills.roots` 只是转调本模块（`scheme/loading/ability_roots.py:133-135`）。
-
-`ensure_roots(pool)`（`:203-220`）只对 `locator` 是 `Path` 的根 `mkdir(parents=True, exist_ok=True)`，包资源根跳过；幂等，返回顺序与入参一致。
-
-## 6. 扫描（目录面）
-
-入口 `scan_ability_definitions(pool: Sequence[AbilityRoot] | None = None) -> AbilityScanResult`（`scheme/loading/ability_scan.py:532-604`）；`pool=None` 时用 `default_pool()`（`:553`）。薄封装 `scan_abilities()`（`:754-778`）是对外主入口，`load_ability_skills()`（`:781-792`）只取 skill 成员。
-
-### 6.1 返回结构
-
-| 类型 | 字段 | 语义 | 行号 |
-| --- | --- | --- | --- |
-| `AbilityEntry` | `container` / `definition` / `root` / `locator` | 一个成功解析的包 | `:87-100` |
-| `AbilitySkill` | `container`、`key`、`full_name`、`title`、`description`、`media_type`、`body_path`、`body_locator`、`tags`、`source`、`rank`、`skill_dir`、`lock_path`、`fingerprint`、`lock_issue` | skill 成员；`catalog_name` = `key`（`:176-182`，原文理由：显示全名会让模型拿一个加载入口不认的名字去调用） | `:104-182` |
-| `AbilityOperation` | `container`、`key`、`full_name`、`definition`，属性 `title`/`description`/`provider_slot`/`handler`/`timeout_ms`/`effects` | operation 成员；**不复制**定义字段，只补归属（`:193`） | `:186-236` |
-| `AbilityAsset` | `container`、`key`、`full_name`、`definition` | asset 成员 | `:240-251` |
-| `AbilityContainer` | `name`、`namespace`、`version`、`title`、`description`、`root`、`locator`、`definition`、`operations`/`skills`/`assets`、`issues`；属性 `full_name`、`kinds`、`operation_count`、`skill_count`、`asset_count`、`member_count`、`is_operation_only`、`is_skill_only` | 聚合视图 | `:255-361` |
-| `AbilityScanIssue` | `path`、`reason`、`container` | 单条问题，`__str__` = `"{path}: {reason}"` | `:365-378` |
-| `AbilityScanResult` | `roots`、`entries`、`skills`、`issues`、`lock_issues`；属性 `definitions`（`{容器名: 定义}`）、`containers` | 全池结果 | `:382-424` |
-
-### 6.2 算法
-
-1. 排序根：`sorted(active, key=lambda item: (item.rank, item.label))`（`:554`）。
-2. 每个根只做一次 `iterdir()`（`:491`），**不递归**。
-3. 忽略：非目录、名字以 `_` 或 `.` 开头（`:491-497`）、目录内没有 `ability.yaml`（注释：`operations/` 这类普通子目录不是能力包）。
-4. 解析定义，失败记 issue 并 `continue`（`:502-504`）。
-5. 校验容器名 == 目录名（`:505-516`）。
-6. 装配成员：operation/skill/asset 按成员键升序，容器按名字升序（`:261-262`）。
-7. 同名容器去重（§5.3）。
-8. skill 正文定位：`_skill_body_locator` 逐段 `joinpath`，`..` 一律拒绝（`:427-447`）；正文不可用的 skill **不进清单**（`:458-459`、`:582-587`）。
-
-skill 目录**不由目录名识别**，只由 `ability.yaml` 的 `skills:` 表声明（`:517-520`、`:582-587`）。
-
-### 6.3 issue 分类
-
-| 情形 | 文案 | 行号 |
+| 入口 | 语义 | 失败行为 |
 | --- | --- | --- |
-| 必需根不存在 | `扫描根不存在`（`container=None`） | `:560-563` |
-| 定义读取/解析失败 | 异常原文（`ManifestValidationError`/`OSError`/`UnicodeDecodeError`） | `:502-504` |
-| 容器名 ≠ 目录名 | `容器名 X 与目录名 Y 不一致（目录名只作定位，身份以定义面为准，两者必须相等）` | `:505-516` |
-| skill 正文越界/为空 | `skills.{key}: 正文路径非法（不能越出容器目录）：…` | `:469-474` |
-| skill 正文缺失 | `skills.{key}: 声明的正文不存在：…` | `:469-474` |
-| 同名容器被忽略 | `重复的容器名 {name!r} 已由 {existing.root.label}（rank={rank}）提供，本条被忽略` | `:569-578` |
+| `scan_ability_definitions(pool=None)` | 全池扫描，返回扁平结果 + 问题清单 | 单包问题记入 `issues` 后继续 |
+| `scan_abilities(pool=None)` | 同一趟扫描，按容器聚合 | 同上 |
+| `load_ability_definitions()` | 实现面：只读内置树、严格抛错 | 第一条问题即抛 |
+| `scan_catalog()` | 能力 + handler + 容器 + skill + 问题的合并报告 | 诊断用途 |
 
-`lock_issues` 与 `issues` **分开维护**（`:398-403`）：lock 问题只表示"漂移判定不可用"，成员仍可加载。
+算法要点（`ability/loading/ability_scan.py`）：池按 `(rank, label)` 升序，每根只 `iterdir()` 一层不递归；忽略非目录、`_`/`.` 开头、无 `ability.yaml` 的项；解析失败记 issue 并继续；**容器名取 `definition.container_name`**，目录名只作定位（两者不等不再报错，旧不变式已撤销）；同名容器先出现者胜、后来者记一条忽略；skill 正文逐段 `joinpath` 且拒绝 `..`，正文不可用的技能不进清单；根存在但不可列举时抛 `OSError`（环境问题不吞）。`lock_issues` 与 `issues` 分开：前者只表示「漂移判定不可用」，成员仍可加载。`load_ability_definitions` 的 docstring 仍把「容器名与目录名不一致」列为抛错原因，实际该情形已不再报错，以代码行为为准。
 
-根存在但不可列举时 `_scan_root` 抛 `OSError`，调用方**不吞**（`:486-487`、`:550-551`）——这是扫描唯一会向外抛的异常。
+### 5.3 启动提交（唯一把来源写进库的路径）
 
-## 7. 运行时投影（实现面）
+启动核定把安装目录/内置树提交进 SQLite，之后运行期只读库（时序与表结构见 `ghrah-13` §2.2）：
 
-### 7.1 只扫内置
-
-`load_ability_definitions() -> Mapping[str, AbilityDefinition]`（`scheme/loading/ability_catalog.py:102-127`）用 `builtin_pool()`，任一 issue 即抛第一条。`builtin_pool()` 单独成函数（`:90-99`）是给测试换临时目录用的。
-
-### 7.2 handler → 模块 → 类
-
-路径约定（`scheme/loading/ability_catalog.py:166`）：handler 落在哪个容器的 `operations` 表，实现就在 `ghrah.scheme.ability.<容器>.operations.<handler>`，类是**该脚本里唯一的 `Ability` 子类**。
-
-判定要求（`:190-201`）：`obj.__module__ == module.__name__`、`issubclass(obj, Ability)`、不是 `Ability` 本身，**数量必须恰好 1**，否则报 `"期望恰好一个 Ability 实现类，实际 N 个"`。这条规则是 §14 里"注册表不存在"的技术原因：类型名到类的映射被文件路径取代。
-
-### 7.3 四件套常量
-
-投影时必须能在实现脚本里找到四个模块级常量，缺失即 `ManifestValidationError`（`scheme/loading/ability_catalog.py:363-374`）：
-
-| 常量 | 类型 | 用途 | 投影后去向 |
-| --- | --- | --- | --- |
-| `PERMISSIONS` | `dict` | 旧 `metadata.permissions` | `AbilityManifest.metadata.permissions` |
-| `HOOKS` | `dict` | 旧 `hooks` | `AbilityManifest.hooks` |
-| `SUMMARY` | `str` | 目录摘要；空串时回落 `operation.description` | `metadata.description` |
-| `TAGS` | `list[str]` | 发现/过滤 | `metadata.tags` |
-
-实例（`scheme/ability/fs/operations/read_file.py:45-58`）：`PERMISSIONS = {"fs_read_only": True}`、`HOOKS = {}`、`SUMMARY = "Read the content of a file at the specified path"`、`TAGS = ["filesystem","read"]`。
-
-注意摘要与描述分属两面：`metadata.description` 取 `SUMMARY`，**工具面 description 取定义面 `description`**（`scheme/loading/ability_catalog.py:388-389` 与 `scheme/loading/tool_list.py:24`）。两处文案可以不一致，改工具描述要去改 `ability.yaml`。
-
-### 7.4 查询与创建 API
-
-| API | 签名 | 语义 | 行号 |
-| --- | --- | --- | --- |
-| `load_definition` | `(container: str) -> AbilityDefinition` | 未知容器抛 `ManifestValidationError(f"未知的 ability 容器：{container!r}")` | `:130-147` |
-| `operation_containers` | `() -> Mapping[str, str]` | `{handler: 容器名}`，**含** registry-only | `:452-466` |
-| `builtin_handlers` | `() -> tuple[str, ...]` | 升序 handler 列表，**含** registry-only | `:469-478` |
-| `has_handler` | `(handler: str) -> bool` | 存在性 | `:481-492` |
-| `ability_class` | `(handler: str) -> type[Ability]` | 未知抛 `f"未知的 ability handler: {handler!r}。已知: {builtin_handlers()}"` | `:495-515` |
-| `create_ability` | `(handler: str, **params) -> Ability` | 原 `AbilityRegistry.create` 的唯一替代入口 | `:518-536` |
-| `builtin_full_names` | `() -> tuple[str, ...]` | 声明路径成员全名，**不含** registry-only | `:424-439` |
-| `load_builtin_manifest` | `(full_name: str) -> AbilityManifest` | 缺失抛 `FileNotFoundError(f"未知的内置 ability 全名：{full_name!r}")` | `:539-557` |
-
-### 7.5 `REGISTRY_ONLY_OPERATIONS`
-
-`REGISTRY_ONLY_OPERATIONS: frozenset[str] = frozenset({"send"})`（`scheme/loading/ability_catalog.py:81`）。原文理由（`:82-87`）：`send` 由 Core 的 room 装配期注入，历史上没有 manifest 声明；投影时跳过它以保持既有语义，`list_abilities` 的 registry-only 差异面依赖这一点。它仍是 `cluster/ability.yaml` 里的正式成员，只是不产出运行时视图。
-
-三处口径因此不同，必须分清：
-
-| 口径 | 含 `send`？ | API |
+| 步 | 调用 | 作用 |
 | --- | --- | --- |
-| handler 全集 | 是（22 个） | `builtin_handlers()` |
-| 定义面全名 | 否 | `builtin_full_names()` |
-| 运行时视图 / 工具面 | 否（视图 21 / 工具面 20） | `load_all_builtin_manifests()` / `load_tool_list()` |
+| 1 | `store.startup_registration(actor, agent)` | 库级独占占位；失败只回滚**本次拥有**的修订 |
+| 2 | `source.capture_package(package)` → `capture_ability_version` | 读包根，算整树摘要 + 定义 + 实现标识 + 内容清单 + 内容字节 |
+| 3 | `store.commit_version(actor, version)` | 校验摘要自洽后落 `ability_versions` / `ability_content`；同 digest 幂等 |
+| 4 | `store.select_instance(actor, instance, digest, root=..., invalidate_grants=...)` | 选定实例版本槽；版本/根变化默认撤销旧授予 |
+| 5 | `store.write_grant(actor, agent, request)` | 写入授予事实（成员集合、内容白名单、根、轴、来源） |
+| 6 | `release_registration(actor, agent)` | 解除占位，持久授权保留 |
 
-（上表数字为**仓库内置树**的口径，实测于 `f8ff157`。用户根 `~/.ghrah/skill-ability` 可另装 skill-only 容器——它们 0 个 operation、只贡献技能，不改变上表。）
+`commit_version` 要求 `version.expected_digest() == version.digest`，清单键集合与定义里声明的 skill 正文/资源逐一对应，内容 blob 按摘要与长度复核，任一不符即 `invalid_change`。`select_instance` 是包级单版本槽（`id` 由包全名派生，点换横线），CAS 用 `expected_revision`；无启动策略的存量模式必须传 `invalidate_grants=False`，否则唯一重建源（库里的授予）会被删掉。`capture_package` 对内置包读 `builtin/<container>/ability.yaml` 后算整树摘要，能力件先过 lock 校验，`ghrah.*` 不在登记表时拒绝（避免把后来塞进安装根的同名包当内置来源）。
 
-`send` 仍可被 `has_handler("send")` 与 `create_ability("send")` 解析。
+## 6 授权与数据权威
 
-### 7.6 `AbilityManifest` 投影形态与遗留层
+### 6.1 关系库
 
-`_project()`（`scheme/loading/ability_catalog.py:338-396`）产出的 `AbilityManifest`：`manifest="ability"`、`version=LEGACY_MANIFEST_VERSION="1"`（`:78`，投影出的**旧格式版本**，不是能力定义版本）、`metadata{namespace, name, title, description, tags, permissions}`、`tool`、`implementation{type:"builtin", handler}`、`hooks`。
+库文件为 `<project_root>/db/action-chains.sqlite3` 的 `ability_*` 表，schema 版本 5（`_SCHEMA`，`ability/access/store.py`）：
 
-`manifest_io.parse_ability_manifest` / `validate_manifest` / `BuiltinManifestStore`（`scheme/loading/manifest_io.py:61-150`）针对的是**另一种文本形状**（`manifest: ability` + `version: "1"` + `metadata/tool/implementation/hooks`）。生产代码零调用，引用只在 `ghrah-core/examples/agents_manifest/runner.py:41,71`、`examples/student_grade_system/runner.py:38,66,76` 与 `tests/manifest/*`、`tests/core/test_*`。`load_agent` 恒抛 `ManifestNotFoundError`、`list_agents` 恒返回 `[]`（`:140-150`）。
+| 表 | 主键 | 语义 |
+| --- | --- | --- |
+| `ability_versions` | `(project, digest)` | 一次提交：规范化定义 JSON、实现摘要、内容清单 |
+| `ability_content` | `(project, digest)` | 内容字节（正文/附件/脚本），按摘要不可变 |
+| `ability_instances` | `(project, id)` | 项目内一个包槽的当前版本摘要与实例根 |
+| `ability_agents` | `(project, id)` | Agent 的授权修订计数 |
+| `ability_grants` | `(project, agent, alias)` | 授予：成员集合、根、内容白名单、轴、来源 |
+| `ability_tools` | `(project, agent, name)` | 已绑定为常驻工具的成员（工具名 → alias/member/修订） |
+| `ability_changes` | `seq` | 变更审计：修订、原因、操作者、版本摘要、策略 |
+| `ability_registrations` | `(project, agent)` | 启动独占占位：token、状态、拥有的修订 |
 
-结论：**写能力包时不要写 `manifest: ability`**，那是遗留形状；真路径是 `ability.yaml` + `schema_version: 0.1-draft`。
+### 6.2 写路径
 
-## 8. 工具面
+| 写操作 | 入口 | 语义 |
+| --- | --- | --- |
+| 授予 | `grant` / `write_grant` | 授予集合是**授权时刻的快照**；相同事实不产生新历史 |
+| 撤销 | `revoke` / `write_revoke` | `members=None` 整条撤销；否则按地址移除（skill 地址按前缀移除其下内容） |
+| 绑定工具 | `bind_tool` / `write_bind_tool` | 只能从本 Agent 当前获授集合选择，不能增加授权 |
+| 解绑工具 | `unbind_tool` / `write_unbind_tool` | 删除选择，保留授予 |
 
-### 8.1 结构
+全部写操作要求 `expected_revision` 与当前修订一致（CAS），冲突返回 `conflict` 而**不静默覆盖**；写入来源记入 `ability_changes.source`（`admin` / `deployment` / `agent-default` / `migration` / `assembly`）。`write_grant` 还校验：成员属于该版本且 `expose`、内容地址在清单里、文件类成员必须有落在实例根内的授予根。
 
-`load_tool_list(pool=None) -> ToolList`（`scheme/loading/tool_list.py:107-161`）。`ToolEntry`（`:47-68`）：`container`、`operation`（= 工具名）、`name`（与 `operation` 同值，单列字段便于客户端直接取）、`tool`、`root`，属性 `full_name` = `"{container}.{operation}"`。`ToolList`（`:72-104`）：`roots`、`tools`、`entries`、`issues`，属性 `names`，方法 `get(name)`（线性查，不按名字猜容器）。
+### 6.3 `_check`：每次读取与调用的复核链
 
-工具体由 `ToolSchema.to_openai_tool()` 产出（`:143`），形状 `{"type":"function","function":{"name","description","strict","parameters"}}`。
+`store._check(actor, fence, arguments=None)` 是一次读取/调用的**唯一**授权复核，按序检查：
 
-> **注意**：本模块在仓内**没有生产调用点**——`load_tool_list()` 只被 `scheme/__init__.py:91` 导出，使用者是测试与 `plans/selfcheck/query_all_abilities.py`。模型实际拿到的工具面来自各实现的 `bind_tool()`（见 §8.4）。因此下面 §8.2 / §8.3 描述的是**定义面的工具投影规则**，不是运行时工具面。
+| 序 | 检查 | 失败码 |
+| --- | --- | --- |
+| 1 | 实例行存在且 `revision` 等于 fence 捕获值 | `access_denied`（`version_changed`） |
+| 2 | 版本摘要与 fence / 实例一致，且版本仍可用 | `access_denied` / `unavailable` |
+| 3 | 内容成员在清单里且不携带工具名；operation 存在且 `expose` | `access_denied` |
+| 4 | 关系库身份：Agent 行存在、run 与调用方一致；操作员身份不能代替 Agent 自身 | `access_denied` |
+| 5 | grant 行存在、`revision` 一致、成员在 `members` / `content` 里 | `access_denied`（`grant_revoked`） |
+| 6 | operation 的轴 `visible` 与 `available` 均为真 | `access_denied` / `unavailable` |
+| 7 | 工具行存在且 `revision`、`grant_revision`、`alias`、`member` 全一致 | `access_denied`（`tool_revoked`） |
+| 8 | 参数接纳：`admission_for(definition, member)` 按契约核资源范围 | `access_denied`（`arguments_out_of_scope`）/ `invalid_change` / `unavailable` |
 
-### 8.2 命名：工具名就是成员键
+返回 `"<版本摘要>:<grant 修订>:<tool 修订>"` 作为接纳依据。第 8 步的后端参数检查在 `ability/access/backends.py`：文件成员逐路径核「在实例根内且在授予根内」、命令成员核 `command` / `working_dir`、集群成员核身份参数、MCP 成员核 `server` / `tool` 与 `arguments` 形状、core 成员核显式声明的参数形状；未登记后端一律 `unavailable`。
 
-工具名 = 成员键（`read_file`），**没有** `namespace__op`、没有 `fs.read_file` 前缀（`:23`、`:53-57`、`:129-131`）。`fs.read_file` 只是定义面全名。跨容器撞名的机制是"先入者胜 + 记 issue"，没有去重前缀机制（`:131-142`，文案 `重复的工具名 {key!r}：已由容器 {holder.container!r} 提供，本条被忽略`）。
+### 6.4 撤销语义与变更审计
 
-### 8.3 筛选、排序、去重
+- **按地址撤销**：`write_revoke` 先校验目标地址在本条授予里再移出事实；事实清空则整条 grant 删除，并把 `ability_tools` 里指向被撤成员的绑定一并删除。
+- **版本切换撤销**：`select_instance` 在版本/根变化时对受影响 grant 逐一 `_bump` + `_remove_grant`（`invalidate_grants=True`，默认），并打 warning。
+- **立即生效**：不需要重启——每次调用都走 `_check`，撤销后当轮即拒；工具名列表由 `tool_table_projector` 每轮重算，撤销成员从下轮模型视野消失。
+- **`ability_tools` 不是授权**：只表示「选择」；`bind_member` 只能绑定已获授且可见成员，解绑不影响授予。
+- **`ability_changes`**：每次 `_bump` 追加一行（`reason`、`actor`、`before_revision`、`version_digest`、`source`、`policy`）；`store.changes(after_seq, limit)` 提供有界增量读取，但**不是**重建来源——完整重建永远读权威表。
 
-- 筛选：`build_tool_schema(key, operation)` 返回 `None`（即 `expose: false`）就跳过（`:128-130`）。
-- 收集顺序：容器名字升序 × 定义内成员声明顺序。
-- 输出排序：最后按**工具名升序**重排 `tools` 与 `entries`（`:155-160`），两者同序。
-- `ToolList.get()` 不做模糊匹配。
+## 7 工具面
 
-### 8.4 模型实际看到的工具面：`bind_tool()`
+### 7.1 目录来源
 
-同一个 operation 的参数形状被写了两遍：`ability.yaml` 的 `operations.<键>.input_schema`（**声明面**）与实现里 `bind_tool()` 返回的输入模型 `model_json_schema()`（**实现面**）。
+```text
+store.surface_snapshot(actor, agent)
+  └─ 同一读事务：ability_grants → ability_instances → ability_versions.definition
+       └─ view() 授权投影（AbilityTreeView）
+            ├─ project_grants(view)   → 工具条目（bound_tools ∩ operations）
+            └─ _skill_entries(...)    → 技能条目（body_allowed 的技能）
+  └─ catalog_from_view(view, definitions) → SurfaceCatalog（tools + skills）
+```
 
-**生产链路走实现面**（完整时序见 `ghrah-06` §5.2）：`register_ability()`（`agents/base.py:212`）调 `ability.bind_tool()`（`:235`），非 `None` 就追加进 `_bound_tools`（`:236-237`）；LLM 创建时（`:453-454`）与运行期每次注册/注销之后（`:416-426`）经 `self._llm.configure_tools(self._bound_tools)`（`chat/format/__init__.py:84`）下发 provider，最终在 `openai.py` 拼进 `api_kwargs["tools"]`。`load_tool_list()` 那套投影没有人调用。
+`store.surface_snapshot`（`ability/access/store.py`）在一次读事务内完成授权 → 版本 → 定义；`catalog_from_view`（`ability/surface/catalog.py`）把投影裁成目录，**不扫安装目录**；`read_agent_catalog` 额外核对 `agent` / `run` 与当前运行代次一致，跨 run 或跨 Agent 的快照一律拒绝。
 
-**`bind_tool()` 同时决定"有没有这个工具"和"它长什么样"**：
+### 7.2 静态集与长尾
 
-- 返回 `None` ⇒ schema 不进 `_bound_tools` ⇒ 模型看不到、也调不到该工具。`conversation` 就是这样被刻意隐藏的（`bind_tool=None`）。所以**新增成员必须实现 `bind_tool()`**，它不是可选项。
-- `function.description` 由实现自己写（如 `scheme/ability/core/operations/load_skill.py:117-123`、`scheme/ability/fs/operations/read_file.py:130-137`）——**模型读的是这段文字**，不是 `ability.yaml` 里的 `description`。
-- `function.parameters` 由 pydantic 输入模型 `model_json_schema()` 生成（`read_file.py:138`）。
+`assemble_surface`（`ability/surface/assembly.py`）把可执行授权目录分成 `static` 与 `long_tail`：
 
-**声明面 vs 实现面的实测漂移**（2026-10-28 记账）：内置树 22 个成员中 19 个可比，**18 个存在差异**；多数只是 pydantic 装饰（`title`、`additionalProperties: false`、`strict`），语义差异 5 处：
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `DEFAULT_DEFINITION_TOKEN_RATIO` | 0.02 | 定义 token 占上下文窗口比例上限 |
+| `DEFAULT_MAX_STATIC` / `DEFAULT_HARD_CAP` | 20 / 30 | 静态工具数上限 / `auto` 切渐进的总成员数上限 |
+| `STATIC_ABS_LIMIT` | 64 | 显式 `static` 的固定绝对上限，超过即装配期报错 |
+| `DEFAULT_SEARCH_LIMIT` / `SEARCH_LIMIT_ABS_MAX` | 8 / 20 | 搜索结果上限（硬上限不开放配置） |
+| `DEFAULT_LOADED_LIMIT` | 8 | 已加载集上限 |
 
-| 成员 | 差异 |
+`mode=auto` 在「定义 token 超预算、成员数超 `max_static`、超 `hard_cap`」任一成立时切渐进；`mode=progressive` 只保留显式成员；显式 `static` 按包定义全名解析，未知/保留名/多实例歧义均拒绝。token 估算走 `definition_tokens`（与生产工具表同形状的完整 JSON），预算扣除已占用的 `reserved_definition_tokens`。
+
+### 7.3 两轴决定通道
+
+`ToolSurfaceRuntime.refresh`（`ability/surface/runtime.py`）按绑定轴分流：
+
+| 状态 | 通道 | 模型体验 |
+| --- | --- | --- |
+| `visible` + `bind` | 工具面静态集 | schema 常驻，可直接调用 |
+| `visible` + 未 `bind` | 工具面长尾（`progressive`） | 不在列表里；`search_tools` 可发现、`describe_tool` 看 schema、`execute_tool` 可调，也可 `bind_member` 装上 |
+| 隐藏（`visible=false`） | 不出现在任何目录 | 不可发现；`_check` 对该 operation 直接拒绝，因此也不可调用 |
+| 控制成员 | 独立 control 通道 | `conversation` / `end_task` 由循环驱动，不受两轴影响 |
+| 脚本 | 独立 `run_script` 入口 | 存在任何 `available` 脚本时才装配 |
+
+`run_script` 与 `META_TOOL_NAMES`（`search_tools` / `describe_tool` / `execute_tool` / `bind_member` / `unbind_member`）永远走 `extras` 通道，不能出现在 `static` 里（装配会拒绝保留名）。
+
+### 7.4 工具名算法
+
+`assign_tool_names(members, allow_reserved=...)`（`ability/surface/naming.py`）是纯函数，输入 `(包名, 成员键)` 序列，输出按工具名升序：
+
+1. 成员键唯一时 `tool_name = 成员键`；
+2. 同一成员键多次出现时全部改为 `<包名>__<成员键>`（两段里的 `-` 换成 `_`）；
+3. 超过 64 字符取前 54 字符 + `__` + 候选名 sha256 前 8 位十六进制；
+4. 与保留名冲突即拒绝（`allow_reserved` 只放行 core 元工具名）；
+5. 最终仍冲突即报错，**不静默改名**；输出确定，与输入顺序无关。
+
+保留名：`search_tools` / `describe_tool` / `execute_tool` / `bind_member` / `unbind_member`（core 占用）+ `run_script`（表面层占用）。工具名是模型可见别名，`tool_name → (alias, member)` 的映射是唯一权威；执行边界把调用改写回装配时固定的成员引用（§9.3），不从工具名反推模块或服务器地址。
+
+### 7.5 元工具与渐进披露
+
+披露文案由 `DISCLOSURE_GUIDANCE`（`ability/surface/runtime.py`）固定：先 `search_tools` 发现、再 `describe_tool` 看 schema，之后可直接调用，`execute_tool` 亦可用；**发现永不产生新授权**。检索是授权域内的确定性关键词检索（`ability/surface/search.py`）：索引只保存名字/成员/包/一行摘要/标签/副作用，**不保存 schema 与磁盘路径**；分桶加权 TF-IDF，同分按工具名排序；索引随授权修订与实例版本变化重建，读取失败即丢弃缓存并拒绝。`describe_tool` 返回目标输入/输出 schema 与当前 `available`，并把目标加入已加载集（受 `loaded_limit` 约束，LRU 淘汰）。
+
+## 8 技能面
+
+### 8.1 每轮注入与按轴分流
+
+`ToolSurfaceRuntime.skill_reminder` 每轮从库重建目录，再交给 `next_skill_reminder`（`ability/loading/skill_context.py`）渲染：
+
+| 情形 | 注入文本 |
 | --- | --- |
-| `load_skill` | 声明面缺 `server`、`tool`（实现接受） |
-| `search_files` | 声明面缺 `context_lines` 的 min/max、`max_results` 边界、`include` 可空 |
-| `recall_context` | 声明面 `mode` 是自由字符串，实现是枚举 |
-| `execute_command` | `working_dir` 声明非空、实现可空 |
-| `list_directory` | `limit` / `offset` 声明有 `minimum: 0`、实现没有 |
+| 有技能 | 每轮给完整清单；清单摘要变化用「完整替换」口径，否则用介绍口径（文案稳定，利于前缀缓存） |
+| 无技能且从未注入 | `None`（不占上下文） |
+| 从有到无 | 注入一次「已清空」提醒，之后不再注入 |
 
-**当前口径：以实现面为准。** 声明面的 `input_schema` 是文档性载荷，不参与校验（没有代码读它校验入参），只出现在 `list_abilities` 之类的人读视图里。新增成员时若只改 `ability.yaml` 不改 `bind_tool()`，模型会继续拿到旧说明书——不报错、不告警。
+目录文案是 `<system-reminder>` 包裹的 `<available_skills>` 块，单条描述空白折叠后截断到 500 字符（`CATALOG_DESCRIPTION_MAX_CHARS`），尖括号转义。摘要只取「名字 + 截断描述 + `read` 地址」，正文变化不改摘要——正文编辑不会误触发重注入。
 
-**为什么现在不修**：三条收敛路径（① `bind_tool()` 从声明投影；② 删掉声明面 `input_schema`、只留实现面；③ 两份都留、加一致性测试钉住）任选其一，都要动全部实现脚本或全部 5 份 `ability.yaml`，且会削弱"定义面自足"。在那之前同步靠人，记作 D-14。
+绑定集合来自实例快照（`_bound_names` 取 `resolved.member_axes` 里 `bind` 为真的成员）；`None` 表示调用方没有提供成员轴（旧路径），此时按「全部可见技能都常驻」处理。分流：
 
-**另两个同源遗留**：`to_prompt_description()`（`scheme/execution/base.py:83-93`）注释已标过时，没有调用者；`Ability.bind_tool()` 在协议里的位置是 `core/ability_protocol.py:41`。
-
-## 9. 执行面
-
-### 9.1 `Ability` 基类契约
-
-`class Ability(ABC)`（`scheme/execution/base.py:32`）：
-
-| 成员 | 签名 | 必需 |
+| 状态 | 目录 | 提示 |
 | --- | --- | --- |
-| `name` | `property -> str` | 抽象 |
-| `execute` | `async (context: AbilityExecutionContext) -> ActionResult` | 抽象 |
-| `get_hooks` | `() -> list[Hook]` | 抽象 |
-| `bind_tool` | `() -> dict[str, Any] \| None`（默认 `None`） | 可选 |
-| `to_prompt_description` | `() -> str`（默认 `""`） | 可选 |
-| `get_default_state` | `() -> dict[str, Any]`（默认 `{}`，作 StateManager 初始作用域） | 可选 |
+| `bind=true` | 正式目录条目 | 无 |
+| `visible=true, bind=false` | 不进正式目录 | 一行「可用但未绑定」提示，列出目录名并给出 `bind_member` 入口 |
+| `visible=false` | 完全不出现 | 无 |
 
-`base.py` 的 `__all__` 再导出 `ActionOutcome`/`ActionResult`（`:19`、`:25-29`），实现脚本不必额外 import。
+技能成员没有工具形态，但保留在绑定集合里供 `skill_reminder` 消费；集合修剪按等价形态判断，避免纯技能包被误删。
 
-**方法名是 `execute`，不是 `run`**；执行器只调 `execute`（`scheme/execution/executor.py:400`）。
+### 8.2 目录条目、`read` 地址与纯技能包
 
-### 9.2 `AbilityExecutionContext`
+`SkillSurfaceEntry`（`ability/surface/catalog.py`）是「成员记录 + 目录名」：`name` 是 `<alias>/<key>`（`catalog_name`），`member` 是统一 `Member` 实体。条目文本形如：
 
-`@dataclass(init=False)`（`scheme/execution/context.py:37`），字段：`invocation: AbilityInvocation`（`:46`）、`data: ExecutionData`（`:47`）、`services: ExecutionServices`（`:48`）、`agent_state: dict[str, Any]`（`:49`）、`last_action_result: ActionResult | None`（`:50`）。
-
-关键字专用 `__init__`（`:52-98`）合并规则：`ability_name = current_ability_name or invocation.ability_name`（`:71`）；`args = tool_args if tool_args is not None else invocation.tool_args`（`:72`）；`invocation` 重建且保留 `tool_call_id`（`:73-77`）；`accumulated_data` 若给则覆盖 `data`（`:80-81`）。
-
-兼容属性：`current_ability_name`（`:100-110`）、`tool_args`（`:112-122`）、`accumulated_data`（`:124-130`，返回**活的** `data.raw`）、`context_manager`（`:132-138`）、`supervisor`（`:140-146`）、`agent_name`（`:148-154`）、`manifest_store`（`:156-163`）可读写；`skill_provider`（`:165-168`）与 `mcp_runtime`（`:170-173`）**只读**，赋值会 `AttributeError`。
-
-状态 API：`get_ability_state()`（`:175-180`）、`update_state(changes)`（`:182-196`，缺 `context_manager` 抛 `RuntimeError("Cannot update state: context_manager is not set. This context may have been created outside the drive loop.")`）、`update_global_state()`（`:198-205`）。
-
-调用标识只有一个：`invocation.tool_call_id`（默认 `""`），没有 trace/span 概念。
-
-### 9.3 数据总线与服务总线
-
-`DataKey`/`ExecutionData`（`scheme/execution/execution_data.py`）：`DataKey` 是 `{name, value_type}` 的 frozen dataclass，但 `value_type` **纯声明**，`get`/`set` 从不做 `isinstance` 校验（`:52-60`）。`ExecutionData.__init__` 收到 `dict` 时**按引用持有**（`:41-42`），`raw` 返回底层活字典（`:46-50`），`snapshot()` 深拷贝（`:76-79`）。
-
-预置 `DataKey`（`:82-86`）：
-
-| 键常量 | 存储名 | 标注类型 |
-| --- | --- | --- |
-| `TOOL_ARGS` | `tool_args` | `dict[str, Any]` |
-| `LLM_RESPONSE` | `llm_response` | `str` |
-| `COT_CONTENT` | `cot_content` | `str` |
-| `CUMULATIVE_TOKEN_USAGE` | `cumulative_token_usage` | `dict` |
-| `FINAL_RESPONSE` | **`response`** | `str` |
-
-`FINAL_RESPONSE` 的实际存储名是 `"response"`，不是 `"final_response"`——按下划线直觉拼 key 会静默读不到。
-
-预置 `ServiceKey`（`scheme/execution/execution_services.py:75-86`）：`CONTEXT_MANAGER`（`ContextManagerProtocol`）、`SUPERVISOR`（`SupervisorProtocol`）、`AGENT_NAME`（`str`）、`MANIFEST_STORE`（`Any`）、`SKILL_PROVIDER`（`Any`）、`MCP_RUNTIME`（`Any`）。`require()` 对未设置与 `None` 都抛 `RuntimeError(f"Required execution service '{key.name}' is not set.")`（`:56-61`）。
-
-`ExecutionFrame`（`scheme/execution/execution_frame.py:21-29`）是 Hook 与驱动循环共用的精简上下文：`data`、`services`、`agent_state`、`last_action_result`、`current_node_id`。它与 `AbilityExecutionContext` 重复 4 个字段却少了 `invocation`，是两套并行模型（见 D-5）。
-
-### 9.4 一次工具调用的时序
-
-`execute_tool_calls`（`scheme/execution/executor.py:429-534`）→ 每个调用一个 `_execute_single_with_context`（`:536-588`）→ `execute_ability`（`:302-413`）。单次执行的步骤：
-
-1. **无参数校验**。参数已在 `:558` 经 `_resolve_paths`（`:590-621`）做过路径解析（只处理 `ABILITY_PATH_SPECS` 的键，绝对路径原样保留）。schema 校验不发生在执行器里。
-2. `PRE_EXECUTE` hook（`:323-325`）。
-3. hook 结果分派（`:328-397`）：
-   - `not should_continue` 且 `requires_hitl` → `handle_hitl_hook_result`（`:332`）；`outcome != "approved"`（`:333`）走超时分支（`:337-361`）或拒绝分支（`:362-378`）；approved 落到 `:379` 继续执行。
-   - `not should_continue` 且无 HITL → 立即 `ActionResult(FAILURE)`（`:382-387`），`error = hook_result.message or "Execution blocked by hook"`。
-   - `should_continue` 且 `route_to` → `ActionResult(outcome=ActionOutcome.DELEGATE, data={"route_to":...}, next_action_hint=route_to)`（`:388-394`）。
-   - `should_continue` 且 `modified_context` → `context.accumulated_data.update(...)`（`:395-397`）。
-4. **没有权限检查**。执行器的两个闸门只有 PRE_EXECUTE hook 与 HITL；权限判定在 hook 里（§11）。
-5. `action_result = await ability.execute(context)`（`:400`）。
-6. **没有异常处理**。docstring 只声明 `Raises: HookError`（`:319-321`）；隔离在 `execute_tool_calls`（`:507-522`）。
-7. `await_reply` 早退（`:402-406`）：`action_result.data.get("await_reply")` 为真时把 `tool_args` 塞回、把 context 停进 `_deferred_contexts[message_id]`，**在 POST_EXECUTE 之前返回**。
-8. `POST_EXECUTE`（`:409-411`，带 `result`）；返回值被丢弃——post hook 里的 `stop()`/`route_to` **不生效**。
-9. 原样返回 `action_result`（`:413`）。延迟重放走 `finish_deferred`（`:415-423`），只重发 POST_EXECUTE。
-
-### 9.5 并行与顺序
-
-已知 ability 的调用被收集后 `asyncio.gather(..., return_exceptions=True)`（`:492-505`），**并行**执行，单次调用也走同样的一元素 gather。未知 ability 直接内联产出 `ActionResult(FAILURE, {"error": f"Unknown ability: {name}"})` 并**立刻 append**（`:462-480`），而已知调用的一批结果在 `:506-525` 才 append——因此结果列表顺序可能与 `tool_calls` 顺序不一致（D-6）。
-
-每次调用的上下文在 `:568-584` 装配：`AbilityInvocation(tool_call_id=...)`、`current_ability_name`、`tool_args=解析后的参数`、`agent_state=context_manager.get_current_state()`、从 `self._supervisor` 用 `getattr` 取 `supervisor`/`manifest_store`/`skill_provider`/`mcp_runtime`（`:563-566`）、`accumulated_data={**deepcopy(accumulated_data), "tool_args": resolved_args}`（`:578-581`）、`last_action_result`、`agent_name`。
-
-### 9.6 异常与取消
-
-`:506-525`：非 `Exception` 的 `BaseException`（含 `CancelledError`）**原样重抛**（`:507-511`）；`Exception` 转成 `ActionResult(FAILURE, {"error": str(r)})`（`:512-522`）。注释（`:440-441`）明确子任务取消不得折算成结果。
-
-一次 `ability.execute` 挂住会挂住整批 gather：执行面没有能力级超时（D-1）。
-
-## 10. Hook 机制
-
-### 10.1 十个 HookPoint
-
-`HookPoint(str, Enum)`（`scheme/execution/hooks.py:41-75`）：
-
-| 常量 | 值 | 层级 | 触发点 |
-| --- | --- | --- | --- |
-| `BEFORE_ACTION` | `before_action` | 循环 | 每次 action 之前（`:62`） |
-| `AFTER_ACTION` | `after_action` | 循环 | 每次 action 之后（`:63`） |
-| `ON_ERROR` | `on_error` | 循环 | 错误处理（`:64`） |
-| `ON_MAX_ITERATIONS` | `on_max_iterations` | 循环 | 达到最大迭代（`:65`） |
-| `PRE_LLM_CALL` | `pre_llm_call` | action | LLM 调用前（`:68`） |
-| `POST_LLM_CALL` | `post_llm_call` | action | LLM 调用后（`:69`） |
-| `PRE_TOOL_EXECUTE` | `pre_tool_execute` | action | 工具执行前（`:70`） |
-| `POST_TOOL_EXECUTE` | `post_tool_execute` | action | 工具执行后（`:71`） |
-| `PRE_EXECUTE` | `pre_execute` | ability | `ability.execute()` 前（`:74`） |
-| `POST_EXECUTE` | `post_execute` | ability | 执行后（副作用）（`:75`） |
-
-执行器只发 `PRE_EXECUTE`（`:323-325`）与 `POST_EXECUTE`（`:409-411`、延迟重放 `:421-423`）；其余 8 个归驱动循环与 `_action`（层级说明见 `:12-18`、`:44-58`）。因此权限与 HITL hook 全部挂在 `PRE_EXECUTE`。
-
-### 10.2 Hook 契约
-
-`class Hook`（`scheme/execution/hooks.py:190-237`）：类属性 `hook_point: HookPoint`（`:209`）、可选 `scope: HookScope | None = None`（`:210`）；抽象 `async should_trigger(context) -> bool`（`:212-222`）与 `async execute(context, result: ActionResult | None) -> HookResult`（`:224-237`，`result` 在 PRE_EXECUTE 为 `None`、在 POST_EXECUTE 为 `ActionResult`）。
-
-### 10.3 `HookResult` 语义矩阵
-
-`@dataclass HookResult`（`:113-131`）：`should_continue: bool = True`、`route_to: str | None`、`modified_context: dict | None`、`data_updates: dict | None`、`message: str | None`、`requires_hitl: bool = False`。`__post_init__`（`:133-141`）把 `modified_context` 与 `data_updates` 当同一份合并后的 dict 的别名。
-
-| 工厂 | 产生的字段 | 执行器行为 |
-| --- | --- | --- |
-| `continue_()`（`:143-146`） | 全默认 | 继续 |
-| `stop(message=)`（`:148-151`） | `should_continue=False`，`requires_hitl=False` | 直接 `FAILURE`（`executor.py:382-387`） |
-| `hitl(message=)`（`:153-159`） | `should_continue=False`，`requires_hitl=True` | 进入审批等待（`executor.py:330-332`） |
-| `route(target, message=)`（`:161-164`） | `route_to` | `ActionOutcome.DELEGATE`（`executor.py:388-394`） |
-| `modified_context`/`data_updates` | dict | 合并进 `accumulated_data`（`executor.py:395-397`、`hook_runner.py:56-57`） |
-
-合并规则 `merge()`（`:166-187`）：`should_continue` 取 **AND**（`:177`）、`route_to` 后者覆盖（`:178`）、`modified_context` 字典合并且后者覆盖（`:179-184`）、`message` 后者覆盖（`:185`）、`requires_hitl` 取 **OR**（`:186`）。含义：**一个 hook 要求停，整条链的结果就是停**；一个 hook 要求审批，就是审批。
-
-### 10.4 `HookScope`
-
-不是 Enum，是 `@dataclass(frozen=True)`（`:78-83`）：`points: frozenset[HookPoint]`、`target_abilities: frozenset[str] | None = None`。校验（`:85-89`）：`points` 为空抛 `ValueError("HookScope.points must not be empty.")`；`target_abilities == frozenset()` 抛 `ValueError("HookScope.target_abilities must be None or non-empty.")`。工厂 `global_(*points)`（`:91-95`）与 `for_abilities(points, abilities)`（`:97-110`）。
-
-`scope is None` 的 hook 是"legacy"：每次运行都要 `await should_trigger()` 再决定（`hook_store.py:80`、`:104-107`、`hook_runner.py:31-41`）；声明了 `scope` 的 hook 由索引直接选中，**跳过** `should_trigger`。现有权限 hook（`AccessApprovalHook`、`CommandApprovalHook`、`HITLApprovalHook`）都用 legacy 形态。
-
-### 10.5 `HookRunner`：唯一执行路径
-
-`async run(context) -> HookResult | None`（`hook_runner.py:17-59`）：
-
-1. `context.to_ability_context()` 重建一次门面（`:27`）；
-2. `store.select(point, ability_name)`（`:28`）；
-3. 遍历**全部**命中 hook（`:30`），legacy 的要先过 `should_trigger`（`:31-33`，假则 `continue` `:40-41`）；
-4. `await hook.execute(...)`（`:44`，总是 await）；
-5. 逐个 `merge`（`:51-54`）；
-6. 循环后若 `merged.modified_context` 非空，写入 `context.frame.data`（`:56-57`）；
-7. 返回合并结果（`:59`）。
-
-**没有短路**：没有 `break`，所有命中 hook 都会跑，优先级由 `merge` 的 AND/OR 决定。异常不吞：`should_trigger` 失败抛 `HookError(context.point.value, f"should_trigger failed for {type(hook).__name__}: {e}")`（`:34-38`），`execute` 失败抛同形 `HookError`（`:45-49`）；由于 `execute_ability` 无 try/except，`HookError` 会逃到 `execute_tool_calls` 变成 `FAILURE{str(e)}`。
-
-副作用：PRE_EXECUTE 的 `modified_context` 实际被写两次——`hook_runner.py:56-57` 写 `frame.data`（与 `context.data.raw` 同一对象），`executor.py:395-397` 又写 `accumulated_data`。内容相同、幂等，但两个写入点（D-7）。
-
-### 10.6 `HookStore`
-
-索引（`hook_store.py:64-69`）：`_entries`（注册顺序）、`_global_by_point`、`_by_point_and_ability`、`_legacy_by_point`。`AGENT_OWNER = "__agent_hooks__"`（`:61`）。
-
-| API | 语义 | 行号 |
-| --- | --- | --- |
-| `view(owner=AGENT_OWNER)` | 返回 `HookListView` | `:71-74` |
-| `add_hooks(owner, hooks)` | `legacy = getattr(hook, "scope", None) is None` | `:76-82` |
-| `remove_owner(owner)` | 摘除并重建索引 | `:84-88` |
-| `select(point, ability_name="")` | global + legacy + `(point, ability)` 三个桶取并集，再按注册顺序重排 | `:95-102` |
-| `is_legacy(hook)` | 判定 | `:104-107` |
-
-`HookListView`（`:29-55`）是给 `agent._all_hooks` 的兼容门面，支持 `append`/`extend`/`clear`；其 `__len__` 统计的是 `store.list_all()`（所有 owner）而不是本 owner 的子集（`:36-37`），多 owner 场景下长度会偏大。
-
-### 10.7 `HookContext`
-
-`@dataclass HookContext`（`hook_context.py:23-30`）：`point`、`frame`、`invocation`、`result`。`from_ability_context()`（`:32-51`）把 `data` **按引用**放进 `ExecutionFrame`（`:43-48`）并复用 `invocation`（`:49`）；`to_ability_context()`（`:53-64`）为 legacy hook 重建门面。
-
-## 11. 权限与 HITL
-
-三层结构，缺一层就会出事：
-
-```
-ability.yaml / 装配参数            PERMISSIONS 常量 + CoreUnitConfig
-        │                                  │
-        ▼                                  ▼
-FSPermissionChecker / CommandSafetyChecker   ← 判定层：只产出 (allowed, status)
-        │
-        ▼
-PRE_EXECUTE Hook（AccessApprovalHook / CommandApprovalHook / HITLApprovalHook）
-        │  stop() → FAILURE ；hitl() → 等待
-        ▼
-LocalAbilityExecutor.handle_hitl_hook_result → HITLRequestEvent → 等待 → 终态
+```text
+- `research/research` (read: `research/research/0.1.0/skills/research/SKILL.md`): 竞品调研流程
 ```
 
-### 11.1 FS 判定链
+`read` 地址是正文在 ability 根下的相对路径（能力件带版本段，内核件不带）。`load_skill` 接受目录名、裸键或该地址三种写法；`store.resolve_address` 只在**当前 Agent 已授予实例**里按声明路径逐字匹配，命中后仍走 `_resolve` 的授权与版本校验——地址不是绕开授权的新入口（`ghrah-11` M-14）。二义时拒绝而不是猜。
 
-`FSPermissionChecker(allowed_paths=None, workspace_root=None, denied_paths=None, require_approval=True)`（`scheme/permissions/fs_permissions.py:72-78`）；三个路径参数都 `Path.resolve()`（`:79-82`、`:85-92`），即白名单/黑名单也消解符号链接。`require_approval` 类级默认 **True**（`:77`）。
+技能条目**按包节点独立收集**，不挂在工具循环里：纯技能包（0 个 operation）没有任何工具，但它的技能必须进目录（`catalog_from_view` 显式注释这一点）。正文读取走 `ABILITY_CONTENT` 服务（`LocalGrantedContentProvider`），输出成员地址、包内相对路径、`media_type`、`digest`、`total_bytes` 与正文，不暴露宿主绝对路径。
 
-`check_access(path, operation="read") -> tuple[bool, str | None]`（`:136-171`）按序判定：
+## 9 执行
 
-| 序 | 条件 | 返回 | 行号 |
-| --- | --- | --- | --- |
-| 1 | 既无白名单也无 `workspace_root` | `(True, "pending")` 若 `require_approval`，否则 `(False, "Permission denied: no allowed paths configured (set allowed_paths or workspace_root, or enable require_approval for HITL)")` | `:151-157` |
-| 2 | 命中 denied | `(False, "Permission denied: {path} is in denied paths")` | `:159-160` |
-| 3 | 命中 allowed 或 workspace 内 | `(True, None)` | `:162-163` |
-| 4 | `require_approval` | `(True, "pending")` | `:165-166` |
-| 5 | 其他 | `(False, "Permission denied: {path} not in allowed paths; allowed roots: …")` | `:168-171` |
+### 9.1 `Ability` 契约与调用对象
 
-二元组语义：`(True, None)` 自动批准；`(True, "pending")` 需 HITL；`(False, reason)` 拒绝。**没有三元组**，也**没有读/写分级**——`operation` 形参在函数体内从未使用（`:136` vs `:149-171`），`check_read_path`/`check_write_path` 只是转调（`:173-203`）。读写在 hook 层由两张名单区分：`WRITE_ABILITIES={"write_file","edit_file","move_file","delete_file"}`、`READ_ABILITIES={"read_file","list_directory","search_files"}`（`:260-261`）。
+`class Ability(ABC)`（`ability/execution/base.py`）：必须实现 `name`（property）、`async execute(call, services) -> ActionResult`、`get_hooks()`；可选覆盖 `bind_tool()`（默认 `None`）、`to_prompt_description()`、`get_default_state()`；实现脚本还可提供异步 `prepare_arguments(call)`，执行器与投影层都会在 Hook 之前调用它。签名固定为 `execute(call, services)`——没有 `context` 门面，参数只有 `call.arguments` 一个来源。
 
-`AccessApprovalHook`（`:234-299`）：`hook_point=PRE_EXECUTE`（`:258`）；`should_trigger` 只看 ability 名（`:266-269`）；`execute` 取 `tool_args`（`:275`）、无目标路径则 `continue_`（`:278-279`）、`check_access`（`:282`）后：拒绝 → `HookResult.stop(message=status)`（`:284-285`）；pending → `HookResult.hitl(message=f"Human approval required for {operation} operation on: {target_path}")`（`:287-290`）；否则 `continue_`（`:292`）。目标路径提取只取**一个**：`move_file` 取 `destination_path`，其他取 `file_path or dir_path`（`:294-299`）。
-
-关键耦合：ability 内联检查把 `(True, "pending")` **当允许放行**（`scheme/ability/fs/operations/read_file.py:182-188`、`write_file.py:173-179`）。若装配期没挂 `AccessApprovalHook`，pending 就等于放行。代码注释已承认这条断链（`unit.py:512-515`、`scheme/execution/ability_build.py:144-146`）。
-
-### 11.2 命令分级
-
-枚举精确值（`scheme/permissions/command_safety.py:53-56`）：`SAFE="safe"`、`DANGEROUS="dangerous"`、`REQUIRE_HITL="require_hitl"`。`CommandSafetyVerdict`（`:59-65`）带 `category`、`base_command`、`sub_command`、`reason`。
-
-判定顺序（实现 `:302-390`）：空命令 → DANGEROUS（`:311-316`）→ base 在危险表 → DANGEROUS（`:322-328`）→ base 有子命令路由表（`:330-333`）时：子命令危险 → DANGEROUS（`:337-344`）、子命令安全 → SAFE（`:345-352`）、其余 → REQUIRE_HITL（`:358-367`）→ base 在安全表 → SAFE（`:369-375`）→ `require_approval=False` → SAFE（`:377-383`，**危险名单不受影响**）→ 兜底 REQUIRE_HITL（`:385-390`）。
-
-`parse_command()`（`:392-435`）用 `shlex.split`，`ValueError` 回退 `split()`（`:413-416`）；base 取 `Path(parts[0]).name`（`:421`，故 `/usr/bin/ls` → `ls`）；子命令 = 首个"不以 `-` 开头、不含 `/`、不含 `.`（除非以 `.` 开头）"的 token（`:424-433`）。副作用：`python script.py` 得 `sub=None`（`:430` 因 `.` 跳过），而 `git -C repo status` 会把 `repo` 误当子命令（D-8）。
-
-`extend_safe_lists()`（`:279-300`）只并入安全集合、小写归一，危险名单只增不减。
-
-`CommandApprovalHook`（`:438-469`）：PRE_EXECUTE（`:448`），只拦 `execute_command`（`:453-454`），命令取 `tool_args["command"]`（`:460`），SAFE → `continue_()`、DANGEROUS → `stop(reason)`、其余 → `hitl(reason)`（`:463-469`）。
-
-### 11.3 HITL 等待协议
-
-`handle_hitl_hook_result`（`scheme/execution/executor.py:651-763`）：
-
-1. 生成 `tool_call_id`（取 `tool_args["call_id"]`，否则 `uuid4().hex[:12]`）与 `promise_id = uuid4().hex`（`:671-672`）；
-2. 发布 `HITLRequestEvent`（`:676-685`）；
-3. `HITLFutureStore.create_future(agent, ability, tool_call)`（`:688-692`，同键旧 future 会被 cancel 替换，`core/hitl.py:88-90`）；
-4. 登记 promise registry（`:693-699`）；
-5. 熔断判定：`degraded = limit > 0 and consecutive >= limit`（`:702-706`），默认 `hitl_consecutive_timeout_limit=0` 即**关闭**；
-6. `await asyncio.wait_for(future, timeout=wait_timeout)`（`:710`，全文件唯一 `wait_for`）。
-
-结果三种（`HitlOutcome = Literal["approved","rejected","timeout"]`，`:55`）：
-
-| 终态 | 产出 | 行号 |
+| 对象 | 内容 | 位置 |
 | --- | --- | --- |
-| approved | 复位熔断计数，`HITLResolvedEvent(status="approved")`，`HITLWaitResult(outcome="approved", …)` | `:711-734` |
-| rejected | 同上但 `status="rejected"`；消息 `f"HITL request rejected by human: {reason}"`，无理由退回 `hook_result.message or "Execution blocked by HITL"`；data 含 `hitl_rejected=True` | `:362-378`、`:729-734` |
-| timeout | 计数 +1、移除 promise、`HITLResolvedEvent(status="timeout")`；data 含 `hitl_timeout=True`、`hitl_degraded`、`promise_id`、`tool_call_id` | `:337-361`、`:735-763` |
+| `MemberReference` | `instance_id` / `alias` / `member` / `version_digest` | `ability/execution/invocation.py` |
+| `InvocationIdentity` | `project_id` / `agent` / `run` / `agent_name`（装配者绑定，不从参数读） | 同上 |
+| `OperationCall` | `member` / `arguments` / `tool_call_id` / `identity` / `arguments_prepared` | 同上 |
 
-超时消息两种：普通 `f"HITL approval timed out after {self._hitl_timeout}s with no response delivered; {attribution}"`（`:348-351`）；降级 `"...(degraded wait; approval channel likely offline after {limit}+ consecutive timeouts); ...; consider wrapping up and calling end_task instead of requesting more approvals"`（`:339-346`）。注释明确**超时不得折算成用户拒绝**（`:334-336`）。
+`ExecutionServices` 是执行期依赖的**唯一**形态（`ability/execution/execution_services.py`）：新增依赖加服务键、不加调用对象属性。9 个键：`CONTEXT_MANAGER`、`SUPERVISOR`、`LOOP`（`LoopData`）、`MANIFEST_STORE`、`MCP_RUNTIME`、`ABILITY_CONTENT`、`TOOL_SURFACE`、`MESSAGE_FACTORY`、`HOST_COMMAND_PORT`。`build_execution_services(...)` 是所有执行入口共用的组装函数；漏传即 `None`，由使用方显式报错（元工具会返回 "Tool surface service is not wired"），不做隐式默认对象。
 
-`HITLWaitResult`（`:58-74`）：`outcome`、`promise_id`、`tool_call_id`、`reason`（审批人给的 `{"reason": ...}`）、`degraded`、`degraded_timeout`。
+### 9.2 `ProjectedAbility` 的三段
 
-回执入口 `receive_hitl_response(ability_name, tool_call_id, approved, result=None) -> bool`（`:765-791`），构造 `HITLResult(approved, result)` 调 `resolve_future`（`core/hitl.py:31-41`）。定位键是 `(agent_name, ability_name, tool_call_id)`。
+`ProjectedAbility`（`ability/access/startup.py`）是模型可见工具与本地执行实例之间的唯一包装：
 
-已知竞态：`HITLRequestEvent` 在 future 创建**之前**发布（`:676-685` vs `:688-692`），审批人若在此窗口内立即回执，会命中一个尚不存在的 future（D-9）。
-
-### 11.4 默认开关
-
-| 配置 | 默认 | 位置 |
+| 段 | 方法 | 做什么 |
 | --- | --- | --- |
-| `PermissionFlags.*`（manifest 字段） | 布尔全 `False`，列表全空 | `scheme/loading/manifest_fields.py:60-71` |
-| `PermissionFlags.merge` | 布尔 OR、`allowed_*` 替换、`denied_*` 追加 | `:73-97` |
-| `CoreUnitConfig.require_approval_by_default` | `True` | `unit.py:181` |
-| `CoreUnitConfig.auto_approve_abilities` | `()` | `unit.py:180` |
-| `CoreUnitConfig.workspace_root` | `None` | `unit.py:179` |
-| `CoreUnitConfig.hitl_timeout` | `300.0` | `unit.py:178` |
-| `CoreUnitConfig.hitl_consecutive_timeout_limit` | `0`（熔断关闭） | `unit.py:184` |
-| `CoreUnitConfig.hitl_degraded_timeout` | `30.0` | `unit.py:185` |
-| `HITLPolicyConfig.require_approval_by_default`（Subject） | `True` | `subject/config.py:88` |
-| `HITLPolicyConfig.environment_injection` | `False` | `subject/config.py:95` |
+| 固定 | `prepare_call(call)` | 把成员引用与受信身份替换成启动时捕获的事实；参数无权覆盖 |
+| 预检 | `check_call(call, services)` | 未绑定 run 即拒；run 不是当前代次即拒；`Input` 模型校验失败即 `Invalid arguments`；再调内层 `check_call`（如 `PermissionDeniedAbility`） |
+| 执行 | `execute(call, services)` | 再 `prepare_call` / `check_call` → `prepare_arguments` → `admission`（`store.admit_tool`）→ 内层 `execute` |
 
-环境变量（Subject 侧）：`GHRAH_SUBJECT_HITL_REQUIRE_APPROVAL` 默认 `"true"`（`subject/config.py:478-481`）、`GHRAH_SUBJECT_HITL_ALLOWED_PATHS`（`:482-484`，`；` 分隔）、`GHRAH_SUBJECT_HITL_WORKSPACE_ROOT`（`:485`）、`GHRAH_SUBJECT_HITL_AUTO_APPROVE_ABILITIES`（`:473-477`）。注入链：`subject/registry.py:420-434` 把 `config.hitl_policy.*` 映射进 `CoreUnitConfig`。
+接纳在 HITL 钩子之后运行：审批只决定「范围外的调用要不要问人」，关系与授予范围的复核**不能被审批跳过**——撤销、改绑、越界在此最后兜底，失败时无副作用。`get_hooks()` 用 `_ProjectedHook` 把内层 Hook 绑定到本次物化的实例与成员，避免同一 Agent 的其他文件工具拿自己的检查器审查本成员。
 
-生效读法：命令未知名在 `require_approval=True` 下是 REQUIRE_HITL；FS 在无 allowed/workspace 时全 pending（`fs_permissions.py:151-153`）或全拒（`:154-157`）；有 `workspace_root` 时工作区内自动放行。
+### 9.3 一次调用的时序
 
-## 12. 装配：谁把这一切接起来
+`LocalAbilityExecutor.execute_ability`（`ability/execution/executor.py`）：
 
-能力对象由两个装配点创建，**两者对 FS 的默认行为不同**（D-2）。
+1. `prepare_call`（若有）→ `check_call`，被拒即返回 `FAILURE`；
+2. `prepare_arguments`（若有）；
+3. `PRE_EXECUTE`：`HookRunner.run` 选中并合并 Hook；
+4. 分派：`requires_hitl` → 审批等待；`not should_continue` → `FAILURE`；`route_to` → `DELEGATE`；
+5. `await ability.execute(call, services)`；
+6. `data["await_reply"]` 为真时登记延迟调用并**在 POST_EXECUTE 之前**返回（`finish_deferred` 只重放 POST_EXECUTE）；
+7. `POST_EXECUTE`（带结果），返回值丢弃；
+8. 原样返回 `ActionResult`。
 
-### 12.1 `CoreUnitConfig`（`unit.py:116-197`）
+`execute_tool_calls` 对已知工具用 `asyncio.gather(..., return_exceptions=True)` 并行执行；非 `Exception` 的 `BaseException`（含取消）**原样重抛**，`Exception` 转成 `FAILURE{str(e)}`；未知工具名立即记 `FAILURE{"error": "Unknown ability: <name>"}`。
 
-`@dataclass(frozen=True)`，与本主题相关的字段：`workspace_root: str | None = None`（`:179`）、`auto_approve_abilities: tuple[str, ...] = ()`（`:180`）、`require_approval_by_default: bool = True`（`:181`）、`safe_extra_commands: tuple[str, ...] = ()`（`:182`）、`safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = ()`（`:183`）、`hitl_timeout: float = 300.0`（`:178`）、`hitl_consecutive_timeout_limit: int = 0`（`:184`）、`hitl_degraded_timeout: float = 30.0`（`:185`）。
+### 9.4 参数校验的位置
 
-### 12.2 装配点 A：`_create_ability_from_def`（`unit.py:448-544`）
+| 位置 | 校验 | 失败表现 |
+| --- | --- | --- |
+| `ProjectedAbility.check_call` | 内置件用实现脚本的 `Input` 模型（启动时 `import_module` 取 `Input`） | `Invalid arguments; check describe_tool's input_schema` |
+| `MetaToolAbility.execute` | 元工具自己的输入模型 | `Invalid meta-tool arguments` |
+| `store._check(..., arguments)` | 后端资源范围（路径/命令/身份/`server`+`tool`） | `access_denied` / `invalid_change` / `unavailable` |
 
-输入 `ability_def`（带 `ability_type` 与 `params`），按类型分派：
+工具 schema 与描述一律取自**已提交版本的定义面**（`operation["input_schema"]` / `operation["description"]`），不从实现脚本二次读取；构建期生成器从实现脚本的 `Input`/`Output` 生成定义（§15.1），两侧因此同源。
 
-- FS（`ability_type in FS_ABILITY_TYPES` 且 params 命中 `{"require_hitl","allowed_paths","denied_paths","workspace_root"}`，`:491-493`）：弹出四个字段（`:494`），`require_approval` 决策 `auto_approved → False`，否则显式 `require_hitl`，否则 `require_approval_by_default`（`:499-504`）；构造 `FSPermissionChecker`（`:505-510`）；`require_approval` 为真时挂 `AccessApprovalHook`（`:516-517`）。
-- `execute_command`（`:519-539`）：`require_approval` 决策同上（`:521-527`）；`CommandSafetyChecker`（`:528`）；有扩展白名单则 `extend_safe_lists`（`:530-535`）；**恒**挂 `CommandApprovalHook`（`:537`）。
-- `end_task`（`:541-542`）：`params["mode"] = "toolcall"`。
-- 最后 `create_ability(ability_type, **params)`（`:544`）。
+### 9.5 HITL 与硬拒绝
 
-docstring（`:461-475`）给出的优先级：`auto_approve > manifest 显式声明 > 兜底默认`。
+`handle_hitl_hook_result`（`ability/execution/executor.py`）走 `HITLFutureStore` + `HITLRequestEvent` / `HITLResolvedEvent` + promise registry，终态三种：`approved`（复位连续超时计数并继续）、`rejected`（`FAILURE`，`data` 含 `hitl_rejected`、`promise_id`、`tool_call_id`，消息带审批人理由）、`timeout`（`FAILURE`，`data` 含 `hitl_timeout`、`hitl_degraded` 与归因字段）。**超时不得折算成用户拒绝**（注释明写）。连续超时熔断默认关闭（`hitl_consecutive_timeout_limit=0`）；开启后第 N 次起等待降级为 `hitl_degraded_timeout`，文案提示收敛并改调 `end_task`。
 
-### 12.3 装配点 B：`instantiate_resolved_abilities`（`scheme/execution/ability_build.py:55-64`）
+`PermissionDeniedAbility`（`ability/permissions/hitl.py`）是硬拒绝：`check_call` 直接返回 `FAILURE`，**不进审批**，也不执行副作用。
 
-签名：
+### 9.6 `run_script`
 
-```python
-def instantiate_resolved_abilities(
-    resolved_abilities: list[ResolvedAbility], *,
-    workspace_root: str | None,
-    auto_approve_abilities: tuple[str, ...] = (),
-    require_approval_by_default: bool = True,
-    command_runner: Any = None,
-    safe_extra_commands: tuple[str, ...] = (),
-    safe_extra_sub_commands: tuple[tuple[str, tuple[str, ...]], ...] = (),
-) -> list[AbilityProtocol]
+脚本不是 operation 成员，不走 `execute_command`。链路：`RunScriptTool`（`ability/surface/runtime.py`）→ `ToolSurfaceRuntime.run_script` → `execute_run_script`（`ability/scripts/runner.py`）。地址是模型侧 `skills/<skill>/scripts/<key>`，与授予侧 `skill/<skill>/scripts/<key>` 由 `resolve_script` 对应；起进程前完成「地址越界、未授权、脚本 `available` 为假、语言不对、参数不是对象」检查；工作目录取本次授予实例的根，不从参数解释路径；默认预算 120 秒；结果 `action` 恒为 `script.call`，stderr 只进日志。
+
+## 10 Hook
+
+### 10.1 触发点与契约
+
+`HookPoint`（`ability/execution/hooks.py`）共 10 个：drive_loop 层 `BEFORE_ACTION` / `AFTER_ACTION` / `ON_ERROR` / `ON_MAX_ITERATIONS`（驱动循环发），action 层 `PRE_LLM_CALL` / `POST_LLM_CALL` / `PRE_TOOL_EXECUTE` / `POST_TOOL_EXECUTE`（驱动循环发），ability 层 `PRE_EXECUTE` / `POST_EXECUTE`（`execute_ability` 发）。权限与 HITL Hook 全部挂 `PRE_EXECUTE`。
+
+`class Hook`：类属性 `hook_point`、可选 `scope: HookScope | None`；抽象 `async should_trigger(call, services) -> bool` 与 `async execute(call, services, result=None) -> HookResult`。Hook 与 Operation 看到**同一份**调用对象与服务表：成员从 `call.member` 读、参数从 `call.arguments` 读、依赖从 `services` 取。`HookScope`（frozen dataclass）声明 `points` 与可选 `target_abilities`，`points` 为空或 `target_abilities == frozenset()` 直接 `ValueError`；`scope is None` 的 Hook 是 legacy（每次都要 `should_trigger`），声明了 `scope` 的由索引直接选中并跳过 `should_trigger`。
+
+### 10.2 `HookResult` 与执行顺序
+
+| 工厂 / 字段 | 语义 | 执行器行为 |
+| --- | --- | --- |
+| `continue_()` | 全默认 | 继续 |
+| `stop(message=)` | `should_continue=False`，`requires_hitl=False` | 立即 `FAILURE` |
+| `hitl(message=)` | `should_continue=False`，`requires_hitl=True` | 进入审批等待 |
+| `route(target)` | `route_to` | `DELEGATE` + `next_action_hint` |
+| `modified_context` / `data_updates` | dict（互为别名） | 合并进 `LOOP` 服务里的循环数据 |
+
+`merge`：`should_continue` 取 AND、`route_to` 后者覆盖、`modified_context` 字典合并且后者覆盖、`message` 后者覆盖、`requires_hitl` 取 OR——一个 Hook 要求停，整条链就是停；一个要求审批，就是审批。
+
+`HookRunner.run(point, call, services, result)`（`ability/execution/hook_runner.py`）是唯一执行路径：`store.select(point, call.member.member)` → 逐个（legacy 先 `should_trigger`）→ `execute` → 依次 `merge` → 若有 `modified_context` 写入 `LOOP`。**没有短路**；异常包成 `HookError` 上抛，最终由 `execute_tool_calls` 转成 `FAILURE`。`HookStore.select` 取 global + legacy + `(point, ability)` 三个桶的并集，再按注册顺序重排。
+
+## 11 权限
+
+### 11.1 三层结构
+
+```text
+members[*].data.permissions（包声明）+ 模板成员 permissions（申请）
+        ↓ resolve_effective_permission（启动物化时算一次）
+  EffectivePermission  →  FSPermissionChecker / CommandSafetyChecker
+        ↓ 挂在 PRE_EXECUTE
+  AccessApprovalHook / CommandApprovalHook / HITLApprovalHook
+        ↓ hitl() → LocalAbilityExecutor.handle_hitl_hook_result
 ```
 
-流程：`template_vars = {"workspace": workspace_root} if workspace_root else {}`（`:88`）→ 逐条 `ResolvedAbility`（`:90`）→ 非 builtin 或无 handler 则 `logger.warning("Skipping non-builtin ability '%s' (type=%s) in manifest spawn", …)` 并跳过（`:91-98`）→ `auto_approved = handler in auto_approve_abilities`（`:104`，按 **handler** 匹配，不是 `ability_name`）→ `_instantiate_ability`（`:99-109`）。
+`resolve_effective_permission(declaration, request, workspace_root)`（`ability/permissions/scope.py`）的合并规则：
 
-分派顺序（`:114-177`）：`conversation` 原样创建（`:129-130`）→ `end_task` 加 `mode="toolcall"`（`:132-133`）→ **FS 分支先于命令分支**（`:135-149`）→ `execute_command`（`:151-166`）→ 兜底（`:168-177`）。
+| 维度 | 合并 |
+| --- | --- |
+| `allowed_paths` | 层间**取交集**；`None` = 未声明范围，空元组 = 声明了但什么都不自动批准 |
+| `denied_paths` | 层间**取并集**（硬拒绝只增） |
+| `allowed_commands` | 层间取交集（按 base+sub 归一比较，保留更窄一条） |
+| `denied_commands` | 层间取并集 |
+| `require_hitl` / `fs_read_only` | 取 OR |
+| `fs_write` / `net_access` / `shell_access` | 取 AND（申请只能收紧）；`fs_read_only` 生效时强制 `fs_write=False` |
 
-差异点（必须知道）：
+`EffectivePermission.sandbox_roots` 是部署方文件硬边界，缺省用工作区根；文件类成员的授予根由启动核定写入 `allowed_roots`。
 
-| 项 | 装配点 A | 装配点 B |
+实现脚本的 `PERMISSIONS` 常量经构建写进成员 `data.permissions`，它是**申请值（上限）**，不是授权结果：真正生效的授权在 `ability_grants`，模板成员 `permissions` 只能在此上限内收紧（`resolve_effective_permission` 的 `request` 层，`None` 字段表示未申请）。
+
+### 11.2 硬拒绝先于审批
+
+`_REQUIRED_PERMISSION`（`ability/execution/ability_build.py`）声明「成员需要哪项能力」：`write_file` / `edit_file` / `delete_file` / `move_file` → `fs_write`，`execute_command` → `shell_access`。有效范围缺该项时用 `PermissionDeniedAbility` 包一层：`check_call` 直接失败，审批无法覆盖。
+
+### 11.3 FS 判定
+
+`FSPermissionChecker.check_access(path, operation)`（`ability/permissions/fs_permissions.py`）返回二元组：`(True, None)` 自动批准、`(True, "pending")` 待审批、`(False, reason)` 拒绝。判定顺序：只读且写操作 → 拒；沙盒硬边界外 → 拒（**审批也不能放宽**）；命中 denied → 拒；命中 allowed 或工作区内 → 准；否则 `require_approval` → pending，不然拒。
+
+`AccessApprovalHook` 只看能力名（`WRITE_ABILITIES` / `READ_ABILITIES`），逐个检查目标路径（`move_file` 查源与目标、`search_files` 查搜索根、其余查 `file_path` 或 `dir_path`）：任一拒绝即 `stop`，任一 pending 即 `hitl`，否则 `continue_`。
+
+### 11.4 命令分级与三张审批 Hook
+
+`CommandSafetyChecker`（`ability/permissions/command_safety.py`）以 bash-classify 前端解析出的表达式为基础，叠加声明范围与危险名单，产出 `CommandSafetyCategory` 三值：`safe` / `dangerous` / `require_hitl`；`CommandSafetyVerdict` 带 `category`、`base_command`、`sub_command`、`reason`，待审批时附 `shell_remember`（供"记住本次允许"）。`extend_safe_lists` 只并入 safe 集合且小写归一，只在 bash-classify 段级门禁允许的档位内生效，不能抬升未知/危险档。`CommandApprovalHook` 只拦 `execute_command`：SAFE 放行、DANGEROUS 拒绝、其余转 HITL。
+
+| Hook | 管辖 | 触发条件 |
 | --- | --- | --- |
-| FS `require_approval` 兜底 | `require_approval_by_default`（`unit.py:504`） | 只用 `bool(permissions.require_hitl)`（`ability_build.py:219`），`require_approval_by_default` 被接收但**不读**（`:196`、`:141`） |
-| command 兜底 | `require_approval_by_default`（`unit.py:527`） | `bool(require_hitl) or require_approval_by_default`（`:242`） |
-| FS hook 挂载 | `require_approval` 为真才挂（`unit.py:516`） | 同样条件（`:147-148`） |
-| command hook 挂载 | **恒**挂（`unit.py:537`） | **恒**挂（`:251`） |
+| `AccessApprovalHook` | 文件路径范围 | 能力名属于读写文件集合 |
+| `CommandApprovalHook` | 命令分级 | 能力名是 `execute_command` |
+| `HITLApprovalHook` | 「声明要审批但能力自己不检查」的通用情形 | `call.member.member == 宿主成员名` |
 
-后果：同一份 manifest 在两条路径下可能一边是 HITL、一边是直接拒绝（`unit.py:504` 兜底 `True` vs `ability_build.py:219` 兜底 `False`）。`ability_build.py` 的 docstring（`:24-25`、`:71-72`、`:201`）声明了 FS 也会用 `require_approval_by_default`，与实现不符。
+`HITLRequiredAbility` 是**组合**（非继承）：委托内层、把 `HITLApprovalHook` 追加到内层 Hook 之后、其余属性透传。装配优先级链统一为 `auto_approve > 声明的 require_hitl > 兜底默认`。
 
-另一个顺序副作用：FS 判断在命令判断之前，一个带 `fs_*` 字段的 `execute_command` 会走 FS 分支并**丢失** `command_checker`/`command_runner`（D-4）。
+## 12 装配
 
-兜底分支对通用 ability 的包装：`create_ability(handler)`（`:168`），若 `not auto_approved and bool(permissions.require_hitl)` 则包一层 `_HITLRequiredAbility(ability, ability_name=handler, reason=f"manifest requires HITL approval for '{handler}'")`（`:171-176`）。
+### 12.1 来源选择：`AbilityAssembly.select`
 
-失败语义：函数自身不抛异常；非 builtin 只跳过 + warning（docstring `:17-19` 显式对比独立 runner 的 `raise ValueError`）；`create_ability`/checker 的异常不捕获，直接上抛。
+`AbilityAssembly.select(mode, *, agent_store=None, install_root=None)`（`ability/assembly.py`）只接受 `builtin` 模式（`AbilitySourceMode.parse` 对其它值直接报错），构造唯一来源 `BuiltinAbilitySource(agent_store=..., install_root=...)`：内置树按包投影，安装根交给 `InstalledAbilityProvider`；同全名在内置树与安装根同时存在时**明确失败**（`_build_origins`），拒绝静默覆盖。`ability_install_root` 由部署方显式给出（`CoreUnitConfig.ability_install_root` 默认 `None`），领域层不拼默认路径。
 
-### 12.4 `HITLRequiredAbility` 与三个审批 hook 的关系
+### 12.2 授权装配边界
 
-- `HITLRequiredAbility`（`scheme/permissions/hitl.py:69-100`）是**组合**不是继承：委托 inner（`:76-78`、`:84-85`），`get_hooks()` 把 `HITLApprovalHook` 追加到宿主 hooks 之后（`:87-88`），`__getattr__` 透传（`:99-100`）。
-- `HITLApprovalHook`（`:40-66`）：PRE_EXECUTE（`:50`），`should_trigger` 只在 `context.current_ability_name == self._ability_name` 时为真（`:56-57`），消息 `f"{reason} — ability='{name}' args={summary}"`（`:64-66`，`summary = str(tool_args)[:200]`）。
+`build_startup_materializer(...)`（`ability/access/boundary.py`）构造本次部署**唯一**的 `StartupGrantMaterializer`：顶层 spawn、子 Agent `spawn_agent`、程序化装配都必须经它拿工具表；`SupervisorActor` 在 builtin 模式拒绝非边界产出的工具表（`AuthorizedToolTable`）。启动动作的操作员身份是 `AccessIdentity(project_id, "deployment", "deployment", True, "deployment")`。
 
-三者分工：`AccessApprovalHook` 管 FS 路径、`CommandApprovalHook` 管命令分级、`HITLApprovalHook` 管"manifest 声明要审批但能力本身不检查权限"的通用情形。
+`materialize(agent=, resolved=)` 的步骤（`ability/access/startup.py`）：
 
-## 13. 不变式与已知偏差
+1. `_split`：按 handler 是否在 `CONTROL_HANDLERS`（`{conversation, end_task}`）且全名以 `ghrah.core.` 开头，分出控制成员与能力包成员；
+2. 逐包 `_register`：`capture_package` → `commit_version` → `select_instance`（同版本幂等）；
+3. 算目标事实：有策略走 `desired_grants`（模板 × 策略，`ability/access/reconcile.py`），无策略走 `_existing_desired`（只认库内既有事实，不扩权）；两者都为空即 `StartupGrantError`（不回退模板自动授予）；
+4. 注入元工具：普通授权成立后才把 `META_TOOL_NAMES` 加进 core 的授予（策略可显式 revoke）；
+5. `apply_grants` 写库（CAS，失败即 `StartupGrantError`）；
+6. `_bind`：`assign_tool_names` 定名 → 清理陈旧 `ability_tools` → 逐条 `write_bind_tool`；
+7. `_instantiate`：为每个绑定成员构造内层实现 + `ProjectedAbility`，附加 `ToolSurfaceRuntime` 与 `RunScriptTool`，返回 `AuthorizedToolTable`。
+
+`materialize_stored` 是恢复分支：只从库内管理员事实恢复，不执行策略写回。
+
+### 12.3 内层实例化与物化包装
+
+`instantiate_resolved_abilities(...)`（`ability/execution/ability_build.py`）按 handler 分派：`conversation` 原样、`end_task` 加 `mode="toolcall"`、文件类挂 `AccessApprovalHook` + `FSPermissionChecker`、`execute_command` 挂 `CommandApprovalHook` + `CommandSafetyChecker`；实现类型为 `python` 的成员（安装包 Operation）改由 `provider.create_operation(...)` 取进程内适配，缺能力时包 `PermissionDeniedAbility`，需审批时包 `HITLRequiredAbility`。非 builtin 且无 handler 只 warning 跳过（不中断整个 spawn）。
+
+`ProjectedAbility` 的 `tool_schema` 直接取已提交定义的 `description` + `input_schema`；`member_reference` 固定实例/别名/成员/版本摘要；`identity` 固定项目/Agent/run/显示名；`admission` 是 `_admission(agent, binding, version_digest)`：比对别名与成员 → 刷新 MCP 后端 → 核对当前 run → `store.admit_tool(..., expected_alias=, expected_member=)` → 版本摘要前缀比对，任一不符给出可读拒绝（`version_changed` / `tool_revoked` / `arguments_out_of_scope` / `stale_invocation`）。`bind_run(run)` 在 Agent 注册完成后补齐受信 run；绑定前 run 为空，接纳层按「旧对象不得借用新 run」拒绝。
+
+### 12.4 控制成员通道与每轮投影
+
+`conversation`、`end_task` 属于成员体系但**不进授权账本**：`_split` 把它们分流到 `control` 列表，`_instantiate` 直接实例化；工具面把它们放进 `controls`（`member_reference is None` 且不是 `run_script`）单独通道，撤销与授权投影都裁剪不到它们。规范见 `ghrah-11` §7。
+
+`tool_table_projector(agent, materialization)` 返回无参异步投影器：每轮从库重算可见工具名，只保留本次实际物化过且仍可用的成员；`AccessError` 时返回空元组（宁可少给，不给过期）。绑定变更由 `set_member_bound` 写实例快照（`MemberBindingState.save` → `AgentInstanceStore.set_member_bindings`），工具成员与技能成员走同一入口；`ability_tools` 由启动核定与管理面 `enable_tool`/`disable_tool` 维护，元工具不直接写它。持久化失败只告警，不回滚内存视图。
+
+## 13 不变式与已知偏差
 
 ### 13.1 不变式（可被测试引用）
 
 | 编号 | 不变式 | 校验点 |
 | --- | --- | --- |
-| INV-01 | 容器名 == 目录名 == `identity.name or identity.namespace` | `ability_scan.py:505-516` |
-| INV-02 | `implementation.operation == 成员键` | `ability_schema.py:127-132` |
-| INV-03 | `implementation.provider_slot` ∈ `provider_requirements` | `ability_schema.py:135-140` |
-| INV-04 | 一个容器至多一个 skill 成员 | `ability_schema.py:136-142` |
-| INV-05 | 每个 `operations/<key>.py` 恰好一个 `Ability` 子类，且 `__module__` 匹配 | `ability_catalog.py:190-201` |
-| INV-06 | 每个实现脚本有 `PERMISSIONS`/`HOOKS`/`SUMMARY`/`TAGS` 四件套 | `ability_catalog.py:363-374` |
-| INV-07 | 工具名 = 成员键；`expose=false` 不进工具面 | `tool_list.py:128-131` |
-| INV-08 | 内置根 rank 0 且不可写，用户根 rank 100，同名内置胜 | `ability_roots.py:52-66`、`ability_scan.py:554-579` |
-| INV-09 | 所有查询无缓存，改盘立即生效 | §3.2 各行号 |
-| INV-10 | 权限拒绝不抛异常，一律 `ActionResult(FAILURE, {"error": …})` | `errors.py:11`（只有两个异常类）、`executor.py:382-387` |
-| INV-11 | 超时不得折算为用户拒绝 | `executor.py:334-336` |
-| INV-12 | 取消（非 `Exception` 的 `BaseException`）必须原样重抛 | `executor.py:507-511` |
+| I-01 | 运行期只读 SQLite，不读安装目录 | `surface_snapshot` / `resolve` / `read_chunk` 的输入只有库内数据 |
+| I-02 | 成员契约唯一来源是已提交定义；工具 schema 不从实现脚本二次读取 | `_instantiate` 取 `operation["input_schema"]` |
+| I-03 | 两轴相互独立：`visible` 只决定能否被发现，`bind` 只决定是否常驻上下文；`search_tools` 在实例创建时固定为 `visible=false, bind=true` | `MemberAxes` / `member_axes_for_creation` |
+| I-04 | 授权地址规范唯一：`operations/<k>`、`skill/<k>[/<role>/<k>]` | `GrantFacts.__post_init__`（地址全集必须被 axes 覆盖） |
+| I-05 | 授权只经关系库写，且必须带 `expected_revision` | `write_grant` / `write_revoke` / `write_bind_tool` |
+| I-06 | 版本按 digest 不可变，提交幂等 | `commit_version` 的摘要自洽校验 |
+| I-07 | 撤销与改绑在下次调用即生效（fail-closed） | `_check` 每次读库比对修订 |
+| I-08 | 工具名与成员的映射唯一且确定，冲突不静默改名 | `assign_tool_names` |
+| I-09 | 保留名不可被任何包占用（core 元工具名仅 core 可用） | `RESERVED_TOOL_NAMES`、`_bind` 的别名校验 |
+| I-10 | 控制成员不进授权账本，也不被授权投影裁剪 | `CONTROL_HANDLERS`、`controls` 通道 |
+| I-11 | 权限拒绝不抛异常，一律 `ActionResult(FAILURE, {"error": …})` | `PermissionDeniedAbility`、`_denial` |
+| I-12 | 取消（非 `Exception` 的 `BaseException`）必须原样重抛；超时不得折算为用户拒绝 | `execute_tool_calls`、`execute_ability` 的 timeout 分支 |
+| I-13 | 工具目录可从库完整重建，不缓存跨事务结论 | `catalog_from_view` + `read_agent_catalog` |
 
-### 13.2 已知偏差与技术债
+### 13.2 已知偏差（按 `a742fcf` 重测）
 
 | 编号 | 偏差 | 证据 | 影响 |
 | --- | --- | --- | --- |
-| D-1 | `execution.timeout_ms` 不生效；能力执行无超时 | `ability_schema.py:188` vs `executor.py:400` | 能力挂住会挂住整批 gather |
-| D-2 | 两条装配路径 FS 默认不同 | `unit.py:504` vs `ability_build.py:219` | 同 manifest 行为可能不同 |
-| D-3 | 权限与 hooks 不在定义面 | `ability_schema.py:11-12` | 判断"要不要审批"必须读实现脚本 |
-| D-4 | FS 判断先于命令判断 | `ability_build.py:135` vs `:151` | 带 `fs_*` 字段的 `execute_command` 丢失命令安全层 |
-| D-5 | `ExecutionFrame` 与 `AbilityExecutionContext` 双模型 | `execution_frame.py:25-29` | 字段漂移风险 |
-| D-6 | 未知 ability 结果先 append | `executor.py:462-480` vs `:506-525` | 结果顺序可能与 `tool_calls` 不一致 |
-| D-7 | PRE_EXECUTE `modified_context` 写两次 | `hook_runner.py:56-57`、`executor.py:395-397` | 幂等但两个写入点 |
-| D-8 | `parse_command` 把带值选项实参当子命令 | `command_safety.py:424-433` | `git -C repo status` 误判为需审批 |
-| D-9 | `HITLRequestEvent` 早于 future 创建 | `executor.py:676-685` vs `:688-692` | 极快回执可能丢失 |
-| D-10 | `pending` 在能力内联检查中等同放行 | `read_file.py:182-188`、`write_file.py:173-179` | 未挂 hook 时越权静默通过 |
-| D-11 | `move_file` 只审 destination | `fs_permissions.py:294-299` | 白名单外 source 不触发审批 |
-| D-12 | 非 `"."` 的相对 `allowed_paths` 按进程 CWD 解析 | `paths.py:142` + `fs_permissions.py:87` | 与"绝不泄漏 $PWD"承诺不一致 |
-| D-13 | POST_EXECUTE 返回值被丢弃 | `executor.py:409-411` | post hook 的 `stop()`/`route_to` 无效 |
-| D-14 | `bind_tool()` 与 `ability.yaml` 双份 schema | `read_file.py:124-140` vs `fs/ability.yaml:30-51` | 19 个可比成员中 18 个有差异（5 处语义）；以实现面为准，同步无校验、无告警 |
-| D-15 | `DataKey.value_type`/`ServiceKey.service_type` 无运行时校验 | `execution_data.py:31-32`、`execution_services.py:35-36` | 类型错误延迟到使用点 |
-| D-16 | `FINAL_RESPONSE` 实际键名是 `response` | `execution_data.py:86` | 按常量名猜键会读不到 |
-| D-17 | `HookListView.__len__` 统计所有 owner | `hook_store.py:36-37` | 多 owner 下长度偏大 |
-| D-18 | `catalog.py:104` 声明 `AbilityDefinitionError`，实际抛 `ManifestValidationError` | `catalog.py:104` vs `ability_catalog.py:126` | 异常捕获可能漏 |
-| D-19 | `CLUSTER_ABILITY_TYPES` 无消费者 | `kinds.py:31-41` | 死常量 |
-| D-20 | `extract_paths` 生产代码无消费者 | `paths.py:58` | 规格表与运行时判定已解耦 |
+| P-1 | 两套同名 `axes` 语义不同：成员侧 `{visible, bind}`，授权事实侧 `{visible, available}` | `ability/member.py` `MemberAxes` vs `ability/access/facts.py` `GrantFacts` | 跨层阅读易把"绑定"当"可执行" |
+| P-2 | 已修复：两轴解耦后，`Member.reference` 不再声明「`bind` 必须与 `visible` 一致」 | `ability/member.py` 的 `reference` | — |
+| P-3 | `execution.timeout_ms` 对能力件生效（`asyncio.timeout`），对内核件不生效 | `ability/package/provider.py` `PythonOperation.execute` vs `ability/execution/executor.py` | 同一字段两种运行行为 |
+| P-4 | `surface_snapshot` 读的是 `include_unavailable_bindings=True` 的投影，不可用成员仍在目录里（`available=false`），必须由上层过滤 | `store.surface_snapshot` / `runtime.refresh` | 漏过滤会让模型看到不可执行工具 |
+| P-5 | 退化身份包成员名两段/三段并存，靠三处等价兼容维持 | 解析回退、安装记录回退、`surface/runtime.py` `_member_forms` | 兼容层与长期债务（`ghrah-11` §11、`ghrah-12` §11、`ghrah-13` §6.2） |
+| P-6 | 定义面仍接受 `schema_version: '1'`（只读），两条解析路径并存 | `ability_schema._from_members` vs `_members_list_to_tables` | 新增字段必须两处同步，否则 v1 存量读不出 |
+| P-7 | 技能存在两套名字：目录名 `<alias>/<key>` 与成员全名 `<package>.<key>` | `ability/surface/catalog.py` `SkillSurfaceEntry` | 调用方必须明确用哪套，不能混用 |
+| P-8 | 多个服务键允许 `None`，使用方必须显式报错 | `build_execution_services` | 漏接线是运行期 `FAILURE` 而非装配期错误 |
 
-## 14. 旧概念对照
+构建严格 / 安装宽松的口径差、`.zip` 不能直接安装、内核件仍写 `identity.version` 等偏差已在 `ghrah-12` §11 记录，本文不重复。
 
-| 旧文档中的概念 | 现状 | 当前对应物 |
+## 14 旧概念对照
+
+| 旧概念（旧 `scheme` 布局 / v1 设计） | 现状 | 当前对应物 |
 | --- | --- | --- |
-| `AbilityRegistry` 类 | **不存在**（仅存注释提及被取代） | 扫盘 + 路径约定：`ability_catalog.py:166`、`:495-536` |
-| `AbilityRegistry.create/has/list_types/get_class/register/unregister/clear` | 前四个有替代，后三个**删除** | `create_ability` / `has_handler` / `builtin_handlers` / `ability_class` |
-| `AbilityMount` / `MountTable` / `mount_id` | **不存在**（全仓 0 命中，仅设计稿里出现） | 无对应物：容器 + 目录池取代挂载表 |
-| `LoadLockEntry` | **不存在** | `LockRecord` / `LockOutcome` / `SkillFingerprint` |
-| `SeedSnapshot` | **不存在** | 无对应物 |
-| `CatalogEntry` | 裸名**不存在** | `SkillCatalogEntry`（Protocol）/ `CatalogReport` |
-| `AbilityDescriptor` | 不在 `ghrah-core` | subject 侧概念，非本仓代码 |
-| 能力 CRUD 指令面（P1 计划） | **未实现** | `list_abilities` 是只读工具（`core/operations/list_abilities.py:99`） |
-| G1–G14 缺口清单 | 历史分类，不再适用 | 现以 §13.2 D-1…D-20 表达 |
-| "注册表在 import 期快照" | **不成立** | 全部查询每次重新扫盘（§3.2） |
-| 工具名 `namespace__op` 或 `container.op` | **错** | 工具名 = 成员键（`tool_list.py:53-57`） |
+| `ghrah.scheme.loading.tool_list` 与它的工具/条目对象 | **模块已删除**；运行期不扫盘生成工具表 | `ability/surface/`（目录 ← `store.surface_snapshot`） |
+| 「零缓存扫盘」查询链（每次调用重扫目录） | 运行期主链**不再扫盘**；库投影替代 | `catalog_from_view`、`read_agent_catalog` |
+| v1 提供者槽声明（`implementation.provider_slot`、`required_capabilities`、`implementation.operation`） | 字段已无 | 契约由来源与身份推导：`provider_contracts.contract_for(origin, ns, name)` |
+| 顶层 `assets` | 字段已无 | 资源归属各自的 skill：`assets` / `references` / `scripts` |
+| 「一个包至多一个 skill」 | **已实现 0..N**：成员是列表，技能各有目录 | `members` 列表 + `skills/<key>/SKILL.md` |
+| 「`SKILL.md` 无 frontmatter」 | frontmatter **被读**：`name` 必须等于成员键，构建/安装期校验 | `package/generate.py` `_parse_frontmatter`、`ability/content.py` |
+| 「同一 operation schema 写两遍，以实现面为准，手工同步」 | **已收敛**：生成器从实现脚本常量 + `Input`/`Output` 生成定义；运行期只用已提交定义 | `package/introspect.py`、`package/generate.py`、`_instantiate` |
+| 旧执行上下文对象（`context.xxx` 门面） | 已删除 | `OperationCall` + `ExecutionServices` |
+| 旧数据总线（键值容器）与预置结果键 | 已删除 | 循环数据在 `LOOP` 服务里的 `LoopData` |
+| 旧执行帧 / Hook 上下文双模型 | 已删除 | Hook 直接收 `(call, services, result)` |
+| 旧的技能提供服务键 | 已删除 | `ABILITY_CONTENT` |
+| 装配点 A「按定义创建能力」+ 两条路径差异 | 函数不存在 | 单一路径：`StartupGrantMaterializer.materialize` |
+| 旧用户级扫描根与对应环境变量开关 | **已退役**；默认池只有内置树 | 外部包走 `ability.install_root` → `InstalledAbilityProvider` |
+| `manifest: ability` + `version: "1"` 的旧清单形状 | 不再是能力包写法 | `ability.yaml` + `schema_version: '2'` |
+| `list_abilities` | **已删除**（模型侧不再有全量清单工具） | 发现面由 `search_tools`（可见未绑定成员）与 `load_skill`（技能目录/正文）承担 |
+| 旧 §13.2 的 D-1…D-20 表 | 已按当前代码重测，收敛为 §13.2 的 P-1…P-8 | — |
 
-各条判定的推理过程与当时的设计取舍见 `07-设计决策与演进留痕.md`。
+## 15 构建、安装与导入
+
+### 15.1 构建（严格）
+
+入口 `ghrah ability build`（`ability/tools/cli/__init__.py`，verbs = `build` / `install` / `list` / `show` / `verify` / `refresh` / `uninstall`）→ `package/generate.build/check`：
+
+1. 读头段：保留 `format`/`schema_version`/`identity`/`title`/`description`，拒绝未知字段与非 `'1'`/`'2'` 版本；
+2. 子进程 import 每个 `operations/<key>.py`，只取模块常量（`TITLE`/`SUMMARY`/`TAGS`/`PERMISSIONS`/`EFFECTS`/`TIMEOUT_MS`/`RESOURCES`/`EXPOSE`）与 `Input`/`Output` 模型，**不执行 `execute`**（`package/introspect.py`）；
+3. 生成 `members`（键升序、字段顺序固定）→ 渲染 v2 文本 → 用**运行时解析器**自检读回 → 同目录临时文件 + `os.replace` 原子写；
+4. 可移植性严格校验（`package/paths.py` `ensure_portable_tree`）：文本必须 LF、UTF-8 无 BOM、拒绝符号链接/非普通文件/保留名/超长路径；
+5. `--check` 不写盘，差异非零退出并列出差异（CI 门禁）。
+
+同一输入两次构建字节相同；生成器只写 `schema_version: '2'`。
+
+### 15.2 安装（容忍）
+
+`AbilityInstaller.install(source)`（`ability/package/installer.py`）：
+
+1. `installer.prepare` → `intake.normalize_source`：头段能读就用其身份，读不出就按根目录名合成；成员**一律以磁盘为准**（`operations/*.py`、`skills/<name>/SKILL.md`），旧 `members` 不参与；渲染标准 v2 文本就地写回；
+2. 校验：成员键与保留名、成员文件存在性与 entry 约定、内容摘要/大小、frontmatter 与成员键一致、目录可移植性——**不 import 包代码**；
+3. 落槽：只读复制到 `<install_root>/<ns>/<name>/<version>/` 并原子 rename；同版本同摘要幂等，同版本不同内容报 `version_conflict`；
+4. 写安装记录 `<version>.lock.yaml`（在版本目录**之外**）：`schema`、`package_digest`（树摘要）、`digest_algorithm`、`installed_at`、`source`、逐文件摘要。
+
+`mcp` 包走 `refresh`（受信客户端探测后重写快照），普通包 `refresh` 被拒绝。
+
+### 15.3 文本归一与导入
+
+- **文本源归一**：`ability.yaml`、`SKILL.md`、`.py` 等统一为 UTF-8 无 BOM + LF；含空字节视为非文本，不参与。
+- **包内杂物容忍**：`operations/` 下的说明文件/子目录、`skills/<key>/` 下的未知文件只跳过，不登记成资源，也不阻断安装。
+- 归一结果以 warning 回给调用方（例如「已把 N 个文本源统一为 LF」）。
+
+作者侧 `build` 仍严格：同一份源包「作者构建失败、用户安装成功」是**预期行为**，排障时先分清走的是哪条路径（`ghrah-12` §11 第 6 条）。
+
+### 15.4 三方职责
+
+| 阶段 | 谁做 | 做什么 | 绝不做什么 |
+| --- | --- | --- | --- |
+| build | 作者 / CI | 生成并校验 `members`，保证幂等字节 | 不改头段、不跑 `execute` |
+| install | 发行版 | 校验索引与内容、写 lock、原子落槽 | 不 import 包代码、不重建索引 |
+| load / commit | Core 启动 | 读定义面、捕获整树、提交进库 | 不按文件系统猜成员、不把 lock 当运行期事实 |
+| read | Core 运行期 | 从库投影目录、复核授权、读内容 blob | 不读安装目录、不另存授权副本 |

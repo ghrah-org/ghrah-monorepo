@@ -16,7 +16,6 @@ from _helpers import make_services
 from ghrah.protocol.ability_tree import GrantAbilityRequest, RevokeAbilityRequest, SkillReadScope
 
 from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
-from ghrah.ability.builtin.core.operations.list_abilities import ListAbilitiesAbility
 from ghrah.ability.builtin.core.operations.load_skill import LoadSkillAbility
 from ghrah.ability.content import (
     ContentChunk,
@@ -166,16 +165,11 @@ async def test_attachment_scope_and_discovery_are_current(content):
         ),
     )
     services = make_services(ability_content=provider)
-    listed = await ListAbilitiesAbility().execute(make_call(), services)
-    assert listed.outcome == ActionOutcome.SUCCESS
-    assert listed.data["abilities"] == []
-    assert [row["full_name"] for row in listed.data["skills"]] == ["reports/guide"]
-    detail = await ListAbilitiesAbility().execute(
-        make_call(arguments={"full_name": "reports/guide"}), services
-    )
-    assert detail.data["references"] == []
-    assert detail.data["scripts"] == []
-    assert [entry["key"] for entry in detail.data["assets"]] == ["template"]
+    rows = await provider.skills()
+    assert [row["full_name"] for row in rows] == ["reports/guide"]
+    assert [entry["key"] for entry in rows[0]["assets"]] == ["template"]
+    assert rows[0]["references"] == []
+    assert rows[0]["scripts"] == []
     with pytest.raises(AccessError):
         await provider.read_relative("reports", "guide", "references/style.md")
     with pytest.raises(AccessError):
@@ -184,10 +178,8 @@ async def test_attachment_scope_and_discovery_are_current(content):
         make_call(arguments={"full_name": "reports/guide", "path": "references/style.md"}), services
     )
     assert denied.outcome == ActionOutcome.FAILURE
-    hidden = await ListAbilitiesAbility().execute(
-        make_call(arguments={"full_name": "ghrah.fs.read_file"}), services
-    )
-    assert hidden.outcome == ActionOutcome.FAILURE
+    with pytest.raises(ValueError):
+        await provider.load_skill("ghrah.fs.read_file")
 
 
 @pytest.mark.parametrize(
@@ -418,9 +410,8 @@ async def test_rebase_requires_explicit_service_for_target_identity_and_run(cont
         create_rebased_context(cm, agent_name=ALICE, ability_content=provider)
 
 
-@pytest.mark.parametrize("operation", [LoadSkillAbility, ListAbilitiesAbility])
-async def test_operations_require_granted_content_provider(operation):
-    result = await operation().execute(
+async def test_operations_require_granted_content_provider():
+    result = await LoadSkillAbility().execute(
         make_call(arguments={"full_name": "reports/guide"}), make_services()
     )
     assert result.outcome == ActionOutcome.FAILURE
@@ -430,10 +421,9 @@ async def test_operations_require_granted_content_provider(operation):
 @pytest.mark.parametrize(
     "identity", [{"project_id": "another"}, {"agent": BOB}, {"run": "new-run"}]
 )
-@pytest.mark.parametrize("operation", [LoadSkillAbility, ListAbilitiesAbility])
-async def test_wrong_project_agent_or_run_cannot_use_content_service(content, identity, operation):
+async def test_wrong_project_agent_or_run_cannot_use_content_service(content, identity):
     _, provider, _, _, _ = content
-    result = await operation().execute(
+    result = await LoadSkillAbility().execute(
         make_call(arguments={"full_name": "reports/guide"}, **identity),
         make_services(ability_content=provider),
     )

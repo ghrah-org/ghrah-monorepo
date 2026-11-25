@@ -129,6 +129,7 @@ class StartupToolBinding:
     alias: str
     member: str
     tool_name: str
+    member_type: str = "operation"
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,7 @@ class ProjectedAbility:
         tool_schema: dict[str, Any],
         member: str = "",
         member_reference: MemberReference | None = None,
+        member_type: str = "operation",
         identity: InvocationIdentity | None = None,
         admission: Any = None,
         current_run: Any = None,
@@ -208,6 +210,7 @@ class ProjectedAbility:
         self._tool_schema = tool_schema
         self._member = member
         self._member_reference = member_reference or MemberReference(member=member)
+        self._member_type = member_type
         self._identity = identity or InvocationIdentity()
         self._admission = admission
         self._run_resolver = current_run
@@ -222,6 +225,11 @@ class ProjectedAbility:
     def member(self) -> str:
         """该工具固定的成员键；执行器按它解析路径参数，不从工具名反推。"""
         return self._member
+
+    @property
+    def member_type(self) -> str:
+        """成员类型（``operation`` / ``mcp``）；执行器按它选择调用通道。"""
+        return self._member_type
 
     @property
     def member_reference(self) -> MemberReference:
@@ -569,8 +577,14 @@ class StartupGrantMaterializer:
             desired[record.alias] = stored_facts(
                 list(record.members), list(record.content), record.axes
             )
+        member_types = self._member_types(instances)
         bindings = tuple(
-            StartupToolBinding(tool.alias, tool.member, tool.name)
+            StartupToolBinding(
+                tool.alias,
+                tool.member,
+                tool.name,
+                member_types.get(tool.alias, {}).get(tool.member, "operation"),
+            )
             for tool in await self._store.tool_bindings(self._actor, agent)
         )
         abilities = self._instantiate(
@@ -590,6 +604,7 @@ class StartupGrantMaterializer:
             loaded_limit=self._surface_loaded_limit,
             bound=self._bound_names(resolved),
             on_bound_change=self._bound_writer(agent),
+            member_snapshot=self._member_snapshot(agent),
         )
         abilities.tool_surface = surface
         abilities.append(RunScriptTool(surface))
@@ -702,7 +717,12 @@ class StartupGrantMaterializer:
             )
         except AccessError as error:
             raise StartupGrantError(f"启动授权写入失败：{error.code}") from error
-        bindings, revision = await self._bind(agent, desired, result.revision)
+        bindings, revision = await self._bind(
+            agent,
+            desired,
+            result.revision,
+            member_types=self._member_types(instances),
+        )
         sources = {alias: item[2] for alias, item in registered.items()}
         run = ""
         abilities = self._instantiate(
@@ -729,6 +749,7 @@ class StartupGrantMaterializer:
             loaded_limit=self._surface_loaded_limit,
             bound=self._bound_names(resolved),
             on_bound_change=self._bound_writer(agent),
+            member_snapshot=self._member_snapshot(agent),
         )
         abilities.tool_surface = surface
         abilities.append(RunScriptTool(surface))
@@ -830,6 +851,22 @@ class StartupGrantMaterializer:
             await state.save(agent, bound)
 
         return write
+
+    def _member_snapshot(self, agent: str) -> Any:
+        """实例快照成员的只读回调；未接线实例快照时返回 ``None``。
+
+        工具面（``search_tools``）用它读取成员轴（``axes.visible`` /
+        ``axes.bind``）。未接线时保持 ``None``，由工具面显式返回原因，不在
+        这里伪造默认轴。
+        """
+        state = self._binding_state
+        if state is None:
+            return None
+
+        async def read() -> Any:
+            return await state.members(agent)
+
+        return read
 
     def _split(
         self, catalog: Any, resolved: list[ResolvedAbility]
@@ -943,18 +980,42 @@ class StartupGrantMaterializer:
                 desired[alias] = facts
         return dict(sorted(desired.items()))
 
+    @staticmethod
+    def _member_types(instances: Iterable[GrantInstance]) -> dict[str, dict[str, str]]:
+        """从已登记实例定义推导 ``alias -> member -> type``。
+
+        类型事实来自定义面（``operation.mcp`` 即 mcp 成员），不在执行期猜；
+        只用于工具投影与分派，不写回任何权威。
+        """
+        result: dict[str, dict[str, str]] = {}
+        for instance in instances:
+            operations = instance.definition.get("operations") or {}
+            result[instance.alias] = {
+                key: "mcp" if isinstance(operation, dict) and operation.get("mcp") else "operation"
+                for key, operation in operations.items()
+            }
+        return result
+
     async def _bind(
         self,
         agent: str,
         desired: dict[str, GrantFacts],
         revision: int,
+        *,
+        member_types: dict[str, dict[str, str]] | None = None,
     ) -> tuple[tuple[StartupToolBinding, ...], int]:
         """按唯一命名规则选定工具并清理陈旧选择。"""
         pairs = [(alias, key) for alias, facts in desired.items() for key in sorted(facts.members)]
         if any(key in META_TOOL_NAMES and alias != "core" for alias, key in pairs):
             raise StartupGrantError("只有内置 core 包可以装配元工具保留名")
+        kinds = member_types or {}
         bindings = tuple(
-            StartupToolBinding(item.package, item.member, item.tool_name)
+            StartupToolBinding(
+                item.package,
+                item.member,
+                item.tool_name,
+                kinds.get(item.package, {}).get(item.member, "operation"),
+            )
             for item in assign_tool_names(pairs, allow_reserved=META_TOOL_NAMES)
         )
         wanted = {binding.tool_name for binding in bindings}
@@ -1065,6 +1126,7 @@ class StartupGrantMaterializer:
                     built[0],
                     tool_name=binding.tool_name,
                     member=binding.member,
+                    member_type=binding.member_type,
                     member_reference=MemberReference(
                         instance_id=instance.instance_id,
                         alias=binding.alias,

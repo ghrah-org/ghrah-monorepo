@@ -313,6 +313,8 @@ def _members_list_to_tables(items: list[Any], identity: Any, source: str) -> dic
         }
         if member.type == "mcp":
             operation["mcp"] = {"server": data["server"], "tool": data["tool"]}
+            if data.get("read_only"):
+                operation["mcp"]["read_only"] = True
         else:
             operation["entry"] = _member_relative_path(member, source)
         operations[key] = operation
@@ -621,6 +623,8 @@ class McpMember(BaseModel):
     model_config = ConfigDict(extra="forbid")
     server: str = Field(min_length=1)
     tool: str = Field(min_length=1)
+    read_only: bool = False
+    """只读标注：只影响失败后的自动重放；缺省按可写处理。"""
 
 
 class OperationDefinition(BaseModel):
@@ -827,6 +831,8 @@ class AbilityDefinition(BaseModel):
                 kind = "mcp"
                 data["server"] = operation.mcp.server
                 data["tool"] = operation.mcp.tool
+                if operation.mcp.read_only:
+                    data["read_only"] = True
             else:
                 if operation.entry is None:
                     raise ManifestValidationError(

@@ -240,30 +240,20 @@ def _safe_relative(raw: str) -> str:
 # ── 解包后：定位源包根并校验目录树 ──
 
 
-def _looks_like_package(path: Path) -> bool:
-    """包根判定：有 ``ability.yaml``，或有 ``operations/`` / ``skills/`` 目录。
-
-    上传包允许缺 ``ability.yaml``（导入时按磁盘扫出成员再补写），因此目录结构
-    本身就是「这是个能力包」的证据。
-    """
-    if (path / "ability.yaml").is_file():
-        return True
-    return any((path / name).is_dir() for name in ("operations", "skills"))
-
-
 def _locate_root(dest: Path) -> Path:
-    """归档可以「直接是包」，也可以「套一层顶层目录」。"""
-    if _looks_like_package(dest):
-        return dest
-    children = [child for child in dest.iterdir() if not child.name.startswith("__MACOSX")]
-    directories = [child for child in children if child.is_dir() and not is_link(child)]
-    if len(directories) == 1 and _looks_like_package(directories[0]):
-        return directories[0]
-    raise ArchiveError(
-        "invalid_package",
-        "压缩包里没有能力包：需要 ability.yaml、operations/ 或 skills/；"
-        "能力包要么是包目录本身，要么只有一层顶层目录",
-    )
+    """返回解包根，**不做结构判定**。
+
+    成员可以在任意层级（``ability/<name>/``、``skills/<name>/``、根目录直接放
+    ``SKILL.md``…），由入库规范化统一发现；解包阶段只负责把文件安全落地，不因为
+    「看起来不像包」提前拒绝。
+
+    Args:
+        dest: 解包目标目录。
+
+    Returns:
+        解包根目录。
+    """
+    return dest
 
 
 def _check_tree(root: Path, limits: ArchiveLimits) -> None:

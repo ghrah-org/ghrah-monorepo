@@ -91,6 +91,41 @@ def test_only_granted_members_enter_the_spec() -> None:
     assert rendered.report.not_granted == ("ghrah.fs.write_file",)
 
 
+def test_mcp_member_type_is_normalized_from_legacy_operation_templates() -> None:
+    """旧模板把 MCP 成员存成 operation 时，渲染仍按 mcp 下发，避免创建期类型冲突。"""
+    template = _template(
+        available_members=[
+            {
+                "namespace": "mcp",
+                "name": "aliyun_mcp",
+                "member": "mcp.aliyun_mcp.mcp_search_pro",
+                "type": "operation",
+                "version": "0.0.1",
+                "ability_type": "external",
+            }
+        ]
+    )
+    granted = _granted(
+        package="mcp.aliyun_mcp",
+        alias="aliyun_mcp",
+        instance_id="m" * 32,
+        operations=("mcp_search_pro",),
+        skills=(),
+    )
+
+    rendered = render_assembly(
+        template,
+        agent_name="helper-agent",
+        workspaces=_WORKSPACES,
+        granted=[granted],
+        initial_bindings=("mcp.aliyun_mcp.mcp_search_pro",),
+    )
+
+    member = rendered.spec.members[0]
+    assert member.member == "mcp.aliyun_mcp.mcp_search_pro"
+    assert member.type == "mcp"
+
+
 def test_initial_bindings_mark_only_the_selected_members() -> None:
     """创建时选中的初始绑定写进成员轴：未选中的成员仍可见、只是不常驻。"""
     rendered = render_assembly(

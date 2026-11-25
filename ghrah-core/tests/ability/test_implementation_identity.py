@@ -48,11 +48,9 @@ def test_file_backend_keeps_process_locked_identity() -> None:
 
 
 def test_each_non_file_backend_has_its_own_identity() -> None:
-    implementations = {
-        package: _capture(package)[0] for package in ("shell", "cluster", "core", "mcp")
-    }
+    implementations = {package: _capture(package)[0] for package in ("shell", "cluster", "core")}
 
-    # 四个非文件后端各自一个实现标识，且都不再冒充文件后端的版本号
+    # 三个非文件后端各自一个实现标识，且都不再冒充文件后端的版本号
     assert len(set(implementations.values())) == len(implementations)
     assert loaded_file_implementation() not in implementations.values()
 

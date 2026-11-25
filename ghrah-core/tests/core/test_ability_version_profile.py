@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 import yaml
 
+from ghrah.ability.loading.ability_roots import builtin_root
 from ghrah.ability.package.installer import (
     AbilityInstaller,
     InstallerError,
@@ -158,19 +159,8 @@ def test_builtin_skill_member_profile() -> None:
 
 
 def test_builtin_source_package_does_not_fake_mcp() -> None:
-    """内置 ``ghrah.mcp`` 是 source 包：不得出现 MCP 快照或 MCP 成员引用。"""
-    profile = build_version_profile(None, "ghrah", "mcp", "0.1.0")
-
-    assert profile.origin == "builtin"
-    assert profile.definition_origin == "source"
-    assert profile.mcp is None
-    assert [operation.key for operation in profile.operations] == ["mcp_call"]
-    operation = profile.operations[0]
-    assert operation.mcp is None
-    assert operation.entry is not None
-    assert operation.entry.path == "operations/mcp_call.py"
-
-    _assert_no_install_paths(profile.model_dump(mode="json"))
+    """内置包目录已不再包含 MCP 包；MCP 只能来自页面安装的显式成员。"""
+    assert not (builtin_root().path / "mcp").exists()
 
 
 @pytest.mark.parametrize(

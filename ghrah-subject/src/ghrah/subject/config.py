@@ -18,13 +18,12 @@ import logging
 import os
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ghrah.protocol.types import RecoveryAction
 
 if TYPE_CHECKING:
     from ghrah.ability.access.policy import GrantPolicy
-    from ghrah.ability.mcp_wiring import McpDeploymentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +406,7 @@ class SubjectConfig:
     # 不重新读取本配置，也不把 manifest 模板当授权来源。
     ability_grant_policy: GrantPolicy | None = None
     # 仅进程内受信部署代码设置；不从 Skill 正文、annotations 或模型输入解析。
-    mcp: McpDeploymentConfig | None = None
+    mcp: Any = None
 
     # 观测端能力管理面（REST /api/v1）开关与认证。默认启用，本机观察端可以直接调用。
     # 回环请求视为受信；非回环请求必须携带 ``Authorization: Bearer <token>``。
@@ -815,6 +814,7 @@ class SubjectConfig:
                     os.environ.get("GHRAH_SUBJECT_ABILITY_FILESYSTEM_ROOTS", "[]")
                 ),
             ),
+            mcp=os.environ.get("GHRAH_SUBJECT_MCP_ENABLED", "true").lower() in ("true", "1", "yes"),
             project_slice=project_slice,
             recovery_slice=recovery_slice,
             room_filter_slice=room_filter_slice,

@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档编号 | GHRAH-ADR-007 |
 | 文档状态 | 现行（authoritative，只读存档性质） |
-| 校准基线 | `ghrah-monorepo` @ `f8ff157`（2026-10-28 19:18–19:22 重构后），`ghrah-core` 0.2.0a0 |
+| 校准基线 | `a742fcf`（2026-11-23）；历史判定基线仍是 `f8ff157`（2026-10-28） |
 | 读者 | 想知道"某个旧概念为什么没了""某条裁定为什么没落地"的维护者；评审新设计前需要避免重走弯路的人 |
 | 范围 | 解释 16 份旧设计（其中 4 份原在本仓 `docs/`，另 12 份在仓外 `doc/archive/`）的去留，以及 2026-10-12 ~ 10-28 期间的关键取舍 |
 | 相关文档 | [ghrah-00-doc-index.md](ghrah-00-doc-index.md)、[ghrah-01](ghrah-01-ability-design-and-implementation.md) §14（旧概念对照表）、[archive/README.md](archive/README.md)（本仓归档清单） |
@@ -14,6 +14,7 @@
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | 1.0 | 2026-10-28 | 首版。基于 10 份旧文档的逐份只读复核 + git 历史，记录判定与可复用教训 |
+| 2.0 | 2026-11-23 | 补状态位与二次推翻：D-1..D-8 状态表、D-9..D-16 新裁定、§2.2.1「否决本身被推翻」；校准基线改为 `a742fcf` |
 
 ## 1. 为什么要有这份文档
 
@@ -30,7 +31,7 @@
 ### 2.1 唯一被代码追上的设计：`2026-10-26-ability-scheme-draft.md`
 
 **主旨**：以 `/scheme/ability/<alias>` 为落位、`ghrah.ability-definition` 为格式、`schema_version: 0.1-draft` 为版本锚，容器内 `skills/SKILL.md` + `ability.lock.yaml` 双文件。
-**现状**：**全部落地**——`scheme/loading/ability_schema.py:54/63/66/283`、`scheme/ability/__init__.py:16-25`、5 个 `ability.yaml`（core/fs/shell/cluster/mcp）、22 个 `operations/*.py`。
+**现状**：**当时全部落地**——`scheme/loading/ability_schema.py`、`scheme/ability/__init__.py`、5 个 `ability.yaml`（core/fs/shell/cluster/mcp）、22 个 `operations/*.py`。**2026-11 现状**：能力系统迁到 `ghrah-core/src/ghrah/ability/`，6 个内置包、27 个 operation + 1 个纯技能包（`ability-builder`）。
 **未实现部分**（读该文档时请注意）：`GrantRecord`（仅存于 `scheme/ability/__init__.py:31` 的 docstring）、`AbilityBinding`（近似物是 `ghrah-scheme/_state.py:28` 的 `Binding`）、`boundary/grant/revoke`（只有 `Authority`/`DenyAuthority`，`authority.py:10-22`）、`invoke` 改名 `submit`、`resolve` 改名 `acquire`。
 
 ### 2.2 被代码反向否决的两条
@@ -41,6 +42,17 @@
 | G13 裁定"快照不重算"（加载后封印） | `2026-10-13-ability-gaps-blocking-triage.md` | `scheme/loading/tool_list.py:30` 明写"每次调用都重新扫盘（无缓存）"，选的是现值而非快照 |
 
 第二条尤其要注意：**裁定文档的判决被反向执行，而裁定文档没有更新**。这是本项目最贵的一类文档债务——读者会以为裁定仍然有效。
+
+### 2.2.1 二次推翻（2026-11，重要）
+
+上表两条「被代码反向否决」的判决，它们的**否决本身也已被推翻**：
+
+| 旧主张 | 2026-10-28 的代码选择 | 2026-11-23 的现行事实 |
+| --- | --- | --- |
+| 「工具面不放每能力一命名工具」 | 每能力一命名工具（`tool_list.py`） | **渐进披露**：绑定集常驻，其余经 `search_tools`/`describe_tool`/`execute_tool` 元工具发现（`ability/surface/runtime.py`） |
+| G13「快照不重算 / 改文件即生效」 | 每次调用重新扫盘 | **启动提交 + 运行期只读关系库**：定义/正文来自 `ability_versions` 与 `ability_content`，改安装目录对运行中的 Agent 无效（`ability/access/store.py`） |
+
+结论：不要用「2026-10 的否决」当现行规范；每一轮架构替换后，旧判决都要重新标状态。
 
 ### 2.3 完全废弃（全仓 0 命中）
 
@@ -62,6 +74,19 @@
 
 ## 3. 跨文档的关键决策（ADR 摘要）
 
+**状态位（2026-11-23）**：
+
+| 编号 | 状态 | 一句话 |
+| --- | --- | --- |
+| D-1 | 部分失效 | 目录仍是内置定义源，但运行期权威是关系库 |
+| D-2 | **已被否决** | 身份已改为结构化寻址（`MemberReference`/`InvocationIdentity`），成员全名三段 |
+| D-3 | **已被否决** | 不再每调用扫盘；每轮从关系库投影，加载状态仅本次 run 有效 |
+| D-4 | 部分失效 | 只剩 `LOCK_SCHEMA_VERSION = 2`；「不静默迁移」仍有效 |
+| D-5 | 仍有效，范围扩大 | 能力关系表与链同库同写侧（`AbilityAccessStore`）；`LedgerUnit` 不持连接 |
+| D-6 | 部分失效 | 契约仍以 `ghrah-protocol` 为唯一权威；但能力树/包/授权/模板**已上 wire** |
+| D-7 | 部分落地 | `GrantRecord`、授权写入/撤销、`ability_changes`、`GrantPolicy` 已实现；衰减律/委托租约仍缺 |
+| D-8 | 仍有效 | 文档不引用 `plans/` |
+
 **D-1 定义面用目录，不用注册表。** `ability.yaml` 就在 `scheme/ability/<容器>/` 里，扫描器读目录；`AbilityRegistry` 类已删，`RegistryProtocol` 是无人实现的死协议（`core/ability_protocol.py:28-58`）。理由：少一个必须与文件同步的中央表，装配期零注册代码。
 
 **D-2 身份是字符串键，不是对象。** 容器身份 = `identity.name or namespace`；成员身份 = 成员键；`_abilities: dict[str, AbilityProtocol]`（`agents/base.py:177`，写入 `:243`）仍是旧设计的遗留物。多份旧文档反复点名要改（"名字即身份"），至今未改——这是当前**最大的设计债**，也是新设计必须先回答的问题。
@@ -78,19 +103,38 @@
 
 **D-8 文档不引用 `plans/`。** `plans/` 被 `.gitignore` 整体忽略，是过程产物；设计文档一律进 `docs/`，代码里禁止引用 plan 的节点/标题/锚点（`AGENTS.md`）。
 
+### 3.1 2026-11 新增裁定（D-9 ~ D-16）
+
+**D-9 能力运行期权威 = SQLite 关系库。** `ability_versions`/`ability_content`/`ability_instances`/`ability_agents`/`ability_grants`/`ability_tools`/`ability_changes`/`ability_registrations`（schema v5）由启动提交写入，运行期只读；`ability.yaml` 只作内置定义源与导入产物。见 `docs/ghrah-13-ability-data-store.md`。
+
+**D-10 模板权威 = `subject.db.agent_templates`。** YAML/文件模板退役；`scripts/migrate_agent_templates.py` 是一次性迁移工具，不是运行路径。
+
+**D-11 成员三级寻址 + 绑定轴。** 模板 `available_members` 存三段成员全名（身份六字段）；`bind_member`/`unbind_member` 把成员绑进/移出模型上下文并立即持久化到实例快照。
+
+**D-12 工具面渐进披露。** 绑定集常驻，其余经 `search_tools`/`describe_tool`/`execute_tool` 发现与执行；每轮从授权事实重建，撤销下一轮生效。
+
+**D-13 启动核定是唯一授权落库点。** 模板只申请，`GrantPolicy` 决定授予；Subject 不写授权（否则是第二写路径）。
+
+**D-14 Agent 实例快照是配置权威。** `agents.sqlite3.agent_instances` 冻结配置、成员与轴；模板只是创建时的填充输入，重启不回读模板。
+
+**D-15 启动/运维命令面迁到 `ghrah-toolchain`。** `distro` 管发布代，`dev` 管工作树快环；`scripts/start_all.py` 退役。
+
+**D-16 端口层 `Capability` 改名 `Interface`。** 注入键 `CORE_PORT`/`SUBJECT_PORT` 与 `Problem.capability` 字段名为兼容保留，不随改名变动。
+
 ## 4. 可复用的教训
 
 1. **裁定要带状态位。** 任何"决定"都必须紧跟一行"已落地 / 被否决 / 未实施"并附证据（file:line 或提交号）。本项目所有歧义都来自"决定写了，状态没写"。
 2. **重构时先改文档还是先改代码，要显式选一个。** `1938ffa` 系列先改代码，导致 10 份文档同时失效；代价是后来者必须逐份考古（本文件就是产物）。
 3. **最新 ≠ 准确。** `docs/ARCHITECTURE.md`（2026-10-27 写）在 10-28 重构后仍逐行描述 `abilities/__init__.py:153-174`、`AbilityRegistry`、22 个 builtins——它比 `docs/` 里的旧件更新，却同样被重构甩下；直到 2026-10-29 才把 §6.2 / §6.6 / §6.7 / §6.8 改写成定义面口径。**判断一份文档是否可信，看它的基线提交，不看它的修改时间。**
-4. **测试目录名会骗人。** `tests/` 下仍有 `abilities/`、`manifest/`、`scheme/`、`skills/` 四个目录名，内容大多已改指 `ghrah.scheme`（如 `tests/abilities/test_abilities.py`），但 `tests/skills/` **仍在测旧的 `ghrah.skills` 包**——与 `ghrah-subject` 的 `SkillUnit` 同源。找测试按内容找，别按目录名推断被测对象。
+4. **测试目录名会骗人。** `tests/` 下仍有 `abilities/`、`manifest/`、`scheme/`、`skills/` 等旧目录名，内容多为迁移后遗留或改指新包；`ghrah/skills/` 源码目录已空。找测试按内容找，别按目录名推断被测对象。
 5. **归档不是删除。** 旧件的价值在于"证明我们想过什么、否决过什么"，所以进 `docs/archive/` 并在 `docs/archive/README.md` 标注取代关系，不直接删。
 
 ## 5. 已知文档债务（未处理，供后续排期）
 
 | 债务 | 位置 | 影响 |
 | --- | --- | --- |
-| `ARCHITECTURE.md` 其余章节未逐行复核 | `ghrah-monorepo/docs/ARCHITECTURE.md`（§6 已于 2026-10-29 按定义面口径改写） | §1–§5、§7–§13 未做 10-28 重构后的逐行校准，引用具体行号前请回源码核对 |
-| `ability_catalog.py:20` docstring 提到不存在的 `load_all_builtin_manifests.cache_clear()` | `scheme/loading/ability_catalog.py:20` 与 `:405` 自相矛盾 | 照抄会写出错误注释 |
-| 能力面板缺失 | `ghrah-observer-webui` 无 abilities 面板（命中仅在 node_modules） | 文档不得声称有 UI 能力视图 |
-| 测试目录名与内容不一致 | `ghrah-core/tests/{abilities,manifest,scheme,skills}/` | 见 §4.4 |
+| `ARCHITECTURE.md` 其余章节未逐行复核 | `ghrah-monorepo/docs/ARCHITECTURE.md` | 2026-11-23 已按当前实现全面重写；此前版本的失效论断不再适用 |
+| `ability_catalog.py` docstring 与实现不符 | `ability/loading/ability_catalog.py` | 读取缓存相关注释可能与实现不一致，引用前回源码核对 |
+| 测试目录名与内容不一致 | `ghrah-core/tests/{abilities,manifest,scheme,skills}/` | 旧目录名仍在，内容多为迁移后遗留；按内容找测试，别按目录名推断 |
+| `CORE_COMMANDS` 与 `CoreUnit._COMMANDS` 漂移 | `ghrah-core/src/ghrah/core/routing.py`、`core/unit.py` | 装配/模型命令 7 条未进 `CORE_COMMANDS`；新增命令时两边都要查 |
+| `MANIFEST_COMMANDS` 10 条无 owner | `ghrah-subject/src/ghrah/subject/units/_commands.py` | 命令面清单包含已删 unit 的命令，统计口径会虚高 |

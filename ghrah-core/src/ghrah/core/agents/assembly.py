@@ -34,14 +34,57 @@ from ghrah.types.config_types import AgentConfig, ContextConfig, ModelOverrides,
 
 __all__ = [
     "AssemblyError",
+    "SEARCH_TOOLS_MEMBER",
     "config_from_snapshot",
     "config_to_snapshot",
+    "member_axes_for_creation",
     "member_axes_from_spec",
+    "normalize_snapshot_members",
     "parse_spec_member",
     "resolve_assembly",
     "resolve_members",
     "surface_from_snapshot",
 ]
+
+SEARCH_TOOLS_MEMBER: str = "ghrah.core.search_tools"
+"""内置发现入口成员全名。
+
+实例创建/恢复时它的两轴固定为「不可见但绑定」：必须常驻模型上下文
+（否则模型没有发现入口），但不进 ``search_tools`` 自己的发现结果。
+"""
+
+
+def member_axes_for_creation(member: Member) -> MemberAxes:
+    """返回实例创建时落快照的成员轴。
+
+    ``search_tools`` 固定为 ``visible=false, bind=true``；其余成员沿用装配
+    输入给出的轴（可见性与绑定相互独立）。
+    """
+    if member.member == SEARCH_TOOLS_MEMBER:
+        return MemberAxes(visible=False, bind=True)
+    return MemberAxes(visible=member.axes.visible, bind=member.axes.bind)
+
+
+def normalize_snapshot_members(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """规范化准备写入快照的成员申请（引用态 wire 形状）。
+
+    仅改写 ``search_tools`` 的 ``axes``（保持 wire 的 ``visible`` /
+    ``available`` 键名），其余成员原样保留。
+    """
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        entry = dict(item)
+        if str(entry.get("member") or "") == SEARCH_TOOLS_MEMBER:
+            axes = dict(entry.get("axes") or {})
+            axes["visible"] = False
+            if "bind" in axes:
+                axes["bind"] = True
+            else:
+                axes["available"] = True
+            entry["axes"] = axes
+        normalized.append(entry)
+    return normalized
+
 
 _PERMISSION_FIELDS = (
     "require_hitl",
@@ -212,6 +255,10 @@ def member_axes_from_spec(items: list[dict[str, Any]]) -> dict[str, MemberAxes]:
     整包条目（``whole_container``）在装配前已展开，不应出现在快照里；真出现时
     跳过，避免用包名当成员名建轴。
 
+    ``search_tools`` 的轴统一规范为「不可见但绑定」（见
+    :func:`member_axes_for_creation`）：只要该条目落在已提供轴的规格里，
+    就不沿用调用方给出的值。
+
     Args:
         items: 装配输入或实例快照里的成员数组。
 
@@ -228,7 +275,7 @@ def member_axes_from_spec(items: list[dict[str, Any]]) -> dict[str, MemberAxes]:
             entity = parse_spec_member(item)
         except AssemblyError:
             continue
-        axes[entity.member] = entity.axes
+        axes[entity.member] = member_axes_for_creation(entity)
     return axes
 
 

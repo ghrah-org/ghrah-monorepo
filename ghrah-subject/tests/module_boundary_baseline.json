@@ -13,7 +13,6 @@
     "pyproject.toml::ghrah-core": 1,
     "src/ghrah/subject/config.py::ghrah.ability.access.policy": 1,
     "src/ghrah/subject/config.py::ghrah.ability.assembly": 1,
-    "src/ghrah/subject/config.py::ghrah.ability.mcp_wiring": 1,
     "src/ghrah/subject/core_cluster/registry.py::ghrah.ability.access": 1,
     "src/ghrah/subject/core_cluster/registry.py::ghrah.communication": 1,
     "src/ghrah/subject/core_cluster/registry.py::ghrah.core.unit": 1,

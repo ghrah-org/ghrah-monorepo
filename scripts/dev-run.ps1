@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 # 循环控制成员：由 Agent 自身提供、manifest 用 type: 声明。整包再授一次
 # 就会重复注册，spawn 直接失败。
 $rules = @(
-    [ordered]@{ package = 'ghrah.core'; operation = 'list_abilities' },
+    [ordered]@{ package = 'ghrah.core'; operation = 'session_info' },
     [ordered]@{ package = 'ghrah.fs'; operation = 'read_file' },
     [ordered]@{ package = 'ghrah.fs'; operation = 'list_directory' },
     [ordered]@{ package = 'ghrah.shell'; operation = 'execute_command' }

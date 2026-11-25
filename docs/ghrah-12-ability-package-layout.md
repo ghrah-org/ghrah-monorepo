@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档编号 | GHRAH-SPEC-012 |
 | 文档状态 | 现行（唯一范式声明，已实现） |
-| 校准基线 | `4a84453`（2026-11-19） |
+| 校准基线 | `a742fcf`（2026-11-23） |
 | 读者 | 写能力包的人、做发行版预装的人、改加载/安装链路的人 |
 | 效力 | 本文是能力包**文件结构与各层目录含义**的唯一定义。包长什么样、放哪里、每一层代表什么，以本文为准 |
 | 不覆盖 | 成员概念与数据格式（另一份规范）、MCP 协议、运行时装配流程 |
@@ -14,6 +14,7 @@
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | 1.0 | 2026-11-19 | 首版。明确内核件/能力件/MCP 三类的目录差异与构建、安装、装载三方职责 |
+| 2.0 | 2026-11-23 | 补安装 intake 归一（文本源 LF/BOM、包内杂物 tolerant）与 `name` 显式化建议；登记两段/三段成员名并存与"构建严格 / 安装宽松"两条已知偏差 |
 
 ## 1 两类包与三种来源
 
@@ -25,7 +26,7 @@
 
 判定依据是**位置**（源码树 / 安装根），不是包的自述字段：
 
-- 同一身份的同一版本同时存在于两处时，**安装根优先**（目录视图会标 `shadowed_builtin=true`）。
+- 同一身份的同一版本同时存在于两处时，**启动装配明确失败**（`ManifestValidationError`：拒绝静默覆盖）；目录视图的 `shadowed_builtin` 只用于展示登记冲突，不是"安装根胜出"。
 - 内核件永远没有版本选择语义：目录接口对内核件返回 `latest_version=null`，成员申请里 `version` 恒 `null`。
 - MCP 快照的 `namespace=mcp` 是保留命名空间，任何常规安装通道不得占用。
 
@@ -52,24 +53,38 @@
 
 ```yaml
 format: ghrah.ability-definition     # 固定值；格式不对直接拒绝
-schema_version: '1'
+schema_version: '2'                 # 构建产物恒为 '2'；解析兼容 '1'
 identity:
   namespace: research               # 必填
-  name: research                     # 可省略；省略时包全名取 namespace（退化身份）
+  name: research                     # 建议显式写出；省略时包全名取 namespace（退化身份）
   version: 0.1.0                     # 必填，语义化版本
 title: research
 description: ...                     # 给人和目录看的说明
 members:                             # 由 `ghrah ability build` 生成，禁止手写
-  operations: {...}
-  skills: {...}
+- namespace: research
+  name: research
+  member: research.research.research
+  type: skill
+  version: null
+  ability_type: kernel
+  axes: {visible: true, bind: true}
+  data:
+    title: research
+    description: ...
+    path: research/research/skills/research/SKILL.md   # 能力根相对路径
+    media_type: text/markdown
+    assets: {}
+    references: {}
+    scripts: {}
 ```
 
 规则：
 
-1. **`members` 是构建产物**：从 `operations/*.py` 的声明常量与 `Input`/`Output` 模型生成，手写会在 `--check` 或安装期被判定为索引不一致。
-2. 头段（`format`/`schema_version`/`identity`/`title`/`description`）**保留作者写法**，构建只重写 `members`。
+1. **`members` 是构建产物**：`members` 是成员记录数组（不是 `{operations, skills}` 两个映射），从 `operations/*.py` 的声明常量与 `Input`/`Output` 模型生成；手写会在 `--check` 或安装期被判定为索引不一致。
+2. 头段（`format`/`identity`/`title`/`description`）**保留作者写法**，构建会重写 `members` 并把 `schema_version` 归一为 `'2'`。
 3. 落盘格式固定：UTF-8 无 BOM、LF 换行、`sort_keys=false`、稳定字段顺序、原子写；同一输入两次构建必须字节相同。
-4. `name` 省略时目录层级仍然两段：目录用 `<namespace>/<namespace>/<version>/`，成员全名形如 `research.research`。
+4. `name` 省略时目录层级仍然两段：目录用 `<namespace>/<namespace>/<version>/`，定义面成员全名形如 `research.research`。
+5. **新包建议显式写 `name`**：成员全名的规范形态是三段（`namespace.ability_name.member_name`）；省略 `name` 会让定义面只剩两段，模板/快照/装配仍用三段，运行期靠兼容层（解析回退 + 等价形态比较）对齐。显式写 `name` 可以完全避开这层兼容。
 
 ### 2.2 `operations/<key>.py`：声明与实现同文件
 
@@ -177,7 +192,7 @@ package_digest: sha256:<tree 摘要>
 digest_algorithm: sha256-tree-v1
 installed_at: '2026-11-18T10:42:24Z'
 source:
-  kind: directory          # 或 mcp-snapshot
+  kind: directory          # directory | archive | mcp
   ref: <来源绝对路径或标识>
 files:
   ability.yaml: sha256:<逐文件摘要>
@@ -200,6 +215,29 @@ files:
 | 旧多层布局（`<ns>/<name>/<version>` 嵌套再套一层） | ❌ `legacy_layout` | 提示改造成 v1 源包目录 |
 | 含 lock 文件的源目录 | ❌ `lock_in_source` | lock 只能由安装器生成 |
 
+安装源目录会先过一遍 **intake 归一**（`intake.normalize_source`，由 `installer.py` 调用），再进入构建：
+
+- **文本源归一**：`ability.yaml`、`SKILL.md`、`.py` 等文本源统一为 UTF-8 无 BOM + LF；非文本（含空字节）不参与。这一步只改文本，不动二进制。
+- **成员扫描宽容**（`tolerant`）：生成 `members` 时，`operations/` 下的说明文件/子目录、`skills/<key>/` 下的未知文件或子目录会被跳过，不登记成资源；作者侧 `build` 命令仍然严格，发现即报错。
+- **边界（重要）**：宽容只到「生成成员索引」为止。安装器落槽前仍会**严格比对文件集合**（`installer` 的索引校验），成员目录里残留的杂物会导致 `index_mismatch`；只有**包根**的说明文件（README/CREDITS 等）被允许。所以"上传一个带杂物的包能装上"不成立——要么清掉杂物，要么走包根。
+- 归一结果会以 warning 形式回给调用方（例如"已把 N 个文本源统一为 LF"）。
+
+### 4.3 上传导入（intake）与信任边界
+
+```text
+Subject POST /ability-packages/import
+  → Core package_import
+  → 解包到临时目录
+  → installer.prepare：normalize_source（合成/保留头段、扫盘定成员、LF/BOM 归一、成员扫描宽容）
+  → ABI 预检（import 实现脚本，读常量/Input/Output；不执行 execute）
+  → install（严格索引校验、写 lock、原子落槽，source.kind=archive）
+  → relock_source 改写 lock 来源
+```
+
+- 上传安装等于**在当前进程执行一次包代码的导入期逻辑**（模块顶层与类定义），靠接口鉴权与操作员身份兜底；不可信来源不要直接上传。
+- 上传包与作者侧 `build` 的差异只在「宽容范围」与「来源标记」：文本噪声、包根杂物、缺失声明常量会被补齐/跳过；成员目录内的杂物仍会失败。
+- 导入失败不落槽：临时目录与半成品版本目录由安装器清理，不污染安装根。
+
 ## 5 MCP 包布局
 
 MCP 包是**声明式**的：没有 operation 代码，只有声明 + 由受信客户端探测生成的快照。
@@ -215,7 +253,7 @@ mcp: {server: <agentconf 里的服务器名>}
 ```
 
 - 快照的成员是远端工具（`type=mcp`），其 schema 由探测得到，不从本地代码推导。
-- `namespace=mcp` 是保留命名空间；`ghrah.mcp` 是内置的 MCP 接入包，两者不是一回事。
+- `namespace=mcp` 是保留命名空间；MCP 成员只来自安装快照，旧的 `ghrah.mcp` 内置接入包已退役。
 - 安装根下的槽位与能力件一致；快照刷新走 `refresh`。
 
 ## 6 构建、安装、装载的职责边界
@@ -232,11 +270,15 @@ built tree  ──── ghrah ability install ──▶ <install_root>/<ns>/<na
                      · 校验 members 与内容一致        + <version>.lock.yaml
                      · 只读复制、不 import 代码
                      · 原子 rename 版本目录
-                                                        │  装载（Core）
-                                                        │    · 读 ability.yaml（定义面）
-                                                        │    · 按成员键解析实现
+                                                        │  启动提交（Core）
+                                                        │    · capture：读 ability.yaml、verify lock
+                                                        │    · commit_version / select_instance / write_grant
                                                         ▼
-                                                        ResolvedAbility → 工具
+                                              SQLite：ability_versions + ability_content
+                                                        │  运行期
+                                                        │    · 只读库（surface_snapshot / resolve / read_chunk）
+                                                        ▼
+                                              ProjectedAbility → 工具 / 技能目录
 ```
 
 四个"谁负责什么"：
@@ -245,7 +287,7 @@ built tree  ──── ghrah ability install ──▶ <install_root>/<ns>/<na
 | --- | --- | --- | --- |
 | build | 作者/CI | 生成并校验 `members`，保证幂等字节 | 不改头段、不跑 `execute` |
 | install | 发行版 | 校验索引与内容、写 lock、原子落槽 | 不 import 包代码、不重建索引、不改包内容 |
-| load | Core | 读定义面、解析成员、实例化 | 不读 lock、不按文件系统猜测成员 |
+| load | Core | 启动时捕获并提交：读定义面、校验 lock、把版本/内容写入关系库；运行期只读库 | 不在运行期扫盘、不按文件系统猜测成员 |
 | catalog | Core 目录面 | 汇总内置树 + 安装根，给出版本与成员键 | 不改任何存储 |
 
 ## 7 可移植性规则（构建与安装共同执行）
@@ -263,7 +305,7 @@ built tree  ──── ghrah ability install ──▶ <install_root>/<ns>/<na
 | 长度 | 单段 ≤ 字节上限；相对路径 ≤ UTF-16 码元上限 | 路径超长 |
 | 忽略项 | `.git`/`__pycache__`/`.mypy_cache`/`.pytest_cache`/`.ruff_cache` 与 `.DS_Store`/`Thumbs.db`/`desktop.ini` 不参与摘要 | — |
 | 命名空间 | `mcp` 任意通道拒绝；`ghrah` 仅发行版通道 | `reserved_namespace` |
-| 成员键 | 不得占用工具保留名（`search_tools`/`describe_tool`/`execute_tool`/`run_script`） | `reserved_member_name` |
+| 成员键 | 不得占用工具保留名（`search_tools`/`describe_tool`/`execute_tool`/`bind_member`/`unbind_member`/`run_script`） | `reserved_member_name` |
 
 ## 8 不变式（违反即为缺陷）
 
@@ -271,7 +313,7 @@ built tree  ──── ghrah ability install ──▶ <install_root>/<ns>/<na
 | --- | --- |
 | PKG-1 | 包身份唯一由 `identity`（`namespace` + 可选 `name` + `version`）决定，绝不取自目录名 |
 | PKG-2 | `members` 只能由构建生成；手工编辑等同于索引漂移 |
-| PKG-3 | 同一 `(namespace, name, version)` 在两处同时存在时，安装根优先于内置树 |
+| PKG-3 | 同一 `(namespace, name, version)` 在两处同时存在时，启动装配报错（拒绝静默覆盖），不做优先级裁决 |
 | PKG-4 | 版本槽一旦写入即不可变；同版本不同内容只能报冲突，不能覆盖 |
 | PKG-5 | lock 只在版本目录之外；lock 缺失或摘要不符视为安装损坏 |
 | PKG-6 | 内核件没有版本选择语义，其 `version` 不参与任何选择 |
@@ -354,7 +396,7 @@ classDiagram
     AbilityInstaller ..> BuiltinTree : 发行版预装通道
     BuiltinTree --> BuiltinAbilitySource
     InstallSlot --> InstalledAbilityProvider
-    BuiltinAbilitySource --> InstalledAbilityProvider : 同身份同版本时安装根优先
+    BuiltinAbilitySource --> InstalledAbilityProvider : 同身份同版本时报冲突（不覆盖）
 ```
 
 职责边界：`SourcePackage` 是作者产物；`AbilityInstaller` 是"复制 + 校验 + 记账"；`BuiltinTree` 是随源码发布的只读树；`InstallSlot`/`AbilityLock` 是安装事实；两个 provider 各自读取自己的存储，并在身份重叠时按 §1 的优先级决定胜负。
@@ -365,3 +407,5 @@ classDiagram
 2. **构建与安装共用同一份源包形状**：作者侧必须先 build 再 install；安装不重建索引意味着"改了代码忘记 build"只会在安装期报 `index_mismatch`，不会自动修复。
 3. **`refresh` 仅对 MCP 快照有意义**：普通包调用会被 `unsupported_refresh` 拒绝，但 CLI 文案尚未把这一限制说清楚。
 4. **`.zip` 不支持直接安装**：需要先解包；这对外部分发不友好，属于待补的输入通道。
+5. **退化身份的两段成员名是兼容层**：`identity.name` 省略时定义面成员名两段（`research.research`），模板/快照/装配用三段（`research.research.research`）。Core 在成员解析、安装记录读取、绑定集合比较三处做等价兼容，但两段/三段并存本身就是长期债务——建议后续把 `identity.name` 定为必填（或构建/安装时自动补 `name=namespace`），重建存量包后删除兼容分支。
+6. **构建严格 / 安装导入宽松的口径差**：`build` 对包内杂物直接报错；安装 intake 只对**文本噪声**与**成员扫描**宽容，落槽前的文件集合校验仍然严格——成员目录里的杂物依旧会 `index_mismatch`，只有包根说明文件被允许。排障时要先区分失败发生在「生成成员索引」还是「安装落槽」。

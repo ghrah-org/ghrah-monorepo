@@ -100,10 +100,16 @@ def installed(tmp_path_factory):
 @pytest.fixture
 async def environment(tmp_path, installed):
     """以生产物化器与 Builder 接通单个 Agent，身份与服务均来自装配边界。"""
+    from ghrah.ability.member import Member
+    from ghrah.core.agents import AgentInstanceStore
+    from ghrah.core.agents.bindings import MemberBindingState
+
     runs = {AGENT: "run-one"}
     store = await AbilityAccessStore.open(
         tmp_path / "surface.db", "project", operators=frozenset({"deployment"}), runs=runs.get
     )
+    instance_store = AgentInstanceStore(tmp_path / "agents.sqlite3")
+    await instance_store.start()
     assembly = AbilityAssembly.select("builtin", install_root=str(installed.root))
     resolved = assembly.source.resolver().resolve(parse_agent_manifest(MANIFEST))
     resolved.config = replace(resolved.config, agent_id=AGENT, workspace_root=str(tmp_path))
@@ -119,13 +125,37 @@ async def environment(tmp_path, installed):
         ),
         workspace_root=str(tmp_path),
         surface_loaded_limit=2,
+        binding_state=MemberBindingState(lambda: instance_store),
     )
     try:
         result = await materializer.materialize(agent=AGENT, resolved=resolved)
         await materializer.bind_run(AGENT, result)
+        # 控制面创建的实例快照：成员轴以 surface.static 作为绑定集合。
+        bound_names = set(resolved.surface.static) if resolved.surface is not None else set()
+        members = []
+        for record in await store.grants(ADMIN, AGENT):
+            instance = await store.instance(record.instance_id)
+            identity = instance["definition"]["identity"]
+            name = identity.get("name")
+            package = (
+                identity["namespace"]
+                if not name or name == identity["namespace"]
+                else f"{identity['namespace']}.{name}"
+            )
+            members.extend(
+                Member.reference(
+                    member=f"{package}.{key}",
+                    type="operation",
+                    visible=True,
+                    bind=f"{package}.{key}" in bound_names,
+                ).to_wire()
+                for key in record.members
+            )
+        await instance_store.save(agent_id=AGENT, name="consumer", config={}, members=members)
         yield store, materializer, result, resolved.config, runs
     finally:
         await materializer.close_agent_resources(AGENT)
+        await instance_store.close()
         await store.close()
 
 
@@ -169,7 +199,7 @@ async def invoke(agent, name, arguments, call_id="test-call"):
 async def test_receive_search_describe_execute_and_result_roundtrip(environment):
     model = Model(
         [
-            [ToolCallBlock(id="search", name="search_tools", arguments={"query": "op_049"})],
+            [ToolCallBlock(id="search", name="search_tools", arguments={})],
             [ToolCallBlock(id="describe", name="describe_tool", arguments={"name": "op_049"})],
             [
                 ToolCallBlock(
@@ -219,6 +249,30 @@ async def test_receive_search_describe_execute_and_result_roundtrip(environment)
         row["kind"] == "tool.call" and row["name"] == "op_049" and row["tool_call_id"] == "execute"
         for row in audit
     )
+
+
+async def test_search_scans_instance_axes_for_visible_unbound_members(environment):
+    """search_tools 只列实例快照里 visible=true 且 bind=false 的授予成员。"""
+    agent = make_agent(environment)
+    result = await invoke(agent, "search_tools", {})
+    assert result.outcome == ActionOutcome.SUCCESS
+    assert result.data["status"] == "ok"
+    rows = {row["name"]: row for row in result.data["data"]}
+    assert "op_049" in rows
+    assert rows["op_049"]["member"] == "acme.tools.op_049"
+    assert rows["op_049"]["package"] == "tools"
+    # 已绑定成员（axes.bind=true）已在模型上下文里，不再进入发现面。
+    assert "read_file" not in rows
+    # 保留名（元工具 / run_script）永远不通过 search_tools 暴露。
+    reserved = {
+        "search_tools",
+        "describe_tool",
+        "execute_tool",
+        "bind_member",
+        "unbind_member",
+        "run_script",
+    }
+    assert not (set(rows) & reserved)
 
 
 @pytest.mark.parametrize("name", ["unknown", "execute_tool", "search_tools", "run_script"])
@@ -302,7 +356,7 @@ async def test_old_run_cannot_use_any_surface_entry(environment):
     agent = make_agent(environment)
     await invoke(agent, "describe_tool", {"name": "op_001"})
     runs[AGENT] = "run-two"
-    assert (await invoke(agent, "search_tools", {"query": "op"})).outcome == ActionOutcome.FAILURE
+    assert (await invoke(agent, "search_tools", {})).outcome == ActionOutcome.FAILURE
     assert (
         await invoke(
             agent, "run_script", {"script": "skills/guide/scripts/export", "arguments": {}}
@@ -360,7 +414,7 @@ async def test_run_end_clears_loaded_state_without_revoking_grants(environment):
     before = await store.agent_revision(ADMIN, AGENT)
     await materializer.close_agent_resources(AGENT)
     assert not surface._loaded and surface.closed
-    assert (await invoke(agent, "search_tools", {"query": "op"})).outcome == ActionOutcome.FAILURE
+    assert (await invoke(agent, "search_tools", {})).outcome == ActionOutcome.FAILURE
     assert await store.agent_revision(ADMIN, AGENT) == before
 
 
@@ -454,8 +508,8 @@ async def test_unavailable_version_stays_describable_but_not_natively_visible(en
     store.set_version_availability(
         lambda version: version.definition().identity.namespace == "ghrah"
     )
-    searched = await invoke(agent, "search_tools", {"query": "op_049"})
-    assert any(row["name"] == "op_049" for row in searched.data["tools"])
+    searched = await invoke(agent, "search_tools", {})
+    assert any(row["name"] == "op_049" for row in searched.data["data"])
     described = await invoke(agent, "describe_tool", {"name": "op_049"})
     assert described.outcome == ActionOutcome.SUCCESS and described.data["available"] is False
     assert "value" in described.data["input_schema"]["properties"]
@@ -493,7 +547,7 @@ async def test_meta_only_agent_cannot_borrow_another_agents_members(environment,
             llm_factory=lambda _: Model(),
             persistence_factory=lambda _: None,
         )
-        assert (await invoke(agent, "search_tools", {"query": "op_049"})).data["tools"] == []
+        assert (await invoke(agent, "search_tools", {})).data["data"] == []
         assert (
             await invoke(agent, "describe_tool", {"name": "op_049"})
         ).outcome == ActionOutcome.FAILURE

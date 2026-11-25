@@ -265,8 +265,11 @@ def capture_content(
                 continue
             path = str(body_dir / unquote(url.path))
             relative_path(path)
-            if path not in known:
-                raise ValueError(f"Skill 链接未登记: {link}")
+            # 目录链接（``[templates](templates)``）只要其下有登记文件就算已登记：
+            # 清单登记的是文件，正文可以指向整块目录。
+            if path in known or any(item.startswith(path + "/") for item in known):
+                continue
+            raise ValueError(f"Skill 链接未登记: {link}")
     return definition, canonical(manifest), tuple(sorted(blobs.items()))
 
 

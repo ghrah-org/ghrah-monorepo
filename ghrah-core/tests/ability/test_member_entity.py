@@ -87,12 +87,13 @@ def test_kernel_has_no_version_and_external_requires_semver() -> None:
     assert external.version == "1.0.0"
 
 
-def test_axes_allow_discoverable_but_unbound() -> None:
-    """可发现但未绑定是合法状态；绑定必然可见。"""
+def test_axes_are_independent() -> None:
+    """可发现未绑定与「绑定但不进发现面」都是合法状态。"""
     assert MemberAxes(visible=False, bind=False).visible is False
     assert MemberAxes(visible=True, bind=False) == MemberAxes(visible=True, bind=False)
-    with pytest.raises(MemberError, match="bind=true 要求 visible=true"):
-        MemberAxes(visible=False, bind=True)
+    hidden = MemberAxes(visible=False, bind=True)
+    assert (hidden.visible, hidden.bind) == (False, True)
+    assert hidden.with_bind(False) == MemberAxes(visible=False, bind=False)
 
 
 def test_member_full_name_must_match_identity() -> None:
@@ -272,3 +273,42 @@ def test_ability_yaml_rejects_reference_records() -> None:
     )
     with pytest.raises(ManifestValidationError, match="缺少 data"):
         parse_definition(raw, source="test")
+
+
+def test_mcp_member_read_only_is_optional_but_typed() -> None:
+    """MCP 成员的 read_only 缺省 false；只接受 bool，防止页面写入字符串。"""
+    data = {
+        "title": "搜索",
+        "description": "搜索网页",
+        "server": "search",
+        "tool": "web_search",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "execution": {
+            "mode": "request",
+            "timeout_ms": 1000,
+            "cancellation": "unsupported",
+            "on_revoke": "drain",
+            "retry": "never",
+        },
+    }
+    member = Member(
+        namespace="mcp",
+        name="search",
+        member="mcp.search.web_search",
+        type="mcp",
+        version="0.0.1",
+        ability_type="external",
+        data={**data, "read_only": True},
+    )
+    assert member.data["read_only"] is True
+    with pytest.raises(MemberError, match="read_only"):
+        Member(
+            namespace="mcp",
+            name="search",
+            member="mcp.search.web_search",
+            type="mcp",
+            version="0.0.1",
+            ability_type="external",
+            data={**data, "read_only": "yes"},
+        )

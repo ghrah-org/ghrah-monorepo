@@ -4,16 +4,17 @@
 | --- | --- |
 | 文档编号 | GHRAH-DESIGN-003 |
 | 文档状态 | 现行（authoritative） |
-| 校准基线 | `ghrah-monorepo` @ `f8ff157`（2026-10-28），`ghrah-core` 0.2.0a0 |
+| 校准基线 | `ghrah-monorepo` @ `a742fcf`（2026-11-23）；行号沿自 `f8ff157`，以符号名为准 |
 | 读者 | 改 Agent 循环、调上下文窗口/压缩策略、排查"为什么这轮没执行/为什么回滚了"的开发者 |
 | 取代 | `Agent驱动循环执行轨迹.md`（归档至 `docs/archive/`） |
-| 相关文档 | `ghrah-01-ability-design-and-implementation.md` §9–§11（工具调用与审批）、`ghrah-04-skill-system.md`（技能目录注入点）、`ghrah-05-build-startup-and-troubleshooting.md`（日志与落盘） |
+| 相关文档 | `ghrah-01-ability-design-and-implementation.md`（工具调用与审批）、`ghrah-04-skill-system.md`（技能目录注入点）、`ghrah-05-build-startup-and-troubleshooting.md`（日志与落盘） |
 
 ## 修订记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | 1.0 | 2026-10-28 | 首版。以 `agents/base.py` 为准重建：8 阶段循环、`_action` 全流程、并行工具调用、await_reply 两阶段提交、压缩闸门与四级应急降级、异常回滚语义、13 条硬序约束、配置字段表与偏差清单 |
+| 2.0 | 2026-11-23 | 校准工具面与技能注入：每轮 `refresh_tool_projection`、`ToolSurfaceRuntime`（绑定集常驻 + 渐进披露元工具）、技能目录在 `_action` 内注入（`source="system:runtime"`）；窗口默认预算改为 1M；`IterationState` 移至 `context/iteration_state.py`；全文行号降级为历史锚点 |
 
 ## 1. 范围与读法
 
@@ -25,7 +26,9 @@
 
 ## 2. 对象结构
 
-`class ActorAgent`（`agents/base.py:132-2123`，57 个方法）。构造函数（`:158-195`）注入：`config`、`context_manager`、`ability_executor`、`llm_factory`、`supervisor`、`event_publisher`；内部自建 `HookStore` + `HookRunner`、消息队列、`AgentRunner`、`IterationState`。
+`class ActorAgent`（`agents/base.py`，约 2334 行、63 个方法）。构造函数注入：`config`、`context_manager`、`ability_executor`、`llm_factory`、`supervisor`、`event_publisher`；内部自建 `HookStore` + `HookRunner`、消息队列、`AgentRunner`、`IterationState`（已移至 `context/iteration_state.py`）。
+
+> **校准说明（2026-11-23）**：本文原有行号基线为 `f8ff157`（2026-10-28），代码已整体重排；下文行号仅作历史锚点，定位请按「符号名 + 文件」。已核对并修正的三处事实：`ActorAgent` 方法数 63（非 57）、`IterationState` 在 `context/iteration_state.py`、窗口默认预算 1M（非 200k）。
 
 关键状态与方法分组：
 
@@ -147,7 +150,7 @@
 
 | 键 | 默认 | 位置 |
 | --- | --- | --- |
-| `window.max_tokens` | `None`（回落 `DEFAULT_WINDOW_MAX_TOKENS = 200_000`） | `core/types/config_types.py:43`、`:12` |
+| `window.max_tokens` | `None`（回落 `DEFAULT_WINDOW_MAX_TOKENS = 1_000_000`） | `core/types/config_types.py` |
 | `window.strategies` | `["tool_call_fold", "truncation"]` | `:44` |
 | `window.tool_call_max_length` | `500` | `:45` |
 | `window.sliding_window_size` | `20` | `:46` |
@@ -218,7 +221,7 @@
 | --- | --- | --- | --- |
 | LD-1 | `pending_route` 字段已死 | `agents/iteration_state.py:13`、`:33` 自述"documented dead" | 读它做判断会永远为 `None` |
 | LD-2 | 结果顺序可能与 `tool_calls` 顺序不一致 | `executor.py:462-480` vs `:506-525` | 并行多工具时结果对位要靠 `tool_call_id` |
-| LD-3 | `window.max_tokens` 未配置时静默用 200k | `core/types/config_types.py:12`、`:43` | 换模型不改配置会导致压缩阈值失真 |
+| LD-3 | `window.max_tokens` 未配置时静默用 1M | `core/types/config_types.py` | 换模型不改配置会导致压缩阈值失真 |
 | LD-4 | `compact_threshold` 默认关闭 | `core/types/config_types.py:47` | 不配就永不自动压缩，只能手动 |
 | LD-5 | 应急降级只看异常类型名/消息文本 | `agents/base.py:108-117` | 换供应商的错误文案可能不触发自愈 |
 | LD-6 | `_publish_context_usage` 静默吞异常 | `:1244-1250` | 前端用量面板可能缺数而不报错 |
@@ -228,8 +231,8 @@
 
 | 接缝 | 位置 | 说明 |
 | --- | --- | --- |
-| 工具面 | `register_ability` `:212-259` → `_refresh_bound_tools` `:416-426` → `_ensure_llm` `:454` 的 `configure_tools` | 工具 schema 来自各能力实现的 `bind_tool()`；新增/移除能力会刷新工具面 |
-| 技能目录注入 | `core/context/manager.py:1114-1161` | 在窗口管理**之后**追加一条 `source="skill:catalog"` 的 user 消息，详见 `ghrah-04-skill-system.md` |
+| 工具面 | `ToolSurfaceRuntime`（`ability/surface/runtime.py`）；`_action` 开头 `refresh_tool_projection()`，每轮从关系库重建 | 绑定集合决定常驻（static）工具；未绑定但可见的成员进 `search_tools`/`describe_tool`/`execute_tool` 通道；`bind_member`/`unbind_member` 可运行期改绑定 |
+| 技能目录注入 | `ActorAgent._action`（`agents/base.py`，`get_llm_messages()` 之后、`llm.generate` 之前） | 追加一条 `source="system:runtime"` 的 user 消息；按技能目录摘要变化注入，绑定技能进目录、可见未绑定只出"可 bind_member"提示 |
 | 能力执行 | `_ability_executor.execute_tool_calls` `:1399-1405` | 详见 `ghrah-01-ability-design-and-implementation.md` §9 |
 | 事件 | `ActionChainUpdatedEvent` `:870-882`、`AgentResponseEvent` `:740-750`、`AgentErrorEvent` `:908-913` | wire 载荷见 `ghrah-protocol/src/ghrah/protocol/payloads/agent.py:194` |
 | 落盘 | `cm.commit_iteration_async` `:861` | Core sqlite 为写侧权威，见 `ghrah-05-build-startup-and-troubleshooting.md` §6 |

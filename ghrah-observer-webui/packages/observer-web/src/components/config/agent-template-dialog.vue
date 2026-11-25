@@ -56,6 +56,8 @@ interface PackageRow {
   availableSkills: string[];
   /** 已勾选的技能键。 */
   selectedSkills: string[];
+  /** MCP 成员键：保存时 type 必须是 mcp，不能写成 operation。 */
+  mcpKeys: string[];
 }
 
 interface PackageOption {
@@ -101,13 +103,19 @@ const form = reactive({
   tags: (props.template?.metadata.tags ?? []).join(", "),
   deprecated: props.template?.metadata.deprecated ?? false,
   endpointName: props.template?.model.endpoint_name ?? "",
-  systemPrompt: props.template?.prompt.system_prompt ?? "",
+  systemPrompt:
+    props.template === null
+      ? t("config.template.defaultSystemPrompt")
+      : props.template.prompt.system_prompt,
   maxIterations: props.template?.context_policy.max_iterations ?? -1,
   communicationTimeout: props.template?.context_policy.communication_timeout ?? 300,
   rows: rowsFromMembers(props.template?.available_members ?? []) as PackageRow[],
 });
 
-const abilityCache = new Map<string, { operations: string[]; skills: string[] }>();
+const abilityCache = new Map<
+  string,
+  { operations: string[]; skills: string[]; mcpKeys: string[] }
+>();
 
 function http() {
   return new HttpClient({ baseUrl: connection.httpBaseUrl, token: connection.apiToken });
@@ -191,7 +199,7 @@ async function loadOptions() {
 async function fetchMembers(
   fullName: string,
   version: string,
-): Promise<{ operations: string[]; skills: string[] }> {
+): Promise<{ operations: string[]; skills: string[]; mcpKeys: string[] }> {
   const key = `${fullName}@${version}`;
   const cached = abilityCache.get(key);
   if (cached !== undefined) return cached;
@@ -199,7 +207,7 @@ async function fetchMembers(
   const parts = fullName.split(".");
   const namespace = parts[0];
   const name = parts[1] ?? parts[0];
-  if (!namespace) return { operations: [], skills: [] };
+  if (!namespace) return { operations: [], skills: [], mcpKeys: [] };
   try {
     // 与「Ability 配置」页同一个版本详情接口：返回该版本可申请的操作键与技能键。
     const profile = AbilityPackageVersionProfileViewSchema.parse(
@@ -208,11 +216,12 @@ async function fetchMembers(
     const members = {
       operations: profile.operations.map((item) => item.key),
       skills: profile.skills.map((item) => item.key),
+      mcpKeys: profile.operations.filter((item) => item.mcp !== null).map((item) => item.key),
     };
     abilityCache.set(key, members);
     return members;
   } catch {
-    return { operations: [], skills: [] };
+    return { operations: [], skills: [], mcpKeys: [] };
   }
 }
 
@@ -221,12 +230,14 @@ async function ensureMembers(row: PackageRow) {
   // 成员清单优先来自同一个查询接口（能力包组），只有接口没给成员时才回退到
   // 版本画像——内核件同样不需要先有版本。
   const option = packages.value.find((item) => item.value === row.optionValue);
+  const isMcp = row.package === "mcp" || row.package.startsWith("mcp.");
   const members =
-    option !== undefined && (option.operations.length > 0 || option.skills.length > 0)
-      ? { operations: option.operations, skills: option.skills }
+    !isMcp && option !== undefined && (option.operations.length > 0 || option.skills.length > 0)
+      ? { operations: option.operations, skills: option.skills, mcpKeys: [] }
       : await fetchMembers(row.package, row.fetchVersion);
   row.available = members.operations;
   row.availableSkills = members.skills;
+  row.mcpKeys = members.mcpKeys;
   if (row.wholeContainer) {
     // 整包 = 全选：保存时按具体成员键落库，所以这里直接把目录里的成员都选上。
     row.selected = [...members.operations];
@@ -258,6 +269,7 @@ function emptyRow(): PackageRow {
     selected: [],
     availableSkills: [],
     selectedSkills: [],
+    mcpKeys: [],
   };
 }
 
@@ -333,7 +345,11 @@ function originOf(fullName: string): "builtin" | "installed" {
 
 type TemplateMember = NonNullable<AgentTemplateCreateRequest["available_members"]>[number];
 
-function memberOf(row: PackageRow, key: string, type: "operation" | "skill"): TemplateMember {
+function memberOf(
+  row: PackageRow,
+  key: string,
+  type: "operation" | "skill" | "mcp",
+): TemplateMember {
   const [namespace, name] = row.package.split(".");
   const abilityName = name || namespace;
   const kernel = originOf(row.package) === "builtin";
@@ -352,7 +368,9 @@ function buildMembers(): TemplateMember[] {
   const members: TemplateMember[] = [];
   for (const row of form.rows.filter((item) => item.package !== "")) {
     const keys = row.wholeContainer ? row.available : row.selected;
-    for (const key of keys) members.push(memberOf(row, key, "operation"));
+    for (const key of keys) {
+      members.push(memberOf(row, key, row.mcpKeys.includes(key) ? "mcp" : "operation"));
+    }
     const skillKeys = row.wholeContainer ? row.availableSkills : row.selectedSkills;
     for (const key of skillKeys) members.push(memberOf(row, key, "skill"));
   }
@@ -375,6 +393,7 @@ function rowsFromMembers(members: readonly TemplateMember[]): PackageRow[] {
         selected: [],
         availableSkills: [],
         selectedSkills: [],
+        mcpKeys: [],
       } satisfies PackageRow;
       grouped.set(fullName, row);
     }
@@ -385,6 +404,7 @@ function rowsFromMembers(members: readonly TemplateMember[]): PackageRow[] {
     } else {
       row.available.push(key);
       row.selected.push(key);
+      if (member.type === "mcp" || member.namespace === "mcp") row.mcpKeys.push(key);
     }
   }
   return [...grouped.values()];

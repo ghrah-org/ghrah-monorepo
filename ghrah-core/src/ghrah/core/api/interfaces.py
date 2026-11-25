@@ -17,6 +17,10 @@ from ghrah.protocol.ability_control import (
     AbilityChangesPage,
     AbilityGrantWriteView,
     AbilityInstancesView,
+    AbilityMcpDraftProbeRequest,
+    AbilityMcpDraftProbeView,
+    AbilityMcpInstallRequest,
+    AbilityMcpInstallView,
     AbilityMcpProbeRequest,
     AbilityMcpProbeView,
     AbilityPackageCatalogView,
@@ -544,6 +548,22 @@ class AbilitiesPackageMcpProbeRequest(AbilitiesPackageVersionRequest):
     request: AbilityMcpProbeRequest
 
 
+class AbilitiesMcpDraftProbeRequest(BaseModel):
+    """MCP 草稿探测：未保存连接，不要求包身份。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request: AbilityMcpDraftProbeRequest
+
+
+class AbilitiesMcpInstallRequest(BaseModel):
+    """MCP 页面安装请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request: AbilityMcpInstallRequest
+
+
 class AbilitiesPackageGroupsRequest(BaseModel):
     """``abilities.package_groups`` 的请求信封（全局视图可省略项目）。"""
 
@@ -868,6 +888,16 @@ CORE_CATALOG_INTERFACES = InterfaceRegistry(
             "abilities.package_import",
             AbilitiesPackageImportRequest,
             AbilityPackageImportView,
+        ),
+        Interface(
+            "abilities.mcp_draft_probe",
+            AbilitiesMcpDraftProbeRequest,
+            AbilityMcpDraftProbeView,
+        ),
+        Interface(
+            "abilities.mcp_install",
+            AbilitiesMcpInstallRequest,
+            AbilityMcpInstallView,
         ),
     )
 )

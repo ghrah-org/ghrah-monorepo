@@ -34,7 +34,7 @@ from ghrah.mcp.credentials import CredentialResolver, no_credentials
 from ghrah.mcp.errors import McpConfigError, McpNotActivatedError
 from ghrah.mcp.result import ToolOutcome
 from ghrah.mcp.session import McpSession
-from ghrah.mcp.spec import McpServerSpec
+from ghrah.mcp.spec import McpServerSpec, McpToolSpec
 
 __all__ = ["McpRuntime"]
 
@@ -204,6 +204,29 @@ class McpRuntime:
         tool_spec = spec.require_tool(tool)
         session = await self._session_for(agent_scope, spec)
         return await session.call_tool(tool_spec, dict(arguments or {}))
+
+    async def call_tool(
+        self,
+        *,
+        agent_scope: str,
+        server: str,
+        tool_spec: McpToolSpec,
+        arguments: Mapping[str, Any] | None = None,
+        timeout_ms: int | None = None,
+    ) -> ToolOutcome:
+        """按显式工具声明调用，不做服务器白名单校验。
+
+        成员驱动路径已经由获授成员固定 server/tool；白名单校验由成员数据承担，
+        不在这里用连接声明二次裁剪。
+        """
+        spec = self._resolve_spec(agent_scope=agent_scope, server=server, skill=None)
+        session = await self._session_for(agent_scope, spec)
+        read_timeout_s = timeout_ms / 1000 if timeout_ms else None
+        return await session.call_tool(
+            tool_spec,
+            dict(arguments or {}),
+            read_timeout_s=read_timeout_s,
+        )
 
     async def close(self) -> None:
         """关闭全部连接。重复调用安全。"""

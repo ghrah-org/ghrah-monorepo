@@ -10,7 +10,26 @@
 | 读者 | 要新增一个工具（能力）、要改现有能力行为、要给能力加权限或审批的开发者 |
 | 取代 | `package技术文档.md`、`package增量开发指引.md`（归档至 `docs/archive/`） |
 | 被取代 | `ghrah.ability-builder` 包（`ghrah.ability-builder@0.1.1`，内置包 `builtin/ability-builder/`）的 `skills/ability-package-development-guide/SKILL.md`；作者面规范以该包正文为准 |
-| 相关文档 | `ghrah-01-ability-design-and-implementation.md`（为什么这样设计、契约全貌）、`ghrah-04-skill-system.md`（技能成员）、`ghrah-06-code-map.md` §8（新文件放哪） |
+| 相关文档 | `ghrah-11-member-spec.md`（成员定义）、`ghrah-12-ability-package-layout.md`（包结构）、`ghrah-13-ability-data-store.md`（运行期数据底座） |
+
+## 0. 现状速查（2026-11-23，先看这一节）
+
+> **红旗：本文正文基于已退役的 `ghrah-core/src/ghrah/scheme/` 目录与 `schema_version: 0.1-draft` 定义格式，照抄会失败。** 现行定义是 `schema_version: '2'`、`members` 成员记录数组、`data.path` 指向实现文件；运行期不再读安装目录，而是启动时提交成 SQLite 版本与内容 blob。
+
+现行作者面工作流（可执行）：
+
+```text
+1. 写 operations/<key>.py：Input / Output 模型 + async def execute(call, services)，
+   模块常量 TITLE / SUMMARY / TAGS / PERMISSIONS / EFFECTS / TIMEOUT_MS / EXPOSE
+2. 写 skills/<name>/SKILL.md（frontmatter: name / description / metadata.title / metadata.tags）
+3. 生成定义：uv run python -m ghrah.ability.tools.build <包目录>（作者侧严格；CI 用 --check）
+4. 安装：ghrah ability install <包目录>（或随发行版预装）；装进 <install_root>/<ns>/<name>/<version>/
+5. 运行：Agent 启动时由 Core 捕获并提交版本/内容，之后只读关系库
+```
+
+现行规范以这三份为准：`ghrah-11`（成员与命名/两轴）、`ghrah-12`（包目录/`ability.yaml`/lock/构建安装职责）、`ghrah-13`（SQLite 权威与启动提交）。作者面教程以内置技能 `ghrah.ability-builder@0.1.1` 的 `SKILL.md` 为准。
+
+**下方 §2「五分钟最小可行包」、§4「`ability.yaml` 字段表」、§5「实现脚本模板」是旧格式样例，仅作历史参考，不要复制。**
 
 ## 修订记录
 
@@ -399,12 +418,11 @@ python scripts/check_docstrings.py --summary             # docstring 覆盖
 | 容器 | 成员数 | handler | 说明 |
 | --- | --- | --- | --- |
 | `fs` | 7 | `read_file` `write_file` `edit_file` `delete_file` `move_file` `list_directory` `search_files` | 文件系统；全部进 `FS_ABILITY_TYPES` |
-| `core` | 6 | `conversation`(expose:false) `end_task` `list_abilities` `load_skill` `recall_context` `session_info` | 会话基础能力 |
+| `core` | 10 | `conversation`(expose:false) `end_task` `session_info` `load_skill` `recall_context` `search_tools` `describe_tool` `execute_tool` `bind_member` `unbind_member` | 会话基础能力 + 发现/绑定元工具 |
 | `cluster` | 7 | `query_agents` `send_message` `broadcast_message` `spawn_agent` `terminate_agent` `query_manifests` `send`(expose:false, registry-only) | 多 agent 协作 |
 | `shell` | 1 | `execute_command` | 命令执行；走命令分级 |
-| `mcp` | 1 | `mcp_call` | MCP 工具桥 |
 
-口径（仓库内置树，实测于 `f8ff157`）：handler 全集 **22**；工具面 **20**（去掉 `conversation` 与 `send`）；`AbilityManifest` 视图 **21**（只去掉 registry-only 的 `send`）。用户根 `~/.ghrah/skill-ability` 下还可以装 skill-only 容器，它们不产生 operation，因此不改变这三个数字。
+口径（仓库内置树，当前）：handler 全集 **25**；工具面 **23**（去掉 `conversation` 与 `send`）；`AbilityManifest` 视图 **24**（只去掉 registry-only 的 `send`）。用户根 `~/.ghrah/skill-ability` 下还可以装 skill-only 容器，它们不产生 operation，因此不改变这三个数字。
 
 ## 9. 常见错误对照
 

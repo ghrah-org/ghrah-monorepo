@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ DEFAULT_PROBE_TIMEOUT_MS = 5_000
 MIN_PROBE_TIMEOUT_MS = 1_000
 MAX_PROBE_TIMEOUT_MS = 10_000
 _PROBE_SKILL_NAME = "diagnostic/ui-probe"
+_DRAFT_SKILL_NAME = "diagnostic/draft-probe"
 
 _AGENTCONF_UNAVAILABLE = frozenset(
     {
@@ -65,6 +66,7 @@ __all__ = [
     "McpProbeFailure",
     "McpProbeReport",
     "McpResourceInfo",
+    "probe_draft",
     "probe_server",
 ]
 
@@ -302,6 +304,134 @@ async def _read_resources(
     return True, resources, tuple(listed_templates)
 
 
+async def _run_probe(
+    *,
+    name: str,
+    spec: McpServerSpec,
+    credential: str | None,
+    timeout_ms: int,
+    include_tools: bool,
+    include_resources: bool,
+    connector: Connector | None,
+) -> McpProbeReport:
+    """在已构造的连接声明上做一次短会话探测。"""
+    started = time.monotonic()
+    phase = "connect"
+    connected = False
+    secrets = _secret_values(spec, credential)
+    tools: tuple[dict[str, Any], ...] = ()
+    resources: tuple[McpResourceInfo, ...] = ()
+    resource_templates: tuple[dict[str, Any], ...] = ()
+    resources_supported = False
+    protocol_version: str | None = None
+    server_name: str | None = None
+    server_version: str | None = None
+    timeout_s = _clamp_timeout_ms(timeout_ms) / 1000
+    try:
+        async with asyncio.timeout(timeout_s):
+            read_timeout_s = min(spec.connect_timeout_ms / 1000, timeout_s)
+            connect = connector or open_client
+            async with connect(
+                spec, credential=credential, read_timeout_s=read_timeout_s
+            ) as client:
+                connected = True
+                phase = "initialize"
+                protocol_version = _text(getattr(client, "protocol_version", None))
+                info = getattr(client, "server_info", None)
+                if info is not None:
+                    server_name = _text(getattr(info, "name", None))
+                    server_version = _text(getattr(info, "version", None))
+                if include_tools:
+                    phase = "list_tools"
+                    tools = tuple(
+                        await list_tools(
+                            client,
+                            max_pages=spec.max_pages,
+                            max_bytes=spec.max_result_bytes,
+                        )
+                    )
+                if include_resources:
+                    phase = "list_resources"
+                    resources_supported, resources, resource_templates = await _read_resources(
+                        client, spec
+                    )
+        return _emit(
+            name,
+            McpProbeReport(
+                ok=True,
+                phase=phase,
+                elapsed_ms=_elapsed_ms(started),
+                protocol_version=protocol_version,
+                server_name=server_name,
+                server_version=server_version,
+                tools=tools,
+                resources_supported=resources_supported,
+                resources=resources,
+                resource_templates=resource_templates,
+            ),
+        )
+    except TimeoutError as exc:
+        return _failure_report(
+            name=name,
+            started=started,
+            phase=phase,
+            exc=exc,
+            secrets=secrets,
+            connected=connected,
+            tools=tools,
+            resources=resources,
+            resource_templates=resource_templates,
+            resources_supported=resources_supported,
+            protocol_version=protocol_version,
+            server_name=server_name,
+            server_version=server_version,
+            timeout=True,
+        )
+    except Exception as exc:
+        error = exc if isinstance(exc, McpError) else translate_exception(exc)
+        return _failure_report(
+            name=name,
+            started=started,
+            phase=phase,
+            exc=error,
+            secrets=secrets,
+            connected=connected,
+            tools=tools,
+            resources=resources,
+            resource_templates=resource_templates,
+            resources_supported=resources_supported,
+            protocol_version=protocol_version,
+            server_name=server_name,
+            server_version=server_version,
+        )
+
+
+def _config_failure(
+    *,
+    name: str,
+    started: float,
+    exc: Exception,
+    secrets: Sequence[str] = (),
+) -> McpProbeReport:
+    """把配置阶段失败转成统一报告；不建立连接。"""
+    error = exc if isinstance(exc, McpError) else translate_exception(exc)
+    return _failure_report(
+        name=name,
+        started=started,
+        phase="config",
+        exc=error,
+        secrets=secrets,
+        connected=False,
+        tools=(),
+        resources=(),
+        resource_templates=(),
+        resources_supported=False,
+        protocol_version=None,
+        server_name=None,
+        server_version=None,
+    )
+
+
 async def probe_server(
     name: str,
     *,
@@ -317,105 +447,89 @@ async def probe_server(
     不读取资源能力，也不调用资源方法。凭据与地址只出现在已脱敏的 ``detail`` 里。
     """
     started = time.monotonic()
-    phase = "config"
-    connected = False
-    secrets: tuple[str, ...] = ()
-    tools: tuple[dict[str, Any], ...] = ()
-    resources: tuple[McpResourceInfo, ...] = ()
-    resource_templates: tuple[dict[str, Any], ...] = ()
-    resources_supported = False
-    protocol_version: str | None = None
-    server_name: str | None = None
-    server_version: str | None = None
-    timeout_s = _clamp_timeout_ms(timeout_ms) / 1000
     source = AgentconfMcpSource(db_path=db_path)
+    secrets: tuple[str, ...] = ()
     try:
         try:
-            async with asyncio.timeout(timeout_s):
-                if name not in source.names():
-                    raise McpServerNotConfiguredError(name)
-                spec = source.connection_spec(name, skill_full_name=_PROBE_SKILL_NAME)
-                secrets = _secret_values(spec, None)
-                credential = source.credential_for_spec(spec)
-                headers = source.headers_for_spec(spec)
-                if headers is not None:
-                    spec = replace(spec, headers=headers)
+            if name not in source.names():
+                raise McpServerNotConfiguredError(name)
+            spec = source.connection_spec(name, skill_full_name=_PROBE_SKILL_NAME)
+            secrets = _secret_values(spec, None)
+            credential = source.credential_for_spec(spec)
+            secrets = _secret_values(spec, credential)
+            headers = source.headers_for_spec(spec)
+            if headers is not None:
+                spec = replace(spec, headers=headers)
                 secrets = _secret_values(spec, credential)
-                phase = "connect"
-                read_timeout_s = min(spec.connect_timeout_ms / 1000, timeout_s)
-                connect = connector or open_client
-                async with connect(
-                    spec, credential=credential, read_timeout_s=read_timeout_s
-                ) as client:
-                    connected = True
-                    phase = "initialize"
-                    protocol_version = _text(getattr(client, "protocol_version", None))
-                    info = getattr(client, "server_info", None)
-                    if info is not None:
-                        server_name = _text(getattr(info, "name", None))
-                        server_version = _text(getattr(info, "version", None))
-                    if include_tools:
-                        phase = "list_tools"
-                        tools = tuple(
-                            await list_tools(
-                                client,
-                                max_pages=spec.max_pages,
-                                max_bytes=spec.max_result_bytes,
-                            )
-                        )
-                    if include_resources:
-                        phase = "list_resources"
-                        resources_supported, resources, resource_templates = await _read_resources(
-                            client, spec
-                        )
-            return _emit(
-                name,
-                McpProbeReport(
-                    ok=True,
-                    phase=phase,
-                    elapsed_ms=_elapsed_ms(started),
-                    protocol_version=protocol_version,
-                    server_name=server_name,
-                    server_version=server_version,
-                    tools=tools,
-                    resources_supported=resources_supported,
-                    resources=resources,
-                    resource_templates=resource_templates,
-                ),
-            )
-        except TimeoutError as exc:
-            return _failure_report(
-                name=name,
-                started=started,
-                phase=phase,
-                exc=exc,
-                secrets=secrets,
-                connected=connected,
-                tools=tools,
-                resources=resources,
-                resource_templates=resource_templates,
-                resources_supported=resources_supported,
-                protocol_version=protocol_version,
-                server_name=server_name,
-                server_version=server_version,
-                timeout=True,
-            )
         except Exception as exc:
-            error = exc if isinstance(exc, McpError) else translate_exception(exc)
-            return _failure_report(
-                name=name,
-                started=started,
-                phase=phase,
-                exc=error,
-                secrets=secrets,
-                connected=connected,
-                tools=tools,
-                resources=resources,
-                resource_templates=resource_templates,
-                resources_supported=resources_supported,
-                protocol_version=protocol_version,
-                server_name=server_name,
-                server_version=server_version,
-            )
+            return _config_failure(name=name, started=started, exc=exc, secrets=secrets)
+        return await _run_probe(
+            name=name,
+            spec=spec,
+            credential=credential,
+            timeout_ms=timeout_ms,
+            include_tools=include_tools,
+            include_resources=include_resources,
+            connector=connector,
+        )
     finally:
         source.close()
+
+
+async def probe_draft(
+    *,
+    url: str,
+    headers: Mapping[str, str] | None = None,
+    credential: str | None = None,
+    timeout_ms: int = DEFAULT_PROBE_TIMEOUT_MS,
+    include_tools: bool = True,
+    include_resources: bool = False,
+    connector: Connector | None = None,
+) -> McpProbeReport:
+    """在未保存的草稿连接上做一次只读探测。
+
+    与 :func:`probe_server` 共用同一套会话/分类逻辑，但不读取 agentconf、不写
+    任何配置。``headers`` 里的 ``{{auth}}`` 占位由 ``credential`` 在建连前替换；
+    页面添加 MCP 时用它在“保存之前”验证端点与工具。
+
+    Args:
+        url: 草稿端点 URL。
+        headers: 请求头；可含 ``{{auth}}`` 占位。
+        credential: 与占位对应的明文凭据；只用于本次调用。
+        timeout_ms: 探测超时；夹到 1–10 秒。
+        include_tools: 是否读取工具清单。
+        include_resources: 是否读取资源清单。
+        connector: 测试用连接器；生产留空。
+
+    Returns:
+        与 :func:`probe_server` 同形的报告；配置错误也以失败报告返回。
+    """
+    started = time.monotonic()
+    secret_values = [url]
+    secret_values.extend(value for value in (headers or {}).values() if value)
+    if credential:
+        secret_values.append(credential)
+    try:
+        spec = McpServerSpec(
+            skill_full_name=_DRAFT_SKILL_NAME,
+            server="draft",
+            url=url,
+            headers=headers or {},
+            connect_timeout_ms=_clamp_timeout_ms(timeout_ms),
+        )
+    except Exception as exc:
+        return _config_failure(
+            name="draft",
+            started=started,
+            exc=exc,
+            secrets=tuple(secret_values),
+        )
+    return await _run_probe(
+        name="draft",
+        spec=spec,
+        credential=credential,
+        timeout_ms=timeout_ms,
+        include_tools=include_tools,
+        include_resources=include_resources,
+        connector=connector,
+    )

@@ -24,6 +24,8 @@ import {
   AgentconfProviderReferencesViewSchema,
   AgentconfProviderViewSchema,
   AgentconfStatusViewSchema,
+  AbilityPackageVersionProfileViewSchema,
+  type AbilityPackageVersionProfileView,
   type AgentconfCapabilityDetailView,
   type AgentconfCapabilitySummary,
   type AgentconfCapabilityUpdatePreviewView,
@@ -36,6 +38,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import BaseModal from "@/components/ui/base-modal.vue";
 import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
+import McpInstallDialog from "@/components/config/mcp-install-dialog.vue";
 import UiButton from "@/components/ui/button.vue";
 import UiSelect from "@/components/ui/select.vue";
 import UiTextField from "@/components/ui/text-field.vue";
@@ -45,6 +48,11 @@ type Tab = "providers" | "endpoints" | "capabilities" | "mcpProviders" | "mcpSer
 type Phase = "loading" | "ready" | "migration" | "unavailable" | "failed";
 type Named = { id: string; name: string };
 type Row = { id: string; cells: string[] };
+type McpAbilityInfo = {
+  package: string;
+  version: string;
+  members: string[];
+};
 type Saved =
   AgentconfProviderView | AgentconfEndpointView | AgentconfMcpProviderView | AgentconfMcpServerView;
 type ApiFormat = (typeof API_FORMATS)[number];
@@ -92,7 +100,7 @@ const COLUMN_KEYS: Record<Tab, string[]> = {
   endpoints: ["name", "modelName", "modelType", "apiFormat", "provider"],
   capabilities: ["modelKey", "displayName", "modelType", "origin"],
   mcpProviders: ["name", "vendor", "secret"],
-  mcpServers: ["name", "transport"],
+  mcpServers: ["name", "vendor", "secret", "ability"],
 };
 
 class FormError extends Error {
@@ -114,6 +122,7 @@ const keyConfigured = ref(false);
 const referenceConfigured = ref(false);
 const failure = ref("");
 const notice = ref("");
+const mcpInstallOpen = ref(false);
 const preview = ref("");
 const references = ref<string[]>([]);
 const capabilityOptions = ref<AgentconfCapabilitySummary[]>([]);
@@ -130,8 +139,12 @@ const updatePreview = ref<AgentconfCapabilityUpdatePreviewView | null>(null);
 const rows = ref<Row[]>([]);
 const providerChoices = ref<Named[]>([]);
 const mcpChoices = ref<Named[]>([]);
+const mcpProviderVendors = ref<Record<string, string>>({});
+const mcpServerViews = ref<Record<string, AgentconfMcpServerView>>({});
+const mcpAbilities = ref<Record<string, McpAbilityInfo>>({});
+const mcpQuery = ref("");
+const expandedMcpServer = ref("");
 const modelFilter = ref("");
-const transportFilter = ref("");
 const dialog = ref<null | "delete" | "discard" | "update">(null);
 const pendingTab = ref<Tab | null>(null);
 const pendingClose = ref(false);
@@ -208,6 +221,14 @@ const subtabs = computed(() => (domain.value === "models" ? MODEL_TABS : MCP_TAB
 const columns = computed(() =>
   COLUMN_KEYS[tab.value].map((key) => t(`config.connections.columns.${key}`)),
 );
+const visibleRows = computed(() => {
+  if (tab.value !== "mcpServers") return rows.value;
+  const needle = mcpQuery.value.trim().toLowerCase();
+  if (!needle) return rows.value;
+  return rows.value.filter((row) => {
+    return [row.cells[0], mcpVendor(row.id)].some((value) => value.toLowerCase().includes(needle));
+  });
+});
 const showForm = computed(
   () => tab.value !== "capabilities" && (creating.value || resourceId.value !== ""),
 );
@@ -623,15 +644,80 @@ async function refreshRows() {
   }
   const providers = AgentconfMcpProviderListViewSchema.parse(await http.get(PATH.mcpProviders));
   mcpChoices.value = providers.providers.map((item) => ({ id: item.id, name: item.name }));
-  const page = AgentconfMcpServerListViewSchema.parse(
-    await http.get(PATH.mcpServers, {
-      query: transportFilter.value ? { transport: transportFilter.value } : undefined,
-    }),
+  mcpProviderVendors.value = Object.fromEntries(
+    providers.providers.map((item) => [item.id, item.vendor ?? ""]),
   );
-  rows.value = page.servers.map((item) => ({
-    id: item.id,
-    cells: [item.name, item.transport],
-  }));
+  const page = AgentconfMcpServerListViewSchema.parse(await http.get(PATH.mcpServers));
+  mcpServerViews.value = Object.fromEntries(page.servers.map((item) => [item.id, item]));
+  rows.value = page.servers.map((item) => {
+    const ability = mcpAbilities.value[item.name];
+    return {
+      id: item.id,
+      cells: [
+        item.name,
+        mcpVendor(item.id),
+        secretLabel(mcpSecretConfigured(item.id)),
+        ability ? ability.package : t("config.connections.mcpAbilityPending"),
+      ],
+    };
+  });
+  void loadMcpAbilities(page.servers);
+}
+
+async function loadMcpAbilities(servers: AgentconfMcpServerView[]) {
+  const http = client();
+  try {
+    const catalog = (await http.get("/api/v1/ability-packages")) as {
+      packages?: Array<{ namespace?: string | null; name?: string | null; version?: string }>;
+    };
+    const packages = (catalog.packages ?? []).filter(
+      (item): item is { namespace: string; name: string; version: string } =>
+        item.namespace === "mcp" &&
+        typeof item.name === "string" &&
+        typeof item.version === "string",
+    );
+    const profiles = await Promise.all(
+      packages.map(async (item) => {
+        try {
+          return AbilityPackageVersionProfileViewSchema.parse(
+            await http.get(
+              `/api/v1/ability-packages/mcp/${encodeURIComponent(item.name)}/versions/${encodeURIComponent(item.version)}`,
+            ),
+          );
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const next: Record<string, McpAbilityInfo> = {};
+    for (const profile of profiles) {
+      if (!profile?.mcp) continue;
+      next[profile.mcp.server] = abilityInfo(profile);
+    }
+    mcpAbilities.value = next;
+    rows.value = servers.map((item) => {
+      const info = next[item.name];
+      return {
+        id: item.id,
+        cells: [
+          item.name,
+          mcpVendor(item.id),
+          secretLabel(mcpSecretConfigured(item.id)),
+          info ? info.package : t("config.connections.mcpAbilityPending"),
+        ],
+      };
+    });
+  } catch {
+    mcpAbilities.value = {};
+  }
+}
+
+function abilityInfo(profile: AbilityPackageVersionProfileView): McpAbilityInfo {
+  return {
+    package: `mcp.${profile.name}`,
+    version: profile.version,
+    members: profile.operations.filter((item) => item.mcp).map((item) => item.key),
+  };
 }
 
 function capabilityLabel(name: string): string {
@@ -760,6 +846,11 @@ async function load() {
     phase.value = "failed";
     failure.value = explain(error);
   }
+}
+
+async function mcpInstalled() {
+  notice.value = t("config.connections.mcpInstall.installedNotice");
+  await load();
 }
 
 async function loadReferences(id: string) {
@@ -1040,9 +1131,42 @@ function setModelFilter(value: string) {
   void loadTab();
 }
 
-function setTransportFilter(value: string) {
-  transportFilter.value = value;
-  void loadTab();
+function mcpServer(rowId: string): AgentconfMcpServerView | undefined {
+  return mcpServerViews.value[rowId];
+}
+
+function mcpVendor(rowId: string): string {
+  const server = mcpServer(rowId);
+  if (!server?.provider_id) return "—";
+  return mcpProviderVendors.value[server.provider_id] ?? "—";
+}
+
+function mcpSecretConfigured(rowId: string): boolean {
+  const server = mcpServer(rowId);
+  if (!server) return false;
+  return (
+    server.reference_configured ||
+    server.auth_mode === "inline" ||
+    server.auth_mode === "provider" ||
+    Object.keys(server.headers).length > 0
+  );
+}
+
+function mcpAbility(rowId: string): McpAbilityInfo | undefined {
+  const server = mcpServer(rowId);
+  return server ? mcpAbilities.value[server.name] : undefined;
+}
+
+function onRowClick(id: string) {
+  if (tab.value === "capabilities") {
+    openProfile(id);
+    return;
+  }
+  if (tab.value === "mcpServers") {
+    expandedMcpServer.value = expandedMcpServer.value === id ? "" : id;
+    return;
+  }
+  openRow(id);
 }
 
 function closeForm() {
@@ -1085,7 +1209,6 @@ function chooseDomain(next: Domain) {
 async function switchTab(next: Tab) {
   tab.value = next;
   modelFilter.value = "";
-  transportFilter.value = "";
   catalogQuery.value = "";
   await loadTab();
 }
@@ -1164,6 +1287,14 @@ onMounted(() => void load());
       </div>
       <div class="connections-toolbar">
         <UiButton
+          v-if="tab === 'mcpServers'"
+          type="button"
+          variant="primary"
+          @click="mcpInstallOpen = true"
+        >
+          {{ t("config.connections.mcpInstall.add") }}
+        </UiButton>
+        <UiButton
           v-if="tab !== 'capabilities'"
           type="button"
           variant="secondary"
@@ -1195,14 +1326,12 @@ onMounted(() => void load());
           <UiTextField v-model="catalogQuery" @keydown.enter.prevent="loadTab" />
         </label>
         <label v-else-if="tab === 'mcpServers'" class="connections-field">
-          <span>{{ t("config.connections.transport") }}</span>
-          <UiSelect :model-value="transportFilter" @update:model-value="setTransportFilter">
-            <option value="">{{ t("config.connections.all") }}</option>
-            <option value="stdio">{{ t("config.connections.transports.stdio") }}</option>
-            <option value="streamable_http">
-              {{ t("config.connections.transports.streamable_http") }}
-            </option>
-          </UiSelect>
+          <span>{{ t("config.connections.mcpSearchLabel") }}</span>
+          <UiTextField
+            v-model="mcpQuery"
+            type="search"
+            :placeholder="t('config.connections.mcpSearchPlaceholder')"
+          />
         </label>
       </div>
       <p v-if="failure && !showForm" role="alert">{{ failure }}</p>
@@ -1216,26 +1345,86 @@ onMounted(() => void load());
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="row in rows"
-                :key="row.id"
-                :aria-selected="rowSelected(row.id)"
-                @click="tab === 'capabilities' ? openProfile(row.id) : openRow(row.id)"
-              >
-                <td v-for="(cell, index) in row.cells" :key="`${row.id}-${index}`">
-                  <button
-                    v-if="index === 0"
-                    type="button"
-                    @click.stop="tab === 'capabilities' ? openProfile(row.id) : openRow(row.id)"
-                  >
-                    {{ cell }}
-                  </button>
-                  <template v-else>{{ cell }}</template>
-                </td>
-              </tr>
+              <template v-for="row in visibleRows" :key="row.id">
+                <tr
+                  :aria-selected="
+                    tab === 'mcpServers' ? expandedMcpServer === row.id : rowSelected(row.id)
+                  "
+                  @click="onRowClick(row.id)"
+                >
+                  <td v-for="(cell, index) in row.cells" :key="`${row.id}-${index}`">
+                    <button v-if="index === 0" type="button" @click.stop="onRowClick(row.id)">
+                      <span v-if="tab === 'mcpServers'" class="mcp-row-caret" aria-hidden="true">
+                        {{ expandedMcpServer === row.id ? "▾" : "▸" }}
+                      </span>
+                      {{ cell }}
+                    </button>
+                    <code v-else-if="index === 3 && mcpAbility(row.id)">{{ cell }}</code>
+                    <template v-else>{{ cell }}</template>
+                  </td>
+                </tr>
+                <tr
+                  v-if="tab === 'mcpServers' && expandedMcpServer === row.id"
+                  class="mcp-detail-row"
+                >
+                  <td :colspan="columns.length">
+                    <dl v-if="mcpServer(row.id)" class="mcp-detail">
+                      <div>
+                        <dt>{{ t("config.connections.mcpDetailVendor") }}</dt>
+                        <dd>{{ mcpVendor(row.id) }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t("config.connections.mcpDetailTransport") }}</dt>
+                        <dd>{{ mcpServer(row.id)?.transport }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t("config.connections.mcpDetailEndpoint") }}</dt>
+                        <dd>{{ mcpServer(row.id)?.url || mcpServer(row.id)?.command || "—" }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t("config.connections.mcpDetailKey") }}</dt>
+                        <dd>{{ secretLabel(mcpSecretConfigured(row.id)) }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t("config.connections.mcpDetailAbility") }}</dt>
+                        <dd>
+                          <template v-if="mcpAbility(row.id)">
+                            <code>{{ mcpAbility(row.id)?.package }}</code>
+                            <span class="mcp-member-badge">
+                              {{
+                                t("config.connections.mcpMembers", {
+                                  count: mcpAbility(row.id)?.members.length ?? 0,
+                                })
+                              }}
+                            </span>
+                          </template>
+                          <span v-else class="mcp-muted">
+                            {{ t("config.connections.mcpAbilityPending") }}
+                          </span>
+                        </dd>
+                      </div>
+                    </dl>
+                    <div v-if="mcpAbility(row.id)?.members.length" class="mcp-detail-members">
+                      <code
+                        v-for="member in mcpAbility(row.id)?.members"
+                        :key="member"
+                        class="mcp-member-chip"
+                      >
+                        {{ member }}
+                      </code>
+                    </div>
+                    <p v-else class="connections-note">
+                      {{ t("config.connections.mcpAbilityHint") }}
+                    </p>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
-          <p v-if="!rows.length">{{ t("config.connections.empty") }}</p>
+          <p v-if="!visibleRows.length">{{ t("config.connections.empty") }}</p>
+          <p v-if="tab === 'mcpServers'" class="connections-note mcp-table-note">
+            {{ t("config.connections.mcpTableHint") }}
+          </p>
         </div>
       </div>
       <div v-if="showForm" class="connections-drawer">
@@ -1573,6 +1762,11 @@ onMounted(() => void load());
         </template>
       </dl>
     </BaseModal>
+    <McpInstallDialog
+      v-if="mcpInstallOpen"
+      @close="mcpInstallOpen = false"
+      @installed="mcpInstalled"
+    />
     <ConfirmDialog
       v-if="dialog"
       :title="dialogTitle"
@@ -1818,5 +2012,76 @@ onMounted(() => void load());
     border-top: 1px solid var(--ui-panel-border);
     box-shadow: none;
   }
+}
+.mcp-row-caret {
+  display: inline-block;
+  width: 1rem;
+  color: var(--color-text-subtle);
+}
+
+.mcp-detail-row > td {
+  padding: var(--spacing-3);
+  background: var(--color-surface-2);
+}
+
+.mcp-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+
+.mcp-detail div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.mcp-detail dt {
+  color: var(--color-text-subtle);
+  font-size: var(--font-ui-note);
+}
+
+.mcp-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-member-badge,
+.mcp-member-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-family: var(--font-ui-code);
+  font-size: var(--font-ui-note);
+}
+
+.mcp-member-badge {
+  margin-left: var(--spacing-2);
+  padding: 0 var(--spacing-2);
+  color: var(--color-success);
+}
+
+.mcp-detail-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-3);
+}
+
+.mcp-member-chip {
+  padding: 0 var(--spacing-2);
+}
+
+.mcp-muted,
+.mcp-table-note {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.mcp-table-note {
+  margin-top: var(--spacing-2);
 }
 </style>
