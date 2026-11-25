@@ -147,3 +147,78 @@ async def test_suggested_rollback_targets_include_compact_member(tmp_path):
             suggestions = await turn.suggest_rollback_targets(db, row, limit=10)
         assert compact.id in suggestions
         assert ordinary.id in suggestions
+
+
+async def _stored_hitl(tmp_path, options):
+    """登记一条待审批请求并返回库文件路径；``options`` 即写路径落列的内容。"""
+    path = tmp_path / "core.sqlite"
+    async with SqliteBackend(path) as backend:
+        cm = ContextManager("agent", persistence=backend)
+        await cm.persist()
+        await cm.open_turn()
+        stored = await cm.open_hitl_request(
+            promise_id="promise",
+            ability_name="shell",
+            tool_call_id="call",
+            tool_call={"command": "git status"},
+            reason="needs approval",
+            options=options,
+            deadline_at=None,
+        )
+        assert stored.persisted
+    return path
+
+
+async def test_pending_hitl_parses_shell_remember_from_options(tmp_path):
+    """shell 审批：读面从 options 还原「批准并记住」候选，options 原样保留。"""
+    path = await _stored_hitl(
+        tmp_path,
+        {
+            "exact_key": "git status",
+            "exact_label": "git status",
+            "class_key": "git",
+            "class_label": "git *",
+        },
+    )
+    domain = SqliteReadDomain(path)
+    try:
+        (pending,) = (
+            await TurnReadStore(domain).pending_hitl(agent_id="agent", session_id=None)
+        ).items
+    finally:
+        await domain.aclose()
+    assert pending.options["exact_key"] == "git status"
+    assert pending.shell_remember is not None
+    assert (
+        pending.shell_remember.exact_key,
+        pending.shell_remember.exact_label,
+        pending.shell_remember.class_key,
+        pending.shell_remember.class_label,
+    ) == ("git status", "git status", "git", "git *")
+
+
+async def test_pending_hitl_without_options_has_no_shell_remember(tmp_path):
+    """非 shell 审批写 ``options={}``：读面给出 ``None``，不是空对象。"""
+    path = await _stored_hitl(tmp_path, {})
+    domain = SqliteReadDomain(path)
+    try:
+        (pending,) = (
+            await TurnReadStore(domain).pending_hitl(agent_id="agent", session_id=None)
+        ).items
+    finally:
+        await domain.aclose()
+    assert pending.options == {}
+    assert pending.shell_remember is None
+
+
+async def test_hitl_request_ignores_malformed_options(tmp_path):
+    """旧库脏 ``options`` 形状不符：读面置 ``None``，不打红整条读查询。"""
+    path = await _stored_hitl(tmp_path, {"exact_key": {"nested": True}, "exact_label": "x"})
+    domain = SqliteReadDomain(path)
+    try:
+        view = await TurnReadStore(domain).hitl_request(agent_id="agent", promise_id="promise")
+    finally:
+        await domain.aclose()
+    assert view is not None
+    assert view.options == {"exact_key": {"nested": True}, "exact_label": "x"}
+    assert view.shell_remember is None

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ghrah.plugin.negotiator import PythonHalfInfo, TsHalfReport, negotiate
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
 from ghrah.protocol.payloads.room import RoomSendPayload
 from ghrah.protocol.payloads.turn import (
     TurnAbortPayload,
@@ -128,6 +129,27 @@ SAMPLES: dict[str, object] = {
                 options={},
                 status="pending",
                 created_at="2026-11-20T09:00:00+00:00",
+            ),
+            HitlRequestView(
+                promise_id="promise-shell",
+                turn_id="turn",
+                ability_name="shell",
+                tool_call={},
+                reason="review",
+                options={
+                    "exact_key": "git status",
+                    "exact_label": "git status",
+                    "class_key": "git",
+                    "class_label": "git *",
+                },
+                status="pending",
+                created_at="2026-11-20T09:00:01+00:00",
+                shell_remember=ShellRememberOptions(
+                    exact_key="git status",
+                    exact_label="git status",
+                    class_key="git",
+                    class_label="git *",
+                ),
             ),
         ],
     ),

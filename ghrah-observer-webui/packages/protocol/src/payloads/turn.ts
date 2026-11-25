@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 
+import { ShellRememberOptionsSchema } from "../hitl.generated.js";
 import { ActionNodeSchema } from "./agent.js";
 
 const TurnPayloadSchema = z.object({
@@ -179,6 +180,7 @@ export const HitlRequestListViewSchema = z.object({
       resolved_at: z.string().nullable(),
       resolved_by: z.string().nullable(),
       resolution: z.unknown(),
+      shell_remember: ShellRememberOptionsSchema.nullable().optional(),
     }),
   ),
 });

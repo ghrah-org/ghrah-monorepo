@@ -441,7 +441,12 @@ it("session, history and pending approval REST views preserve the Python respons
   const history = loadSnapshot("HistoryView");
   expect(HistoryViewSchema.parse(history)).toEqual(history);
   const pending = loadSnapshot("HitlRequestListView");
-  expect(HitlRequestListViewSchema.parse(pending)).toEqual(pending);
+  const parsedPending = HitlRequestListViewSchema.parse(pending);
+  expect(parsedPending).toEqual(pending);
+  expect(parsedPending.items.find((item) => item.shell_remember)?.shell_remember?.exact_key).toBe(
+    "git status",
+  );
+  expect(parsedPending.items.find((item) => !item.shell_remember)?.shell_remember).toBeNull();
 });
 
 // NOTE: ActionChainUpdatedPayload 快照为 synthetic 样本（由 Python serialize_node

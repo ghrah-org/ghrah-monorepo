@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
+from ghrah.protocol.payloads.agent import ShellRememberOptions
 from ghrah.protocol.views.core import (
     HitlRequestListView,
     HitlRequestView,
@@ -20,6 +21,7 @@ from ghrah.protocol.views.core import (
     TurnView,
 )
 from ghrah.protocol.views.observer_room import TurnCardView, TurnDetailView, TurnStatsView
+from pydantic import ValidationError
 
 from ghrah.context.persistence import deserialize_node, serialize_node
 from ghrah.context.persistence.sqlite_read import SqliteReadDomain
@@ -159,10 +161,24 @@ async def turn_cards(
 
 
 def _hitl_view(row: aiosqlite.Row) -> HitlRequestView:
-    data = {key: row[key] for key in HitlRequestView.model_fields}
+    keys = row.keys()
+    data = {key: row[key] for key in HitlRequestView.model_fields if key in keys}
     for field in ("tool_call", "options", "resolution"):
         data[field] = json.loads(data[field])
+    data["shell_remember"] = _shell_remember_of(data["options"])
     return HitlRequestView.model_validate(data)
+
+
+def _shell_remember_of(options: Any) -> ShellRememberOptions | None:
+    """``options`` 列的唯一写入语义是 ``shell_remember.model_dump()``；非 shell 审批写 ``{}``。"""
+    if not isinstance(options, dict):
+        return None
+    if "exact_key" not in options or "exact_label" not in options:
+        return None
+    try:
+        return ShellRememberOptions.model_validate(options)
+    except ValidationError:
+        return None
 
 
 def _turn_view(row: aiosqlite.Row) -> TurnView:

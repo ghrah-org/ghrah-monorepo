@@ -15,6 +15,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
+
 AGENT_CONTROL_MEMBER_KEYS: frozenset[str] = frozenset({"conversation", "end_task"})
 """控制成员键：装配边界自己加的成员，模板与装配输入都不应显式列它们。"""
 
@@ -402,6 +404,8 @@ class HitlRequestView(BaseModel):
     resolved_at: str | None = None
     resolved_by: str | None = None
     resolution: Any = None
+    shell_remember: ShellRememberOptions | None = None
+    """从 ``options`` 解析的「批准并记住」候选；非 shell 审批为 ``None``。"""
 
 
 class HitlRequestListView(BaseModel):
