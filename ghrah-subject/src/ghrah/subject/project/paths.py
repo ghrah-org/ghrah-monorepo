@@ -108,6 +108,15 @@ class ProjectPaths:
         return self.db_dir / "rooms.sqlite3"
 
     @property
+    def chat_action_db_path(self) -> Path:
+        return self.db_dir / "chat-actions.sqlite3"
+
+    @property
+    def material_state_db_path(self) -> Path:
+        """项目业务数据源当前值及 patch 执行回执。"""
+        return self.db_dir / "material-state.sqlite3"
+
+    @property
     def action_chain_db_path(self) -> Path:
         return self.db_dir / "action-chains.sqlite3"
 

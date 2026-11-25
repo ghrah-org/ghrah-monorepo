@@ -82,6 +82,7 @@ async def test_full_assembly_all_fibers_active(
             "media_control",
             "artifact_control",
             "room",
+            "material_state",
             "recovery",
             "room_filter",
         }

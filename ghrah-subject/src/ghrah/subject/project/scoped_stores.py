@@ -6,17 +6,72 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ghrah.subject.material.state_store import MaterialStateStore
 from ghrah.subject.project.errors import ProjectArchivedError
 from ghrah.subject.project.paths import ProjectPaths
+from ghrah.subject.room.chat_action_store import ChatActionStore
 from ghrah.subject.room.models import RoomLogRecord, RoomRecord
 from ghrah.subject.room.store import RoomStore
 from ghrah.subject.task.models import TaskRecord
 from ghrah.subject.task.store import TaskStore
 
 ProjectRoots = Callable[[], Awaitable[dict[str, str]]]
+
+
+class ProjectScopedMaterialStateStore:
+    """业务数据按已认领的 Project Root 懒加载，并参与项目生命周期。"""
+
+    def __init__(self, roots: ProjectRoots) -> None:
+        self._roots = roots
+        self._stores: dict[str, MaterialStateStore] = {}
+        self._frozen: set[str] = set()
+        self._lock = asyncio.Lock()
+
+    async def store(self, project_id: str) -> MaterialStateStore:
+        """返回唯一连接；找不到项目时拒绝回落到全局数据库。"""
+        async with self._lock:
+            if project_id in self._frozen:
+                raise ProjectArchivedError(project_id)
+            locator = (await self._roots()).get(project_id)
+            if not locator:
+                raise ValueError(f"project root unavailable: {project_id}")
+            paths = ProjectPaths.from_locator(locator)
+            paths.validate_owner(project_id)
+            if project_id not in self._stores:
+                store = MaterialStateStore(paths.material_state_db_path, project_id)
+                await store.start()
+                self._stores[project_id] = store
+            return self._stores[project_id]
+
+    async def stop(self) -> None:
+        """关闭所有已打开的项目库。"""
+        async with self._lock:
+            for store in self._stores.values():
+                await store.stop()
+            self._stores.clear()
+
+    async def close_project(self, project_id: str) -> None:
+        """项目归档时关闭连接并冻结后续访问。"""
+        async with self._lock:
+            self._frozen.add(project_id)
+            store = self._stores.pop(project_id, None)
+            if store is not None:
+                await store.stop()
+
+    async def restore_project(self, project_id: str) -> None:
+        """恢复项目后惰性重开连接。"""
+        async with self._lock:
+            self._frozen.discard(project_id)
+
+    async def evict_project(self, project_id: str) -> None:
+        """永久删除后移除连接与缓存。"""
+        await self.close_project(project_id)
+        async with self._lock:
+            self._frozen.discard(project_id)
 
 
 class ProjectScopedTaskStore:
@@ -345,6 +400,11 @@ class ProjectScopedRoomStore:
         store = await self._locate(room_id)
         return [] if store is None else await store.get_log(room_id, **kwargs)
 
+    async def get_log_page(self, room_id: str, **kwargs: Any) -> list[RoomLogRecord]:
+        """按升序有界读取日志，不使用聊天窗口的尾部截取语义。"""
+        store = await self._locate(room_id)
+        return [] if store is None else await store.get_log_page(room_id, **kwargs)
+
     async def migrate_project(self, project_id: str) -> int:
         target = await self._project_store(project_id)
         if target is self._legacy:
@@ -369,3 +429,49 @@ class ProjectScopedRoomStore:
                 if pid not in self._frozen_projects
             ]
         )
+
+
+class ProjectScopedChatActionStore:
+    """Routes chat actions to a project-local SQLite database."""
+
+    def __init__(self, roots: ProjectRoots) -> None:
+        self._roots = roots
+        self._stores: dict[str, ChatActionStore] = {}
+
+    async def start(self) -> None:
+        for project_id in await self._roots():
+            await self.store(project_id)
+
+    async def stop(self) -> None:
+        for store in self._stores.values():
+            await store.stop()
+        self._stores.clear()
+
+    async def close_project(self, project_id: str) -> None:
+        """Close a project-local ChatAction database when the project archives."""
+
+        store = self._stores.pop(project_id, None)
+        if store is not None:
+            await store.stop()
+
+    async def restore_project(self, project_id: str) -> None:
+        """Reopen lazily after project restore; no eager database access."""
+
+        return None
+
+    async def evict_project(self, project_id: str) -> None:
+        """Drop cached state after permanent project deletion."""
+
+        await self.close_project(project_id)
+
+    async def store(self, project_id: str) -> ChatActionStore:
+        roots = await self._roots()
+        locator = roots.get(project_id)
+        if not locator:
+            raise ValueError(f"project root unavailable: {project_id}")
+        store = self._stores.get(project_id)
+        if store is None:
+            store = ChatActionStore(ProjectPaths.from_locator(locator).chat_action_db_path)
+            await store.start()
+            self._stores[project_id] = store
+        return store

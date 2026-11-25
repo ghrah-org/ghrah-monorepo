@@ -60,6 +60,51 @@ async def test_archived_project_stays_frozen_after_restart_until_restore(
                 {"name": "room", "project_id": project["project_id"]},
             )
         )["room"]
+
+        entry = _data(
+            await bridge_command(
+                ctx,
+                "room_send",
+                {
+                    "room_id": room["room_id"],
+                    "author": "human:user",
+                    "author_type": "human",
+                    "data": {
+                        "message": "更新需求数量",
+                        "chat_action": {
+                            "action": "requirement.update",
+                            "payload": {"change_request": "数量改为 30"},
+                        },
+                    },
+                },
+            )
+        )["entry"]
+        actions = _data(
+            await bridge_command(ctx, "chat_action_list", {"room_id": room["room_id"], "limit": 20})
+        )["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "requirement.update"
+        assert actions[0]["status"] == "sent"
+        assert actions[0]["room_log_id"] == entry["id"]
+        invalid = await bridge_command(
+            ctx,
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "human:user",
+                "author_type": "human",
+                "data": {
+                    "message": "非法动作不应落库",
+                    "chat_action": {"action": "", "payload": {}},
+                },
+            },
+        )
+        assert invalid["success"] is False
+        assert invalid["error"].startswith("invalid payload:")
+        persisted = _data(
+            await bridge_command(ctx, "chat_action_list", {"room_id": room["room_id"], "limit": 20})
+        )["actions"]
+        assert len(persisted) == 1
         archived = _data(
             await bridge_command(
                 ctx,
@@ -111,6 +156,12 @@ async def test_archived_project_stays_frozen_after_restart_until_restore(
             ]
             == room["room_id"]
         )
+        restored_actions = _data(
+            await bridge_command(ctx, "chat_action_list", {"room_id": room["room_id"], "limit": 20})
+        )["actions"]
+        assert [item["action_id"] for item in restored_actions] == [
+            item["action_id"] for item in persisted
+        ]
 
 
 async def test_project_rest_lifecycle_e2e(tmp_path: Path) -> None:

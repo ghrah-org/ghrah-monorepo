@@ -402,6 +402,16 @@ class RoomManager:
         members = [m.model_dump(mode="json") for m in existing.members]
         return _ok({"room_id": existing.room_id, "members": members, "count": len(members)})
 
+    async def get_log_page(
+        self, room_id: str, *, since_seq: int, limit: int
+    ) -> list[RoomLogRecord]:
+        """供业务消费者按序读通消息正文；引用缺失时失败，不跳过消费位置。"""
+        _room, _project, error = await self._require_room_access(room_id)
+        if error is not None:
+            raise ValueError(error)
+        records = await self._store.get_log_page(room_id, since_seq=since_seq, limit=limit)
+        return [await self._hydrate_reference(record) for record in records]
+
     async def _handle_get_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = RoomGetLogPayload.model_validate(payload)
         existing, _project, error = await self._require_room_access(p.room_id)
@@ -570,7 +580,8 @@ class RoomManager:
         async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
             row = await (
                 await db.execute(
-                    "SELECT content, sender_id, metadata FROM mm_messages WHERE message_id=?",
+                    "SELECT content, sender_id, metadata, reply_to "
+                    "FROM mm_messages WHERE message_id=?",
                     (message_id,),
                 )
             ).fetchone()
@@ -588,6 +599,10 @@ class RoomManager:
         if record.room_id not in rooms:
             raise ValueError("Message does not belong to this Room")
         data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
+        # 从 MM 读通因果关系，供页面动作将回执关联到准确的请求。
+        data.pop("reply_to", None)
+        if row[3] is not None:
+            data["reply_to"] = row[3]
         # MM metadata 顶层的 content_blocks 是人类消息块的权威副本（投递平面
         # 也从这里还原块）；日志引用只持有消息 id，回读时把块复制进 data。
         metadata_blocks = metadata.get("content_blocks")

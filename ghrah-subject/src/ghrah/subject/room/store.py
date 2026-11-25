@@ -322,6 +322,15 @@ class RoomStore:
             )
             return record, room
 
+    async def get_log_page(self, room_id: str, *, since_seq: int, limit: int) -> RoomLogList:
+        """从水位之后向前读取有界页面，供持久消费者顺序处理。"""
+        async with self._lock:
+            async with self._require_db().execute(
+                "SELECT * FROM subject_room_logs WHERE room_id=? AND seq>? ORDER BY seq LIMIT ?",
+                (room_id, since_seq, limit),
+            ) as cursor:
+                return [_row_to_log(row) for row in await cursor.fetchall()]
+
     async def get_log(
         self,
         room_id: str,

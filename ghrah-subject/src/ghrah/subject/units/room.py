@@ -9,10 +9,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ghrah.protocol.types import SendMessagePayload
+from ghrah.protocol.types import ChatActionSendPayload, SendMessagePayload
+from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
-from ghrah.subject.project.scoped_stores import ProjectScopedRoomStore
+from ghrah.subject.project.scoped_stores import (
+    ProjectScopedChatActionStore,
+    ProjectScopedRoomStore,
+)
 from ghrah.subject.room.content_blocks import resolve_content_attachments
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.runtime.service_keys import (
@@ -39,6 +43,7 @@ class RoomUnit(SubjectUnit):
         self._config = config
         self._ctx: Any | None = None
         self._store: ProjectScopedRoomStore | None = None
+        self._chat_actions: ProjectScopedChatActionStore | None = None
         self._manager: RoomManager | None = None
         self._project_manager: Any | None = None
         self._meta = UnitMeta(
@@ -74,9 +79,11 @@ class RoomUnit(SubjectUnit):
             }
 
         self._store = ProjectScopedRoomStore(self._config.persistence.db_path, project_roots)
+        self._chat_actions = ProjectScopedChatActionStore(project_roots)
         register_resource = getattr(project_manager, "register_scoped_resource", None)
         if register_resource is not None:
             register_resource(self._store, room_store=True)
+            register_resource(self._chat_actions)
 
         async def project_get(project_id: str) -> dict[str, Any] | None:
             result = await project_manager.handle_command("project_get", {"project_id": project_id})
@@ -262,10 +269,13 @@ class RoomUnit(SubjectUnit):
                         )
                         await self._store.close_project(str(project["project_id"]))
             await self._store.migrate_all()
+            if self._chat_actions is not None:
+                await self._chat_actions.start()
 
     async def stop(self) -> None:
         if self._store is not None:
             await self._store.stop()
+            await self._chat_actions.stop()
 
     async def handle_command(
         self,
@@ -285,6 +295,63 @@ class RoomUnit(SubjectUnit):
         normalized = await self._normalize_agent_identity(command, payload)
         if isinstance(normalized, dict) and normalized.get("success") is False:
             return normalized
+        if command == "chat_action_list":
+            from ghrah.protocol.types import ChatActionListPayload
+
+            try:
+                request = ChatActionListPayload.model_validate(normalized)
+            except ValidationError as error:
+                return {"success": False, "data": None, "error": f"invalid payload: {error}"}
+            room = await self._store.get(request.room_id)
+            if room is None:
+                return {"success": False, "data": None, "error": "room_not_found"}
+            store = await self._chat_actions.store(room.project_id)
+            records = await store.list(request.room_id, limit=request.limit)
+            return {
+                "success": True,
+                "data": {
+                    "actions": [record.to_wire() for record in records],
+                    "count": len(records),
+                },
+                "error": None,
+            }
+        if command == "room_send" and self._store is not None:
+            send_data = normalized.get("data")
+            if isinstance(send_data, dict) and "chat_action" in send_data:
+                try:
+                    action_payload = ChatActionSendPayload.model_validate(
+                        send_data.get("chat_action")
+                    )
+                except ValidationError as error:
+                    return {"success": False, "data": None, "error": f"invalid payload: {error}"}
+                chat_action = action_payload.action.strip()
+                if not chat_action:
+                    return {
+                        "success": False,
+                        "data": None,
+                        "error": "invalid payload: action must not be blank",
+                    }
+                room = await self._store.get(str(normalized.get("room_id") or ""))
+                if room is None:
+                    return {"success": False, "data": None, "error": "room_not_found"}
+                store = await self._chat_actions.store(room.project_id)
+                record = await store.append(
+                    project_id=room.project_id,
+                    room_id=room.room_id,
+                    action=chat_action,
+                    payload=action_payload.payload,
+                )
+                try:
+                    result = await self.service.handle_command(command, normalized)
+                except Exception as error:
+                    await store.mark_failed(record.action_id, str(error))
+                    raise
+                if result.get("success"):
+                    entry = (result.get("data") or {}).get("entry") or {}
+                    await store.mark_sent(record.action_id, str(entry.get("id") or ""))
+                else:
+                    await store.mark_failed(record.action_id, str(result.get("error") or ""))
+                return result
         return await self.service.handle_command(command, normalized)
 
     async def _normalize_agent_identity(
