@@ -109,6 +109,10 @@ export enum CommandType {
   ROOM_GET_MEMBERS = "room_get_members",
   ROOM_GET_LOG = "room_get_log",
   ROOM_SEND = "room_send",
+  CHAT_ACTION_LIST = "chat_action_list",
+  MATERIAL_STATE_REGISTER = "material_state_register",
+  MATERIAL_STATE_GET = "material_state_get",
+  MATERIAL_STATE_SYNC = "material_state_sync",
 
   SESSION_CREATE = "session_create",
   SESSION_ACTIVATE = "session_activate",
@@ -351,6 +355,13 @@ export const ROOM_COMMANDS: ReadonlySet<string> = new Set([
   CommandType.ROOM_GET_MEMBERS,
   CommandType.ROOM_GET_LOG,
   CommandType.ROOM_SEND,
+  CommandType.CHAT_ACTION_LIST,
+]);
+
+export const MATERIAL_STATE_COMMANDS: ReadonlySet<string> = new Set([
+  CommandType.MATERIAL_STATE_REGISTER,
+  CommandType.MATERIAL_STATE_GET,
+  CommandType.MATERIAL_STATE_SYNC,
 ]);
 
 export type MessageType = CommandType | EventType | SystemType;

@@ -186,6 +186,11 @@ class CommandType(StrEnum):
     ROOM_GET_MEMBERS = "room_get_members"
     ROOM_GET_LOG = "room_get_log"
     ROOM_SEND = "room_send"
+    CHAT_ACTION_LIST = "chat_action_list"
+
+    MATERIAL_STATE_REGISTER = "material_state_register"
+    MATERIAL_STATE_GET = "material_state_get"
+    MATERIAL_STATE_SYNC = "material_state_sync"
 
     # ─── 恢复类（Observer → Subject，2 个）───
     RECONCILE_NOW = "reconcile_now"

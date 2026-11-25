@@ -1,0 +1,30 @@
+{
+  "state": {
+    "project_id": "project-1",
+    "material_id": "requirement",
+    "material_version": "1",
+    "title": "需求核对",
+    "data": {
+      "quantity": 50
+    },
+    "revision": 1,
+    "updated_at": "2026-11-18T00:00:00Z"
+  },
+  "applications": [
+    {
+      "room_log_id": "log-1",
+      "room_id": "room-1",
+      "status": "applied",
+      "revision": 1,
+      "fields": [
+        {
+          "key": "quantity",
+          "label": "需求数量",
+          "value": 50
+        }
+      ],
+      "error": ""
+    }
+  ],
+  "has_more": false
+}

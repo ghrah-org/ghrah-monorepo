@@ -127,6 +127,20 @@ class RoomSendPayload(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChatActionListPayload(BaseModel):
+    """chat_action_list 命令载荷：按 Room 恢复页面动作请求。"""
+
+    room_id: str
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class ChatActionSendPayload(BaseModel):
+    """room_send.data.chat_action 的结构化内嵌模型。"""
+
+    action: str = Field(min_length=1, pattern=r"\S")
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class RoomListResultPayload(BaseModel):
     """room_list 命令结果载荷。"""
 
@@ -139,6 +153,27 @@ class RoomLogResultPayload(BaseModel):
 
     entries: list[RoomLogEntryPayload] = Field(default_factory=list)
     count: int = 0  # ─── Room 事件载荷模型 ───
+
+
+class ChatActionPayload(BaseModel):
+    """已持久化的 Workbench 页面动作请求。"""
+
+    action_id: str
+    project_id: str
+    room_id: str
+    action: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    room_log_id: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ChatActionListResultPayload(BaseModel):
+    """chat_action_list 命令结果。"""
+
+    actions: list[ChatActionPayload] = Field(default_factory=list)
+    count: int = 0
 
 
 class RoomEventPayload(BaseModel):

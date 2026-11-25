@@ -188,6 +188,16 @@ ROOM_COMMANDS: frozenset[str] = frozenset(
         CommandType.ROOM_GET_MEMBERS.value,
         CommandType.ROOM_GET_LOG.value,
         CommandType.ROOM_SEND.value,
+        CommandType.CHAT_ACTION_LIST.value,
+    }
+)
+
+
+MATERIAL_STATE_COMMANDS: frozenset[str] = frozenset(
+    {
+        CommandType.MATERIAL_STATE_REGISTER.value,
+        CommandType.MATERIAL_STATE_GET.value,
+        CommandType.MATERIAL_STATE_SYNC.value,
     }
 )
 

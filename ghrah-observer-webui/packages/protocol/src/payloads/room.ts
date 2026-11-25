@@ -93,6 +93,16 @@ export const RoomSendPayloadSchema = z.object({
   data: z.record(z.unknown()).optional().default({}),
 });
 
+export const ChatActionSendPayloadSchema = z.object({
+  action: z.string().min(1).regex(/\S/u),
+  payload: z.record(z.unknown()).optional().default({}),
+});
+
+export const ChatActionListPayloadSchema = z.object({
+  room_id: z.string(),
+  limit: z.number().int().min(1).max(1000).optional().default(200),
+});
+
 export const RoomListResultPayloadSchema = z.object({
   rooms: z.array(RoomInfoPayloadSchema).optional().default([]),
   count: z.number().int().optional().default(0),
@@ -100,6 +110,24 @@ export const RoomListResultPayloadSchema = z.object({
 
 export const RoomLogResultPayloadSchema = z.object({
   entries: z.array(RoomLogEntryPayloadSchema).optional().default([]),
+  count: z.number().int().optional().default(0),
+});
+
+export const ChatActionPayloadSchema = z.object({
+  action_id: z.string(),
+  project_id: z.string(),
+  room_id: z.string(),
+  action: z.string(),
+  payload: z.record(z.unknown()).optional().default({}),
+  status: z.string(),
+  error: z.string().optional().default(""),
+  room_log_id: z.string().nullable().optional().default(null),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const ChatActionListResultPayloadSchema = z.object({
+  actions: z.array(ChatActionPayloadSchema).optional().default([]),
   count: z.number().int().optional().default(0),
 });
 
@@ -141,6 +169,10 @@ export type RoomGetLogPayload = z.infer<typeof RoomGetLogPayloadSchema>;
 export type RoomSendPayload = z.infer<typeof RoomSendPayloadSchema>;
 export type RoomListResultPayload = z.infer<typeof RoomListResultPayloadSchema>;
 export type RoomLogResultPayload = z.infer<typeof RoomLogResultPayloadSchema>;
+export type ChatActionSendPayload = z.infer<typeof ChatActionSendPayloadSchema>;
+export type ChatActionListPayload = z.infer<typeof ChatActionListPayloadSchema>;
+export type ChatActionPayload = z.infer<typeof ChatActionPayloadSchema>;
+export type ChatActionListResultPayload = z.infer<typeof ChatActionListResultPayloadSchema>;
 export type RoomEventPayload = z.infer<typeof RoomEventPayloadSchema>;
 export type RoomDeletedEventPayload = z.infer<typeof RoomDeletedEventPayloadSchema>;
 export type RoomMemberEventPayload = z.infer<typeof RoomMemberEventPayloadSchema>;

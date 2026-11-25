@@ -5,6 +5,7 @@
 export * from "./payloads/agent.js";
 export * from "./payloads/content.js";
 export * from "./payloads/manifest.js";
+export * from "./payloads/material.js";
 export * from "./payloads/persist.js";
 export * from "./payloads/plugin.js";
 export * from "./payloads/project.js";

@@ -124,6 +124,10 @@ describe("CommandType", () => {
     "room_get_members",
     "room_get_log",
     "room_send",
+    "chat_action_list",
+    "material_state_register",
+    "material_state_get",
+    "material_state_sync",
     "session_create",
     "session_activate",
     "session_list",
@@ -448,9 +452,10 @@ describe("ROOM_COMMANDS", () => {
     "room_get_members",
     "room_get_log",
     "room_send",
+    "chat_action_list",
   ]);
 
-  it("contains exactly 12 room command values", () => {
+  it("contains exactly 13 room command values", () => {
     expect(ROOM_COMMANDS).toEqual(PYTHON_ROOM);
   });
 });

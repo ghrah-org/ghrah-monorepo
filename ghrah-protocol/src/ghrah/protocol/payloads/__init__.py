@@ -69,6 +69,15 @@ from ghrah.protocol.payloads.manifest import (  # noqa: F401
     ManifestValidatePayload,
     ManifestValidateResponsePayload,
 )
+from ghrah.protocol.payloads.material import (  # noqa: F401
+    MaterialPatchEventPayload,
+    MaterialPatchFieldPayload,
+    MaterialStateGetPayload,
+    MaterialStatePayload,
+    MaterialStateRegisterPayload,
+    MaterialStateResultPayload,
+    MaterialStateSyncPayload,
+)
 from ghrah.protocol.payloads.persist import (  # noqa: F401
     PersistDeletePayload,
     PersistListPayload,
@@ -116,6 +125,10 @@ from ghrah.protocol.payloads.project import (  # noqa: F401
     WritableWorkspaceSpec,
 )
 from ghrah.protocol.payloads.room import (  # noqa: F401
+    ChatActionListPayload,
+    ChatActionListResultPayload,
+    ChatActionPayload,
+    ChatActionSendPayload,
     RoomCreatePayload,
     RoomDeletedEventPayload,
     RoomDeletePayload,
@@ -212,6 +225,13 @@ from ghrah.protocol.payloads.workspace import (  # noqa: F401
 
 # 全部域模型符号（新增类型须同步此处，否则不出现在聚合导出面）
 __all__ = [
+    "MaterialPatchEventPayload",
+    "MaterialPatchFieldPayload",
+    "MaterialStateGetPayload",
+    "MaterialStatePayload",
+    "MaterialStateRegisterPayload",
+    "MaterialStateResultPayload",
+    "MaterialStateSyncPayload",
     "AgentIdentity",
     "AgentSnapshot",
     "AgentRuntimeSnapshot",
@@ -332,6 +352,10 @@ __all__ = [
     "RoomMemberEventPayload",
     "RoomSendPayload",
     "RoomUpdatePayload",
+    "ChatActionListPayload",
+    "ChatActionListResultPayload",
+    "ChatActionPayload",
+    "ChatActionSendPayload",
     "SendMessagePayload",
     "SessionActivatePayload",
     "SessionActivatedPayload",

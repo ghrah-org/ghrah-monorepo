@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+export * from "./payloads/material.js";
+export { MATERIAL_STATE_COMMANDS } from "./enums.js";
+
 export {
   createCommand,
   createCommandResult,
@@ -229,6 +232,14 @@ export {
   RecoveryActionSchema,
   type RegisterAbilityPayload,
   RegisterAbilityPayloadSchema,
+  type ChatActionListPayload,
+  ChatActionListPayloadSchema,
+  type ChatActionListResultPayload,
+  ChatActionListResultPayloadSchema,
+  type ChatActionPayload,
+  ChatActionPayloadSchema,
+  type ChatActionSendPayload,
+  ChatActionSendPayloadSchema,
   type RoomCreatePayload,
   RoomCreatePayloadSchema,
   type RoomDeletedEventPayload,

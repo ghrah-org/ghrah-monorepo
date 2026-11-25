@@ -19,6 +19,10 @@ import pytest
 from pydantic import BaseModel
 
 from ghrah.protocol.types import (
+    MaterialStateGetPayload,
+    MaterialStateRegisterPayload,
+    MaterialStateResultPayload,
+    MaterialStateSyncPayload,
     PluginCrashedPayload,
     PluginLifecyclePayload,
     PluginNegotiatedPayload,
@@ -56,6 +60,11 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 # 本批新增快照：名称 → Pydantic 模型（与 TS PAYLOAD_SCHEMA_MAP 同步维护）
 S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
+    "MaterialStateGetPayload": MaterialStateGetPayload,
+    "MaterialStateRegisterPayload": MaterialStateRegisterPayload,
+    "MaterialStateSyncPayload": MaterialStateSyncPayload,
+    "MaterialStateResultPayload_empty": MaterialStateResultPayload,
+    "MaterialStateResultPayload_applied": MaterialStateResultPayload,
     "PluginNegotiatePayload": PluginNegotiatePayload,
     "PluginNegotiateResultPayload": PluginNegotiateResultPayload,
     "PluginLifecyclePayload": PluginLifecyclePayload,
