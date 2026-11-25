@@ -1047,12 +1047,10 @@ class TestReceiveIntegration:
         assert [event.node["metadata"]["delivery_context"] for event in chain_events] == [
             {
                 "room_id": "room-1",
-                "project_id": "project-1",
                 "agent_id": "stable-1",
             },
             {
                 "room_id": "room-1",
-                "project_id": "project-1",
                 "agent_id": "stable-1",
             },
         ]

@@ -70,7 +70,12 @@ export const AgentEntityOperationSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("mailbox.get_message"), message_id: identifier }).strict(),
-  z.object({ type: z.enum(["mailbox.retry", "mailbox.resume"]), delivery_id: identifier }).strict(),
+  z
+    .object({
+      type: z.enum(["mailbox.retry", "mailbox.resume", "mailbox.cancel"]),
+      delivery_id: identifier,
+    })
+    .strict(),
   z
     .object({
       type: z.literal("abilities.configure"),

@@ -18,7 +18,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Mapping
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from ghrah.agents.builder import AgentBuilder
@@ -29,7 +29,7 @@ from ghrah.communication.errors import (
 from ghrah.communication.message_manager import MessageKind, MessageManager
 from ghrah.communication.registry import AgentRegistry
 from ghrah.communication.router import MessageRouter
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.context.turn import RollbackTarget
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.exceptions import CommunicationTimeoutError
 from ghrah.core.message import AgentMessage, MessageType
@@ -298,9 +298,7 @@ class SupervisorActor:
             ):
                 raise RegistryError("Agent ID is not declared in MessageManager")
             if persistence_factory is None:
-
-                def persistence_factory(config: AgentConfig) -> SqliteBackend:
-                    return SqliteBackend(self.message_manager.db_path)
+                persistence_factory = self.message_manager.context_backend
 
         if self._registry.exists(config.name):
             raise RegistryError(f"Agent already registered: {config.name}")
@@ -354,12 +352,9 @@ class SupervisorActor:
         # 有快照则 restore；仅无快照时初始化。任一步失败均 fail closed。
         try:
             if self.message_manager is not None:
-                backend = actor_handle._context_manager.persistence
-                if (
-                    not isinstance(backend, SqliteBackend)
-                    or backend.db_path.resolve() != self.message_manager.db_path
-                ):
-                    raise ValueError("Persistent messaging requires same-file SqliteBackend")
+                self.message_manager.validate_context_backend(
+                    actor_handle._context_manager.persistence
+                )
             recovery_mode = await self._prepare_agent_persistence(
                 actor_handle, config.effective_agent_id
             )
@@ -647,7 +642,38 @@ class SupervisorActor:
             message, result.content, content_blocks=result.metadata.get("content_blocks")
         )
 
-    async def _accept_input(self, message: AgentMessage) -> Any:
+    async def accept(
+        self,
+        *,
+        target: str,
+        content: str,
+        sender: str = "user",
+        metadata: dict[str, Any] | None = None,
+        content_blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
+    ) -> Any:
+        """持久受理输入并立即返回当前投递投影。"""
+        if self.message_manager is None:
+            raise RuntimeError("Durable message manager is required")
+        return await self._accept_input(
+            AgentMessage(
+                sender=sender,
+                recipient=target,
+                content=content,
+                metadata=dict(metadata or {}),
+                content_blocks=content_blocks,
+            ),
+            delivery_policy=delivery_policy,
+            await_reply=False,
+        )
+
+    async def _accept_input(
+        self,
+        message: AgentMessage,
+        *,
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
+    ) -> Any:
         manager = self.message_manager
         target = message.recipient
         target_id = (
@@ -672,7 +698,7 @@ class SupervisorActor:
             **message.metadata,
             "message_type": message.type.value,
             "content_blocks": blocks,
-            "return_reply": True,
+            "return_reply": await_reply,
         }
         key = str(meta.pop("request_id", "")) or message.id
         if source or message.sender in manager.agent_ids:
@@ -682,6 +708,8 @@ class SupervisorActor:
                 content=message.content,
                 kind=MessageKind.REQUEST,
                 idempotency_key=f"ingress:{key}",
+                delivery_policy=delivery_policy,
+                await_reply=await_reply,
                 metadata=meta,
             )
         return await manager.send_external(
@@ -689,6 +717,8 @@ class SupervisorActor:
             recipient_ids=(target_id,),
             content=message.content,
             idempotency_key=f"ingress:{key}",
+            delivery_policy=delivery_policy,
+            await_reply=await_reply,
             metadata=meta,
         )
 
@@ -999,6 +1029,32 @@ class SupervisorActor:
         """
         handle = await self.get_agent_handle(agent_name)
         await handle.delete_session(session_id)
+
+    async def abort_turn(
+        self,
+        agent_name: str,
+        *,
+        turn_id: str | None = None,
+        session_id: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """请求运行中的 Agent 中止指定轮次。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.abort_turn(turn_id=turn_id, session_id=session_id, reason=reason)
+
+    async def rollback_turn(
+        self, agent_name: str, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中回滚轮次。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.rollback_turn(turn_id=turn_id, target=target, node_id=node_id)
+
+    async def preview_rollback(
+        self, agent_name: str, *, turn_id: str, target: RollbackTarget, node_id: str | None = None
+    ) -> dict[str, Any]:
+        """在 Agent 的执行队列中计算只读回滚预览。"""
+        handle = await self.get_agent_handle(agent_name)
+        return await handle.preview_rollback(turn_id=turn_id, target=target, node_id=node_id)
 
     async def create_branch(
         self,

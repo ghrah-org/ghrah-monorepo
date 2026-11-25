@@ -7,16 +7,24 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from ghrah.context.persistence.catalog import ContextChainMeta
 from ghrah.context.persistence.changes import ContextChanges
 from ghrah.context.persistence.checkpoint import ContextCheckpoint, SnapshotPayloads
+
+if TYPE_CHECKING:
+    from ghrah.context.turn_store import TurnStore
 
 __all__ = ["PersistenceBackend", "SnapshotPayloads"]
 
 
 class PersistenceBackend(ABC):
     """按 Agent 保存多 Session 拓扑的异步持久化接口。"""
+
+    #: 同一存储域的轮次读写能力；由装配层在同一后端上挂载，``None`` 表示该后端
+    #: 不提供持久轮次。``ContextManager`` 只经此属性访问轮次存储。
+    turn_store: TurnStore | None = None
 
     @abstractmethod
     async def apply_changes(self, changes: ContextChanges) -> None:

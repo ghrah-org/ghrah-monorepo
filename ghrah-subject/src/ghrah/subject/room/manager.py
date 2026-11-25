@@ -16,12 +16,11 @@ ValidationError 收窄；纯 store + 回调，不依赖 SubjectContext，便于�
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
-import aiosqlite
+from ghrah.protocol.errors import ApiError
 from ghrah.protocol.types import (
     RoomCreatePayload,
     RoomDeletePayload,
@@ -35,11 +34,15 @@ from ghrah.protocol.types import (
     RoomSubjectType,
     RoomUpdatePayload,
 )
+from ghrah.protocol.views.observer_room import (
+    RoomFactsQuery,
+    RoomTranscriptView,
+    TranscriptFactsView,
+)
 from pydantic import ValidationError
 
 from ghrah.subject.errors import StableError
 from ghrah.subject.project.errors import ProjectArchivedError
-from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.content_blocks import (
     CONTENT_TEXT_REQUIRED,
     validate_content_blocks,
@@ -57,14 +60,19 @@ from ghrah.subject.room.store import (
     RoomArchivedError,
     RoomStore,
 )
+from ghrah.subject.room.transcript import RoomLogFacts, room_facts_query
 
 logger = logging.getLogger(__name__)
 
 OnEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 ProjectExists = Callable[[str], Awaitable[bool]]
 ProjectLookup = Callable[[str], Awaitable[dict[str, Any] | None]]
-Deliver = Callable[[str, str, str, str, list[dict[str, Any]] | None], Awaitable[dict[str, Any]]]
-"""deliver(target, sender, content, room_id, blocks) → command_result。
+ReadRoomFacts = Callable[[str, str, RoomFactsQuery], Awaitable[TranscriptFactsView]]
+Deliver = Callable[
+    [str, str, str, str, list[dict[str, Any]] | None, Literal["inject", "queue"]],
+    Awaitable[dict[str, Any]],
+]
+"""deliver(target, sender, content, room_id, blocks, delivery_policy) → command_result。
 
 room_id 随投递写入消息 metadata（AgentMessage.metadata.room_id）→ 链节点
 messages_delta，供回复归属推导（Room Filter）消费。``blocks`` 为经校验的
@@ -104,6 +112,7 @@ class RoomManager:
         project_exists: ProjectExists | None = None,
         project_get: ProjectLookup | None = None,
         deliver: Deliver | None = None,
+        read_facts: ReadRoomFacts | None = None,
         publish: Callable[[RoomRecord, RoomSendPayload], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self._store = store
@@ -111,6 +120,7 @@ class RoomManager:
         self._project_exists = project_exists
         self._project_get = project_get
         self._deliver = deliver
+        self._read_facts = read_facts
         self._publish = publish
 
     @property
@@ -404,15 +414,17 @@ class RoomManager:
 
     async def _handle_get_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = RoomGetLogPayload.model_validate(payload)
-        existing, _project, error = await self._require_room_access(p.room_id)
+        room, project, error = await self._require_room_access(p.room_id)
         if error is not None:
             return error
+        assert room is not None
         records = await self._store.get_log(p.room_id, since_seq=p.since_seq, limit=p.limit)
+        facts = await self._room_facts(room, project, room_facts_query(room, records))
         entries: list[dict[str, Any]] = []
         dropped = 0
         for record in records:
             try:
-                entries.append((await self._hydrate_reference(record)).to_wire())
+                entries.append(facts.hydrate(record).to_wire())
             except ValueError:
                 # Room 日志是投影，正文权威在 MM。单条引用失配（源消息被回收、
                 # 或库被单独恢复导致不一致）不应让整个列表不可读。
@@ -431,6 +443,8 @@ class RoomManager:
         if error is not None:
             return error
         assert room is not None
+        if p.delivery_policy == "inject" and p.author_type != RoomSubjectType.HUMAN:
+            return _err("delivery_policy_not_allowed")
         # 写时校验：author 合法 = human 或 room 成员 agent
         if p.author_type == RoomSubjectType.AGENT and not any(
             m.subject == p.author for m in room.members
@@ -500,6 +514,7 @@ class RoomManager:
                         sender=p.author,
                         content=content,
                         blocks=blocks,
+                        delivery_policy=p.delivery_policy,
                     )
                 )
             except RuntimeError:
@@ -528,10 +543,11 @@ class RoomManager:
         sender: str,
         content: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
     ) -> None:
         try:
             result = await self._deliver(  # type: ignore[misc]
-                target, sender, content, room_id, blocks
+                target, sender, content, room_id, blocks, delivery_policy
             )
         except Exception:
             logger.exception("room delivery failed: target=%s sender=%s", target, sender)
@@ -558,62 +574,49 @@ class RoomManager:
 
     # ─── send 收敛点（双路径共用：room_send 命令 + Core send ability serial） ───
 
-    async def _hydrate_reference(self, record: RoomLogRecord) -> RoomLogRecord:
-        """从 Core MM 权威读通正文，Room 日志仅持消息引用。"""
-        message_id = record.data.get("mm_message_id")
-        if not message_id:
-            return record
-        room, project, error = await self._require_room_access(record.room_id)
-        if error or project is None or room is None:
-            raise ValueError(error or "Room project unavailable")
-        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
-        async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
-            row = await (
-                await db.execute(
-                    "SELECT content, sender_id, metadata FROM mm_messages WHERE message_id=?",
-                    (message_id,),
-                )
-            ).fetchone()
-            deliveries = await (
-                await db.execute(
-                    "SELECT delivery_id, recipient_id, state, error, blocked_reason "
-                    "FROM mm_deliveries WHERE message_id=? ORDER BY seq",
-                    (message_id,),
-                )
-            ).fetchall()
-        if row is None or row[1] not in (record.author, f"human:{record.author}"):
-            raise ValueError("Room message reference is missing or has a different author")
-        metadata = json.loads(row[2])
-        rooms = metadata.get("room_ids") or [metadata.get("room_id")]
-        if record.room_id not in rooms:
-            raise ValueError("Message does not belong to this Room")
-        data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
-        # MM metadata 顶层的 content_blocks 是人类消息块的权威副本（投递平面
-        # 也从这里还原块）；日志引用只持有消息 id，回读时把块复制进 data。
-        metadata_blocks = metadata.get("content_blocks")
-        blocks: list[dict[str, Any]] | None = (
-            metadata_blocks if isinstance(metadata_blocks, list) and metadata_blocks else None
+    async def _room_facts(
+        self,
+        room: RoomRecord,
+        project: dict[str, Any] | None,
+        query: RoomFactsQuery,
+    ) -> RoomLogFacts:
+        locator = str((project or {}).get("project_root_locator") or "")
+        if self._read_facts is None or not locator:
+            return RoomLogFacts(TranscriptFactsView())
+        if not (query.messages or query.nodes or query.active_agent_ids):
+            return RoomLogFacts(TranscriptFactsView())
+        facts = await self._read_facts(room.project_id, locator, query)
+        return RoomLogFacts(facts)
+
+    async def hydrate_log_entry(
+        self,
+        room: RoomRecord,
+        project: dict[str, Any],
+        entry: RoomLogRecord,
+    ) -> RoomLogRecord:
+        """从已核验的 Room 中补全消息回执。"""
+        facts = await self._room_facts(room, project, room_facts_query(room, [entry]))
+        return facts.hydrate(entry)
+
+    async def transcript(
+        self,
+        *,
+        project_id: str,
+        project: dict[str, Any],
+        room_id: str,
+        before_seq: int | None,
+        since_seq: int | None,
+        limit: int,
+    ) -> RoomTranscriptView | None:
+        """读取指定项目的 Room 页，再批取该页引用的权威事实。"""
+        page = await self._store.get_log_page(
+            room_id, project_id=project_id, before_seq=before_seq, since_seq=since_seq, limit=limit
         )
-        if blocks is not None:
-            data["content_blocks"] = blocks
-        if metadata.get("room_has_message", True):
-            data["message"] = row[0]
-        elif blocks is not None:
-            # 纯块消息：正文留空，不把受理时的兜底 JSON 当正文回显。
-            data.pop("message", None)
-        if metadata.get("targets"):
-            data["targets"] = metadata["targets"]
-        data["deliveries"] = [
-            {
-                "delivery_id": d[0],
-                "recipient_id": d[1],
-                "state": "blocked" if d[4] else d[2],
-                "error": d[3],
-                "blocked_reason": d[4],
-            }
-            for d in deliveries
-        ]
-        return record.model_copy(update={"data": data})
+        if page is None:
+            return None
+        query = room_facts_query(page.room, page.entries, include_turns=True)
+        facts = await self._room_facts(page.room, project, query)
+        return facts.transcript(page)
 
     async def append_log(
         self,
@@ -624,12 +627,14 @@ class RoomManager:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """分配 seq → 落库 → 广播 ROOM_LOG_APPENDED → 返回 _ok({entry})。"""
-        _room, _project, error = await self._require_room_access(room_id)
+        room, project, error = await self._require_room_access(room_id)
         if error is not None:
             return error
+        assert room is not None
         data = dict(data or {})
         message_id = data.get("mm_message_id")
         reference_id = f"mm:{message_id}:{room_id}" if message_id else None
+        facts = RoomLogFacts(TranscriptFactsView())
         if reference_id:
             data.pop("message", None)
             candidate = make_room_log_record(
@@ -637,19 +642,21 @@ class RoomManager:
             )
             candidate.id = reference_id
             try:
-                await self._hydrate_reference(candidate)
-            except (ValueError, aiosqlite.Error) as exc:
+                facts = await self._room_facts(room, project, room_facts_query(room, [candidate]))
+                facts.hydrate(candidate)
+            except (ValueError, ApiError) as exc:
                 return _err(str(exc))
-            existing = await self._store.get_log_by_id(room_id, reference_id)
-            if existing:
-                return _ok({"entry": (await self._hydrate_reference(existing)).to_wire()})
+
+        created = None
 
         def make_record(seq: int) -> RoomLogRecord:
+            nonlocal created
             record = make_room_log_record(
                 room_id=room_id, seq=seq, author=author, author_type=author_type, data=data
             )
             if reference_id:
                 record.id = reference_id
+            created = record
             return record
 
         try:
@@ -658,9 +665,11 @@ class RoomManager:
             return _err("resource_archived")
         if result is None:
             return _err(f"room not found: {room_id}")
-        record: RoomLogRecord = await self._hydrate_reference(result[0])
-        await self._emit("room_log_appended", {"entry": record.to_wire()})
-        return _ok({"entry": record.to_wire()})
+        entry = facts.hydrate(result[0]).to_wire()
+        # Store 对首写返回 factory 生成的对象，对幂等重放返回已存记录。
+        if result[0] is created:
+            await self._emit("room_log_appended", {"entry": entry})
+        return _ok({"entry": entry})
 
     # ─── send ability 支撑（Core 侧 recipients 解析用） ───
 

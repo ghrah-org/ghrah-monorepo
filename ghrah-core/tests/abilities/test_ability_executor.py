@@ -30,6 +30,7 @@ from ghrah.ability.execution.executor import AbilityExecutor, LocalAbilityExecut
 from ghrah.ability.execution.hooks import Hook, HookPoint, HookResult
 from ghrah.ability.execution.invocation import OperationCall
 from ghrah.chat.content import ToolCallBlock
+from ghrah.context.turn import TurnRevokedError
 from ghrah.core.event_publisher import EventPublisher, NullEventPublisher
 from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent
 from ghrah.core.hitl import HITLPromiseRegistry
@@ -1106,3 +1107,32 @@ async def test_shell_remember_reaches_wire_payload(command, category):
     assert wire.shell_remember.exact_key == command
     assert wire.shell_remember.class_key == category
     assert wire.tool_args == {"command": command}
+
+
+class _RevokedAbility(Ability):
+    """模拟中止期间的执行权失效。"""
+
+    @property
+    def name(self) -> str:
+        return "revoked_ability"
+
+    async def execute(self, call: OperationCall, services: ExecutionServices) -> ActionResult:
+        raise TurnRevokedError("turn is no longer active")
+
+    def get_hooks(self) -> list[Hook]:
+        return []
+
+
+async def test_execute_tool_calls_propagates_turn_revoked():
+    """中止不得折算成工具失败：并行 tool_calls 的吊销信号必须原样上抛。"""
+    executor = LocalAbilityExecutor(agent_name="test-agent")
+    mock_cm = MagicMock()
+    mock_cm.get_current_state.return_value = {}
+    with pytest.raises(TurnRevokedError):
+        await executor.execute_tool_calls(
+            tool_calls=[ToolCallBlock(name="revoked_ability", arguments={}, id="call_revoked")],
+            abilities={"revoked_ability": _RevokedAbility()},
+            accumulated_data={},
+            context_manager=mock_cm,
+            invocation_factory=_invocation_factory(executor, mock_cm),
+        )

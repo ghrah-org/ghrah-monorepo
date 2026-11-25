@@ -80,6 +80,8 @@ from ghrah.ability.surface.config import (
 )
 from ghrah.communication.errors import RegistryError
 from ghrah.communication.supervisor import SupervisorActor
+from ghrah.context.manager import ContextManager
+from ghrah.context.turn import RollbackError
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
 from ghrah.core.events import (
@@ -99,6 +101,9 @@ from ghrah.core.events import (
     SessionArchivedEvent,
     SessionCreatedEvent,
     SessionDeletedEvent,
+    TurnClosedEvent,
+    TurnOpenedEvent,
+    TurnWaitingHitlEvent,
 )
 from ghrah.core.hitl import HITLPromiseRegistry
 from ghrah.core.host_command_bridge import HostCommandBridge
@@ -277,7 +282,6 @@ class _UnitMeta:
     routes: _RouteSpec
 
 
-# Core 管理命令：CommandType 的 .value 字符串
 # Supervisor 的恢复口径（memory/initialized/restored）与 wire 契约
 # （``AgentStartView.recovery_mode`` 只认 created/resumed）不是同一套词表。
 _WIRE_RECOVERY_MODES = {
@@ -309,6 +313,8 @@ _COMMANDS: frozenset[str] = frozenset(
         CommandType.EXECUTE_ABILITY.value,
         CommandType.AGENT_COMPACT_CONTEXT.value,
         CommandType.AGENT_RESET.value,
+        CommandType.TURN_ABORT.value,
+        CommandType.TURN_ROLLBACK.value,
         CommandType.CREATE_AGENT_ASSEMBLY.value,
         CommandType.GET_AGENT_CONFIG.value,
         CommandType.START_AGENT_ASSEMBLY.value,
@@ -345,6 +351,9 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
     event_type_map: dict[str, str] = {
         CoreEventType.HITL_REQUEST.value: "hitl_request",
         CoreEventType.HITL_RESOLVED.value: "hitl_resolved",
+        CoreEventType.TURN_OPENED.value: "turn_opened",
+        CoreEventType.TURN_WAITING_HITL.value: "turn_waiting_hitl",
+        CoreEventType.TURN_CLOSED.value: "turn_closed",
         CoreEventType.ACTION_CHAIN_UPDATED.value: "action_chain_updated",
         CoreEventType.AGENT_ERROR.value: "agent_error",
         CoreEventType.AGENT_RESPONSE.value: "agent_response",
@@ -374,6 +383,9 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
                 "context": event.context,
                 "promise_id": event.promise_id,
                 "reason": event.reason,
+                "turn_id": event.turn_id,
+                "delivery_id": event.delivery_id,
+                "deadline_at": event.deadline_at,
                 "shell_remember": event.shell_remember.model_dump()
                 if event.shell_remember is not None
                 else None,
@@ -386,7 +398,27 @@ def _core_event_to_dict(event: CoreEvent) -> tuple[str, dict[str, Any]]:
                 "ability_name": event.ability_name,
                 "tool_call_id": event.tool_call_id,
                 "status": event.status,
+                "turn_id": event.turn_id,
             }
+        )
+    elif isinstance(event, TurnOpenedEvent):
+        payload.update(
+            turn_id=event.turn_id,
+            session_id=event.session_id,
+            status=event.status,
+            opener_delivery_id=event.opener_delivery_id,
+        )
+    elif isinstance(event, TurnWaitingHitlEvent):
+        payload.update(
+            turn_id=event.turn_id, session_id=event.session_id, promise_id=event.promise_id
+        )
+    elif isinstance(event, TurnClosedEvent):
+        payload.update(
+            turn_id=event.turn_id,
+            session_id=event.session_id,
+            status=event.status,
+            closing_kind=event.closing_kind,
+            end_node_id=event.end_node_id,
         )
     elif isinstance(event, ActionChainUpdatedEvent):
         payload.update({"node": event.node, "branch": event.branch})
@@ -573,6 +605,8 @@ class CoreUnit:
             CommandType.SESSION_LIST.value: self._handle_session_list,
             CommandType.SESSION_ARCHIVE.value: self._handle_session_archive,
             CommandType.SESSION_DELETE.value: self._handle_session_delete,
+            CommandType.TURN_ABORT.value: self._handle_turn_abort,
+            CommandType.TURN_ROLLBACK.value: self._handle_turn_rollback,
             CommandType.BRANCH_CREATE.value: self._handle_branch_create,
             CommandType.BRANCH_ACTIVATE.value: self._handle_branch_activate,
             CommandType.BRANCH_LIST.value: self._handle_branch_list,
@@ -646,11 +680,6 @@ class CoreUnit:
             HostCommandPort(HostCommandBridge(serial)) if callable(serial) else None
         )
 
-        if (
-            self._config.message_manager is not None
-            and self._config.message_manager.project_id != self._config.project_id
-        ):
-            raise ValueError("MessageManager project does not match CoreUnit")
         # 装配模式：一次选择同时决定能力目录、工具实例与 Skill 读取服务。
         # 只属于旧模式的可写入口由 builtin 模式显式拒绝。
         assembly = AbilityAssembly.select(
@@ -695,7 +724,7 @@ class CoreUnit:
             startup_materializer = build_startup_materializer(
                 store=self._config.ability_store,
                 source=assembly.source,
-                project_id=self._config.project_id,
+                scope_id=self._config.project_id,
                 policy=self._config.ability_grant_policy,
                 workspace_root=self._config.workspace_root,
                 auto_approve_abilities=self._config.auto_approve_abilities,
@@ -1589,6 +1618,19 @@ class CoreUnit:
             if sp.content_blocks
             else None
         )
+        if sp.delivery_policy == "inject":
+            from ghrah.core.message_acceptance import message_acceptance_view
+
+            accepted = await supervisor.accept(
+                target=sp.target,
+                content=sp.content,
+                sender=sp.sender,
+                metadata=sp.metadata,
+                content_blocks=content_blocks,
+                delivery_policy="inject",
+            )
+            receipt = message_acceptance_view(accepted)
+            return self._ok(receipt.model_dump(mode="json"))
         result = await supervisor.send(
             target=sp.target,
             content=sp.content,
@@ -1891,24 +1933,32 @@ class CoreUnit:
     # HITL 命令
     # ----------------------------------------------------------------
 
+    async def _is_final_hitl(self, promise_id: str) -> bool:
+        """识别本作用域已结束的 promise，保留其它单元的待审批命令穿透。"""
+        try:
+            if self._config.message_manager is not None:
+                return await self._config.message_manager.is_final_hitl_request(promise_id)
+            supervisor = self._require_supervisor()
+            if isinstance(supervisor, SupervisorActor):
+                for agent in await supervisor.list_agents():
+                    handle = await supervisor.get_agent_handle_by_id(agent["agent_id"])
+                    cm = getattr(handle, "_context_manager", None)
+                    if isinstance(cm, ContextManager):
+                        result = await cm.read_hitl_request(promise_id)
+                        if result.persisted:
+                            return result.status not in (None, "pending")
+        except Exception:
+            logger.warning("Could not read final HITL state for %s", promise_id, exc_info=True)
+        return False
+
     async def _handle_hitl_response(
         self, payload: dict[str, Any], cmd_ctx: Any
     ) -> dict[str, Any] | None:
-        """hitl_response — 审批响应解析（promise 优先，三元组回退）。
+        """按 promise 或兼容三元组定位审批，持久裁定提交后才唤醒执行器。
 
-        promise 路径：凭 promise_id 从 unit 级注册表翻译回
-        (agent_name, ability_name, tool_call_id) 再 resolve——真实链路
-        Observer 只回传 promise_id。三元组路径：直接按单体字段集定位
-        （存量调用方兼容）。两路皆 miss 时显式失败（不 resolve 任何
-        future，不伪装成功）；拒绝时把 UI 收集的 reason 并入
-        HITLResult.result 透传给 LLM。resolve 成功后发布
-        hitl_resolved 事件（Observer 据此清除审批卡片）。
-
-        多 cluster 穿透：promise 注册表是 unit 级单例，promise 归属唯一
-        持有它的 CoreUnit；本 unit 未持有且无三元组回退时返回 ``None``
-        穿透给下一个 CoreUnit（宿主 serial「返回 None = 不是我的」约定），
-        而非以错误回执短路命令链——否则先挂载的 cluster 会拦截其它
-        cluster 的审批响应。全部 miss 时由宿主兜底 Unknown command。
+        注册表用于定位进程内等待者。无法在本单元定位的 promise 返回 ``None``，
+        由宿主继续分发到其它 CoreUnit。已持久化的终态按幂等回执返回。
+        人工拒绝理由随裁定传递给执行器。
         """
         supervisor = self._require_supervisor()
         hp = HITLResponsePayload.model_validate(payload)
@@ -1919,7 +1969,9 @@ class CoreUnit:
         tool_call_id = hp.tool_call_id
         promise_id = hp.promise_id
         if promise_id:
-            triplet = self._hitl_promises.resolve(promise_id)
+            triplet = self._hitl_promises.lookup(promise_id)
+            if triplet is None and await self._is_final_hitl(promise_id):
+                return self._ok({"resolved": False, "status": "already_resolved"})
             if triplet is None and not (agent_name and ability_name and tool_call_id):
                 logger.debug(
                     "hitl_response: promise '%s' not held by this CoreUnit; "
@@ -1936,6 +1988,33 @@ class CoreUnit:
         result: Any = hp.result
         if not hp.approved and hp.reason and result is None:
             result = {"reason": hp.reason}
+
+        active_promise = promise_id or self._hitl_promises.lookup_promise(
+            agent_name, ability_name, tool_call_id
+        )
+        turn_id = None
+        durably_resolved = False
+        cm = getattr(agent_handle, "_context_manager", None)
+        if (
+            isinstance(cm, ContextManager)
+            and cm.persistence is not None
+            and cm.persistence.turn_store is not None
+        ):
+            if active_promise is None:
+                return self._err("No pending HITL request matches the response")
+            stored = await cm.resolve_hitl_request(
+                active_promise, approved=hp.approved, resolved_by=None, resolution=result
+            )
+            if stored.error is not None:
+                return self._err("Could not confirm persistent HITL decision")
+            if not stored.persisted:
+                return self._err("HITL request not found")
+            if not stored.changed:
+                return self._ok({"resolved": False, "status": "already_resolved"})
+            turn_id = stored.turn_id
+            durably_resolved = stored.changed
+        if active_promise:
+            self._hitl_promises.remove(active_promise)
 
         executor = getattr(agent_handle, "_ability_executor", None)
         if executor is not None and hasattr(executor, "receive_hitl_response"):
@@ -1954,15 +2033,17 @@ class CoreUnit:
             )
             resolved = True
 
+        resolved = resolved or durably_resolved
         if resolved:
             self._emit_event(
                 EventType.HITL_RESOLVED.value,
                 {
                     "agent_name": agent_name,
-                    "promise_id": promise_id,
+                    "promise_id": active_promise,
                     "ability_name": ability_name,
                     "tool_call_id": tool_call_id,
                     "status": "approved" if hp.approved else "rejected",
+                    "turn_id": turn_id,
                 },
             )
 
@@ -2017,6 +2098,51 @@ class CoreUnit:
         self._validate_agent(sp.agent_id, sp.agent_name)
         await supervisor.delete_session(agent_name=sp.agent_name, session_id=sp.session_id)
         return self._ok({"session_id": sp.session_id, "deleted": True})
+
+    async def _handle_turn_abort(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        turn_id = payload.get("turn_id")
+        session_id = payload.get("session_id")
+        reason = payload.get("reason", "")
+        if (
+            not isinstance(payload.get("agent_id"), str)
+            or not isinstance(payload.get("agent_name"), str)
+            or (turn_id is not None and (not isinstance(turn_id, str) or not turn_id))
+            or (session_id is not None and (not isinstance(session_id, str) or not session_id))
+            or not isinstance(reason, str)
+        ):
+            return self._err("invalid_abort_request")
+        self._validate_agent(payload["agent_id"], payload["agent_name"])
+        supervisor = self._require_supervisor()
+        data = await supervisor.abort_turn(
+            payload["agent_name"], turn_id=turn_id, session_id=session_id, reason=reason
+        )
+        return self._ok(data)
+
+    async def _handle_turn_rollback(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
+        turn_id = payload.get("turn_id")
+        target = payload.get("target")
+        node_id = payload.get("node_id")
+        dry_run = payload.get("dry_run")
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or target not in ("base", "node")
+            or (node_id is not None and not isinstance(node_id, str))
+            or not isinstance(dry_run, bool)
+        ):
+            return self._err("invalid_rollback_target")
+
+        self._validate_agent(payload["agent_id"], payload["agent_name"])
+        supervisor = self._require_supervisor()
+        operation = supervisor.preview_rollback if dry_run else supervisor.rollback_turn
+        try:
+            return self._ok(
+                await operation(
+                    payload["agent_name"], turn_id=turn_id, target=target, node_id=node_id
+                )
+            )
+        except RollbackError as exc:
+            return {**self._err(str(exc)), "details": exc.details}
 
     async def _handle_branch_create(self, payload: dict[str, Any], cmd_ctx: Any) -> dict[str, Any]:
         supervisor = self._require_supervisor()

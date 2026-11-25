@@ -1,0 +1,7 @@
+{
+  "project_id": "project",
+  "agent_id": "agent",
+  "turn_id": "turn",
+  "target": "node",
+  "node_id": "node"
+}

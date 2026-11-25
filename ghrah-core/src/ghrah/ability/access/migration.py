@@ -95,9 +95,9 @@ class MigrationResult:
     already_migrated: bool
 
 
-def _migration_actor(project_id: str) -> AccessIdentity:
+def _migration_actor(scope_id: str) -> AccessIdentity:
     """迁移操作员身份；来源与主体都固定为 ``migration``。"""
-    return AccessIdentity(project_id, MIGRATION_SOURCE, MIGRATION_SOURCE, True, MIGRATION_SOURCE)
+    return AccessIdentity(scope_id, MIGRATION_SOURCE, MIGRATION_SOURCE, True, MIGRATION_SOURCE)
 
 
 def _alias_for(catalog: Mapping[str, Any], package: str) -> str:
@@ -135,7 +135,7 @@ async def migrate_agent(
     entries = list(grants)
     if not entries:
         raise MigrationError(f"agent '{agent}' 的迁移快照没有可写入的获授事实")
-    actor = _migration_actor(store.project_id)
+    actor = _migration_actor(store.scope_id)
     await store.ensure_agent(actor, agent)
     catalog = load_ability_definitions()
     requested_aliases = tuple(_alias_for(catalog, entry.package) for entry in entries)

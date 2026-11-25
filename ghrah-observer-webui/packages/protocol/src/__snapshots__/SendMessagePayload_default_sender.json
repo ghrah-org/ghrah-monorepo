@@ -3,5 +3,6 @@
   "agent_id": "agent-001",
   "target": "agent-1",
   "content": "hello",
-  "sender": "user"
+  "sender": "user",
+  "delivery_policy": "queue"
 }

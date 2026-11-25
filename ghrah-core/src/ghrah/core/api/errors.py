@@ -18,6 +18,7 @@ from ghrah.protocol.problem import Problem, ProblemCode
 from pydantic import ValidationError
 
 from ghrah.ability.access import AccessError as AbilityAccessError
+from ghrah.context.persistence.sqlite_read import StorageScopeMismatchError
 from ghrah.core.read.ability import AbilityConflictError, AbilityUnavailableError
 from ghrah.core.read.ability_catalog import CatalogError
 from ghrah.core.read.chain import ChainDatabaseUnavailableError
@@ -70,7 +71,7 @@ def translate(capability: str) -> Iterator[None]:
         raise CoreApiError(
             Problem.make(ProblemCode.NOT_FOUND, capability=capability, detail=str(exc)),
         ) from exc
-    except MailboxProjectMismatchError as exc:
+    except (MailboxProjectMismatchError, StorageScopeMismatchError) as exc:
         raise CoreApiError(
             Problem.make(
                 ProblemCode.FAILED_PRECONDITION,

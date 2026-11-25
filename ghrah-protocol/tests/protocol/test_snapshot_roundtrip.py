@@ -18,6 +18,14 @@ from typing import TypeVar
 import pytest
 from pydantic import BaseModel
 
+from ghrah.protocol.payloads.room import RoomSendPayload
+from ghrah.protocol.payloads.turn import (
+    TurnAbortPayload,
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnRollbackPayload,
+    TurnWaitingHitlPayload,
+)
 from ghrah.protocol.types import (
     PluginCrashedPayload,
     PluginLifecyclePayload,
@@ -42,6 +50,17 @@ from ghrah.protocol.types import (
     TaskVerificationGapsPayload,
     TaskVerifyPayload,
 )
+from ghrah.protocol.views.core import (
+    DeliveryAcceptanceView,
+    DeliveryQueueEntryView,
+    DeliveryQueueView,
+    DeliveryView,
+    HistoryView,
+    HitlRequestListView,
+    MessageAcceptanceView,
+    SessionCatalogView,
+)
+from ghrah.protocol.views.observer_room import RoomTranscriptView, TurnDetailView
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -56,6 +75,22 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 # 本批新增快照：名称 → Pydantic 模型（与 TS PAYLOAD_SCHEMA_MAP 同步维护）
 S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
+    "DeliveryView": DeliveryView,
+    "DeliveryAcceptanceView": DeliveryAcceptanceView,
+    "DeliveryQueueEntryView": DeliveryQueueEntryView,
+    "DeliveryQueueView": DeliveryQueueView,
+    "SessionCatalogView": SessionCatalogView,
+    "HistoryView": HistoryView,
+    "HitlRequestListView": HitlRequestListView,
+    "TurnDetailView": TurnDetailView,
+    "RoomTranscriptView": RoomTranscriptView,
+    "MessageAcceptanceView": MessageAcceptanceView,
+    "TurnAbortPayload": TurnAbortPayload,
+    "TurnRollbackPayload": TurnRollbackPayload,
+    "RoomSendPayload": RoomSendPayload,
+    "TurnOpenedPayload": TurnOpenedPayload,
+    "TurnWaitingHitlPayload": TurnWaitingHitlPayload,
+    "TurnClosedPayload": TurnClosedPayload,
     "PluginNegotiatePayload": PluginNegotiatePayload,
     "PluginNegotiateResultPayload": PluginNegotiateResultPayload,
     "PluginLifecyclePayload": PluginLifecyclePayload,

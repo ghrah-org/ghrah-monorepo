@@ -4,5 +4,6 @@
   "author_type": "human",
   "data": {
     "message": "请评审最新架构草案"
-  }
+  },
+  "delivery_policy": "queue"
 }

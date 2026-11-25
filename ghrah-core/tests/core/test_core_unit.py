@@ -145,6 +145,8 @@ class TestMetaContract:
             CommandType.EXECUTE_ABILITY.value,
             CommandType.AGENT_COMPACT_CONTEXT.value,
             CommandType.AGENT_RESET.value,
+            CommandType.TURN_ABORT.value,
+            CommandType.TURN_ROLLBACK.value,
             CommandType.CREATE_AGENT_ASSEMBLY.value,
             CommandType.GET_AGENT_CONFIG.value,
             CommandType.START_AGENT_ASSEMBLY.value,
@@ -164,7 +166,7 @@ class TestMetaContract:
             CommandType.BRANCH_ARCHIVE.value,
             CommandType.BRANCH_DELETE.value,
         }
-        assert len(unit.meta.routes.commands) == 31
+        assert len(unit.meta.routes.commands) == 33
         assert unit.meta.routes.commands == expected
 
 

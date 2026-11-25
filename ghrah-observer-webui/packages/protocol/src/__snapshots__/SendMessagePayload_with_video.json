@@ -27,5 +27,6 @@
   ],
   "sender": "user",
   "timeout": null,
-  "metadata": null
+  "metadata": null,
+  "delivery_policy": "queue"
 }

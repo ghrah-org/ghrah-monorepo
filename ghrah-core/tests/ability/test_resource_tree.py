@@ -75,7 +75,7 @@ async def slice_env(tmp_path, runs):
 
 
 def agent_session(host, actor=ALICE):
-    return host.session(Principal(actor.project_id, actor.subject_id, actor.run_id))
+    return host.session(Principal(actor.scope_id, actor.subject_id, actor.run_id))
 
 
 async def terminal(session, call):

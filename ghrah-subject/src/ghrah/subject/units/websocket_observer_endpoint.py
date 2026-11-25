@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from fastapi import FastAPI, WebSocket
-from ghrah.protocol.types import EventType, Message
+from ghrah.protocol.types import CommandType, EventType, Message
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.runtime.ouroboros_bridge import bridge_command
@@ -67,7 +67,7 @@ class _EngineDispatchAdapter:
         enriched = dict(payload)
         if request_id is not None:
             enriched.setdefault("request_id", request_id)
-        if session_id is not None:
+        if session_id is not None and command != CommandType.TURN_ABORT.value:
             enriched.setdefault("session_id", session_id)
         return await bridge_command(self._ctx, command, enriched)
 

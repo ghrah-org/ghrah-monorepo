@@ -11,12 +11,12 @@ from ghrah.protocol.views.core import NodeView
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.interfaces import NodeGetRequest
-from ghrah.core.read.chain import ChainReadStore
+from ghrah.core.read.queries import ChainQueries
 
 __all__ = ["make_node_handlers"]
 
 
-def make_node_handlers(store: ChainReadStore) -> dict[str, Handler]:
+def make_node_handlers(store: ChainQueries) -> dict[str, Handler]:
     """构造 ``nodes`` 分组处理器。
 
     Args:

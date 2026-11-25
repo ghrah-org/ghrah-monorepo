@@ -12,6 +12,10 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+from ghrah.context.persistence import deserialize_node, serialize_node
 from ghrah.core.events import (
     ActionChainUpdatedEvent,
     BranchActivatedEvent,
@@ -81,11 +85,15 @@ class TestCoreEventDictWireContract:
         assert payload["branch"] == _BRANCH_INFO
 
     def test_action_chain_updated_event_dict_carries_branch_snapshot(self) -> None:
-        node = {
-            "id": "node-001",
-            "session_id": "session-001",
-            "created_on_branch_id": "branch-main",
-        }
+        snapshot = (
+            Path(__file__).resolve().parents[3]
+            / "ghrah-observer-webui/packages/protocol/src"
+            / "__snapshots__/ActionChainUpdatedPayload.json"
+        )
+        fixture = json.loads(snapshot.read_text())
+        node = serialize_node(deserialize_node(fixture["node"]))
+        assert set(fixture["node"]) == set(node)
+        assert node["turn_id"] == "turn-001"
         event = ActionChainUpdatedEvent(agent_name="agent-1", node=node, branch=_BRANCH_INFO)
         event_type, payload = _core_event_to_dict(event)
         assert event_type == "action_chain_updated"
@@ -123,3 +131,47 @@ class TestCoreEventDictWireContract:
         for event, expected in cases:
             event_type, _ = _core_event_to_dict(event)
             assert event_type == expected
+
+
+def test_turn_and_hitl_events_are_accepted_by_wire_models() -> None:
+    from ghrah.protocol.enums import EventType
+    from ghrah.protocol.envelope import EVENT_PAYLOAD_MAP
+
+    from ghrah.core.events import (
+        HITLRequestEvent,
+        HITLResolvedEvent,
+        TurnClosedEvent,
+        TurnOpenedEvent,
+        TurnWaitingHitlEvent,
+    )
+
+    turn = {"agent_name": "display", "turn_id": "turn", "session_id": "session"}
+    hitl = {
+        "agent_name": "display",
+        "promise_id": "promise",
+        "ability_name": "tool",
+        "turn_id": "turn",
+    }
+    cases = [
+        (TurnOpenedEvent(**turn, opener_delivery_id="delivery"), {"status", "opener_delivery_id"}),
+        (TurnWaitingHitlEvent(**turn, promise_id="promise"), {"promise_id"}),
+        (
+            TurnClosedEvent(**turn, status="closed", closing_kind="completed", end_node_id="end"),
+            {"status", "closing_kind", "end_node_id"},
+        ),
+    ]
+    for event, keys in cases:
+        name, payload = _core_event_to_dict(event)
+        assert set(payload) == set(turn) | keys | {"event_type"}
+        assert EVENT_PAYLOAD_MAP[EventType(name)].model_validate(payload).turn_id == "turn"
+
+    request = HITLRequestEvent(**hitl, delivery_id="delivery", deadline_at="2026-11-17T00:00:00Z")
+    name, payload = _core_event_to_dict(request)
+    model = EVENT_PAYLOAD_MAP[EventType(name)].model_validate(payload)
+    assert (model.turn_id, model.delivery_id, model.deadline_at) == (
+        request.turn_id,
+        request.delivery_id,
+        request.deadline_at,
+    )
+    name, payload = _core_event_to_dict(HITLResolvedEvent(**hitl, status="approved"))
+    assert EVENT_PAYLOAD_MAP[EventType(name)].model_validate(payload).turn_id == "turn"

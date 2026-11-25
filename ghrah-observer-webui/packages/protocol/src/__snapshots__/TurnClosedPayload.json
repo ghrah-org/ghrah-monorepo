@@ -1,0 +1,10 @@
+{
+  "project_id": "",
+  "agent_id": "",
+  "agent_name": "beta",
+  "turn_id": "turn",
+  "session_id": "session",
+  "status": "closed",
+  "closing_kind": "completed",
+  "end_node_id": "end"
+}

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,59 @@ async def test_get_log_since_and_limit(tmp_path: Path) -> None:
         await store.stop()
 
 
+async def test_log_page_uses_room_scope_and_drains_incremental_pages(tmp_path: Path) -> None:
+    path = tmp_path / "rooms.sqlite3"
+    reader = RoomStore(path)
+    assert await reader.get_log_page("missing", project_id="p") is None
+    assert not path.exists()
+    store = RoomStore(path)
+    await store.start()
+    try:
+        room = make_room_record(project_id="p", name="Room")
+        await store.upsert(room)
+        for _ in range(7):
+            await store.append_log(
+                room.room_id,
+                lambda seq: make_room_log_record(
+                    room_id=room.room_id,
+                    seq=seq,
+                    author="user",
+                    author_type="human",
+                ),
+            )
+        assert await reader.get_log_page(room.room_id, project_id="foreign") is None
+        tail = await reader.get_log_page(room.room_id, project_id="p", limit=2)
+        assert tail is not None
+        assert [entry.seq for entry in tail.entries] == [6, 7]
+        assert tail.has_more and tail.next_before_seq == 6
+        earlier = await reader.get_log_page(
+            room.room_id, project_id="p", before_seq=tail.next_before_seq, limit=2
+        )
+        assert earlier is not None
+        assert [entry.seq for entry in earlier.entries] == [4, 5]
+
+        cursor = 0
+        sequences: list[int] = []
+        while True:
+            page = await reader.get_log_page(
+                room.room_id, project_id="p", since_seq=cursor, limit=2
+            )
+            assert page is not None and page.latest_seq == 7
+            assert page.next_since_seq is not None and page.next_since_seq > cursor
+            assert page.next_before_seq is None
+            cursor = page.next_since_seq
+            sequences.extend(entry.seq for entry in page.entries)
+            if not page.has_more:
+                break
+        assert sequences == list(range(1, 8))
+        empty = await reader.get_log_page(room.room_id, project_id="p", since_seq=cursor, limit=2)
+        assert empty is not None
+        assert empty.entries == []
+        assert empty.next_since_seq == empty.latest_seq == cursor
+    finally:
+        await store.stop()
+
+
 async def test_delete_cascades_logs_and_guards(tmp_path: Path) -> None:
     store = await _started(tmp_path)
     try:
@@ -214,3 +268,36 @@ async def test_start_migrates_pre_archive_room_schema(tmp_path: Path) -> None:
         assert "archived_at" in columns
     finally:
         db.close()
+
+
+async def test_start_rebuilds_reference_index_for_existing_room_logs(tmp_path: Path) -> None:
+    """重开存量 Room 库时补建引用索引并保留日志和房间水位。"""
+    path = tmp_path / "rooms.db"
+    store = await _started(tmp_path)
+    try:
+        room = make_room_record(project_id="project", name="room")
+        await store.upsert(room)
+        appended = await store.append_log(
+            room.room_id,
+            lambda seq: make_room_log_record(
+                room_id=room.room_id, seq=seq, author="agent", author_type="agent"
+            ),
+        )
+        assert appended is not None
+        entry, updated_room = appended
+    finally:
+        await store.stop()
+
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("DROP INDEX IF EXISTS idx_subject_room_log_reference")
+
+    for _ in range(2):
+        store = await _started(tmp_path)
+        try:
+            assert await store.get_log_by_id(room.room_id, entry.id) == entry
+            assert await store.get(room.room_id) == updated_room
+        finally:
+            await store.stop()
+        with closing(sqlite3.connect(path)) as db:
+            columns = db.execute("PRAGMA index_info('idx_subject_room_log_reference')")
+            assert [row[2] for row in columns] == ["room_id", "id"]

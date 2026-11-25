@@ -79,8 +79,8 @@ async def _open(tmp_path: Path) -> AbilityAccessStore:
 
 async def _changes(db: AbilityAccessStore) -> list[tuple[str, str | None]]:
     async with db._db.execute(
-        "SELECT reason, version_digest FROM ability_changes WHERE project=? ORDER BY seq",
-        (db.project_id,),
+        "SELECT reason, version_digest FROM ability_changes WHERE scope=? ORDER BY seq",
+        (db.scope_id,),
     ) as cursor:
         return [(row[0], row[1]) for row in await cursor.fetchall()]
 

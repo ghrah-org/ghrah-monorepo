@@ -15,6 +15,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
+
 AGENT_CONTROL_MEMBER_KEYS: frozenset[str] = frozenset({"conversation", "end_task"})
 """控制成员键：装配边界自己加的成员，模板与装配输入都不应显式列它们。"""
 
@@ -61,6 +63,17 @@ __all__ = [
     "ChainMetaView",
     "ContentReadResult",
     "DeliveryView",
+    "DeliveryQueueView",
+    "DeliveryQueueEntryView",
+    "MessageAcceptanceView",
+    "DeliveryAcceptanceView",
+    "TurnView",
+    "TurnAbortView",
+    "TurnListView",
+    "TurnRollbackView",
+    "TurnRollbackPreviewView",
+    "HitlRequestView",
+    "HitlRequestListView",
     "HistoryView",
     "MailboxSummaryView",
     "MessageIdListView",
@@ -101,6 +114,7 @@ class NodeView(BaseModel):
     agent_name: str = ""
     session_id: str = ""
     created_on_branch_id: str = ""
+    turn_id: str | None = None
     timestamp: str = ""
     iteration: int = 0
     ability_names: list[str] = Field(default_factory=list)
@@ -221,6 +235,186 @@ class DeliveryView(BaseModel):
     blocked_reason: str | None = None
     last_node_id: str | None = None
     resume_requested: bool = False
+    turn_id: str | None = None
+    delivery_policy: str = "queue"
+    parked: bool = False
+    parked_reason: str | None = None
+    display_state: str = ""
+    result_ready: bool = False
+    queue_position: int = 0
+    queue_reason: str | None = None
+    blocked_by_delivery_id: str | None = None
+    cancelable: bool = False
+
+
+class DeliveryQueueEntryView(BaseModel):
+    """队列中一条投递的实时投影。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_id: str
+    message_id: str
+    display_state: str
+    position: int = 0
+    queue_reason: str | None = None
+    blocked_by_delivery_id: str | None = None
+    turn_id: str | None = None
+    cancelable: bool = False
+
+
+class DeliveryQueueView(BaseModel):
+    """同一 Agent、会话的未收敛投递，按受理顺序排列。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None
+    entries: list[DeliveryQueueEntryView] = Field(default_factory=list)
+    open_turn_id: str | None = None
+
+
+class DeliveryAcceptanceView(BaseModel):
+    """本次受理返回时已确定的投递方式和位置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_id: str
+    policy: Literal["inject", "queue"]
+    policy_applied: bool
+    turn_id: str | None = None
+    display_state: str
+    queue_position: int = 0
+
+
+class MessageAcceptanceView(BaseModel):
+    """消息持久受理的回执。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str
+    accepted_at: float
+    deliveries: list[DeliveryAcceptanceView] = Field(default_factory=list)
+
+
+class TurnView(BaseModel):
+    """链库中的执行轮次及其锚点。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    agent_name: str
+    session_id: str
+    status: str
+    closing_kind: str | None = None
+    base_node_id: str | None = None
+    start_node_id: str | None = None
+    end_node_id: str | None = None
+    branch_id: str | None = None
+    end_branch_id: str | None = None
+    opener_delivery_id: str | None = None
+    opened_at: str
+    waiting_since: str | None = None
+    closed_at: str | None = None
+    injections: int = 0
+    abort_reason: str | None = None
+    incomplete_node_id: str | None = None
+    recovery_branch_id: str | None = None
+
+
+class TurnListView(BaseModel):
+    """一个 Agent 的轮次列表。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    items: list[TurnView] = Field(default_factory=list)
+
+
+class TurnAbortView(BaseModel):
+    """轮次中止的持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    status: str
+    closing_kind: str | None = None
+    aborted: bool = False
+    already_terminal: bool = False
+    result_pending: bool = False
+    cancelled_hitl: int = 0
+    released_deliveries: int = 0
+    incomplete_node_id: str | None = None
+    recovery_branch_id: str | None = None
+    opener_delivery_id: str | None = None
+
+
+class TurnRollbackView(BaseModel):
+    """轮次回滚的持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    session_id: str
+    status: str
+    closing_kind: str
+    target: Literal["base", "node"]
+    target_node_id: str
+    branch_id: str
+    parent_branch_id: str | None = None
+    released_delivery_ids: list[str] = Field(default_factory=list)
+    already_applied: bool = False
+    rolled_back_at: str
+
+
+class TurnRollbackPreviewView(BaseModel):
+    """回滚目标及其对当前上下文和排队输入的影响。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str
+    session_id: str
+    target: Literal["base", "node"]
+    target_node_id: str
+    target_branch_id: str
+    base_node_id: str | None = None
+    start_node_id: str | None = None
+    end_node_id: str | None = None
+    truncated_node_count: int = 0
+    crosses_compact: bool = False
+    target_is_compact: bool = False
+    head_unchanged: bool = False
+    released_delivery_ids: list[str] = Field(default_factory=list)
+
+
+class HitlRequestView(BaseModel):
+    """审批请求及其持久结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    promise_id: str
+    turn_id: str
+    delivery_id: str | None = None
+    ability_name: str
+    tool_call: dict[str, Any]
+    reason: str
+    options: dict[str, Any]
+    status: str
+    created_at: str
+    deadline_at: str | None = None
+    resolved_at: str | None = None
+    resolved_by: str | None = None
+    resolution: Any = None
+    shell_remember: ShellRememberOptions | None = None
+    """从 ``options`` 解析的「批准并记住」候选；非 shell 审批为 ``None``。"""
+
+
+class HitlRequestListView(BaseModel):
+    """一个 Agent 的待审批请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    items: list[HitlRequestView] = Field(default_factory=list)
 
 
 class MessageView(BaseModel):

@@ -23,6 +23,8 @@ def create_command_result(
     data: Any = None,
     error: str | None = None,
     error_detail: str | None = None,
+    *,
+    details: dict[str, Any] | None = None,
 ) -> Envelope:
     """创建命令结果消息的便捷函数。"""
     return Envelope(
@@ -33,6 +35,7 @@ def create_command_result(
             data=data,
             error=error,
             error_detail=error_detail,
+            details=details,
         ),
         request_id=request_id,
     )

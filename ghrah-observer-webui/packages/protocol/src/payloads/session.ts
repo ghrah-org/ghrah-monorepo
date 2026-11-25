@@ -156,6 +156,27 @@ export const BranchListResultPayloadSchema = z.object({
   branches: z.array(BranchInfoPayloadSchema),
 });
 
+export const SessionCatalogViewSchema = z.object({
+  availability: z.enum(["online", "offline"]),
+  active_session_id: z.string().nullable(),
+  sessions: z.array(
+    SessionInfoPayloadSchema.omit({
+      project_id: true,
+      agent_id: true,
+      message_count: true,
+      iteration_count: true,
+    }),
+  ),
+  branches: z.array(BranchInfoPayloadSchema),
+});
+
+export const BranchListViewSchema = z.object({
+  branches: z.array(BranchInfoPayloadSchema),
+});
+
+export type SessionCatalogView = z.infer<typeof SessionCatalogViewSchema>;
+export type BranchListView = z.infer<typeof BranchListViewSchema>;
+
 export type SessionCreatePayload = z.infer<typeof SessionCreatePayloadSchema>;
 export type SessionActivatePayload = z.infer<typeof SessionActivatePayloadSchema>;
 export type SessionListPayload = z.infer<typeof SessionListPayloadSchema>;

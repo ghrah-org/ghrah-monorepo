@@ -8,9 +8,8 @@
 - AbilityExecutor 是 Ability 执行的抽象接口
 - LocalAbilityExecutor 在 Core 端本地执行 Ability（单体模式）
 
-单体模式下，HITL 在 Core 端处理：
-    Hook → HITLFutureStore.create_future() → EventPublisher.publish(HITLRequestEvent)
-    → Subject → Observer → 审批 → receive_hitl_response() → resolve_future()
+持久轮次的 HITL 请求先落库，再创建等待者并发布事件。审批提交后唤醒等待者，
+执行器回读持久结论。独立内存模式通过 Future 接收结果。
 """
 
 from __future__ import annotations
@@ -20,19 +19,21 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from ghrah.ability.execution.execution_services import ExecutionServices
+from ghrah.ability.execution.execution_services import CONTEXT_MANAGER, ExecutionServices
 from ghrah.ability.execution.hook_runner import HookRunner
 from ghrah.ability.execution.hook_store import HookStore
 from ghrah.ability.execution.hooks import HookPoint, HookResult
 from ghrah.ability.execution.invocation import MemberReference, OperationCall
 from ghrah.ability.paths import ABILITY_PATH_SPECS
 from ghrah.chat.content import ToolCallBlock
+from ghrah.context.turn import TurnRevokedError
 from ghrah.core.ability_protocol import AbilityProtocol
 from ghrah.core.event_publisher import EventPublisher
-from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent
+from ghrah.core.events import HITLRequestEvent, HITLResolvedEvent, TurnWaitingHitlEvent
 from ghrah.core.hitl import HITLFutureStore, HITLPromiseRegistry, HITLResult
 from ghrah.types.results import ActionOutcome, ActionResult
 
@@ -49,8 +50,7 @@ __all__ = [
     "LocalAbilityExecutor",
 ]
 
-# HITL 审批终态：批准 / 人工拒绝 / 等待超时
-HitlOutcome = Literal["approved", "rejected", "timeout"]
+HitlOutcome = Literal["approved", "rejected", "timeout", "storage_error"]
 
 
 @dataclass(frozen=True)
@@ -152,7 +152,7 @@ class AbilityExecutor(ABC):
             services: 执行期服务表
 
         Returns:
-            审批终态回执：outcome（"approved" / "rejected" / "timeout"）
+            审批回执：outcome（"approved" / "rejected" / "timeout" / "storage_error"）
             附 promise_id / tool_call_id / 拒绝理由（归因字段）
         """
         ...
@@ -207,10 +207,7 @@ class AbilityExecutor(ABC):
 class LocalAbilityExecutor(AbilityExecutor):
     """本地执行器 — 在 Core 端直接执行 Ability。
 
-    保留当前所有行为：
-    - PRE_EXECUTE / POST_EXECUTE Hook
-    - HITL 审批（通过 HITLFutureStore）
-    - 本地 I/O 操作
+    负责 PRE_EXECUTE / POST_EXECUTE Hook、HITL 等待及本地 I/O 操作。
 
     用于单体模式（ghrah-core 独立使用）。
     """
@@ -355,6 +352,16 @@ class LocalAbilityExecutor(AbilityExecutor):
                         # 人工拒绝或等待超时——错误信息区分两者，超时不得
                         # 折算成"用户拒绝"信号进 LLM 上下文
                         attribution = self._hitl_attribution(hitl_wait, call)
+                        if hitl_wait.outcome == "storage_error":
+                            return ActionResult(
+                                outcome=ActionOutcome.FAILURE,
+                                data={
+                                    "error": f"Could not confirm HITL storage state; {attribution}",
+                                    "hitl_storage_error": True,
+                                    "promise_id": hitl_wait.promise_id,
+                                    "tool_call_id": hitl_wait.tool_call_id,
+                                },
+                            )
                         if hitl_wait.outcome == "timeout":
                             if hitl_wait.degraded:
                                 error_msg = (
@@ -541,6 +548,10 @@ class LocalAbilityExecutor(AbilityExecutor):
                 ],
                 return_exceptions=True,
             )
+            for r in raw_results:
+                if isinstance(r, TurnRevokedError):
+                    # 中止是控制流：不得折算为工具失败，否则旧循环会继续跑到提交边界。
+                    raise r
             for i, r in enumerate(raw_results):
                 if isinstance(r, BaseException) and not isinstance(r, Exception):
                     # 取消等控制流信号不是动作结果：原样重抛，交上层取消
@@ -678,121 +689,171 @@ class LocalAbilityExecutor(AbilityExecutor):
         call: OperationCall,
         services: ExecutionServices,
     ) -> HITLWaitResult:
-        """处理 HITL Hook 结果。
-
-        在单体模式下，创建 asyncio.Future 等待 HITL 审批：
-        1. 生成 promise_id，发布 HITLRequestEvent（携带 promise_id）到 EventPublisher
-        2. 创建 HITL Future（promise 登记到注册表）并等待
-        3. 收到审批结果后继续或终止
-
-        Args:
-            hook_result: Hook 返回的结果
-            call: 本次调用的值对象
-            services: 执行期服务表
-
-        Returns:
-            审批终态回执：outcome 附 promise_id / tool_call_id / 拒绝理由（归因字段）
-        """
-        # 调用参数不能决定审批归因；没有外部调用 ID 的内部路由生成独立标识。
+        """登记审批请求后发布事件，等待人工审批或超时。"""
         tool_call_id = call.tool_call_id or uuid.uuid4().hex
         promise_id = uuid.uuid4().hex
-
-        # 发布 HITL 请求事件（promise_id 随载荷下发，Observer 凭此回发审批；
-        # reason 为触发审批的 Hook 拦截原因，审批人可见"为何要审"）
-        await self._event_publisher.publish(
-            HITLRequestEvent(
-                agent_name=self._agent_name,
-                ability_name=call.member.member,
-                tool_call=dict(call.arguments),
-                context={"tool_call_id": tool_call_id},
-                promise_id=promise_id,
-                reason=hook_result.message or "",
-                shell_remember=hook_result.shell_remember,
-            )
-        )
-
-        # 创建 Future 并等待
-        future = self._hitl_store.create_future(
-            agent_name=self._agent_name,
-            ability_name=call.member.member,
-            tool_call_id=tool_call_id,
-        )
-        if self._hitl_promise_registry is not None:
-            self._hitl_promise_registry.register(
-                promise_id=promise_id,
-                agent_name=self._agent_name,
-                ability_name=call.member.member,
-                tool_call_id=tool_call_id,
-            )
-
-        # 熔断降级：连续超时达阈值后改用短等待（审批通道疑似离线）
         degraded = (
             self._hitl_timeout_limit > 0
             and self._consecutive_hitl_timeouts >= self._hitl_timeout_limit
         )
         wait_timeout = self._hitl_degraded_timeout if degraded else self._hitl_timeout
-
-        # 等待 HITL 结果（带超时）
+        deadline_at = (
+            (datetime.now(UTC) + timedelta(seconds=wait_timeout)).isoformat()
+            if 0 <= wait_timeout < float("inf")
+            else None
+        )
+        cm = services.get(CONTEXT_MANAGER)
+        previous_phase = cm.execution_phase if cm is not None else "unknown"
+        turn_id = None
+        future = None
         try:
-            hitl_result: HITLResult = await asyncio.wait_for(future, timeout=wait_timeout)
-            outcome: HitlOutcome = "approved" if hitl_result.approved else "rejected"
-            # 任何人工响应都证明审批通道在线——熔断计数全量复位
-            self._consecutive_hitl_timeouts = 0
-            if self._hitl_promise_registry is not None:
-                self._hitl_promise_registry.remove(promise_id)
-            logger.info(
-                f"LocalAbilityExecutor[{self._agent_name}] HITL {outcome}: "
-                f"ability={call.member.member}, tool_call_id={tool_call_id}"
-            )
-            await self._event_publisher.publish(
-                HITLResolvedEvent(
-                    agent_name=self._agent_name,
+            stored = None
+            if cm is not None:
+                cm.execution_phase = "waiting_hitl"
+                stored = await cm.open_hitl_request(
                     promise_id=promise_id,
                     ability_name=call.member.member,
                     tool_call_id=tool_call_id,
-                    status=outcome,
+                    tool_call=dict(call.arguments),
+                    reason=hook_result.message or "",
+                    options=hook_result.shell_remember.model_dump(mode="json")
+                    if hook_result.shell_remember is not None
+                    else {},
+                    deadline_at=deadline_at,
+                )
+                if stored.error is not None:
+                    return HITLWaitResult("storage_error", promise_id, tool_call_id)
+                turn_id = stored.turn_id
+            future = self._hitl_store.create_future(
+                agent_name=self._agent_name,
+                ability_name=call.member.member,
+                tool_call_id=tool_call_id,
+            )
+            if self._hitl_promise_registry is not None:
+                self._hitl_promise_registry.register(
+                    promise_id=promise_id,
+                    agent_name=self._agent_name,
+                    ability_name=call.member.member,
+                    tool_call_id=tool_call_id,
+                )
+            await self._event_publisher.publish(
+                HITLRequestEvent(
+                    agent_name=self._agent_name,
+                    ability_name=call.member.member,
+                    tool_call=dict(call.arguments),
+                    context={"tool_call_id": tool_call_id},
+                    promise_id=promise_id,
+                    reason=hook_result.message or "",
+                    shell_remember=hook_result.shell_remember,
+                    turn_id=turn_id,
+                    delivery_id=stored.delivery_id if stored else None,
+                    deadline_at=deadline_at,
                 )
             )
+            if stored and stored.changed and stored.turn_id and stored.session_id:
+                try:
+                    await self._event_publisher.publish(
+                        TurnWaitingHitlEvent(
+                            agent_name=self._agent_name,
+                            turn_id=stored.turn_id,
+                            session_id=stored.session_id,
+                            promise_id=promise_id,
+                        )
+                    )
+                except Exception:
+                    logger.warning("Could not publish turn_waiting_hitl", exc_info=True)
+            hitl_result = None
+            timed_out = False
+            try:
+                event = cm.turn_abort_event() if cm is not None else None
+                if event is None:
+                    hitl_result = await asyncio.wait_for(future, timeout=wait_timeout)
+                else:
+                    aborted = asyncio.create_task(event.wait())
+                    try:
+                        done, _ = await asyncio.wait(
+                            (future, aborted),
+                            timeout=wait_timeout,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if event.is_set():
+                            raise TurnRevokedError("turn aborted while waiting for HITL")
+                        if future not in done:
+                            raise TimeoutError
+                        hitl_result = future.result()
+                    finally:
+                        aborted.cancel()
+                        await asyncio.gather(aborted, return_exceptions=True)
+            except TimeoutError:
+                timed_out = True
+
+            publish_resolved = True
+            if cm is not None and stored is not None and stored.persisted:
+                if timed_out:
+                    terminal = await cm.expire_hitl_request(promise_id)
+                    publish_resolved = terminal.changed
+                    if terminal.error is not None:
+                        terminal = await cm.read_hitl_request(promise_id)
+                else:
+                    publish_resolved = False
+                    terminal = await cm.read_hitl_request(promise_id)
+                cm.require_turn(turn_id)
+                if terminal.turn_id is not None and terminal.turn_id != turn_id:
+                    raise TurnRevokedError("HITL request belongs to a different turn")
+                if terminal.status in ("approved", "rejected"):
+                    hitl_result = HITLResult(
+                        approved=terminal.status == "approved", result=terminal.resolution
+                    )
+                elif terminal.status == "expired":
+                    hitl_result = None
+                elif terminal.status in ("cancelled", "orphaned"):
+                    raise TurnRevokedError("HITL request is no longer active")
+                else:
+                    return HITLWaitResult("storage_error", promise_id, tool_call_id)
+
+            outcome: HitlOutcome
+            if hitl_result is None:
+                outcome = "timeout"
+                self._consecutive_hitl_timeouts += 1
+                logger.warning(
+                    "HITL request timed out: ability=%s, tool_call_id=%s, consecutive=%s",
+                    call.member.member,
+                    tool_call_id,
+                    self._consecutive_hitl_timeouts,
+                )
+            else:
+                outcome = "approved" if hitl_result.approved else "rejected"
+                self._consecutive_hitl_timeouts = 0
+            if publish_resolved:
+                await self._event_publisher.publish(
+                    HITLResolvedEvent(
+                        agent_name=self._agent_name,
+                        promise_id=promise_id,
+                        ability_name=call.member.member,
+                        tool_call_id=tool_call_id,
+                        status=outcome,
+                        turn_id=turn_id,
+                    )
+                )
             return HITLWaitResult(
                 outcome=outcome,
                 promise_id=promise_id,
                 tool_call_id=tool_call_id,
-                reason=hitl_result.result,
+                reason=hitl_result.result if hitl_result is not None else None,
+                degraded=degraded if outcome == "timeout" else False,
+                degraded_timeout=self._hitl_degraded_timeout if outcome == "timeout" else 0.0,
             )
-        except TimeoutError:
-            self._consecutive_hitl_timeouts += 1
-            logger.warning(
-                f"LocalAbilityExecutor[{self._agent_name}] HITL request timed out: "
-                f"ability={call.member.member}, tool_call_id={tool_call_id}, "
-                f"consecutive={self._consecutive_hitl_timeouts}"
-            )
-            if self._hitl_promise_registry is not None:
-                self._hitl_promise_registry.remove_triplet(
-                    agent_name=self._agent_name,
-                    ability_name=call.member.member,
-                    tool_call_id=tool_call_id,
-                )
-            await self._event_publisher.publish(
-                HITLResolvedEvent(
-                    agent_name=self._agent_name,
-                    promise_id=promise_id,
-                    ability_name=call.member.member,
-                    tool_call_id=tool_call_id,
-                    status="timeout",
-                )
-            )
-            return HITLWaitResult(
-                outcome="timeout",
-                promise_id=promise_id,
-                tool_call_id=tool_call_id,
-                degraded=degraded,
-                degraded_timeout=self._hitl_degraded_timeout,
-            )
-
         finally:
+            if cm is not None:
+                cm.execution_phase = previous_phase
             if self._hitl_promise_registry is not None:
                 self._hitl_promise_registry.remove(promise_id)
-            self._hitl_store.cancel_future(self._agent_name, call.member.member, tool_call_id)
+            if (
+                future is not None
+                and self._hitl_store.get_future(self._agent_name, call.member.member, tool_call_id)
+                is future
+            ):
+                self._hitl_store.cancel_future(self._agent_name, call.member.member, tool_call_id)
 
     def receive_hitl_response(
         self,

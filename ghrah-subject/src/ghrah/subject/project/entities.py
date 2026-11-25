@@ -10,10 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ghrah.agents.entity import AgentEntity
-from ghrah.communication.mailbox_reader import MailboxReader
-from ghrah.context.persistence import serialize_node
-from ghrah.context.persistence.sqlite_backend import SqliteBackend
-from ghrah.context.session_runtime import SessionRuntime
+from ghrah.protocol.errors import ApiError
 from ghrah.protocol.payloads.entity import (
     AgentEntityCreatePayload,
     AgentEntityPayload,
@@ -22,10 +19,12 @@ from ghrah.protocol.payloads.entity import (
     AgentSnapshot,
 )
 from ghrah.protocol.payloads.project import AgentCreateSpecSchema
+from ghrah.protocol.ports.core import CorePort
+from ghrah.protocol.problem import ProblemCode
+from ghrah.protocol.views.core import MessageView
 
 from ghrah.subject.errors import StableError
 from ghrah.subject.project.models import AgentRecord, ProjectRecord, ProjectStatus
-from ghrah.subject.project.paths import ProjectPaths
 
 if TYPE_CHECKING:
     from ghrah.subject.project.manager import ProjectManager
@@ -178,60 +177,75 @@ class AgentEntityManager:
             return await handle.entity_context(agent.agent_id, operation)
         if operation["type"] not in {"context.list_sessions", "context.get_history"}:
             raise StableError("agent_offline")
-        path = ProjectPaths.from_locator(project.project_root_locator).action_chain_db_path
-        if not path.exists():
-            if operation["type"] == "context.get_history":
-                raise StableError("session_not_found")
-            return {"active_session_id": None, "sessions": [], "branches": []}
-        async with SqliteBackend(path, read_only=True) as backend:
-            if operation["type"] == "context.list_sessions":
-                return await backend.load_session_catalog(agent.agent_id)
-            checkpoint = await backend.load_checkpoint(
-                agent.agent_id, snapshot_payloads="boundaries"
-            )
-        session_id = operation["session_id"]
-        session = (
-            next((s for s in checkpoint.sessions if s.session_id == session_id), None)
-            if checkpoint is not None
-            else None
-        )
-        if session is None:
+        port = self._read_port(project)
+        if operation["type"] == "context.list_sessions":
+            if port is None:
+                return {"active_session_id": None, "sessions": [], "branches": []}
+            catalog = await port.sessions.catalog(agent_id=agent.agent_id)
+            return catalog.model_dump(mode="json", exclude={"availability"})
+        if port is None:
             raise StableError("session_not_found")
-        session_runtime = SessionRuntime.restore(
-            session=session,
-            branches=[b for b in checkpoint.branches if b.session_id == session_id],
-            nodes=[n for n in checkpoint.nodes if n.session_id == session_id],
-        )
-        nodes = session_runtime.get_history(
-            branch_id=operation["branch_id"], limit=operation["limit"]
-        )
+        try:
+            history = await port.sessions.history(
+                agent_id=agent.agent_id,
+                session_id=operation["session_id"],
+                branch_id=operation["branch_id"],
+                limit=operation["limit"],
+            )
+        except ApiError as exc:
+            if exc.problem.code == ProblemCode.NOT_FOUND:
+                raise StableError("session_not_found") from exc
+            raise
+        return history.model_dump(mode="json", include={"session_id", "branch_id", "nodes"})
+
+    def _read_port(self, project: ProjectRecord) -> CorePort | None:
+        transport = self._projects._cluster_transport
+        if not hasattr(transport, "port_for"):
+            return None
+        transport.remember_locator(project.project_id, project.project_root_locator)
+        return transport.port_for(project.project_id)
+
+    @staticmethod
+    def _mailbox_message(view: MessageView) -> dict[str, Any]:
+        raw = view.model_dump(mode="json", exclude={"project_id", "deliveries"})
         return {
-            "session_id": session_id,
-            "branch_id": operation["branch_id"],
-            "nodes": [serialize_node(node) for node in nodes],
+            "message": raw,
+            "deliveries": [delivery.model_dump(mode="json") for delivery in view.deliveries],
         }
 
     async def _mailbox(
         self, project: ProjectRecord, agent: AgentRecord, operation: dict[str, Any]
     ) -> dict[str, Any]:
-        identity = AgentIdentity(project_id=project.project_id, agent_id=agent.agent_id)
-        path = ProjectPaths.from_locator(project.project_root_locator).action_chain_db_path
-        if not path.exists():
-            if operation["type"] == "mailbox.get_message":
-                raise StableError("message_not_found")
-            if operation["type"] == "mailbox.summary":
+        port = self._read_port(project)
+        kind = operation["type"]
+        if kind == "mailbox.summary":
+            if port is None:
                 return {"availability": "empty", "inbox_counts": {}, "outbox_count": 0}
+            return (await port.mailbox.summary(agent_id=agent.agent_id)).model_dump(mode="json")
+        if kind == "mailbox.get_message":
+            if port is not None:
+                try:
+                    view = await port.mailbox.get(
+                        agent_id=agent.agent_id, message_id=operation["message_id"]
+                    )
+                    return self._mailbox_message(view)
+                except ApiError as exc:
+                    if exc.problem.code != ProblemCode.NOT_FOUND:
+                        raise
+            raise StableError("message_not_found")
+        if port is None:
             return {"items": [], "next_before_seq": None}
-        async with MailboxReader(path, identity) as reader:
-            if operation["type"] == "mailbox.summary":
-                return await reader.summary()
-            if operation["type"] == "mailbox.get_message":
-                return await reader.get_message(operation["message_id"])
-            return await reader.list_messages(
-                inbox=operation["type"] == "mailbox.list_inbox",
-                limit=operation["limit"],
-                before_seq=operation["before_seq"],
-            )
+        before_seq = operation["before_seq"]
+        page = await port.mailbox.list(
+            agent_id=agent.agent_id,
+            inbox=kind == "mailbox.list_inbox",
+            limit=operation["limit"],
+            cursor=str(before_seq) if before_seq is not None else None,
+        )
+        return {
+            "items": [self._mailbox_message(view) for view in page.items],
+            "next_before_seq": int(page.next_cursor) if page.next_cursor is not None else None,
+        }
 
     async def _snapshot(self, project: ProjectRecord, agent: AgentRecord) -> dict[str, Any]:
         runtime = await self._runtime(project, agent)
@@ -323,11 +337,12 @@ class AgentEntityManager:
                 return await self._context(project, agent, op)
             if kind in {"mailbox.list_inbox", "mailbox.list_outbox", "mailbox.get_message"}:
                 return await self._mailbox(project, agent, op)
-            if kind in {"mailbox.retry", "mailbox.resume"}:
-                if project.status != ProjectStatus.ACTIVE or agent.desired_state != "running":
-                    raise StableError("agent_not_running")
-                if (await self._runtime(project, agent))["availability"] != "online":
-                    raise StableError("agent_offline")
+            if kind in {"mailbox.retry", "mailbox.resume", "mailbox.cancel"}:
+                if kind != "mailbox.cancel":
+                    if project.status != ProjectStatus.ACTIVE or agent.desired_state != "running":
+                        raise StableError("agent_not_running")
+                    if (await self._runtime(project, agent))["availability"] != "online":
+                        raise StableError("agent_offline")
                 # 消息管理器按项目取端口实例，归属恒等，不再做项目一致性校验。
                 mm = self._projects._cluster_transport.get_message_manager(project.project_id)
                 from ghrah.protocol.errors import ApiError
@@ -340,6 +355,14 @@ class AgentEntityManager:
                     raise StableError("delivery_not_found")
                 if kind == "mailbox.retry":
                     await mm.retry(op["delivery_id"], agent_id=agent.agent_id)
+                elif kind == "mailbox.cancel":
+                    try:
+                        await mm.cancel(op["delivery_id"], agent_id=agent.agent_id)
+                    except ApiError as exc:
+                        reason = (exc.problem.details or {}).get("reason")
+                        if reason == "delivery_not_cancelable":
+                            raise StableError(reason) from exc
+                        raise
                 else:
                     await mm.resume(op["delivery_id"], agent_id=agent.agent_id)
                 final = await mm.get_progress(op["delivery_id"], agent_id=agent.agent_id)

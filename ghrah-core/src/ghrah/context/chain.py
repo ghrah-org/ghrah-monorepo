@@ -83,6 +83,7 @@ class ActionChain:
         is_snapshot: bool = False,
         action_results: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        turn_id: str = "",
     ) -> ContextNode:
         """在指定父节点后追加节点，不修改任何 Branch Head。"""
         if not branch_id:
@@ -105,6 +106,7 @@ class ActionChain:
             metadata=metadata or {},
             session_id=self._session_id,
             created_on_branch_id=branch_id,
+            turn_id=turn_id,
         )
         self._nodes[node.id] = node
         return node

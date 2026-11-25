@@ -11,12 +11,12 @@ from ghrah.protocol.views.core import BranchListView
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.interfaces import BranchesListRequest
-from ghrah.core.read.chain import ChainReadStore
+from ghrah.core.read.queries import ChainQueries
 
 __all__ = ["make_branch_handlers"]
 
 
-def make_branch_handlers(store: ChainReadStore) -> dict[str, Handler]:
+def make_branch_handlers(store: ChainQueries) -> dict[str, Handler]:
     """构造 ``branches`` 分组处理器。
 
     Args:

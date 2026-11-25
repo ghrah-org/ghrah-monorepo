@@ -42,6 +42,8 @@ CORE_COMMANDS: frozenset[str] = frozenset(
         CommandType.GET_AGENT_INFO.value,
         CommandType.AGENT_COMPACT_CONTEXT.value,
         CommandType.AGENT_RESET.value,
+        CommandType.TURN_ABORT.value,
+        CommandType.TURN_ROLLBACK.value,
         CommandType.SESSION_CREATE.value,
         CommandType.SESSION_ACTIVATE.value,
         CommandType.SESSION_LIST.value,
