@@ -358,10 +358,16 @@ class ProjectManager:
 
     async def _handle_entity_list(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = AgentEntityListPayload.model_validate(_strip_envelope(payload))
+        project, error = await self._get_active_project(request.project_id)
+        if error is not None or project is None:
+            return error or _err(f"project not found: {request.project_id}")
         return _ok(
             {
                 "items": await self.agents.list(request.project_id),
                 "available_ability_types": self.agents.available_ability_types(),
+                # 项目版本：前端以它作为 REST 建 Agent 的 expected_revision（映射为
+                # expected_version）；缺这个字段会让前端无法构造创建请求。
+                "revision": project.version,
                 **self.agents.model_catalog(),
             }
         )

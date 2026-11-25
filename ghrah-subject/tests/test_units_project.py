@@ -149,6 +149,32 @@ class TestUnitsAssembly:
             assert result["success"], result.get("error")
             assert result["data"]["project"]["name"] == "P2"
 
+    async def test_agent_entity_list_carries_project_revision(self, tmp_path: Path) -> None:
+        """``agent_entity_list`` 回执携带项目版本（前端用它做 REST 创建的乐观锁）。"""
+        async with _boot(tmp_path) as (ctx, _, _):
+            (tmp_path / "p3").mkdir()
+            created = await bridge_command(
+                ctx,
+                "project_create",
+                {
+                    "name": "P3",
+                    "writable_workspaces": [
+                        {
+                            "locator": path_to_locator(str(tmp_path / "p3")),
+                            "name": "default",
+                            "default_for_agents": True,
+                        }
+                    ],
+                },
+            )
+            assert created["success"], created.get("error")
+            project = created["data"]["project"]
+            listed = await bridge_command(
+                ctx, "agent_entity_list", {"project_id": project["project_id"]}
+            )
+            assert listed["success"], listed.get("error")
+            assert listed["data"]["revision"] == project["version"]
+
     async def test_reconcile_now_command(self, tmp_path: Path) -> None:
         async with _boot(tmp_path) as (ctx, _, _):
             result = await bridge_command(ctx, "reconcile_now", {"subject_id": "default"})
