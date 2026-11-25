@@ -21,6 +21,8 @@ export enum CommandType {
   GET_AGENT_INFO = "get_agent_info",
   AGENT_COMPACT_CONTEXT = "agent_compact_context",
   AGENT_RESET = "agent_reset",
+  TURN_ABORT = "turn_abort",
+  TURN_ROLLBACK = "turn_rollback",
   SUBSCRIBE = "subscribe",
   UNSUBSCRIBE = "unsubscribe",
 
@@ -242,6 +244,8 @@ export const CORE_COMMANDS: ReadonlySet<string> = new Set([
   CommandType.GET_AGENT_INFO,
   CommandType.AGENT_COMPACT_CONTEXT,
   CommandType.AGENT_RESET,
+  CommandType.TURN_ABORT,
+  CommandType.TURN_ROLLBACK,
   CommandType.SESSION_CREATE,
   CommandType.SESSION_ACTIVATE,
   CommandType.SESSION_LIST,

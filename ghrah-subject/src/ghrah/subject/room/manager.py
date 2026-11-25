@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.protocol.errors import ApiError
 from ghrah.protocol.types import (
@@ -68,8 +68,11 @@ OnEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 ProjectExists = Callable[[str], Awaitable[bool]]
 ProjectLookup = Callable[[str], Awaitable[dict[str, Any] | None]]
 ReadRoomFacts = Callable[[str, str, RoomFactsQuery], Awaitable[TranscriptFactsView]]
-Deliver = Callable[[str, str, str, str, list[dict[str, Any]] | None], Awaitable[dict[str, Any]]]
-"""deliver(target, sender, content, room_id, blocks) → command_result。
+Deliver = Callable[
+    [str, str, str, str, list[dict[str, Any]] | None, Literal["inject", "queue"]],
+    Awaitable[dict[str, Any]],
+]
+"""deliver(target, sender, content, room_id, blocks, delivery_policy) → command_result。
 
 room_id 随投递写入消息 metadata（AgentMessage.metadata.room_id）→ 链节点
 messages_delta，供回复归属推导（Room Filter）消费。``blocks`` 为经校验的
@@ -440,6 +443,8 @@ class RoomManager:
         if error is not None:
             return error
         assert room is not None
+        if p.delivery_policy == "inject" and p.author_type != RoomSubjectType.HUMAN:
+            return _err("delivery_policy_not_allowed")
         # 写时校验：author 合法 = human 或 room 成员 agent
         if p.author_type == RoomSubjectType.AGENT and not any(
             m.subject == p.author for m in room.members
@@ -509,6 +514,7 @@ class RoomManager:
                         sender=p.author,
                         content=content,
                         blocks=blocks,
+                        delivery_policy=p.delivery_policy,
                     )
                 )
             except RuntimeError:
@@ -537,10 +543,11 @@ class RoomManager:
         sender: str,
         content: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
     ) -> None:
         try:
             result = await self._deliver(  # type: ignore[misc]
-                target, sender, content, room_id, blocks
+                target, sender, content, room_id, blocks, delivery_policy
             )
         except Exception:
             logger.exception("room delivery failed: target=%s sender=%s", target, sender)

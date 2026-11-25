@@ -74,14 +74,33 @@ def make_turn_handlers(store: TurnQueries, agents: RuntimeRegistry) -> dict[str,
             limit=request.limit,
         )
 
+    async def resolve_turn_agent(agent_id: str, capability: str) -> str:
+        try:
+            return await resolve_agent_name(agents, agent_id, running_only=True)
+        except CoreApiError as exc:
+            if exc.problem.code != ProblemCode.NOT_FOUND:
+                raise
+            raise offline(capability) from exc
+
+    def offline(capability: str) -> CoreApiError:
+        return CoreApiError(
+            Problem.make(
+                ProblemCode.FAILED_PRECONDITION,
+                capability=capability,
+                detail="agent_not_online",
+            )
+        )
+
     async def call_rollback(
         request: TurnRollbackRequest, *, capability: str, dry_run: bool
     ) -> dict[str, Any]:
-        name = await resolve_agent_name(agents, request.agent_id)
-        result = await agents.handle_command(
+        name = await resolve_turn_agent(request.agent_id, capability)
+        result = await agents.try_dispatch_command(
             command="turn_rollback",
             payload={**request.model_dump(), "agent_name": name, "dry_run": dry_run},
         )
+        if result is None:
+            raise offline(capability)
         if not result.get("success"):
             reason = str(result.get("error") or "rejected")
             raise CoreApiError(
@@ -96,21 +115,12 @@ def make_turn_handlers(store: TurnQueries, agents: RuntimeRegistry) -> dict[str,
 
     async def abort(request: TurnAbortRequest) -> TurnAbortView:
         capability = "turns.abort"
-        try:
-            name = await resolve_agent_name(agents, request.agent_id)
-        except CoreApiError as exc:
-            if exc.problem.code != ProblemCode.NOT_FOUND:
-                raise
-            raise CoreApiError(
-                Problem.make(
-                    ProblemCode.FAILED_PRECONDITION,
-                    capability=capability,
-                    detail="agent_not_online",
-                )
-            ) from exc
-        result = await agents.handle_command(
+        name = await resolve_turn_agent(request.agent_id, capability)
+        result = await agents.try_dispatch_command(
             command="turn_abort", payload={**request.model_dump(), "agent_name": name}
         )
+        if result is None:
+            raise offline(capability)
         if not result.get("success"):
             detail = str(result.get("error") or "rejected")
             code = (

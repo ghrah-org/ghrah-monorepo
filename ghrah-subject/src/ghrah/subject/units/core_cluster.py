@@ -21,7 +21,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
-from ghrah.protocol.types import ProjectStatus
+from ghrah.protocol.types import CommandType, ProjectStatus
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.core_cluster.registry import default_core_unit_factory
@@ -45,7 +45,9 @@ __all__ = ["CoreClusterRegistryUnit"]
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_AGENT_COMMANDS = frozenset(
+_TURN_COMMANDS = frozenset({CommandType.TURN_ABORT.value, CommandType.TURN_ROLLBACK.value})
+
+_PROJECT_AGENT_COMMANDS = _TURN_COMMANDS | frozenset(
     {
         "spawn_agent",
         "terminate_agent",
@@ -90,6 +92,8 @@ _TARGET_FIELDS = {
     # agent_reset 以 project_id + agent_id 稳定寻址（AgentResetPayload 无 name
     # 字段）；目标字段置空串 = 仅按 agent_id 解析，不校验可重名 name。
     "agent_reset": "",
+    CommandType.TURN_ABORT.value: "agent_name",
+    CommandType.TURN_ROLLBACK.value: "agent_name",
     "session_create": "agent_name",
     "session_activate": "agent_name",
     "session_list": "agent_name",
@@ -127,7 +131,9 @@ _RUNTIME_REVIVING_COMMANDS = frozenset(
 # stopped/archived 后 cluster 已 dispose，这些命令从 Project AgentSpec 兜底。
 # 注意：cluster 已登记不等于有在线实例（spawn 失败前就 ensure 过 cluster），
 # 因此 get_agent_info 在挂载状态下还会先探测 runtime，离线同样走定义态。
-_NO_MOUNT_COMMANDS = frozenset({"get_agent_info", "session_list", "terminate_agent"})
+_NO_MOUNT_COMMANDS = _TURN_COMMANDS | frozenset(
+    {"get_agent_info", "session_list", "terminate_agent"}
+)
 
 
 def _is_version_conflict(project_id: str, error: str) -> bool:
@@ -362,6 +368,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 "data": None,
                 "error": f"unknown project agent command: {command}",
             }
+        if command == CommandType.TURN_ROLLBACK.value and "dry_run" in payload:
+            return {"success": False, "data": None, "error": "invalid_request"}
         try:
             project, manager = await self._project(payload, command)
             if command == "spawn_agent":
@@ -397,13 +405,17 @@ class CoreClusterRegistryUnit(SubjectUnit):
                     str(project["project_id"]),
                     str(project["project_root_locator"]),
                 )
-            if command in _NO_MOUNT_COMMANDS and not self.service.has_cluster(cluster_id):
-                return self._definition_result(command, project, agent)
-            handle = await self.service.ensure_cluster(
-                cluster_id,
-                project_id=str(project["project_id"]),
-                project_root_locator=str(project["project_root_locator"]),
-            )
+            if command in _NO_MOUNT_COMMANDS:
+                try:
+                    handle = self.service.get_handle(cluster_id)
+                except KeyError:
+                    return self._definition_result(command, project, agent)
+            else:
+                handle = await self.service.ensure_cluster(
+                    cluster_id,
+                    project_id=str(project["project_id"]),
+                    project_root_locator=str(project["project_root_locator"]),
+                )
             core_payload = dict(payload)
             if send_blocks is not None:
                 core_payload["content_blocks"] = send_blocks
@@ -412,7 +424,9 @@ class CoreClusterRegistryUnit(SubjectUnit):
             target_field = _TARGET_FIELDS[command]
             if target_field:
                 core_payload[target_field] = agent["name"]
-            if command == "get_agent_info":
+            if command == CommandType.TURN_ROLLBACK.value:
+                core_payload["dry_run"] = False
+            if command == "get_agent_info" or command in _TURN_COMMANDS:
                 # cluster 已登记 ≠ 有在线实例：spawn 失败前 _ensure_agent_spawned
                 # 已 ensure_cluster。端口 agents.get 只认识在线 Agent，离线会
                 # NOT_FOUND；读侧命令应先探测 runtime，离线回定义态。
@@ -420,6 +434,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
                 if availability == "offline":
                     return self._definition_result(command, project, agent)
             result = await handle.dispatch(command, core_payload)
+            if command in _TURN_COMMANDS:
+                return result
             if (
                 command == "get_agent_info"
                 and not result.get("success")
@@ -489,6 +505,8 @@ class CoreClusterRegistryUnit(SubjectUnit):
             "agent_id": agent["agent_id"],
             "agent_name": agent["name"],
         }
+        if command in _TURN_COMMANDS:
+            return {"success": False, "data": None, "error": "agent_offline"}
         if command == "terminate_agent":
             return {"success": True, "data": {**identity, "terminated": True}}
         if command == "session_list":

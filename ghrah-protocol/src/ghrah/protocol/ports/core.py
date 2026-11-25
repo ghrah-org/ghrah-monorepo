@@ -245,8 +245,10 @@ class MailboxOperations(Protocol):
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> PublishedMessageView:
-        """以外部（人）身份发布一条消息；``idempotency_key`` 保证重复提交幂等。"""
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
+    ) -> MessageAcceptanceView:
+        """以外部（人）身份发布一条消息，返回持久受理时的投递快照。"""
         ...
 
     async def publish_notification(

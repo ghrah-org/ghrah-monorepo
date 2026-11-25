@@ -4,11 +4,15 @@
 
 """通过实际 full profile 和 CorePort 验证 Observer 只读路由。"""
 
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx2
 from ghrah.context import ContextManager
 from ghrah.context.persistence.sqlite_backend import SqliteBackend
+from ghrah.protocol.views.core import TurnRollbackPreviewView
 from ouroboros import Context
 
 from ghrah.subject.config import RecoveryConfig, SubjectConfig
@@ -16,6 +20,7 @@ from ghrah.subject.project.models import AgentRecord, make_project_record
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.runtime.service_keys import (
     CORE_CLUSTER_REGISTRY,
+    CORE_PORT_SERVICE,
     OBSERVER_ENDPOINT,
     PROJECT_MANAGER,
     PROJECT_STORE,
@@ -165,3 +170,85 @@ async def test_http_gate_precedes_project_lookup(tmp_path: Path) -> None:
             result = await client.get("/api/v1/projects/missing/agents/missing/turns")
         assert result.status_code == 503
         assert result.json()["error"]["code"] == "capability_unavailable"
+
+
+async def test_rollback_preview_uses_the_read_snapshot_and_does_not_start_core(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = make_project_record(name="sample", project_root_locator=str(tmp_path / "project"))
+    agent = AgentRecord(agent_id="worker", project_id=project.project_id, name="Worker")
+    project = project.model_copy(update={"agents": [agent]})
+    paths = ProjectPaths.from_locator(project.project_root_locator)
+    paths.initialize(project.project_id)
+    prefix = f"/api/v1/projects/{project.project_id}/agents/{agent.agent_id}/turns"
+
+    def snapshot():
+        with closing(sqlite3.connect(paths.action_chain_db_path)) as db:
+            return [
+                db.execute(f"SELECT * FROM {table}").fetchall() for table in ("branches", "turns")
+            ]
+
+    async with Context() as ctx:
+        await mount_builtin_units(ctx, _config(tmp_path), profile="full")
+        await ctx.get(PROJECT_STORE.name).upsert(project)
+        app = ctx.get(OBSERVER_ENDPOINT.name).app
+        transport = httpx2.ASGITransport(app=app, client=("192.0.2.10", 50000))
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            cold = f"{prefix}/cold/rollback-preview"
+            assert (await client.get(cold)).status_code == 403
+            client.headers["Authorization"] = "Bearer test-token"
+            assert (await client.get(cold, params={"target": "node"})).status_code == 400
+            assert (await client.get(cold, params={"node_id": "extra"})).status_code == 400
+            result = await client.get(cold)
+            assert result.status_code == 409
+            assert result.json()["error"]["code"] == "agent_offline"
+            assert not paths.action_chain_db_path.exists()
+            assert not ctx.get(CORE_CLUSTER_REGISTRY.name).has_cluster(project.project_id)
+
+            registry = ctx.get(CORE_PORT_SERVICE.name).for_project(project.project_id)._registry
+            unit = (await registry.ensure()).unit
+            monkeypatch.setitem(
+                unit._handlers,
+                "list_agents",
+                AsyncMock(
+                    return_value={
+                        "success": True,
+                        "data": {"agents": [{"agent_id": agent.agent_id, "name": agent.name}]},
+                    }
+                ),
+            )
+            monkeypatch.setattr(unit, "_agent_id_for_name", lambda name: agent.agent_id)
+            async with registry.message_manager().context_backend(None) as backend:
+                chain = ContextManager(agent.agent_id, persistence=backend)
+                await chain.persist()
+                turn_id = await chain.open_turn()
+                assert turn_id is not None
+                chain.begin_iteration()
+                end = chain.commit_iteration()
+                assert end is not None
+                await chain.persist()
+
+                async def preview(name, **kwargs):
+                    assert name == agent.name
+                    return await chain.preview_rollback(**kwargs)
+
+                monkeypatch.setattr(unit._supervisor, "preview_rollback", preview)
+                url = f"{prefix}/{turn_id}/rollback-preview"
+                active = await client.get(url)
+                assert active.status_code == 409
+                assert active.json()["error"]["code"] == "turn_active"
+                await chain.close_turn(
+                    status="closed", closing_kind="completed", end_node_id=end.id
+                )
+                before = snapshot()
+                success = await client.get(url)
+                assert success.status_code == 200, success.text
+                view = TurnRollbackPreviewView.model_validate(success.json())
+                assert view.turn_id == turn_id
+                invalid = await client.get(url, params={"target": "node", "node_id": "missing"})
+                assert invalid.status_code == 409
+                assert invalid.json()["error"]["code"] == "rollback_target_not_found"
+                missing = await client.get(cold)
+                assert missing.status_code == 404
+                assert missing.json()["error"]["code"] == "not_found"
+                assert snapshot() == before

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from ghrah.core.wiring import build_core_port
 from ghrah.protocol.types import RoomSubjectType
 from ghrah.protocol.views.observer_room import RoomFactsQuery
@@ -658,6 +659,7 @@ async def _delivery_manager(
         content: str,
         room_id: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: str = "queue",
     ) -> dict[str, Any]:
         deliveries.append((target, sender, content))
         return {"success": True, "data": {"content": "ok"}, "error": None}
@@ -772,6 +774,7 @@ async def test_delivery_failure_does_not_affect_room_send(tmp_path: Path) -> Non
         content: str,
         room_id: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: str = "queue",
     ) -> dict[str, Any]:
         deliveries.append((target, sender, content))
         if target == "bad":
@@ -816,9 +819,12 @@ VIDEO_BLOCK: dict[str, Any] = {
 }
 
 
-async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Path) -> None:
+@pytest.mark.parametrize("policy", [None, "inject"])
+async def test_room_send_with_blocks_keeps_blocks_and_delivery_policy(
+    tmp_path: Path, policy: str | None
+) -> None:
     """纯块消息：空正文受理成功；日志 data 与投递闭包都拿到校验后的块。"""
-    deliveries: list[tuple[str, str, str, list[dict[str, Any]] | None]] = []
+    deliveries: list[tuple[str, str, str, list[dict[str, Any]] | None, str]] = []
     store = RoomStore(tmp_path / "rooms.db")
     await store.start()
 
@@ -828,8 +834,9 @@ async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Pa
         content: str,
         room_id: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: str = "queue",
     ) -> dict[str, Any]:
-        deliveries.append((target, sender, content, blocks))
+        deliveries.append((target, sender, content, blocks, delivery_policy))
         return {"success": True, "data": {"content": "ok"}, "error": None}
 
     m = RoomManager(store, deliver=deliver)
@@ -844,6 +851,7 @@ async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Pa
                 "author": "human:yuki",
                 "author_type": "human",
                 "data": {"content_blocks": [IMAGE_BLOCK]},
+                **({"delivery_policy": policy} if policy else {}),
             },
         )
         entry = _data(result)["entry"]
@@ -852,7 +860,21 @@ async def test_room_send_with_blocks_keeps_blocks_and_delivers_them(tmp_path: Pa
         assert "message" not in entry["data"]
 
         await _drain_delivery_tasks()
-        assert deliveries == [("architect", "human:yuki", "", [IMAGE_BLOCK])]
+        assert deliveries == [("architect", "human:yuki", "", [IMAGE_BLOCK], policy or "queue")]
+
+        rejected = await m.handle_command(
+            "room_send",
+            {
+                "room_id": room["room_id"],
+                "author": "architect",
+                "author_type": "agent",
+                "data": {"message": "不应留下日志"},
+                "delivery_policy": "inject",
+            },
+        )
+        assert rejected["error"] == "delivery_policy_not_allowed"
+        log = await m.handle_command("room_get_log", {"room_id": room["room_id"]})
+        assert _data(log)["count"] == 1
     finally:
         await m.store.stop()
 
@@ -869,6 +891,7 @@ async def test_room_send_video_block_flows_through_legacy_delivery(tmp_path: Pat
         content: str,
         room_id: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: str = "queue",
     ) -> dict[str, Any]:
         deliveries.append((target, sender, content, blocks))
         return {"success": True, "data": {}, "error": None}
@@ -905,6 +928,7 @@ async def test_room_send_text_with_blocks_keeps_both(tmp_path: Path) -> None:
         content: str,
         room_id: str,
         blocks: list[dict[str, Any]] | None = None,
+        delivery_policy: str = "queue",
     ) -> dict[str, Any]:
         deliveries.append((target, sender, content, blocks))
         return {"success": True, "data": {}, "error": None}

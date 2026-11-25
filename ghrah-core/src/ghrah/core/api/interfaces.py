@@ -211,6 +211,8 @@ class MailboxPublishExternalRequest(BaseModel):
     idempotency_key: str
     metadata: dict[str, Any] | None = None
     content_blocks: list[InputContentBlock] | None = None
+    delivery_policy: Literal["inject", "queue"] = "queue"
+    await_reply: bool = True
 
 
 class MailboxPublishNotificationRequest(BaseModel):
@@ -767,7 +769,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("mailbox.summary", MailboxSummaryRequest, MailboxSummaryView),
         Interface("mailbox.list", MailboxListRequest, Page[MessageView]),
         Interface("mailbox.get", MailboxGetRequest, MessageView),
-        Interface("mailbox.publish_external", MailboxPublishExternalRequest, PublishedMessageView),
+        Interface("mailbox.publish_external", MailboxPublishExternalRequest, MessageAcceptanceView),
         Interface(
             "mailbox.publish_notification",
             MailboxPublishNotificationRequest,

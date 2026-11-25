@@ -61,6 +61,8 @@ class CommandType(StrEnum):
     GET_AGENT_INFO = "get_agent_info"
     AGENT_COMPACT_CONTEXT = "agent_compact_context"
     AGENT_RESET = "agent_reset"
+    TURN_ABORT = "turn_abort"
+    TURN_ROLLBACK = "turn_rollback"
     # 装配输入 v3：按 AgentAssemblySpec 创建/恢复，配置落在 Core 实例快照。
     CREATE_AGENT_ASSEMBLY = "create_agent_assembly"
     GET_AGENT_CONFIG = "get_agent_config"

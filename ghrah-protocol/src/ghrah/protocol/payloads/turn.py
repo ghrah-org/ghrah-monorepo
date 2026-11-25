@@ -2,9 +2,42 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""执行轮次事件的传输载荷。"""
+"""轮次事件与命令载荷。"""
 
-from pydantic import BaseModel
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class TurnAbortPayload(BaseModel):
+    """中止目标 Agent 的指定轮次或当前轮次。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    turn_id: str | None = Field(default=None, min_length=1)
+    session_id: str | None = Field(default=None, min_length=1)
+    reason: str = ""
+
+
+class TurnRollbackPayload(BaseModel):
+    """从终态轮次的起点前或指定轮内节点创建分支。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
+    target: Literal["base", "node"] = "base"
+    node_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def check_target(self) -> Self:
+        """仅在选择轮内节点时接受 node_id。"""
+        if (self.target == "node") != (self.node_id is not None):
+            raise ValueError("node_id is required exactly when target is node")
+        return self
 
 
 class _TurnPayload(BaseModel):

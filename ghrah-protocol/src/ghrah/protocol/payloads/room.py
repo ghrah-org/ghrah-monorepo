@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -125,6 +125,7 @@ class RoomSendPayload(BaseModel):
     author: str
     author_type: RoomSubjectType
     data: dict[str, Any] = Field(default_factory=dict)
+    delivery_policy: Literal["inject", "queue"] = "queue"
 
 
 class RoomListResultPayload(BaseModel):

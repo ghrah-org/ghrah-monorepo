@@ -11,13 +11,17 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from ghrah.plugin.negotiator import PythonHalfInfo, TsHalfReport, negotiate
 
+from ghrah.protocol.payloads.room import RoomSendPayload
 from ghrah.protocol.payloads.turn import (
+    TurnAbortPayload,
     TurnClosedPayload,
     TurnOpenedPayload,
+    TurnRollbackPayload,
     TurnWaitingHitlPayload,
 )
 from ghrah.protocol.types import (
@@ -31,6 +35,7 @@ from ghrah.protocol.types import (
     ProjectTransitionPayload,
     ProjectTransitionRequest,
     ProjectUpdateRequest,
+    RoomSubjectType,
     SendMessagePayload,
     TaskCheckOutcomePayload,
     TaskClaimEventPayload,
@@ -147,6 +152,18 @@ SAMPLES: dict[str, object] = {
             ),
         ),
         nodes=[NodeView(id="end", turn_id="turn")],
+    ),
+    "TurnAbortPayload": TurnAbortPayload(
+        project_id="project", agent_id="agent", session_id="session", reason="用户中止"
+    ),
+    "TurnRollbackPayload": TurnRollbackPayload(
+        project_id="project", agent_id="agent", turn_id="turn", target="node", node_id="node"
+    ),
+    "RoomSendPayload": RoomSendPayload(
+        room_id="room-001",
+        author="human:yuki",
+        author_type=RoomSubjectType.HUMAN,
+        data={"message": "请评审最新架构草案"},
     ),
     "TurnOpenedPayload": TurnOpenedPayload(
         agent_name="beta", turn_id="turn", session_id="session", opener_delivery_id="delivery"
@@ -471,10 +488,10 @@ SAMPLES["RoomTranscriptView"] = RoomTranscriptView(
 )
 
 
-def main() -> None:
+def main(names: list[str]) -> None:
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-    for name, sample in SAMPLES.items():
-        model = sample  # type: ignore[assignment]
+    for name in names or SAMPLES:
+        model = SAMPLES[name]  # type: ignore[assignment]
         data = model.model_dump(mode="json")  # type: ignore[attr-defined]
         path = SNAPSHOTS_DIR / f"{name}.json"
         path.write_text(
@@ -484,4 +501,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

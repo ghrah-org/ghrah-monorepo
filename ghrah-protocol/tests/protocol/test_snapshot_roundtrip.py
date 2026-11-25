@@ -18,9 +18,12 @@ from typing import TypeVar
 import pytest
 from pydantic import BaseModel
 
+from ghrah.protocol.payloads.room import RoomSendPayload
 from ghrah.protocol.payloads.turn import (
+    TurnAbortPayload,
     TurnClosedPayload,
     TurnOpenedPayload,
+    TurnRollbackPayload,
     TurnWaitingHitlPayload,
 )
 from ghrah.protocol.types import (
@@ -82,6 +85,9 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TurnDetailView": TurnDetailView,
     "RoomTranscriptView": RoomTranscriptView,
     "MessageAcceptanceView": MessageAcceptanceView,
+    "TurnAbortPayload": TurnAbortPayload,
+    "TurnRollbackPayload": TurnRollbackPayload,
+    "RoomSendPayload": RoomSendPayload,
     "TurnOpenedPayload": TurnOpenedPayload,
     "TurnWaitingHitlPayload": TurnWaitingHitlPayload,
     "TurnClosedPayload": TurnClosedPayload,

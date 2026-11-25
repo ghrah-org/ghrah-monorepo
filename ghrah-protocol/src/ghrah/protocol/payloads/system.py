@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializerFunctionWrapHandler, model_serializer
 
 # ─── 系统载荷模型 ───
 
@@ -20,6 +20,14 @@ class CommandResultPayload(BaseModel):
     data: Any = None
     error: str | None = None
     error_detail: str | None = None
+    details: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.details is None:
+            data.pop("details", None)
+        return data
 
 
 class ErrorPayload(BaseModel):

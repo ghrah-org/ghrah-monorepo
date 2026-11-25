@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 from ghrah.protocol.enums import CommandType
 from ghrah.protocol.problem import ProblemCode
+from ghrah.protocol.views.core import TurnAbortView, TurnRollbackView
 
 from ghrah.chat.message import ChatMessage
 from ghrah.communication.sqlite_message_store import SqliteDeliverySettlement
@@ -38,8 +39,7 @@ async def rollback_runtime(runtime):
     agent._supervisor = supervisor
     unit = CoreUnit(CoreUnitConfig(project_id="p", message_manager=mm))
     unit._supervisor = supervisor
-    assert "turn_rollback" not in unit.meta.routes.commands
-    assert "turn_rollback" not in {item.value for item in CommandType}
+    assert CommandType.TURN_ROLLBACK.value in unit.meta.routes.commands
 
     port = build_core_port(scope_id="p", db_path=str(backend.db_path))
     registry = port._registry
@@ -89,6 +89,39 @@ async def closed_turn(rollback_runtime):
     assert row["status"] == "closed"
     assert (await mm.get_replies(request.message_id))[0].content == "done"
     return row
+
+
+async def test_public_turn_commands_return_typed_idempotent_receipts(rollback_runtime, closed_turn):
+    _, _, _, port = rollback_runtime
+    registry = port._registry
+    payload = {
+        "agent_id": "agent",
+        "agent_name": "display",
+        "turn_id": closed_turn["turn_id"],
+    }
+
+    invalid = await registry.handle_command(command="turn_abort", payload={**payload, "reason": 1})
+    assert invalid["error"] == "invalid_abort_request"
+    invalid = await registry.handle_command(command="turn_rollback", payload=payload)
+    assert invalid["error"] == "invalid_rollback_target"
+    wrong_agent = await registry.handle_command(
+        command="turn_abort", payload={**payload, "agent_id": "other"}
+    )
+    assert wrong_agent["error"] == "agent_identity_mismatch"
+
+    abort = await registry.handle_command(command="turn_abort", payload=payload)
+    assert abort["success"]
+    assert TurnAbortView.model_validate(abort["data"]).already_terminal
+
+    rollback_payload = {**payload, "target": "base", "dry_run": False}
+    first = await registry.handle_command(command="turn_rollback", payload=rollback_payload)
+    replay = await registry.handle_command(command="turn_rollback", payload=rollback_payload)
+    assert first["success"] and replay["success"]
+    first_view = TurnRollbackView.model_validate(first["data"])
+    assert not first_view.already_applied
+    assert TurnRollbackView.model_validate(replay["data"]) == first_view.model_copy(
+        update={"already_applied": True}
+    )
 
 
 async def seed_residual_inputs(backend, mm, row):

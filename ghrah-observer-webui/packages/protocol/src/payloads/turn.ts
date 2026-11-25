@@ -33,6 +33,79 @@ export type TurnOpenedPayload = z.infer<typeof TurnOpenedPayloadSchema>;
 export type TurnWaitingHitlPayload = z.infer<typeof TurnWaitingHitlPayloadSchema>;
 export type TurnClosedPayload = z.infer<typeof TurnClosedPayloadSchema>;
 
+const RollbackTargetSchema = z.enum(["base", "node"]);
+
+export const TurnAbortPayloadSchema = z.strictObject({
+  project_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  turn_id: z.string().min(1).nullable().default(null),
+  session_id: z.string().min(1).nullable().default(null),
+  reason: z.string().default(""),
+});
+
+export const TurnRollbackPayloadSchema = z
+  .strictObject({
+    project_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    target: RollbackTargetSchema.default("base"),
+    node_id: z.string().min(1).nullable().default(null),
+  })
+  .refine(({ target, node_id }) => (target === "node") === (node_id !== null), {
+    path: ["node_id"],
+    message: "node_id is required exactly when target is node",
+  });
+
+export const TurnAbortViewSchema = z.strictObject({
+  turn_id: z.string(),
+  status: z.string(),
+  closing_kind: z.string().nullable().default(null),
+  aborted: z.boolean().default(false),
+  already_terminal: z.boolean().default(false),
+  result_pending: z.boolean().default(false),
+  cancelled_hitl: z.number().int().default(0),
+  released_deliveries: z.number().int().default(0),
+  incomplete_node_id: z.string().nullable().default(null),
+  recovery_branch_id: z.string().nullable().default(null),
+  opener_delivery_id: z.string().nullable().default(null),
+});
+
+export const TurnRollbackViewSchema = z.strictObject({
+  turn_id: z.string(),
+  session_id: z.string(),
+  status: z.string(),
+  closing_kind: z.string(),
+  target: RollbackTargetSchema,
+  target_node_id: z.string(),
+  branch_id: z.string(),
+  parent_branch_id: z.string().nullable().default(null),
+  released_delivery_ids: z.array(z.string()).default([]),
+  already_applied: z.boolean().default(false),
+  rolled_back_at: z.string(),
+});
+
+export const TurnRollbackPreviewViewSchema = z.strictObject({
+  turn_id: z.string(),
+  session_id: z.string(),
+  target: RollbackTargetSchema,
+  target_node_id: z.string(),
+  target_branch_id: z.string(),
+  base_node_id: z.string().nullable().default(null),
+  start_node_id: z.string().nullable().default(null),
+  end_node_id: z.string().nullable().default(null),
+  truncated_node_count: z.number().int().default(0),
+  crosses_compact: z.boolean().default(false),
+  target_is_compact: z.boolean().default(false),
+  head_unchanged: z.boolean().default(false),
+  released_delivery_ids: z.array(z.string()).default([]),
+});
+
+export type TurnAbortPayload = z.input<typeof TurnAbortPayloadSchema>;
+export type TurnRollbackPayload = z.input<typeof TurnRollbackPayloadSchema>;
+export type TurnAbortView = z.infer<typeof TurnAbortViewSchema>;
+export type TurnRollbackView = z.infer<typeof TurnRollbackViewSchema>;
+export type TurnRollbackPreviewView = z.infer<typeof TurnRollbackPreviewViewSchema>;
+
 const TurnFieldsSchema = z.object({
   turn_id: z.string(),
   agent_name: z.string(),

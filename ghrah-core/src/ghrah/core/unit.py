@@ -281,11 +281,6 @@ class _UnitMeta:
     routes: _RouteSpec
 
 
-# Core 管理命令：CommandType 的 .value 字符串
-# 私有能力命令仅供 Core Registry 调用。Subject 路由使用 _COMMANDS。
-_TURN_ROLLBACK_COMMAND = "turn_rollback"
-_TURN_ABORT_COMMAND = "turn_abort"
-
 # Supervisor 的恢复口径（memory/initialized/restored）与 wire 契约
 # （``AgentStartView.recovery_mode`` 只认 created/resumed）不是同一套词表。
 _WIRE_RECOVERY_MODES = {
@@ -317,6 +312,8 @@ _COMMANDS: frozenset[str] = frozenset(
         CommandType.EXECUTE_ABILITY.value,
         CommandType.AGENT_COMPACT_CONTEXT.value,
         CommandType.AGENT_RESET.value,
+        CommandType.TURN_ABORT.value,
+        CommandType.TURN_ROLLBACK.value,
         CommandType.CREATE_AGENT_ASSEMBLY.value,
         CommandType.GET_AGENT_CONFIG.value,
         CommandType.START_AGENT_ASSEMBLY.value,
@@ -607,8 +604,8 @@ class CoreUnit:
             CommandType.SESSION_LIST.value: self._handle_session_list,
             CommandType.SESSION_ARCHIVE.value: self._handle_session_archive,
             CommandType.SESSION_DELETE.value: self._handle_session_delete,
-            _TURN_ABORT_COMMAND: self._handle_turn_abort,
-            _TURN_ROLLBACK_COMMAND: self._handle_turn_rollback,
+            CommandType.TURN_ABORT.value: self._handle_turn_abort,
+            CommandType.TURN_ROLLBACK.value: self._handle_turn_rollback,
             CommandType.BRANCH_CREATE.value: self._handle_branch_create,
             CommandType.BRANCH_ACTIVATE.value: self._handle_branch_activate,
             CommandType.BRANCH_LIST.value: self._handle_branch_list,
@@ -1598,7 +1595,7 @@ class CoreUnit:
             else None
         )
         if sp.delivery_policy == "inject":
-            from ghrah.protocol.views.core import DeliveryAcceptanceView, MessageAcceptanceView
+            from ghrah.core.message_acceptance import message_acceptance_view
 
             accepted = await supervisor.accept(
                 target=sp.target,
@@ -1608,21 +1605,7 @@ class CoreUnit:
                 content_blocks=content_blocks,
                 delivery_policy="inject",
             )
-            receipt = MessageAcceptanceView(
-                message_id=accepted.message_id,
-                accepted_at=accepted.accepted_at,
-                deliveries=[
-                    DeliveryAcceptanceView(
-                        delivery_id=d.delivery_id,
-                        policy=d.delivery_policy,
-                        policy_applied=d.policy_applied,
-                        turn_id=d.turn_id,
-                        display_state=d.display_state,
-                        queue_position=d.queue_position,
-                    )
-                    for d in accepted.deliveries
-                ],
-            )
+            receipt = message_acceptance_view(accepted)
             return self._ok(receipt.model_dump(mode="json"))
         result = await supervisor.send(
             target=sp.target,

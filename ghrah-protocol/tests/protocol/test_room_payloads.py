@@ -12,6 +12,7 @@ Python 侧在此 pin wire 格式，双侧漂移任一侧测试即红。
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from ghrah.protocol.types import (
     COMMAND_PAYLOAD_MAP,
@@ -171,6 +172,7 @@ class TestRoomPayloadRoundTrip:
                     "author": "human:yuki",
                     "author_type": "human",
                     "data": {"message": "请评审最新架构草案"},
+                    "delivery_policy": "queue",
                 },
             ),
             (RoomListResultPayload, {"rooms": [ROOM_INFO], "count": 1}),
@@ -248,6 +250,18 @@ class TestRoomEnvelopeIntegration:
         )
         assert isinstance(env.payload, RoomSendPayload)
         assert env.payload.data["message"] == "hi"
+        assert env.payload.delivery_policy == "queue"
+
+    def test_room_send_rejects_unknown_delivery_policy(self):
+        with pytest.raises(ValidationError, match="delivery_policy"):
+            RoomSendPayload.model_validate(
+                {
+                    "room_id": "r",
+                    "author": "reader",
+                    "author_type": "human",
+                    "delivery_policy": "now",
+                }
+            )
 
     def test_room_event_envelope_resolves_model(self):
         env = envelope_from_dict(

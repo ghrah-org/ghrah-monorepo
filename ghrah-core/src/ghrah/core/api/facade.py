@@ -578,8 +578,10 @@ class _Mailbox:
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> PublishedMessageView:
-        """以外部（人）身份发布消息。"""
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
+    ) -> MessageAcceptanceView:
+        """以外部（人）身份发布消息并返回投递回执。"""
         raw = await self._facade._call(
             "mailbox.publish_external",
             sender=sender,
@@ -588,8 +590,10 @@ class _Mailbox:
             idempotency_key=idempotency_key,
             metadata=metadata,
             content_blocks=content_blocks,
+            delivery_policy=delivery_policy,
+            await_reply=await_reply,
         )
-        return PublishedMessageView.model_validate(raw)
+        return MessageAcceptanceView.model_validate(raw)
 
     async def publish_notification(
         self,

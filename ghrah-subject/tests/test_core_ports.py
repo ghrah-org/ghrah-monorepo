@@ -26,6 +26,33 @@ class _FakePort:
         self.closed += 1
 
 
+async def test_cluster_handle_keeps_requested_delivery_policy(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ghrah.protocol.payloads.agent import SendMessagePayload
+    from ghrah.protocol.views.core import MessageAcceptanceView
+
+    from ghrah.subject.runtime.port_transport import PortClusterTransport
+
+    append = AsyncMock(return_value=MessageAcceptanceView(message_id="msg", accepted_at=1.0))
+    ports = CorePorts(lambda _: SimpleNamespace(messages=SimpleNamespace(append=append)))
+    transport = PortClusterTransport(ports)
+    handle = await transport.ensure_cluster("p", project_id="p", project_root_locator=str(tmp_path))
+
+    receipt = await handle.send_message(
+        SendMessagePayload(
+            project_id="p",
+            agent_id="worker",
+            target="Worker",
+            content="hi",
+            delivery_policy="inject",
+        )
+    )
+    assert receipt["data"]["message_id"] == "msg"
+    assert append.call_args.kwargs["delivery_policy"] == "inject"
+
+
 def _recording_factory(created: list[str]):
     def factory(project_id: str) -> Any:
         created.append(project_id)

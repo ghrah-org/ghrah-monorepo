@@ -92,6 +92,7 @@ export const RoomSendPayloadSchema = z.object({
   author: z.string(),
   author_type: RoomSubjectTypeSchema,
   data: z.record(z.unknown()).optional().default({}),
+  delivery_policy: z.enum(["inject", "queue"]).default("queue"),
 });
 
 export const RoomListResultPayloadSchema = z.object({

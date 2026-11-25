@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from ghrah.protocol.errors import ApiError
 from ghrah.protocol.payloads.project import ProjectInfoPayload
 from ghrah.protocol.ports.core import CorePort
+from ghrah.protocol.problem import ProblemCode
 from ghrah.protocol.views.core import (
     BranchListView,
     DeliveryQueueView,
@@ -20,6 +21,7 @@ from ghrah.protocol.views.core import (
     HitlRequestListView,
     SessionCatalogView,
     TurnListView,
+    TurnRollbackPreviewView,
 )
 from ghrah.protocol.views.observer_room import TurnDetailView
 
@@ -31,15 +33,36 @@ from ghrah.subject.units.ability_control import PROBLEM_TO_HTTP, AbilityApiError
 __all__ = ["TurnControlUnit", "build_turn_control_router"]
 
 
+_ROLLBACK_PREVIEW_CONFLICTS = frozenset(
+    {
+        "rollback_target_not_found",
+        "already_rolled_back",
+        "turn_active",
+        "session_has_active_turn",
+        "turn_busy",
+        "rollback_conflict",
+        "turn_not_rollbackable",
+        "turn_has_no_nodes",
+        "turn_base_missing",
+        "turn_session_missing",
+        "turn_has_pending_hitl",
+        "rollback_target_not_usable",
+        "target_branch_deleted",
+    }
+)
+
+
+def _read_error(error: ApiError) -> AbilityApiError:
+    problem = error.problem
+    code = PROBLEM_TO_HTTP.get(problem.code.value, "internal")
+    return AbilityApiError(code, problem.detail or code, detail=problem.details or None)
+
+
 async def _read[T](operation: Awaitable[T]) -> T:
     try:
         return await operation
     except ApiError as error:
-        problem = error.problem
-        code = PROBLEM_TO_HTTP.get(problem.code.value, "internal")
-        raise AbilityApiError(
-            code, problem.detail or code, detail=problem.details or None
-        ) from error
+        raise _read_error(error) from error
 
 
 def build_turn_control_router(*, config: SubjectConfig, ctx: Any) -> APIRouter:
@@ -85,6 +108,33 @@ def build_turn_control_router(*, config: SubjectConfig, ctx: Any) -> APIRouter:
     @router.get("/turns/{turn_id}")
     async def _turn(agent_id: str, turn_id: str, port: CorePort = Depends(_port)) -> TurnDetailView:
         return await _read(port.turns.detail(agent_id=agent_id, turn_id=turn_id))
+
+    @router.get("/turns/{turn_id}/rollback-preview")
+    async def _rollback_preview(
+        agent_id: str,
+        turn_id: str,
+        port: CorePort = Depends(_port),
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackPreviewView:
+        if (target == "node") != (node_id is not None) or node_id == "":
+            raise AbilityApiError(
+                "invalid_request", "node_id is required exactly when target is node"
+            )
+        try:
+            return await port.turns.rollback_preview(
+                agent_id=agent_id, turn_id=turn_id, target=target, node_id=node_id
+            )
+        except ApiError as error:
+            problem = error.problem
+            reason = problem.detail
+            if reason == "agent_not_online" and problem.code == ProblemCode.FAILED_PRECONDITION:
+                raise AbilityApiError("agent_offline", reason, status=409) from error
+            if reason in _ROLLBACK_PREVIEW_CONFLICTS:
+                raise AbilityApiError(
+                    reason, reason, detail=problem.details or None, status=409
+                ) from error
+            raise _read_error(error) from error
 
     @router.get("/sessions")
     async def _sessions(agent_id: str, port: CorePort = Depends(_port)) -> SessionCatalogView:
