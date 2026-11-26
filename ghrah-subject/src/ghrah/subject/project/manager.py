@@ -47,6 +47,7 @@ from ghrah.protocol.types import (
     ProjectUnlinkTaskPayload,
     ProjectUpdatePayload,
     RecoveryAction,
+    RoomSubjectType,
 )
 from pydantic import ValidationError
 
@@ -75,6 +76,7 @@ from ghrah.subject.project.store import (
     ProjectNotFoundError,
     ProjectStore,
 )
+from ghrah.subject.room.models import RoomRecord, now_iso
 from ghrah.subject.template_store.store import TemplateStore
 from ghrah.subject.workspace.locator import locator_to_path, path_to_locator
 
@@ -1145,6 +1147,12 @@ class ProjectManager:
 
             return r.model_copy(update={"agents": [a for a in r.agents if not is_target(a)]})
 
+        # 忙碌守卫：正在处理消息时拒绝删除，避免 terminate 杀掉在途轮次。
+        # 运行态读不到（offline / unknown）时 busy 为 None，不阻塞删除。
+        runtime = await self.agents.runtime(existing, target)
+        if runtime.get("busy") is True:
+            return _err_code("agent_busy", f"agent {target.name} is processing messages")
+
         # 先 terminate runtime、成功后再删定义：terminate 失败保留定义并返回
         # 稳定错误码——宁可不删，不留"定义已删、runtime 仍在运行"的游离
         # Agent。cluster 未挂载（stopped/archived 后）视为无 runtime。
@@ -1179,6 +1187,7 @@ class ProjectManager:
                 return _err_code("agent_terminate_failed", terminate_error)
 
         updated = await self._store.update(p.project_id, expected, mutator)
+        await self._purge_room_members(existing.project_id, target)
         # 引用计数与创建时的 increment_reference 配对；失败不影响删除结果。
         try:
             templates = self._template_store() if self._template_store is not None else None
@@ -1195,6 +1204,49 @@ class ProjectManager:
                 "agent_id": target.agent_id,
             }
         )
+
+    async def _purge_room_members(self, project_id: str, agent: AgentRecord) -> None:
+        """删除 Agent 后清掉项目内所有 Room 的成员关系；日志不动。"""
+        if self._room_store is None:
+            return
+        keys = {value for value in (agent.agent_id, agent.name) if value}
+        try:
+            rooms = await self._room_store.list(project_id=project_id)
+        except Exception:
+            logger.warning("remove_agent: list rooms failed", exc_info=True)
+            return
+        for room in rooms:
+            removed = [
+                member
+                for member in room.members
+                if member.subject_type == RoomSubjectType.AGENT
+                and (member.subject in keys or member.subject_name in keys)
+            ]
+            if not removed:
+                continue
+            keep = [member for member in room.members if member not in removed]
+            try:
+                updated = await self._room_store.update(
+                    room.room_id,
+                    expected_version=None,
+                    mutator=lambda current: current.model_copy(
+                        update={"members": keep, "updated_at": now_iso()}
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "remove_agent: room %s member purge failed", room.room_id, exc_info=True
+                )
+                continue
+            if updated is None:
+                continue
+            for member in removed:
+                await self._emit_room_member_left(updated, member.subject)
+
+    async def _emit_room_member_left(self, room: RoomRecord, subject: str) -> None:
+        if self._on_event is None:
+            return
+        await self._on_event("room_member_left", {"room": room.to_wire(), "subject": subject})
 
     async def _handle_link_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._toggle_task_link(payload, link=True)

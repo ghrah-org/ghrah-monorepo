@@ -121,6 +121,10 @@ class AgentEntityManager:
             if agent.agent_id
         ]
 
+    async def runtime(self, project: ProjectRecord, agent: AgentRecord) -> dict[str, Any]:
+        """按项目与记录读运行态（availability / busy / incarnation_id）。"""
+        return await self._runtime(project, agent)
+
     async def _load(self, identity: AgentIdentity) -> tuple[ProjectRecord, AgentRecord]:
         project, error = await self._projects._get_active_project(identity.project_id)
         if error or project is None:
