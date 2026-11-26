@@ -140,6 +140,22 @@ describe("useAbilityAdminStore", () => {
     expect(record?.tree).toBeNull();
   });
 
+  it("marks the record failed when admin fails even if the tree loads", async () => {
+    setAbilityControlClientFactory(() =>
+      client({ admin: vi.fn().mockRejectedValue(new Error("admin down")) }),
+    );
+    const store = useAbilityAdminStore();
+    await store.load("p1", "a1");
+    const record = store.record("p1", "a1");
+    expect(record?.failed).toBe(true);
+    expect(record?.errorMessage).toBe("admin down");
+    expect(record?.loadedAt).toBeNull();
+    expect(record?.tree?.run_id).toBe("run-1");
+    expect(record?.changes.map((change) => change.seq)).toEqual([1]);
+    expect(record?.nextAfterSeq).toBe(2);
+    expect(record?.hasMore).toBe(false);
+  });
+
   it("does not overlap reloads, and a visible agent rereads after it is marked stale", async () => {
     const pending: Array<(value: typeof tree) => void> = [];
     let active = 0;

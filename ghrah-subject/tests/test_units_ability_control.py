@@ -18,7 +18,14 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi import FastAPI
-from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, GrantRecord
+from ghrah.ability.access import (
+    AbilityAccessStore,
+    AccessError,
+    AccessIdentity,
+    GrantPolicy,
+    GrantRecord,
+    GrantRule,
+)
 from ghrah.ability.loading.ability_catalog import load_ability_definitions
 from ghrah.ability.versions import AbilityVersion
 from ghrah.core.read.ability_catalog import (
@@ -200,6 +207,7 @@ async def make_app():
                 scope_id=project_id,
                 db_path=handle.store_path or "",
                 install_root=config.ability.install_root,
+                grant_policy=config.ability_grant_policy,
             )
 
         base_ports = CorePorts(make_port)
@@ -437,6 +445,36 @@ async def test_admin_and_tree_rest_behaviour(tmp_path: Any, make_app) -> None:
             finally:
                 server2.should_exit = True
                 await task2
+        finally:
+            server.should_exit = True
+            await task
+    finally:
+        await store.close()
+
+
+async def test_admin_reports_deployment_grant_policy(tmp_path: Path, make_app) -> None:
+    store, operator = await _open_store(tmp_path)
+    try:
+        policy = GrantPolicy(mode="merge", rules=(GrantRule(package="ghrah.fs"),))
+        config = SubjectConfig(
+            ability_source="builtin",
+            observer_http_api_enabled=True,
+            ability_grant_policy=policy,
+        )
+        app = make_app(
+            config, _Handle("proj", store, operator, str(tmp_path / "ability.db")), _Bus()
+        )
+        server, task, port = await _serve(app)
+        try:
+            status, admin = await _request(
+                f"http://127.0.0.1:{port}/api/v1/projects/proj/agents/agent-1/ability-admin"
+            )
+            assert status == 200
+            assert admin["grant_policy"] == {
+                "mode": "merge",
+                "digest": policy.digest,
+                "rules": 1,
+            }
         finally:
             server.should_exit = True
             await task

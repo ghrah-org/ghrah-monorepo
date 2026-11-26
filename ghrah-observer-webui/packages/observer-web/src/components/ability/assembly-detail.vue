@@ -41,6 +41,7 @@ const record = computed(() => {
   return {
     loading: current.loading,
     failed: current.failed,
+    errorMessage: current.errorMessage,
     conflict: current.conflict,
     revision: current.revision,
     admin: current.admin,
@@ -161,6 +162,9 @@ onUnmounted(hide);
       <p v-if="record?.loading" class="assembly-state">{{ t("assembly.loading") }}</p>
       <p v-if="record?.failed" class="assembly-state assembly-state-alert" role="alert">
         {{ t("assembly.loadFailed") }}
+      </p>
+      <p v-if="record?.failed && record.errorMessage" class="assembly-note">
+        {{ record.errorMessage }}
       </p>
       <UiButton
         v-if="record?.failed"
