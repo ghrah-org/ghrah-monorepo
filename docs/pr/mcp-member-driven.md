@@ -42,6 +42,12 @@ MCP 从「内置 `ghrah.mcp` 包 + 模型可见 `mcp_call` + 包级 binding」�
   - 更新架构、能力、成员规范、模板与数据存储文档；删除已退役内置 MCP 包的描述。
   - 生成 [MCP 集成设计 HTML 归档](../design/mcp-integration-design.html)，内嵌可交互的前端 Demo，并补充模板 MCP 成员类型修复。
 
+### 后续追加（2026-11-26）
+
+- **无密钥 MCP 提供商**：`api_key_configured=false` 不再被禁用；无密钥且无认证绑定时按无认证连接，安装为 `auth.mode=none` 的 Server。详见 [无密钥提供商 PR 文档](mcp-keyless-provider.md)。
+- **同步 main**：合并 `main` 的消息管理器、轮次回执、HITL 与投递策略等变更。
+- **合并冲突修复**：合并后 Room 日志读取路径出现重复方法和残缺方法体，已修复 `RoomManager`、`RoomStore`、`ProjectScopedRoomStore`、`RoomUnit` 与 units 聚合说明；修复提交 `a4e5c221`。该修复不改变设计语义，只恢复正确的两条读取路径：普通 transcript 走 Core facts，物料同步走 MM 权威 DB 的按序读取。
+
 ### 文件结构
 
 ```diff
@@ -66,25 +72,38 @@ MCP 从「内置 `ghrah.mcp` 包 + 模型可见 `mcp_call` + 包级 binding」�
 
 ### 关键回归
 
-| 场景 | 结果 |
-| --- | --- |
-| 复用已有 Provider 探测 | `ok=true`，无新增 Provider，原密钥不变 |
+| 场景                             | 结果                                                       |
+| -------------------------------- | ---------------------------------------------------------- |
+| 复用已有 Provider 探测           | `ok=true`，无新增 Provider，原密钥不变                     |
+| 无密钥 Provider 选择与探测       | 选项可选，连接成功并获取 8 个工具                          |
 | 旧模板 MCP 成员 `type=operation` | 渲染归一为 `mcp`，创建 Agent 不再报 `member type mismatch` |
-| 存量模板修复 | revision 1/2 `bad MCP types: 0` |
-| 安装 `mcp.provider_reuse@0.0.1` | 成功写入 agentconf Server 与能力包版本 |
+| 存量模板修复                     | revision 1/2 `bad MCP types: 0`                            |
+| 安装 `mcp.provider_reuse@0.0.1`  | 成功写入 agentconf Server 与能力包版本                     |
+| 合并 main 后的 Room 日志读取     | transcript 与 material_state_sync 均通过回归               |
+
+### 合并冲突修复
+
+- **Before:** `python -m compileall ghrah-subject/src` 在 `room/manager.py:622` 报 `SyntaxError: '(' was never closed`；`RoomStore` / `ProjectScopedRoomStore` 存在重复的 `get_log_page` 定义。
+- **After:** 修复提交 `a4e5c221` 后，subject 全量 775 passed；合并后的 Core 3205 passed，协议与 TS 测试全部通过。
 
 ### 测试
 
 ```text
 Python（plugin/protocol/core/subject/taskstore/scheme）
-  4354 passed, 43 skipped
+  core       3205 passed, 19 skipped
+  subject     775 passed, 23 skipped
+  protocol    293 passed
+  plugin/taskstore/scheme 315 passed, 1 skipped
 
 TypeScript（protocol/observer-core/mock-server/plugin-registry/observer-web）
-  1478 passed, 7 skipped
+  protocol         568 passed, 4 skipped
+  observer-core    405 passed
+  mock-server       55 passed
+  plugin-registry   19 passed
+  observer-web     471 passed, 3 skipped
+  合计             1518 passed, 7 skipped
   pnpm type-check 通过
-  pnpm lint       0 errors
-  pnpm build      通过
-  mypy protocol/scheme 通过
+  pnpm lint       0 errors（21 条既有 warning）
   ruff check/format 通过
 ```
 
@@ -101,3 +120,19 @@ TypeScript（protocol/observer-core/mock-server/plugin-registry/observer-web）
 - 协议、Core、Subject、Observer Web 五个包同时变化。
 - MCP 旧引用与生成式安装 API 不再兼容；发布前应先在副本上跑迁移脚本并确认备份。
 - 模板成员类型修复是就地修订，不新增 revision；执行前需停止实例并保留 `subject.db` 备份。
+- 分支同时合入了 `main` 的消息管理器/轮次/HITL 变更；合并冲突修复只恢复 Room 日志两条读取路径，不改变协议或存储格式。
+- Workbench 需在合并后的提交上重新构建后才能看到全部变化；部署前应确认 `workbench` 的构建版本与目标提交一致。
+
+## 相关提交
+
+```text
+7618873 feat(core)!: MCP 改为成员驱动并移除旧绑定层
+d6d394b feat(webui): 增加 MCP 安装向导与提供商复用
+438417a chore(scripts): 增加 MCP v2 迁移与模板类型修复脚本
+060e614 docs(mcp): 更新成员驱动说明并补充 PR 文档
+30b866d docs(mcp): 归档设计文档 HTML 并内嵌交互 Demo
+70cf79d fix(mcp): 支持选择无密钥的 MCP 提供商
+ce756982 docs(mcp): 补充无密钥 MCP 提供商 PR 文档
+550b864 Merge branch 'main' into andrew-dev-new
+a4e5c221 fix(subject): 修复合并冲突残留的 Room 日志方法
+```

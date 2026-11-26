@@ -67,6 +67,7 @@ Observer Web
 
 部署验证
   debug_v2 / 2026.11-3d914d4
+  Workbench / 2026.11-ce75698（5173，选项与探测已验证）
   health: ok
 ```
 
