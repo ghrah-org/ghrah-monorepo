@@ -7,6 +7,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseMessage, ServerMessageSchema, serializeMessage } from "./message.js";
 import {
+  MaterialStateGetPayloadSchema,
+  MaterialStateRegisterPayloadSchema,
+  MaterialStateResultPayloadSchema,
+  MaterialStateSyncPayloadSchema,
+} from "./payloads/material.js";
+import {
   AbilityDefinitionPayloadSchema,
   AbilityResultPayloadSchema,
   ActionChainUpdatedPayloadSchema,
@@ -172,6 +178,11 @@ function loadSnapshot(name: string): Record<string, unknown> {
 }
 
 const PAYLOAD_SCHEMA_MAP: Record<string, import("zod").ZodTypeAny> = {
+  MaterialStateGetPayload: MaterialStateGetPayloadSchema,
+  MaterialStateRegisterPayload: MaterialStateRegisterPayloadSchema,
+  MaterialStateSyncPayload: MaterialStateSyncPayloadSchema,
+  MaterialStateResultPayload_empty: MaterialStateResultPayloadSchema,
+  MaterialStateResultPayload_applied: MaterialStateResultPayloadSchema,
   AgentConfigPayload: AgentConfigPayloadSchema,
   AgentConfigPayload_full: AgentConfigPayloadSchema,
   AbilityDefinitionPayload: AbilityDefinitionPayloadSchema,

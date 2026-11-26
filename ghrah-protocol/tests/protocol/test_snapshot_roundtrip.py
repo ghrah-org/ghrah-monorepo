@@ -27,6 +27,10 @@ from ghrah.protocol.payloads.turn import (
     TurnWaitingHitlPayload,
 )
 from ghrah.protocol.types import (
+    MaterialStateGetPayload,
+    MaterialStateRegisterPayload,
+    MaterialStateResultPayload,
+    MaterialStateSyncPayload,
     PluginCrashedPayload,
     PluginLifecyclePayload,
     PluginNegotiatedPayload,
@@ -91,6 +95,11 @@ S1_SNAPSHOTS: dict[str, type[BaseModel]] = {
     "TurnOpenedPayload": TurnOpenedPayload,
     "TurnWaitingHitlPayload": TurnWaitingHitlPayload,
     "TurnClosedPayload": TurnClosedPayload,
+    "MaterialStateGetPayload": MaterialStateGetPayload,
+    "MaterialStateRegisterPayload": MaterialStateRegisterPayload,
+    "MaterialStateSyncPayload": MaterialStateSyncPayload,
+    "MaterialStateResultPayload_empty": MaterialStateResultPayload,
+    "MaterialStateResultPayload_applied": MaterialStateResultPayload,
     "PluginNegotiatePayload": PluginNegotiatePayload,
     "PluginNegotiateResultPayload": PluginNegotiateResultPayload,
     "PluginLifecyclePayload": PluginLifecyclePayload,

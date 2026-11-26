@@ -102,6 +102,9 @@ const authMode = computed({
 const selectedProvider = computed(
   () => providers.value.find((provider) => provider.id === providerId.value) ?? null,
 );
+const providerWithoutKey = computed(
+  () => selectedProvider.value !== null && !selectedProvider.value.api_key_configured,
+);
 const selectedTools = computed(() => tools.value.filter((tool) => selected.value.has(tool.name)));
 const allSelected = computed(
   () => tools.value.length > 0 && selected.value.size === tools.value.length,
@@ -637,19 +640,21 @@ onUnmounted(() => {
                   <option value="">
                     {{ t("config.connections.mcpInstall.providerNew") }}
                   </option>
-                  <option
-                    v-for="provider in providers"
-                    :key="provider.id"
-                    :value="provider.id"
-                    :disabled="!provider.api_key_configured"
-                  >
-                    {{ provider.name }}{{ provider.vendor ? ` · ${provider.vendor}` : "" }}
+                  <option v-for="provider in providers" :key="provider.id" :value="provider.id">
+                    {{ provider.name }}{{ provider.vendor ? ` · ${provider.vendor}` : ""
+                    }}{{
+                      provider.api_key_configured
+                        ? ""
+                        : ` · ${t("config.connections.mcpInstall.providerNoKey")}`
+                    }}
                   </option>
                 </UiSelect>
                 <small>
                   {{
                     selectedProvider
-                      ? t("config.connections.mcpInstall.providerReuseHint")
+                      ? providerWithoutKey
+                        ? t("config.connections.mcpInstall.providerNoKeyHint")
+                        : t("config.connections.mcpInstall.providerReuseHint")
                       : t("config.connections.mcpInstall.providerNewHint")
                   }}
                 </small>
@@ -717,7 +722,11 @@ onUnmounted(() => {
                 <small>{{ t("config.connections.mcpInstall.keyHint") }}</small>
               </label>
               <p v-else class="mcp-field mcp-field-full mcp-note">
-                {{ t("config.connections.mcpInstall.providerCredentialHint") }}
+                {{
+                  providerWithoutKey
+                    ? t("config.connections.mcpInstall.providerNoKeyConnectionHint")
+                    : t("config.connections.mcpInstall.providerCredentialHint")
+                }}
               </p>
               <label class="mcp-field">
                 <span>{{ t("config.connections.mcpInstall.fields.timeout") }}</span>

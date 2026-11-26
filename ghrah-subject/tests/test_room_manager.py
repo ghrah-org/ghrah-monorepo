@@ -21,6 +21,7 @@ from ghrah.core.wiring import build_core_port
 from ghrah.protocol.types import RoomSubjectType
 from ghrah.protocol.views.observer_room import RoomFactsQuery
 
+from ghrah.subject.room.chat_action_store import ChatActionStore
 from ghrah.subject.room.manager import RoomManager
 from ghrah.subject.room.store import RoomStore
 
@@ -1062,6 +1063,36 @@ async def test_room_send_non_message_event_without_message_still_accepted(tmp_pa
         await m.store.stop()
 
 
+async def test_chat_action_store_persists_status_and_payload(tmp_path: Path) -> None:
+    store = ChatActionStore(tmp_path / "chat-actions.sqlite3")
+    await store.start()
+    try:
+        record = await store.append(
+            project_id="proj-1",
+            room_id="room-1",
+            action="requirement.update",
+            payload={"change_request": "数量改为 30"},
+        )
+        assert record.status == "pending"
+        failed = await store.mark_failed(record.action_id, "message rejected")
+        assert failed is not None
+        assert failed.payload_json == record.payload_json
+        assert failed.status == "failed"
+        assert failed.error == "message rejected"
+
+        sent = await store.mark_sent(record.action_id, "entry-1")
+        assert sent is not None
+        assert sent.status == "sent"
+        assert sent.room_log_id == "entry-1"
+        assert sent.payload_json == record.payload_json
+
+        records = await store.list("room-1")
+        assert len(records) == 1
+        assert records[0].to_wire()["payload"] == {"change_request": "数量改为 30"}
+    finally:
+        await store.stop()
+
+
 def _write_mm_db(root: Path, messages: list[dict[str, Any]]) -> None:
     """在 Project Root 下创建用于离线兼容测试的旧 MM 表。"""
     db_dir = root / "db"
@@ -1071,7 +1102,8 @@ def _write_mm_db(root: Path, messages: list[dict[str, Any]]) -> None:
         conn.execute("INSERT INTO mm_meta VALUES (1, 'proj-1', 1)")
         conn.execute(
             "CREATE TABLE mm_messages ("
-            "message_id TEXT PRIMARY KEY, sender_id TEXT, content TEXT, metadata TEXT)"
+            "message_id TEXT PRIMARY KEY, sender_id TEXT, content TEXT, "
+            "metadata TEXT, reply_to TEXT)"
         )
         conn.execute(
             "CREATE TABLE mm_deliveries ("
@@ -1080,7 +1112,7 @@ def _write_mm_db(root: Path, messages: list[dict[str, Any]]) -> None:
         )
         for message in messages:
             conn.execute(
-                "INSERT INTO mm_messages VALUES (?, ?, ?, ?)",
+                "INSERT INTO mm_messages VALUES (?, ?, ?, ?, NULL)",
                 (
                     message["message_id"],
                     message["sender_id"],

@@ -26,6 +26,10 @@ from ghrah.protocol.payloads.turn import (
     TurnWaitingHitlPayload,
 )
 from ghrah.protocol.types import (
+    MaterialStateGetPayload,
+    MaterialStateRegisterPayload,
+    MaterialStateResultPayload,
+    MaterialStateSyncPayload,
     PluginCrashedPayload,
     PluginLifecyclePayload,
     PluginNegotiatedPayload,
@@ -200,6 +204,38 @@ SAMPLES: dict[str, object] = {
         status="closed",
         closing_kind="completed",
         end_node_id="end",
+    ),
+    "MaterialStateGetPayload": MaterialStateGetPayload(project_id="project-1"),
+    "MaterialStateRegisterPayload": MaterialStateRegisterPayload(
+        project_id="project-1",
+        material_id="requirement",
+        material_version="1",
+        initial_data={"quantity": 24},
+        data_schema={"type": "object", "properties": {"quantity": {"type": "integer"}}},
+    ),
+    "MaterialStateSyncPayload": MaterialStateSyncPayload(project_id="project-1", room_id="room-1"),
+    "MaterialStateResultPayload_empty": MaterialStateResultPayload(),
+    "MaterialStateResultPayload_applied": MaterialStateResultPayload.model_validate(
+        {
+            "state": {
+                "project_id": "project-1",
+                "material_id": "requirement",
+                "material_version": "1",
+                "title": "需求核对",
+                "data": {"quantity": 50},
+                "revision": 1,
+                "updated_at": "2026-11-18T00:00:00Z",
+            },
+            "applications": [
+                {
+                    "room_log_id": "log-1",
+                    "room_id": "room-1",
+                    "status": "applied",
+                    "revision": 1,
+                    "fields": [{"key": "quantity", "label": "需求数量", "value": 50}],
+                }
+            ],
+        }
     ),
     "PluginNegotiatePayload": PluginNegotiatePayload(
         enabled_ts=[

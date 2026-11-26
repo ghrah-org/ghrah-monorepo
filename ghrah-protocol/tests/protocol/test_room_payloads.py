@@ -18,6 +18,8 @@ from ghrah.protocol.types import (
     COMMAND_PAYLOAD_MAP,
     EVENT_PAYLOAD_MAP,
     ROOM_COMMANDS,
+    ChatActionListPayload,
+    ChatActionListResultPayload,
     CommandType,
     Envelope,
     EventType,
@@ -97,6 +99,7 @@ class TestRoomEnums:
                 "room_get_members",
                 "room_get_log",
                 "room_send",
+                "chat_action_list",
             }
         )
 
@@ -177,6 +180,29 @@ class TestRoomPayloadRoundTrip:
             ),
             (RoomListResultPayload, {"rooms": [ROOM_INFO], "count": 1}),
             (RoomLogResultPayload, {"entries": [ROOM_LOG_ENTRY], "count": 1}),
+            (
+                ChatActionListPayload,
+                {"room_id": "room-001", "limit": 200},
+            ),
+            (
+                ChatActionListResultPayload,
+                {
+                    "actions": [
+                        {
+                            "action_id": "action-001",
+                            "project_id": "proj-001",
+                            "room_id": "room-001",
+                            "action": "requirement.update",
+                            "payload": {"change_request": "数量改为 30"},
+                            "status": "sent",
+                            "room_log_id": "entry-001",
+                            "created_at": "2026-11-17T00:00:00Z",
+                            "updated_at": "2026-11-17T00:00:01Z",
+                        }
+                    ],
+                    "count": 1,
+                },
+            ),
             (RoomEventPayload, {"room": ROOM_INFO}),
             (RoomDeletedEventPayload, {"room_id": "room-001", "project_id": "proj-001"}),
             (

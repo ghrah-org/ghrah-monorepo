@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ghrah.protocol.views.core import AgentAssemblySpec, AgentStartView
 
     from ghrah.subject.project.models import AgentRecord, ProjectRecord
+    from ghrah.subject.room.models import RoomLogRecord
 
 __all__ = [
     "ABILITY_ACCESS",
@@ -169,6 +170,11 @@ class RoomManagerService(Protocol):
 
     async def handle_command(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a room command. Returns a dispatcher-shape result dict."""
+
+    async def get_log_page(
+        self, room_id: str, *, since_seq: int, limit: int
+    ) -> list[RoomLogRecord]:
+        """按序从消息权威读通正文，供持久消费者（物料数据同步）处理。"""
 
     async def append_log(
         self,
