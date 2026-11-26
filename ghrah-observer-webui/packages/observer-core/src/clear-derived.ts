@@ -13,6 +13,7 @@ import { useHitlStore } from "./stores/hitl.js";
 import { useRoomsStore } from "./stores/rooms.js";
 import { useSessionsStore } from "./stores/sessions.js";
 import { useTasksStore } from "./stores/tasks.js";
+import { useTranscriptStore } from "./stores/transcript.js";
 
 export function clearAgentDerived(target: AgentTarget) {
   useActionChainsStore().clearAgent(target);
@@ -22,9 +23,11 @@ export function clearAgentDerived(target: AgentTarget) {
   useHitlStore().clearAgent(target);
   useChatStore().clearAgent(target);
   useContextUsageStore().clearAgent(target);
+  useTranscriptStore().clearAgent(target);
 }
 
 export function clearRoomDerived(target: RoomTarget, removeRoom = true) {
+  useTranscriptStore().clearRoom(target);
   useChatStore().clearRoom(target);
   const rooms = useRoomsStore();
   if (removeRoom) rooms.clearRoom(target);
@@ -32,6 +35,7 @@ export function clearRoomDerived(target: RoomTarget, removeRoom = true) {
 }
 
 export function clearProjectDerived(projectId: string) {
+  useTranscriptStore().clearProject(projectId);
   useActionChainsStore().clearProject(projectId);
   useBranchesStore().clearProject(projectId);
   useSessionsStore().clearProject(projectId);

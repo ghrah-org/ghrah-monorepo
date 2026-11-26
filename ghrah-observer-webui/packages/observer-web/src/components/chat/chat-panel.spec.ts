@@ -4,16 +4,21 @@
 
 // @vitest-environment happy-dom
 
-import { useChatStore, useConnectionStore, useRoomsStore } from "@ghrah/observer-core";
-import type { RoomInfoPayload, RoomLogEntryPayload } from "@ghrah/protocol";
+import {
+  useChatStore,
+  useConnectionStore,
+  useRoomsStore,
+  useTranscriptStore,
+} from "@ghrah/observer-core";
+import type { RoomInfoPayload, RoomLogEntryPayload, TranscriptEntryView } from "@ghrah/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const roomSendMock = vi.fn();
-const getRoomLogMock = vi.fn();
+const refreshRoomMock = vi.fn();
 vi.mock("@/composables/useObserver", () => ({
-  useObserver: () => ({ roomSend: roomSendMock, getRoomLog: getRoomLogMock }),
+  useObserver: () => ({ roomSend: roomSendMock, refreshRoom: refreshRoomMock }),
 }));
 
 import ChatPanel from "./chat-panel.vue";
@@ -64,6 +69,50 @@ function setup() {
   const connection = useConnectionStore();
   connection.setConnected();
   return { rooms, chat, connection };
+}
+
+function publishTranscriptEntry(
+  seq: number,
+  content: string,
+  overrides: Partial<TranscriptEntryView> = {},
+) {
+  const target = { projectId: "p1", roomId: "r1" };
+  const transcript = useTranscriptStore();
+  const state = transcript.enterRoom(target);
+  const entry: TranscriptEntryView = {
+    entry_id: `r1-${seq}`,
+    seq,
+    author: "user",
+    author_type: "human",
+    timestamp: 1767225600,
+    message_id: `message-${seq}`,
+    content,
+    content_blocks: null,
+    targets: [],
+    deliveries: [],
+    turn_id: null,
+    insert_before_turn_id: null,
+    injection_step: null,
+    human_state: null,
+    node_id: null,
+    ...overrides,
+  };
+  transcript.applyPage(
+    state,
+    {
+      project_id: target.projectId,
+      room_id: target.roomId,
+      entries: [entry],
+      turns: [],
+      next_before_seq: null,
+      next_since_seq: seq,
+      latest_seq: seq,
+      has_more: false,
+      read_at: "",
+    },
+    "incremental",
+  );
+  useChatStore().onTranscriptEntry(target, entry);
 }
 
 function mountPanel(roomId = "r1") {
@@ -155,12 +204,18 @@ describe("ChatPanel", () => {
     expect(entries[1].text()).toContain("hello from human");
   });
 
-  it("end_task 结果投影为结束态条目并渲染（不再被当成普通会话）", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
-      logEntry("r1", 1, "architect", "agent", "开始梳理", { ability: "conversation" }),
-      logEntry("r1", 2, "architect", "agent", "梳理完成", { ability: "end_task" }),
-    ]);
+  it("transcript 的 end_task 经镜像保留旧页面结束标记", async () => {
+    setup();
+    publishTranscriptEntry(1, "开始梳理", {
+      author: "architect",
+      author_type: "agent",
+      ability: "conversation",
+    });
+    publishTranscriptEntry(2, "梳理完成", {
+      author: "architect",
+      author_type: "agent",
+      ability: "end_task",
+    });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     const entries = wrapper.findAll(".chat-entry");
@@ -206,25 +261,33 @@ describe("ChatPanel", () => {
     await wrapper.vm.$nextTick();
     await wrapper.find("textarea").setValue("hello room");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "hello room", [], []);
-    const pending = chat.allEntries.find((e) => e.content === "hello room");
+    const pending = chat
+      .pendingOf({ projectId: "p1", roomId: "r1" })
+      .find((e) => e.content === "hello room");
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      pending?.clientSeq,
+      "hello room",
+      [],
+      [],
+    );
     expect(pending?.roomId).toBe("r1");
     expect(pending?.pending).toBe(true);
   });
 
   it("pending entry is removed when echo arrives and history shows instead", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    publishTranscriptEntry(1, "history", { author: "architect", author_type: "agent" });
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     await wrapper.find("textarea").setValue("echo me");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.text()).toContain("echo me");
-    // 模拟 bind 的 ROOM_LOG_APPENDED 分发：rooms 追加 + chat echo 确认
-    const echo = logEntry("r1", 2, "user", "human", "echo me");
-    rooms.onRoomLogAppended({ entry: echo });
-    chat.onRoomLogAppended(echo, "p1");
+    const target = { projectId: "p1", roomId: "r1" };
+    const [pending] = chat.pendingOf(target);
+    chat.attachServerEntryId(target, pending.clientSeq, "r1-2");
+    publishTranscriptEntry(2, "echo me");
     await wrapper.vm.$nextTick();
     expect(chat.allEntries.find((e) => e.content === "echo me")).toBeUndefined();
     const entries = wrapper.findAll(".chat-entry");
@@ -264,7 +327,13 @@ describe("ChatPanel", () => {
     await options[1].find('input[type="checkbox"]').trigger("change");
     await wrapper.find("textarea").setValue("please review");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend", "backend"], []);
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      expect.any(Number),
+      "please review",
+      ["frontend", "backend"],
+      [],
+    );
   });
 
   it("entry 带 targets 时 header 显示定向标记", async () => {
@@ -362,7 +431,13 @@ describe("ChatPanel", () => {
     await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
     await wrapper.find("form").trigger("submit");
     const blocks = [{ type: "image", base64: "AQID", mime_type: "image/png" }];
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "", [], blocks);
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      expect.any(Number),
+      "",
+      [],
+      blocks,
+    );
     const pending = chat.allEntries.find((entry) => entry.pending);
     expect(pending?.blocks).toEqual(blocks);
     await wrapper.vm.$nextTick();
@@ -370,11 +445,11 @@ describe("ChatPanel", () => {
   });
 
   it("旧核未回显图片时给出块丢失提示", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    publishTranscriptEntry(1, "history", { author: "architect", author_type: "agent" });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    chat.addPendingEntry({
+    const pending = chat.addPendingEntry({
       projectId: "p1",
       to: "r1",
       content: "",
@@ -383,9 +458,8 @@ describe("ChatPanel", () => {
       blocks: [{ type: "image", base64: "AQID", mime_type: "image/png" }],
     });
     await wrapper.vm.$nextTick();
-    const echo = logEntry("r1", 2, "user", "human", "");
-    rooms.onRoomLogAppended({ entry: echo });
-    chat.onRoomLogAppended(echo, "p1");
+    chat.attachServerEntryId({ projectId: "p1", roomId: "r1" }, pending.clientSeq, "r1-2");
+    publishTranscriptEntry(2, "");
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("did not echo the attached media");
   });
@@ -472,9 +546,9 @@ it("shows authoritative delivery failure", async () => {
   }
 });
 
-it("refreshes pending delivery status and stops polling after unmount", async () => {
+it("refreshes the scoped Room from the drawer and surfaces errors without component polling", async () => {
   vi.useFakeTimers();
-  getRoomLogMock.mockClear().mockResolvedValue({ success: true });
+  refreshRoomMock.mockReset().mockRejectedValueOnce(new Error("transcript unavailable"));
   try {
     const { rooms } = setup();
     rooms.setRoomLog("r1", [
@@ -484,11 +558,21 @@ it("refreshes pending delivery status and stops polling after unmount", async ()
     ]);
     const w = mountPanel();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(getRoomLogMock).toHaveBeenCalledOnce();
-    expect(getRoomLogMock).toHaveBeenCalledWith("r1");
+    expect(refreshRoomMock).not.toHaveBeenCalled();
+    await w
+      .findAll("button")
+      .find((button) => button.text() === "Details")!
+      .trigger("click");
+    await w
+      .findAll("button")
+      .find((button) => button.text() === "Refresh delivery status")!
+      .trigger("click");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRoomMock).toHaveBeenCalledWith({ projectId: "p1", roomId: "r1" });
+    expect(w.text()).toContain("transcript unavailable");
     w.unmount();
     await vi.advanceTimersByTimeAsync(6000);
-    expect(getRoomLogMock).toHaveBeenCalledOnce();
+    expect(refreshRoomMock).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
   }

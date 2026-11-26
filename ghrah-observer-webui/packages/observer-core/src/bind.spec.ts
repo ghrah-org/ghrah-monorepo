@@ -2,13 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { CommandResultPayload, ServerMessage } from "@ghrah/protocol";
-import { CommandType, EventType, SystemType, type WebSocketLike } from "@ghrah/protocol";
+import type { CommandResultPayload, RoomTranscriptView, ServerMessage } from "@ghrah/protocol";
+import {
+  CommandType,
+  EventType,
+  RoomInfoPayloadSchema,
+  SystemType,
+  type WebSocketLike,
+} from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectStores } from "./bind.js";
+import { connectStores, type ConnectStoresOptions } from "./bind.js";
 import { ObserverClient } from "./client.js";
 import { createFrameBatcher, createSyncBatcher, type FrameBatcher } from "./frame-batcher.js";
+import { HttpError } from "./http.js";
 import type { ChainTarget } from "./scope.js";
 import { useActionChainsStore } from "./stores/action-chains.js";
 import { useAgentsStore } from "./stores/agents.js";
@@ -24,6 +31,10 @@ import { useRoomsStore } from "./stores/rooms.js";
 import { useSessionsStore } from "./stores/sessions.js";
 import { usePluginsStore } from "./stores/plugins.js";
 import { useTasksStore } from "./stores/tasks.js";
+import { useTranscriptStore } from "./stores/transcript.js";
+import { deferred, entry, page } from "./test-fixtures/transcript.js";
+import { createTranscriptReader } from "./transcript-reader.js";
+import type { TurnApiClient } from "./turn-api.js";
 
 const WS_OPEN = 1;
 
@@ -143,7 +154,13 @@ describe("connectStores", () => {
   let skipSyncInitialState: ReturnType<typeof vi.spyOn<any, any>> | null = null;
 
   async function connectClient(
-    opts: { skipSync?: boolean; batcher?: FrameBatcher; tsHalfProvider?: () => unknown[] } = {},
+    opts: {
+      skipSync?: boolean;
+      batcher?: FrameBatcher;
+      tsHalfProvider?: () => unknown[];
+      turnApi?: ConnectStoresOptions["turnApi"];
+      transcriptReader?: ConnectStoresOptions["transcriptReader"];
+    } = {},
   ) {
     const { skipSync = true } = opts;
     if (skipSync) {
@@ -153,6 +170,8 @@ describe("connectStores", () => {
     }
     disconnect = connectStores(client, {
       batcher: opts.batcher ?? createSyncBatcher(),
+      turnApi: opts.turnApi,
+      transcriptReader: opts.transcriptReader,
       ...(opts.tsHalfProvider ? { tsHalfProvider: opts.tsHalfProvider as () => never[] } : {}),
     });
     const connectPromise = client.connect();
@@ -351,6 +370,9 @@ describe("connectStores", () => {
   });
 
   describe("room events", () => {
+    const roomTarget = { projectId: "p1", roomId: "r1" };
+    const roomIdentity = { project_id: roomTarget.projectId, room_id: roomTarget.roomId };
+
     function makeRoom(roomId: string, overrides: Record<string, unknown> = {}) {
       return {
         room_id: roomId,
@@ -406,6 +428,189 @@ describe("connectStores", () => {
         makeMsg(EventType.ROOM_DELETED, { room_id: "r1", project_id: "p1" }),
       );
       expect(store.rooms.has("r1")).toBe(false);
+    });
+
+    it.each([
+      { event: EventType.ROOM_LOG_APPENDED, payload: { entry: makeLogEntry("r1") }, roomId: "r1" },
+      { event: EventType.TURN_OPENED, payload: { turn_id: "t" }, roomId: "r1" },
+      { event: EventType.TURN_WAITING_HITL, payload: { turn_id: "t" }, roomId: "r1" },
+      { event: EventType.TURN_CLOSED, payload: { turn_id: "t" }, roomId: "r1" },
+      { event: EventType.AGENT_RESPONSE, payload: {}, roomId: "r1" },
+      { event: EventType.AGENT_RESPONSE, payload: { metadata: { room_id: "r2" } }, roomId: "r2" },
+      {
+        event: EventType.HITL_REQUEST,
+        payload: { turn_id: "t", promise_id: "h1", tool_args: {}, context: {} },
+        roomId: "r1",
+      },
+      { event: EventType.HITL_RESOLVED, payload: { turn_id: "t", promise_id: "h1" }, roomId: "r1" },
+    ])("routes $event to a transcript refresh of $roomId", async ({ event, payload, roomId }) => {
+      const roomTranscript = vi.fn<TurnApiClient["roomTranscript"]>(
+        async (projectId, roomId, options) => {
+          const identity = { project_id: projectId, room_id: roomId };
+          if (options?.sinceSeq === undefined) return page([], identity);
+          return page([entry(1)], { ...identity, next_since_seq: 1 });
+        },
+      );
+      const reader = createTranscriptReader({ roomTranscript, turnDetail: vi.fn() });
+      await connectClient({ transcriptReader: reader });
+      const rooms = useRoomsStore();
+      const member = { subject: "a1", subject_type: "agent" };
+      const loadedRooms = [
+        makeRoom("r1", { members: [member] }),
+        makeRoom("r2"),
+        makeRoom("r3", { project_id: "foreign", members: [member] }),
+      ].map((room) => RoomInfoPayloadSchema.parse(room));
+      for (const room of loadedRooms) {
+        rooms.onRoomCreated({ room });
+        await reader.loadInitial({ projectId: room.project_id, roomId: room.room_id });
+      }
+      roomTranscript.mockClear();
+
+      internals(client)._dispatch(
+        event,
+        makeMsg(event, { project_id: "p1", agent_id: "a1", ...payload }),
+      );
+      expect(rooms.logs.get(roomId)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(roomTranscript).toHaveBeenCalledExactlyOnceWith(
+        "p1",
+        roomId,
+        expect.objectContaining({ sinceSeq: 0 }),
+      );
+      expect(rooms.logs.get(roomId)?.map(({ id }) => id)).toEqual(["entry-1"]);
+      expect(rooms.logs.get("r3")).toEqual([]);
+    });
+
+    it("pauses in-flight transcript reads on disconnect and reloads the tail on reconnect", async () => {
+      const pending = deferred<RoomTranscriptView>();
+      const roomTranscript = vi
+        .fn<TurnApiClient["roomTranscript"]>()
+        .mockResolvedValueOnce(page([entry(1)], roomIdentity))
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(page([entry(3)], roomIdentity));
+      const reader = createTranscriptReader({ roomTranscript, turnDetail: vi.fn() });
+      await connectClient({ transcriptReader: reader });
+      const rooms = useRoomsStore();
+      rooms.onRoomCreated({ room: RoomInfoPayloadSchema.parse(makeRoom("r1")) });
+      await reader.loadInitial(roomTarget);
+      reader.invalidate(roomTarget);
+      await vi.advanceTimersByTimeAsync(150);
+      const signal = roomTranscript.mock.calls[1][2]?.signal;
+      expect(signal?.aborted).toBe(false);
+
+      internals(client)._notifyDisconnected();
+      expect(signal?.aborted).toBe(true);
+      pending.resolve(page([entry(2)], { ...roomIdentity, next_since_seq: 2 }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(roomTranscript).toHaveBeenCalledTimes(2);
+      expect(rooms.logs.get("r1")?.map(({ id }) => id)).toEqual(["entry-1"]);
+
+      internals(client)._notifyReconnected();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(roomTranscript).toHaveBeenLastCalledWith(
+        "p1",
+        "r1",
+        expect.objectContaining({ limit: 50 }),
+      );
+      expect(roomTranscript.mock.calls[2][2]?.sinceSeq).toBeUndefined();
+      expect(rooms.logs.get("r1")?.map(({ id }) => id)).toEqual(["entry-3"]);
+    });
+
+    it("unbinds transcript events and invalidates late reads and receipts", async () => {
+      const pending = deferred<RoomTranscriptView>();
+      const roomTranscript = vi
+        .fn<TurnApiClient["roomTranscript"]>()
+        .mockResolvedValueOnce(page([entry(1)], roomIdentity))
+        .mockReturnValueOnce(pending.promise);
+      const reader = createTranscriptReader({ roomTranscript, turnDetail: vi.fn() });
+      const invalidateAgent = vi.spyOn(reader, "invalidateAgent");
+      await connectClient({ transcriptReader: reader });
+      await reader.loadInitial(roomTarget);
+      const refreshing = reader.refreshRoom(roomTarget);
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = roomTranscript.mock.calls[1][2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      const chat = useChatStore();
+      const draft = { ...roomTarget, to: "r1", agentName: "", content: "same" };
+      const previous = chat.addPendingEntry(draft);
+
+      disconnect();
+      expect(signal?.aborted).toBe(true);
+      pending.resolve(page([entry(2)], { ...roomIdentity, next_since_seq: 2 }));
+      await refreshing;
+      expect(useTranscriptStore().room(roomTarget)).toBeUndefined();
+      expect(useRoomsStore().logs.has("r1")).toBe(false);
+
+      internals(client)._dispatch(
+        EventType.TURN_OPENED,
+        makeMsg(EventType.TURN_OPENED, { project_id: "p1", agent_id: "a1", turn_id: "t" }),
+      );
+      expect(invalidateAgent).not.toHaveBeenCalled();
+
+      chat.clearAll();
+      const current = chat.addPendingEntry(draft);
+      expect(current.clientSeq).toBe(previous.clientSeq);
+      reader.acknowledgeSend(roomTarget, previous.clientSeq, "old-entry");
+      expect(chat.pendingOf(roomTarget)[0]?.serverEntryId).toBeUndefined();
+    });
+
+    it.each([
+      { path: "incremental", status: 404, code: "not_found" },
+      { path: "reconnect", status: 404, code: "not_found" },
+      { path: "reconnect", status: 409, code: "resource_archived" },
+    ])("clears the Room and derived state on $path $status", async ({ path, status, code }) => {
+      const target = { projectId: "p1", roomId: "r1" };
+      const failure = new HttpError({ status, code, message: "Room unavailable" });
+      const roomTranscript = vi
+        .fn()
+        .mockResolvedValueOnce({
+          project_id: target.projectId,
+          room_id: target.roomId,
+          entries: [],
+          turns: [],
+          next_before_seq: null,
+          next_since_seq: null,
+          latest_seq: 0,
+          has_more: false,
+          read_at: "",
+        })
+        .mockRejectedValueOnce(failure);
+      const reader = createTranscriptReader({ roomTranscript, turnDetail: vi.fn() });
+      await connectClient({ transcriptReader: reader });
+      const rooms = useRoomsStore();
+      const chat = useChatStore();
+      for (const roomId of ["r1", "r2"]) {
+        rooms.onRoomCreated({ room: makeRoom(roomId) as never });
+        chat.addPendingEntry({ ...target, roomId, to: roomId, agentName: "", content: "pending" });
+      }
+      rooms.setActiveRoom(target.roomId);
+      await reader.loadInitial(target);
+      expect(rooms.logs.has(target.roomId)).toBe(true);
+
+      if (path === "reconnect") {
+        internals(client)._notifyReconnected();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(roomTranscript).toHaveBeenLastCalledWith(
+          "p1",
+          "r1",
+          expect.objectContaining({ limit: 50 }),
+        );
+      } else {
+        await expect(reader.refreshRoom(target)).rejects.toBe(failure);
+        expect(roomTranscript).toHaveBeenLastCalledWith(
+          "p1",
+          "r1",
+          expect.objectContaining({ sinceSeq: 0 }),
+        );
+      }
+
+      expect(useTranscriptStore().room(target)).toBeUndefined();
+      expect(rooms.logs.has(target.roomId)).toBe(false);
+      expect(rooms.rooms.has(target.roomId)).toBe(false);
+      expect(rooms.activeRoomId).toBeNull();
+      expect(chat.pendingOf(target)).toEqual([]);
+      expect(rooms.rooms.has("r2")).toBe(true);
+      expect(chat.pendingOf({ ...target, roomId: "r2" })).toHaveLength(1);
     });
 
     it("archive clears active Room state and restore accepts an unarchived stopped Project", async () => {
@@ -955,6 +1160,96 @@ describe("connectStores", () => {
   });
 
   describe("hitl events", () => {
+    it("recovers after the Agent list on both initial connection and reconnection", async () => {
+      const hitlPending = vi.fn().mockResolvedValue({ agent_id: "a1", items: [] });
+      await connectClient({ turnApi: { hitlPending } });
+      const store = useHitlStore();
+      const dispatch = (type: string, payload: Record<string, unknown>) =>
+        internals(client)._dispatch(type, makeMsg(type, payload));
+      dispatch(EventType.PROJECT_CREATED, { project: { project_id: "p1", name: "test" } });
+      expect(hitlPending).not.toHaveBeenCalled();
+      const list = () =>
+        dispatch(SystemType.COMMAND_RESULT, {
+          request_id: "agent-list",
+          original_command: CommandType.LIST_AGENTS,
+          success: true,
+          data: { agents: [{ name: "worker", agent_id: "a1" }] },
+        });
+      const live = () =>
+        dispatch(EventType.HITL_REQUEST, {
+          promise_id: "h1",
+          agent_name: "worker",
+          ability_name: "shell",
+          tool_args: {},
+          context: {},
+        });
+      live();
+      expect(store.requests).toMatchObject([{ promiseId: "h1", projectId: "p1", agentId: "a1" }]);
+      list();
+      list();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hitlPending).toHaveBeenCalledTimes(1);
+      expect(hitlPending).toHaveBeenCalledWith(
+        "p1",
+        "a1",
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+      expect(store.requests).toEqual([]);
+
+      live();
+      expect(store.requests).toMatchObject([{ promiseId: "h1", projectId: "p1", agentId: "a1" }]);
+      internals(client)._notifyDisconnected();
+      internals(client)._notifyReconnected();
+      expect(hitlPending).toHaveBeenCalledTimes(1);
+      list();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hitlPending).toHaveBeenCalledTimes(2);
+      expect(store.requests).toEqual([]);
+    });
+
+    it("ignores a pending HITL snapshot from before reconnect", async () => {
+      const oldSnapshot = deferred<Awaited<ReturnType<TurnApiClient["hitlPending"]>>>();
+      const hitlPending = vi
+        .fn<TurnApiClient["hitlPending"]>()
+        .mockReturnValueOnce(oldSnapshot.promise)
+        .mockResolvedValueOnce({ agent_id: "a1", items: [] });
+      await connectClient({ turnApi: { hitlPending } });
+      const dispatch = (type: string, payload: Record<string, unknown>) =>
+        internals(client)._dispatch(type, makeMsg(type, payload));
+      const list = () =>
+        dispatch(SystemType.COMMAND_RESULT, {
+          request_id: "agent-list",
+          original_command: CommandType.LIST_AGENTS,
+          success: true,
+          data: { agents: [{ name: "worker", agent_id: "a1" }] },
+        });
+      dispatch(EventType.PROJECT_CREATED, { project: { project_id: "p1", name: "test" } });
+      dispatch(EventType.HITL_REQUEST, {
+        promise_id: "existing",
+        agent_name: "worker",
+        ability_name: "shell",
+        tool_args: {},
+        context: {},
+      });
+      list();
+      expect(hitlPending).toHaveBeenCalledTimes(1);
+      const signal = hitlPending.mock.calls[0][2]?.signal;
+      expect(signal?.aborted).toBe(false);
+
+      internals(client)._notifyDisconnected();
+      internals(client)._notifyReconnected();
+      expect(signal?.aborted).toBe(true);
+      oldSnapshot.resolve({ agent_id: "a1", items: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useHitlStore().requests.map(({ promiseId }) => promiseId)).toEqual(["existing"]);
+      expect(hitlPending).toHaveBeenCalledTimes(1);
+
+      list();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hitlPending).toHaveBeenCalledTimes(2);
+      expect(useHitlStore().requests).toEqual([]);
+    });
+
     it("adds hitl request on hitl_request", async () => {
       await connectClient();
       const store = useHitlStore();

@@ -5,6 +5,7 @@
 import type {
   ActionChainUpdatedPayload,
   ActionNode,
+  AgentResponsePayload,
   AgentSpawnedPayload,
   AgentTerminatedPayload,
   BranchEventPayload,
@@ -41,12 +42,16 @@ import type {
   TaskDumpResultPayload,
   TaskEventPayload,
   TsHalfReport,
+  TurnClosedPayload,
+  TurnOpenedPayload,
+  TurnWaitingHitlPayload,
 } from "@ghrah/protocol";
 import { CommandType, EventType, SystemType } from "@ghrah/protocol";
 import { clearAgentDerived, clearProjectDerived, clearRoomDerived } from "./clear-derived.js";
 import { applyProjectListResult } from "./project-projection.js";
 import type { ObserverClient } from "./client.js";
 import { createFrameBatcher, type FrameBatcher } from "./frame-batcher.js";
+import { createHttpAbortController, HttpError } from "./http.js";
 import {
   type AgentTarget,
   agentKey,
@@ -71,6 +76,8 @@ import { useProjectsStore } from "./stores/projects.js";
 import { useRoomsStore } from "./stores/rooms.js";
 import { useSessionsStore } from "./stores/sessions.js";
 import { useTasksStore } from "./stores/tasks.js";
+import type { TranscriptReader } from "./transcript-reader.js";
+import type { TurnApiClient } from "./turn-api.js";
 
 export interface ConnectStoresOptions {
   /** High-volume event batcher; defaults to requestAnimationFrame/microtask batching. */
@@ -80,6 +87,8 @@ export interface ConnectStoresOptions {
    * 连接后补装不会重发协商。observer-core 不知道插件目录/URL/import map。
    */
   tsHalfProvider?: () => TsHalfReport[];
+  turnApi?: Pick<TurnApiClient, "hitlPending">;
+  transcriptReader?: TranscriptReader;
 }
 
 function stringField(value: unknown): string | null {
@@ -111,6 +120,60 @@ export function connectStores(
   const abilityAdmin = useAbilityAdminStore();
   const abilityPackages = useAbilityPackagesStore();
   const batcher = options.batcher ?? createFrameBatcher();
+  const transcript = options.transcriptReader;
+  transcript?.onRoomUnavailable(clearRoomDerived);
+  const pendingHitlReads = new Map<string, ReturnType<typeof createHttpAbortController>>();
+  const restoredHitlAgents = new Set<string>();
+  let restoreHitl = false;
+
+  function cancelHitlRecovery() {
+    restoreHitl = false;
+    hitl.cancelPendingReads();
+    for (const request of pendingHitlReads.values()) request.abort();
+    pendingHitlReads.clear();
+    restoredHitlAgents.clear();
+  }
+
+  async function recoverAgentHitl(target: AgentTarget) {
+    const api = options.turnApi;
+    if (!api || !restoreHitl) return;
+    const key = agentKey(target);
+    if (pendingHitlReads.has(key) || restoredHitlAgents.has(key)) return;
+    const request = createHttpAbortController();
+    const finish = hitl.beginPendingRead(target);
+    pendingHitlReads.set(key, request);
+    try {
+      const result = await api.hitlPending(target.projectId, target.agentId, {
+        signal: request.signal,
+      });
+      if (result.agent_id !== target.agentId) {
+        throw new HttpError({
+          code: "internal",
+          status: 200,
+          message: "待审批读面返回了错误的 Agent",
+        });
+      }
+      if (finish(result.items)) restoredHitlAgents.add(key);
+    } catch (error) {
+      if (finish()) {
+        const logger = (globalThis as { console?: { warn(...args: unknown[]): void } }).console;
+        logger?.warn("读取待审批请求失败", target.projectId, target.agentId, error);
+      }
+    } finally {
+      if (pendingHitlReads.get(key) === request) pendingHitlReads.delete(key);
+    }
+  }
+
+  function discardAgentState(target: AgentTarget) {
+    const key = agentKey(target);
+    pendingHitlReads.get(key)?.abort();
+    pendingHitlReads.delete(key);
+    restoredHitlAgents.delete(key);
+    transcript?.invalidateAgent(target.projectId, target.agentId, rooms.activeRooms, {
+      restart: true,
+    });
+    clearAgentDerived(target);
+  }
 
   /** 连接级协商 + 归因读通量（A10 连接半边；onConnected/onReconnected 互斥触发）。 */
   function syncPluginAndTaskState() {
@@ -126,12 +189,21 @@ export function connectStores(
 
   client.onConnected(() => {
     connection.setConnected();
+    transcript?.resume();
+    restoreHitl = options.turnApi !== undefined;
     syncPluginAndTaskState();
   });
-  client.onDisconnected(() => connection.setDisconnected());
+  client.onDisconnected(() => {
+    connection.setDisconnected();
+    transcript?.pause();
+    cancelHitlRecovery();
+  });
   client.onReconnecting(() => connection.setReconnecting());
   client.onReconnected(() => {
     connection.setConnected();
+    transcript?.resume(true);
+    cancelHitlRecovery();
+    restoreHitl = options.turnApi !== undefined;
     syncPluginAndTaskState();
     // 重连即触发重同步（S3.1/M3b）：断线窗口内的事件已丢失，须从权威读通量
     // 重建投影。对全部已知 operable 项目重放 listAgents → syncAgentActionState
@@ -158,7 +230,7 @@ export function connectStores(
   client.on(EventType.AGENT_TERMINATED, (msg: ServerMessage) => {
     const payload = msg.payload as AgentTerminatedPayload;
     const target = agents.onAgentTerminated(payload);
-    if (target) clearAgentDerived(target);
+    if (target) discardAgentState(target);
     if (payload.agent_id) void abilityAdmin.markStale(payload.project_id, payload.agent_id);
   });
   client.on(EventType.ABILITY_TREE_CHANGED, (msg: ServerMessage) => {
@@ -196,14 +268,46 @@ export function connectStores(
     });
   });
 
-  client.on(EventType.HITL_REQUEST, (msg: ServerMessage) =>
-    hitl.onHitlRequest(msg.payload as HITLRequestPayload),
-  );
+  client.on(EventType.HITL_REQUEST, (msg: ServerMessage) => {
+    const payload = msg.payload as HITLRequestPayload;
+    hitl.onHitlRequest(payload);
+    transcript?.invalidateAgent(payload.project_id, payload.agent_id, rooms.activeRooms, {
+      turnId: payload.turn_id ?? undefined,
+    });
+  });
 
   client.on(EventType.HITL_RESOLVED, (msg: ServerMessage) => {
     const payload = msg.payload as HITLResolvedPayload;
     hitl.removeRequest(payload.promise_id);
+    transcript?.invalidateAgent(payload.project_id, payload.agent_id, rooms.activeRooms, {
+      turnId: payload.turn_id ?? undefined,
+    });
   });
+
+  const transcriptEvents = [
+    EventType.TURN_OPENED,
+    EventType.TURN_WAITING_HITL,
+    EventType.TURN_CLOSED,
+    EventType.AGENT_RESPONSE,
+  ] as const;
+  if (transcript) {
+    for (const event of transcriptEvents) {
+      client.on(event, (msg: ServerMessage) => {
+        if (event === EventType.AGENT_RESPONSE) {
+          const payload = msg.payload as AgentResponsePayload;
+          transcript.invalidateAgent(payload.project_id, payload.agent_id, rooms.activeRooms, {
+            roomId: stringField(payload.metadata?.room_id) ?? undefined,
+          });
+        } else {
+          const payload = msg.payload as
+            TurnOpenedPayload | TurnWaitingHitlPayload | TurnClosedPayload;
+          transcript.invalidateAgent(payload.project_id, payload.agent_id, rooms.activeRooms, {
+            turnId: payload.turn_id,
+          });
+        }
+      });
+    }
+  }
 
   client.on(EventType.CONTEXT_USAGE_UPDATED, (msg: ServerMessage) =>
     batcher.add(() =>
@@ -233,14 +337,18 @@ export function connectStores(
         list,
         projects.projects.get(projectId),
       );
-      for (const target of removed) clearAgentDerived(target);
-      void syncAgentActionState(
-        agents.agentsForProject(projectId).map(({ projectId, agentId, agentName }) => ({
+      for (const target of removed) discardAgentState(target);
+      const targets = agents
+        .agentsForProject(projectId)
+        .map(({ projectId, agentId, agentName }) => ({
           projectId,
           agentId,
           agentName,
-        })),
-      );
+        }));
+      if (projects.isProjectOperable(projectId)) {
+        for (const target of targets) void recoverAgentHitl(target);
+      }
+      void syncAgentActionState(targets);
     }
 
     if (command === CommandType.ROOM_LIST && Array.isArray(data.rooms)) {
@@ -258,7 +366,7 @@ export function connectStores(
       }
     }
 
-    if (command === CommandType.ROOM_GET_LOG && Array.isArray(data.entries)) {
+    if (!transcript && command === CommandType.ROOM_GET_LOG && Array.isArray(data.entries)) {
       const entries = data.entries as RoomLogEntryPayload[];
       const roomId =
         stringField(context?.payload.room_id) ??
@@ -397,6 +505,11 @@ export function connectStores(
   client.on(EventType.ROOM_LOG_APPENDED, (msg: ServerMessage) => {
     const payload = msg.payload as RoomLogEventPayload;
     if (!payload.entry) return;
+    if (transcript) {
+      const room = rooms.activeRooms.get(payload.entry.room_id);
+      if (room) transcript.invalidate({ projectId: room.project_id, roomId: room.room_id });
+      return;
+    }
     batcher.add(() => {
       const room =
         rooms.activeRooms.get(payload.entry.room_id) ??
@@ -433,7 +546,7 @@ export function connectStores(
       agentName: payload.agent_name,
     };
     agents.removeAgent(target);
-    clearAgentDerived(target);
+    discardAgentState(target);
   });
   client.on(EventType.PROJECT_ARCHIVED, (msg: ServerMessage) => {
     const payload = msg.payload as ProjectEventPayload;
@@ -559,6 +672,7 @@ export function connectStores(
     EventType.ACTION_CHAIN_UPDATED,
     EventType.CONTEXT_USAGE_UPDATED,
     EventType.HITL_REQUEST,
+    EventType.HITL_RESOLVED,
     EventType.AGENT_ERROR,
     EventType.MANIFEST_ABILITY_CREATED,
     EventType.MANIFEST_ABILITY_UPDATED,
@@ -727,6 +841,11 @@ export function connectStores(
     for (const eventType of eventTypes) client.off(eventType);
     client.off(SystemType.COMMAND_RESULT);
     client.clearLifecycleCallbacks();
+    if (transcript) {
+      for (const eventType of transcriptEvents) client.off(eventType);
+      transcript.dispose();
+    }
+    cancelHitlRecovery();
     batcher.cancel();
     inFlight.clear();
     syncGenerations.clear();

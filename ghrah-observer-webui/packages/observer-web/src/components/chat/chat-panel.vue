@@ -50,31 +50,24 @@ const chat = useChatStore();
 const agents = useAgentsStore();
 const rooms = useRoomsStore();
 const connection = useConnectionStore();
-const { roomSend, getRoomLog } = useObserver();
+const { roomSend, refreshRoom } = useObserver();
 const refreshing = ref(false);
 const deliveryError = ref("");
 async function refreshDeliveries() {
   if (refreshing.value || connection.state !== "connected") return;
+  const target = { projectId: props.projectId, roomId: props.roomId };
   refreshing.value = true;
   deliveryError.value = "";
   try {
-    const result = await getRoomLog(props.roomId);
-    if (result && !result.success) deliveryError.value = result.error ?? t("agentEntity.failed");
+    await refreshRoom(target);
   } catch (error) {
-    deliveryError.value = String(error);
+    if (props.projectId === target.projectId && props.roomId === target.roomId) {
+      deliveryError.value = String(error);
+    }
   } finally {
     refreshing.value = false;
   }
 }
-const deliveryTimer = setInterval(() => {
-  if (
-    roomEntries.value.some((e) =>
-      e.deliveries?.some((d) => ["pending", "processing"].includes(d.state)),
-    )
-  )
-    void refreshDeliveries();
-}, 3000);
-onScopeDispose(() => clearInterval(deliveryTimer));
 const { render: renderMarkdown } = useMarkdown();
 const { t } = useI18n();
 const memberLabel = useRoomMemberLabel();
@@ -204,23 +197,27 @@ async function handleSend(targets: string[], content: string, blocks: ChatBlock[
   if (!roomId || !projectId || !currentRoom) return;
   if (!content && blocks.length === 0) return;
   const target = { projectId, roomId };
-  const mediaBlockCount = blocks.filter((block) => block.type !== "text").length;
   chat.clearBlockLoss(roomId);
-  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets, blocks });
-  roomSend(roomId, content, targets, blocks)
+  const pending = chat.addPendingEntry({
+    ...target,
+    to: roomId,
+    content,
+    agentName: "",
+    targets,
+    blocks,
+  });
+  roomSend(target, pending.clientSeq, content, targets, blocks)
     .then((r) => {
       if (r === null)
-        chat.markPendingError(target, content, t("chat.sendFailedDisconnected"), mediaBlockCount);
-      else if (!r.success)
-        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"), mediaBlockCount);
-      else void refreshDeliveries();
+        chat.markPendingErrorBySeq(target, pending.clientSeq, t("chat.sendFailedDisconnected"));
+      else if (r && !r.success)
+        chat.markPendingErrorBySeq(target, pending.clientSeq, r.error ?? t("agentEntity.failed"));
     })
     .catch((e) =>
-      chat.markPendingError(
+      chat.markPendingErrorBySeq(
         target,
-        content,
+        pending.clientSeq,
         t("chat.sendFailed", { msg: String(e ?? "") }),
-        mediaBlockCount,
       ),
     );
   sticky.value = true;

@@ -29,6 +29,7 @@ function globalUrl(): HttpUrlCtor {
 export interface HttpAbortSignal {
   readonly aborted: boolean;
   addEventListener(type: "abort", listener: () => void): void;
+  removeEventListener?(type: "abort", listener: () => void): void;
 }
 
 /** 最小 fetch 初始化形状。 */
@@ -173,12 +174,12 @@ async function parseErrorResponse(response: HttpFetchResponse): Promise<HttpErro
   return new HttpError({ code, status: response.status, message, detail: errorPart?.detail });
 }
 
-function globalAbortController(): AbortControllerCtor {
+export function createHttpAbortController(): AbortControllerLike {
   const ctor = (globalThis as { AbortController?: AbortControllerCtor }).AbortController;
   if (!ctor) {
     throw new HttpError({ code: "internal", status: 0, message: "AbortController 不可用" });
   }
-  return ctor;
+  return new ctor();
 }
 
 function defaultFetch(): HttpFetch {
@@ -331,8 +332,7 @@ export class HttpClient {
     options: HttpRequestOptions,
   ): Promise<T> {
     const timeoutMs = options.timeoutMs ?? (method === "GET" ? this.timeoutMs : WRITE_TIMEOUT_MS);
-    const Controller = globalAbortController();
-    const controller = new Controller();
+    const controller = createHttpAbortController();
     const timers = globalThis as {
       setTimeout?: (handler: () => void, ms: number) => unknown;
       clearTimeout?: (handle: unknown) => void;
@@ -342,8 +342,9 @@ export class HttpClient {
       timedOut = true;
       controller.abort();
     }, timeoutMs);
-    if (options.signal?.aborted) controller.abort();
-    options.signal?.addEventListener("abort", () => controller.abort());
+    const abort = () => controller.abort();
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort);
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (this.token) headers.Authorization = `Bearer ${this.token}`;
@@ -368,6 +369,7 @@ export class HttpClient {
       if (isAbortError(error)) throw networkError(error, true);
       throw error;
     } finally {
+      options.signal?.removeEventListener?.("abort", abort);
       if (timer !== undefined) timers.clearTimeout?.(timer);
     }
   }

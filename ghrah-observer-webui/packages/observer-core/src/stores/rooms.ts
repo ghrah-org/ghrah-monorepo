@@ -182,6 +182,14 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     touchLog(roomId);
   }
 
+  /** transcript 已按 Room 维护缓存上限，镜像只跟随替换和逐出。 */
+  function replaceRoomLog(target: RoomTarget, entries: RoomLogEntryPayload[] | null) {
+    const room = activeRooms.value.get(target.roomId) ?? archivedRooms.value.get(target.roomId);
+    if (room && room.project_id !== target.projectId) return;
+    if (entries === null) logs.value.delete(target.roomId);
+    else logs.value.set(target.roomId, entries);
+  }
+
   function setActiveRoom(roomId: string | null) {
     activeRoomId.value = roomId !== null && activeRooms.value.has(roomId) ? roomId : null;
     if (activeRoomId.value && logs.value.has(activeRoomId.value)) touchLog(activeRoomId.value);
@@ -230,6 +238,7 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     onRoomLogAppended,
     replaceProjectRooms,
     setRoomLog,
+    replaceRoomLog,
     setActiveRoom,
     clearRoom,
     clearRoomLog,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { HITLRequestPayload } from "@ghrah/protocol";
+import type { HitlRequestListView, HITLRequestPayload } from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useHitlStore } from "./hitl.js";
@@ -18,6 +18,33 @@ const payload = (overrides: Partial<HITLRequestPayload> = {}): HITLRequestPayloa
   reason: "",
   ...overrides,
 });
+
+const target = { projectId: "p1", agentId: "a1", agentName: "coder" };
+const remember = {
+  exact_key: "check-key",
+  exact_label: "pnpm test",
+  class_key: null,
+  class_label: null,
+};
+
+function pendingItem(promiseId: string): HitlRequestListView["items"][number] {
+  return {
+    promise_id: promiseId,
+    turn_id: "t1",
+    delivery_id: null,
+    ability_name: "shell",
+    tool_call: { command: "pnpm test" },
+    options: {},
+    reason: "Approval required",
+    status: "pending",
+    created_at: "2026-11-26T00:00:00Z",
+    deadline_at: null,
+    resolved_at: null,
+    resolved_by: null,
+    resolution: null,
+    shell_remember: remember,
+  };
+}
 
 describe("useHitlStore", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -50,6 +77,33 @@ describe("useHitlStore", () => {
     store.clearAgent({ projectId: "p1", agentId: "a1", agentName: "coder" });
     expect(store.requests.map((request) => request.promiseId)).toEqual(["h2"]);
     store.clearProject("p2");
+    expect(store.requests).toEqual([]);
+  });
+
+  it("reconciles a successful snapshot while preserving concurrent requests and resolutions", () => {
+    const store = useHitlStore();
+    store.onHitlRequest(payload({ promise_id: "old" }));
+    store.onHitlRequest(payload({ promise_id: "resolved-during-read" }));
+    store.onHitlRequest(payload({ project_id: "p2", promise_id: "other" }));
+    store.selectAll();
+    const finish = store.beginPendingRead(target);
+    store.removeRequest("resolved-during-read");
+    store.onHitlRequest(payload({ promise_id: "new", context: { tool_call_id: "call-1" } }));
+    expect(finish([pendingItem("resolved-during-read"), pendingItem("restored")])).toBe(true);
+    expect(store.requests.map(({ promiseId }) => promiseId)).toEqual(["other", "new", "restored"]);
+    expect(store.requests[1].context).toEqual({ tool_call_id: "call-1" });
+    expect(store.requests[2]).toMatchObject({ agentName: "coder", shellRemember: remember });
+    expect([...store.selectedIds]).toEqual(["other"]);
+  });
+
+  it("keeps requests on a read failure and invalidates responses after scope cleanup", () => {
+    const store = useHitlStore();
+    store.onHitlRequest(payload());
+    expect(store.beginPendingRead(target)()).toBe(true);
+    expect(store.requests).toHaveLength(1);
+    const old = store.beginPendingRead(target);
+    store.clearProject(target.projectId);
+    expect(old([pendingItem("late")])).toBe(false);
     expect(store.requests).toEqual([]);
   });
 });

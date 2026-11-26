@@ -1,10 +1,134 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type WebSocketRoute } from "@playwright/test";
 import { ObserverClient } from "@ghrah/observer-core";
-import { AgentSnapshotSchema } from "@ghrah/protocol";
+import { AgentSnapshotSchema, RoomInfoPayloadSchema } from "@ghrah/protocol";
 
 // Agent 由模板创建：模板身份来自 Subject 模板库，mock 内置一份同 id 的模板。
 const MOCK_TEMPLATE_ID = "mock.template";
 const MOCK_TEMPLATE_REVISION = "1";
+
+test("Room reads transcript and reconciles identical sends without the WS history command", async ({
+  page,
+}) => {
+  const socketUrl = "ws://127.0.0.1:4113/ws";
+  const client = new ObserverClient(socketUrl);
+  await client.connect();
+  const projectName = `transcript-${crypto.randomUUID()}`;
+  const result = await client.createProject(projectName, {
+    projectRootLocator: "/mock/transcript",
+  });
+  const projectId = (result.data as { project: { project_id: string } }).project.project_id;
+  try {
+    const agent = AgentSnapshotSchema.parse(
+      (
+        await client.createAgentEntity({
+          project_id: projectId,
+          name: "transcript-worker",
+          template_id: MOCK_TEMPLATE_ID,
+          revision: 1,
+          start: true,
+        })
+      ).data,
+    );
+    const agentId = agent.identity.agent_id;
+    const created = await client.createRoom(projectId, "Transcript Room");
+    const room = RoomInfoPayloadSchema.parse((created.data as { room: unknown }).room);
+    expect(
+      (await client.joinRoom(room.room_id, agentId, "agent", "transcript-worker")).success,
+    ).toBe(true);
+    expect(
+      (
+        await client.roomSend(
+          room.room_id,
+          { message: "Archived final reply", ability: "end_task" },
+          agentId,
+          "agent",
+        )
+      ).success,
+    ).toBe(true);
+
+    let browserSocket: WebSocketRoute | undefined;
+    let beforeReconnect: (() => Promise<void>) | undefined;
+    const wsRoomSends: string[] = [];
+    const wsHistoryCommands: string[] = [];
+    await page.routeWebSocket(
+      (url) => `${url.origin}${url.pathname}` === socketUrl,
+      async (socket) => {
+        const prepare = beforeReconnect;
+        beforeReconnect = undefined;
+        await prepare?.();
+        const server = socket.connectToServer();
+        browserSocket = socket;
+        socket.onMessage((payload) => {
+          if (payload.toString().includes('"type":"room_send"'))
+            wsRoomSends.push(payload.toString());
+          if (payload.toString().includes('"type":"room_get_log"'))
+            wsHistoryCommands.push(payload.toString());
+          server.send(payload);
+        });
+      },
+    );
+    await page.addInitScript(() => localStorage.setItem("ghrah-locale", "en"));
+    await page.goto("/");
+    await page.locator(".project-item", { hasText: projectName }).click();
+    const endpoint = `/rooms/${room.room_id}/transcript`;
+    const tail = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith(endpoint),
+    );
+    await page.locator(".room-list-row", { hasText: room.name }).press("Enter");
+    expect((await tail).status()).toBe(200);
+    await expect(page.locator(".entry-endtask")).toHaveText(/Archived final reply/);
+
+    const composer = page.locator(".chat-composer");
+    for (let count = 0; count < 2; count += 1) {
+      await composer.locator("textarea").fill("same text twice");
+      await composer.locator('button[type="submit"]').click();
+    }
+    await expect(page.locator(".entry-human", { hasText: "same text twice" })).toHaveCount(2);
+    await expect(page.locator(".entry-pending")).toHaveCount(0);
+    expect(wsRoomSends).toHaveLength(2);
+
+    await page.locator('button[aria-controls="room-detail-drawer"]').click();
+    const manual = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname.endsWith(endpoint) && url.searchParams.has("since_seq");
+    });
+    await page
+      .locator("#room-detail-drawer")
+      .getByRole("button", { name: "Refresh delivery status", exact: true })
+      .click();
+    expect((await manual).status()).toBe(200);
+
+    beforeReconnect = async () => {
+      const sent = await client.roomSend(
+        room.room_id,
+        { message: "Reply while disconnected" },
+        agentId,
+        "agent",
+      );
+      expect(sent.success).toBe(true);
+    };
+    const reloadedTail = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        url.pathname.endsWith(endpoint) &&
+        url.searchParams.get("limit") === "50" &&
+        !url.searchParams.has("before_seq") &&
+        !url.searchParams.has("since_seq")
+      );
+    });
+    expect(browserSocket).toBeDefined();
+    await browserSocket!.close({ code: 1001, reason: "reconnect test" });
+    expect((await reloadedTail).status()).toBe(200);
+    await expect(page.getByText("Reply while disconnected", { exact: true })).toBeVisible();
+    await expect(page.locator(".entry-human", { hasText: "same text twice" })).toHaveCount(2);
+    expect(wsHistoryCommands).toEqual([]);
+  } finally {
+    const current = await client.getProject(projectId);
+    const project = (current.data as { project: { version: number } }).project;
+    await client.deleteProject({ projectId, expectedVersion: project.version, cascadeRooms: true });
+    await client.disconnect();
+  }
+});
 
 test("mock: create entity, start, create Session, send message and read offline history", async ({
   page,

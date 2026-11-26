@@ -111,6 +111,16 @@ export {
   type ProjectApiMode,
   resolveProjectApiMode,
 } from "./project-api.js";
+export { TurnApiClient, type TranscriptPageOptions, type TurnListOptions } from "./turn-api.js";
+export { createTranscriptReader, type TranscriptReader } from "./transcript-reader.js";
+export { humanStateOf, isAnchor, projectExchanges, type Exchange } from "./exchanges.js";
+export {
+  MAX_TURN_DETAILS,
+  type TranscriptPageMode,
+  type TranscriptRoom,
+  type TurnTarget,
+  useTranscriptStore,
+} from "./stores/transcript.js";
 export {
   createFrameBatcher,
   createSyncBatcher,
@@ -176,7 +186,7 @@ export {
 export { type AgentInfo, type AgentListItem, useAgentsStore } from "./stores/agents.js";
 export { type BranchProjection, useBranchesStore } from "./stores/branches.js";
 export { useChangesStore } from "./stores/changes.js";
-export { DEFAULT_HUMAN_AUTHOR, useChatStore } from "./stores/chat.js";
+export { DEFAULT_HUMAN_AUTHOR, type OptimisticChatEntry, useChatStore } from "./stores/chat.js";
 export { type ConnectionState, useConnectionStore } from "./stores/connection.js";
 export {
   type ContextUsageDisplay,
