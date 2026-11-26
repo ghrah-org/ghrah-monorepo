@@ -946,6 +946,11 @@ export default {
         providerNew: "New provider (enter a secret)",
         providerReuseHint: "Reuse this provider's secret; no second copy is written.",
         providerNewHint: "Or choose an existing provider to reuse its secret.",
+        providerNoKey: "no secret",
+        providerNoKeyHint:
+          "This provider has no secret; the connection will be made without authentication.",
+        providerNoKeyConnectionHint:
+          "This provider has no secret. The MCP server will be saved and called without authentication.",
         providerCredentialHint: "The selected provider's secret is used for this connection.",
         authBearer: "Bearer Token",
         authHeader: "API Key Header",

@@ -82,7 +82,7 @@ def _api_error(code: ProblemCode, detail: str, **details: Any) -> ApiError:
 
 
 def _provider_headers(db_path: str | Path | None, provider_id: str) -> tuple[dict[str, str], str]:
-    """按 provider_id 取受信绑定与 Key；只用于本次探测，不写回。"""
+    """按 provider_id 取受信绑定与 Key；无密钥且无绑定时按无认证连接。"""
     try:
         with _open_agentconf(db_path) as cfg:
             provider = cfg.get_mcp_provider_by_id(provider_id)
@@ -91,7 +91,9 @@ def _provider_headers(db_path: str | Path | None, provider_id: str) -> tuple[dic
     except Exception:
         raise _SetupError("credential_missing", "MCP 提供商不存在或不可读") from None
     if not key:
-        raise _SetupError("credential_missing", "MCP 提供商缺少密钥")
+        if binding is None:
+            return {}, ""
+        raise _SetupError("config_invalid", "MCP 提供商缺少密钥，但已配置 HTTP Header 绑定")
     if binding is None:
         return {"Authorization": f"Bearer {AUTH_PLACEHOLDER}"}, key
     if binding.target != "http_header" or not binding.name:
@@ -244,6 +246,25 @@ def _save_connection(
 
             if provider_id is not None:
                 provider = cfg.get_mcp_provider_by_id(provider_id)
+                if not _secret_str(provider.api_key):
+                    if provider.default_binding is not None:
+                        raise _SetupError(
+                            "config_invalid", "MCP 提供商缺少密钥，但已配置 HTTP Header 绑定"
+                        )
+                    created = cfg.create_mcp_server(
+                        ref,
+                        "streamable_http",
+                        {"url": url, "connect_timeout": timeout_ms / 1000},
+                        auth={"mode": "none"},
+                    )
+                    return _SavedConnection(
+                        provider_id=provider.id,
+                        provider_name=provider.name,
+                        provider_created=False,
+                        server_id=created.id,
+                        server_name=created.name,
+                        server_created=True,
+                    )
                 if provider.default_binding is None:
                     provider = cfg.update_mcp_provider(
                         provider.name,

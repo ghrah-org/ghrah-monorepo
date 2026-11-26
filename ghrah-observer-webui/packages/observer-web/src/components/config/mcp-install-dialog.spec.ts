@@ -188,6 +188,78 @@ describe("McpInstallDialog", () => {
     });
   });
 
+  it("allows selecting a provider without a secret", async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+        const path = new URL(url).pathname;
+        const body = init?.body ? JSON.parse(init.body) : undefined;
+        calls.push({ path, body });
+        if (path.endsWith("/mcp-providers")) {
+          return json({
+            format: "ghrah.agentconf-control.mcp-providers.v1",
+            providers: [
+              {
+                format: "ghrah.agentconf-control.mcp-provider.v1",
+                id: "provider-keyless",
+                name: "keyless-provider",
+                vendor: "Local",
+                api_key_configured: false,
+                default_binding: null,
+                revision: 1,
+                created_at: "2026-11-24T00:00:00+00:00",
+                updated_at: "2026-11-24T00:00:00+00:00",
+              },
+            ],
+          });
+        }
+        return json({
+          format: "ghrah.ability-control.mcp-draft-probe.v1",
+          ok: true,
+          phase: "list_tools",
+          elapsed_ms: 5,
+          tool_count: 1,
+          tools: [
+            {
+              name: "echo",
+              title: "Echo",
+              description: null,
+              input_schema: { type: "object" },
+              output_schema: null,
+              read_only_hint: true,
+            },
+          ],
+          resources: [],
+          resource_count: 0,
+          resources_supported: false,
+          truncated: false,
+          error: null,
+        });
+      }),
+    );
+    const wrapper = mount(McpInstallDialog, {
+      global: { stubs: { teleport: true } },
+    });
+    await flushPromises();
+    const option = wrapper
+      .findAll("option")
+      .find((item) => item.text().includes("keyless-provider"));
+    expect(option?.attributes("disabled")).toBeUndefined();
+    expect(wrapper.text()).toContain("no secret");
+    expect(wrapper.find('input[placeholder="Secret stored in the MCP provider"]').exists()).toBe(
+      false,
+    );
+    await wrapper.get('input[placeholder="e.g. Alibaba Cloud MCP"]').setValue("Keyless");
+    await wrapper.get('input[placeholder="https://…/mcp"]').setValue("https://example.test/mcp");
+    await button(wrapper, "Test connection and fetch tools").trigger("click");
+    await flushPromises();
+    const probe = calls.find((call) => call.path.endsWith("/mcp/probe"));
+    expect(probe?.body).toMatchObject({
+      auth: { mode: "provider", provider_id: "provider-keyless", key: "" },
+    });
+  });
+
   it("keeps the next step disabled when the probe returns no tools", async () => {
     vi.stubGlobal(
       "fetch",
