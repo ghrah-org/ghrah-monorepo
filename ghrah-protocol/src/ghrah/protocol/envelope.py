@@ -113,6 +113,11 @@ from ghrah.protocol.payloads import (
     TaskUpdatePayload,
     TaskVerifyPayload,
     TerminateAgentPayload,
+    TurnAbortPayload,
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnRollbackPayload,
+    TurnWaitingHitlPayload,
     UnregisterAbilityPayload,
     UnsubscribePayload,
     WorkspaceCreatedPayload,
@@ -223,6 +228,8 @@ COMMAND_PAYLOAD_MAP: dict[CommandType, type[BaseModel]] = {
     CommandType.GET_AGENT_INFO: GetAgentInfoPayload,
     CommandType.AGENT_COMPACT_CONTEXT: AgentCompactContextPayload,
     CommandType.AGENT_RESET: AgentResetPayload,
+    CommandType.TURN_ABORT: TurnAbortPayload,
+    CommandType.TURN_ROLLBACK: TurnRollbackPayload,
     CommandType.HITL_RESPONSE: HITLResponsePayload,
     # persist_*: payload 为裸 dict（Stage 2 补齐真实 payload 模型）
     # Agent-scoped workspace 命令；资源级 register/get/list 仍以 workspace_id 路由。
@@ -319,6 +326,9 @@ EVENT_PAYLOAD_MAP: dict[EventType, type[BaseModel]] = {
     EventType.ABILITY_RESULT: AbilityResultPayload,
     EventType.HITL_REQUEST: HITLRequestPayload,
     EventType.HITL_RESOLVED: HITLResolvedPayload,
+    EventType.TURN_OPENED: TurnOpenedPayload,
+    EventType.TURN_WAITING_HITL: TurnWaitingHitlPayload,
+    EventType.TURN_CLOSED: TurnClosedPayload,
     EventType.CONTEXT_USAGE_UPDATED: ContextUsageUpdatedPayload,
     EventType.WORKSPACE_CREATED: WorkspaceCreatedPayload,
     EventType.WORKSPACE_DESTROYED: WorkspaceDestroyedPayload,
@@ -411,7 +421,9 @@ def envelope_from_dict(data: dict[str, Any]) -> Envelope:
     msg_type = data.get("type", "")
     payload_cls = PAYLOAD_MAP.get(msg_type)
     raw_payload = data.get("payload", {})
-    if payload_cls is not None and isinstance(raw_payload, dict):
+    if payload_cls is not None and (
+        isinstance(raw_payload, dict) or payload_cls in (TurnAbortPayload, TurnRollbackPayload)
+    ):
         payload = payload_cls.model_validate(raw_payload)
     else:
         payload = raw_payload

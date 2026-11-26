@@ -26,6 +26,33 @@ class _FakePort:
         self.closed += 1
 
 
+async def test_cluster_handle_keeps_requested_delivery_policy(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ghrah.protocol.payloads.agent import SendMessagePayload
+    from ghrah.protocol.views.core import MessageAcceptanceView
+
+    from ghrah.subject.runtime.port_transport import PortClusterTransport
+
+    append = AsyncMock(return_value=MessageAcceptanceView(message_id="msg", accepted_at=1.0))
+    ports = CorePorts(lambda _: SimpleNamespace(messages=SimpleNamespace(append=append)))
+    transport = PortClusterTransport(ports)
+    handle = await transport.ensure_cluster("p", project_id="p", project_root_locator=str(tmp_path))
+
+    receipt = await handle.send_message(
+        SendMessagePayload(
+            project_id="p",
+            agent_id="worker",
+            target="Worker",
+            content="hi",
+            delivery_policy="inject",
+        )
+    )
+    assert receipt["data"]["message_id"] == "msg"
+    assert append.call_args.kwargs["delivery_policy"] == "inject"
+
+
 def _recording_factory(created: list[str]):
     def factory(project_id: str) -> Any:
         created.append(project_id)
@@ -109,3 +136,55 @@ async def test_aclose_closes_all_ports() -> None:
     assert second.closed == 1
     assert ports.has_project("p1") is False
     assert ports.has_project("p2") is False
+
+
+async def test_entity_mailbox_cancel_forwards_and_preserves_scope(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ghrah.protocol.payloads.entity import AgentEntityPayload
+    from ghrah.protocol.views.core import DeliveryView
+
+    from ghrah.subject.project.entities import AgentEntityManager
+    from ghrah.subject.project.models import ProjectStatus
+    from ghrah.subject.runtime.port_transport import PortMailbox
+
+    delivery = DeliveryView(delivery_id="delivery", recipient_id="agent", state="pending")
+    cancelled = delivery.model_copy(
+        update={"state": "interrupted", "display_state": "cancelled", "error": "cancelled_by_user"}
+    )
+    operations = SimpleNamespace(
+        get=AsyncMock(side_effect=[delivery, cancelled]),
+        cancel=AsyncMock(),
+    )
+    mailbox = PortMailbox(SimpleNamespace(deliveries=operations))
+    projects = SimpleNamespace(
+        lifecycle_lock=lambda _: asyncio.Lock(),
+        _cluster_transport=SimpleNamespace(get_message_manager=lambda _: mailbox),
+    )
+    manager = AgentEntityManager(projects)
+    monkeypatch.setattr(
+        manager,
+        "_load",
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(project_id="p", status=ProjectStatus.ACTIVE),
+                SimpleNamespace(agent_id="agent", desired_state="stopped"),
+            )
+        ),
+    )
+    monkeypatch.setattr(manager, "_runtime", AsyncMock(return_value={"availability": "online"}))
+    result = await manager.execute(
+        AgentEntityPayload.model_validate(
+            {
+                "project_id": "p",
+                "agent_id": "agent",
+                "operation": {"type": "mailbox.cancel", "delivery_id": "delivery"},
+            }
+        )
+    )
+    assert result["delivery"]["display_state"] == "cancelled"
+    operations.cancel.assert_awaited_once_with(agent_id="agent", delivery_id="delivery")
+    assert operations.get.await_count == 2
+    manager._runtime.assert_not_awaited()

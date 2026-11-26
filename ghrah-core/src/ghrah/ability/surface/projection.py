@@ -87,9 +87,9 @@ async def project_surface(
 
     if store.current_run(agent) != run:
         raise AccessError("access_denied")
-    actor = AccessIdentity(store.project_id, agent, run)
+    actor = AccessIdentity(store.scope_id, agent, run)
     view = await store.view(actor, agent)
-    if view.project_id != store.project_id or view.agent_id != agent or view.run_id != run:
+    if view.project_id != store.scope_id or view.agent_id != agent or view.run_id != run:
         raise AccessError("access_denied")
     return [entry for entry in project_grants(view) if entry.available and backend_available(entry)]
 

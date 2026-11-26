@@ -1,0 +1,10 @@
+{
+  "delivery_id": "delivery",
+  "message_id": "message",
+  "display_state": "queued",
+  "position": 1,
+  "queue_reason": null,
+  "blocked_by_delivery_id": null,
+  "turn_id": null,
+  "cancelable": true
+}

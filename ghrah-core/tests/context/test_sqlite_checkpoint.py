@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -171,3 +172,96 @@ async def test_sqlite_v3_columns_round_trip(tmp_path: Path) -> None:
     assert by_name["retry"].lifecycle == "archived"
     assert by_name["main"].lifecycle == "open"
     await restored_backend.close()
+
+
+async def test_v3_sqlite_migrates_and_keeps_legacy_nodes(tmp_path: Path) -> None:
+    """旧节点在只读打开及就地升级后都保留，轮次归属为空。"""
+    path = tmp_path / "context.db"
+    async with SqliteBackend(path) as backend:
+        cm = ContextManager(
+            agent_name="agent", persistence=backend, message_factory=ChatMessageFactory()
+        )
+        await cm.persist()
+        head_id = cm.active_head.id
+
+    with sqlite3.connect(path) as db:
+        db.executescript(
+            "DROP TABLE IF EXISTS hitl_requests; DROP TABLE IF EXISTS turns; "
+            "DROP INDEX IF EXISTS idx_nodes_turn; "
+        )
+        if "turn_id" in {row[1] for row in db.execute("PRAGMA table_info(nodes)")}:
+            db.execute("ALTER TABLE nodes DROP COLUMN turn_id")
+        db.execute("UPDATE context_schema SET version=3")
+
+    async with SqliteBackend(path, read_only=True) as reader:
+        assert await reader.load_node("agent", head_id) is not None
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT version FROM context_schema").fetchone() == (3,)
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='turns'").fetchone() is None
+
+    async with SqliteBackend(path) as backend:
+        await backend.initialize()
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT version FROM context_schema").fetchone() == (4,)
+        assert db.execute("SELECT turn_id FROM nodes WHERE id=?", (head_id,)).fetchone() == (None,)
+        assert db.execute("SELECT count(*) FROM turns").fetchone() == (0,)
+        assert db.execute("SELECT count(*) FROM hitl_requests").fetchone() == (0,)
+
+
+async def test_v4_sqlite_rebuilds_turn_and_hitl_indexes_on_writable_reopen(tmp_path: Path) -> None:
+    """只读打开存量 v4 库不补建索引，写入侧初始化补建且保留轮次和审批。"""
+    path = tmp_path / "context.db"
+    async with SqliteBackend(path) as backend:
+        cm = ContextManager("agent", persistence=backend)
+        await cm.persist()
+        session_id = cm.active_session_id
+        turn_id = await cm.open_turn()
+        pending = await cm.open_hitl_request(
+            promise_id="approval",
+            ability_name="tool",
+            tool_call_id="call",
+            tool_call={},
+            reason="needs approval",
+            options={},
+            deadline_at=None,
+        )
+        assert pending.persisted
+
+    indexes = {"idx_turns_session_opened", "idx_hitl_waiting_only"}
+    with closing(sqlite3.connect(path)) as db:
+        for index in sorted(indexes):
+            db.execute(f"DROP INDEX IF EXISTS {index}")
+
+    for read_only in (True, False, False):
+        async with SqliteBackend(path, read_only=read_only) as backend:
+            if not read_only:
+                await backend.initialize()
+            (saved_turn,) = await backend.list_turns("agent", session_id, None, 10)
+            (saved_request,) = await backend.list_pending_hitl("agent", session_id)
+            assert (saved_turn["turn_id"], saved_turn["status"]) == (turn_id, "waiting_hitl")
+            assert (saved_request["turn_id"], saved_request["promise_id"]) == (turn_id, "approval")
+        with closing(sqlite3.connect(path)) as db:
+            schema_indexes = {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            assert schema_indexes & indexes == (set() if read_only else indexes)
+            assert db.execute("SELECT version FROM context_schema").fetchone() == (4,)
+
+
+async def test_v3_schema_migration_rolls_back_ddl_on_error(tmp_path: Path) -> None:
+    """索引创建受阻时节点列、轮次表和版本号都回到迁移前。"""
+    path = tmp_path / "v3.db"
+    with sqlite3.connect(path) as db:
+        db.executescript(
+            "CREATE TABLE context_schema (singleton INTEGER PRIMARY KEY, version INTEGER); "
+            "INSERT INTO context_schema VALUES (1, 3); "
+            "CREATE TABLE nodes (id TEXT PRIMARY KEY); "
+            "CREATE TABLE idx_turns_opened (id TEXT PRIMARY KEY);"
+        )
+    async with SqliteBackend(path) as backend:
+        with pytest.raises(sqlite3.OperationalError, match="idx_turns_opened"):
+            await backend.initialize()
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT version FROM context_schema").fetchone() == (3,)
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='turns'").fetchone() is None
+        assert {column[1] for column in db.execute("PRAGMA table_info(nodes)")} == {"id"}

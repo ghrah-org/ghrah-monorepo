@@ -22,6 +22,8 @@ import {
   AgentConfigPayloadSchema,
   AgentErrorPayloadSchema,
   AgentResetPayloadSchema,
+  TurnAbortPayloadSchema,
+  TurnRollbackPayloadSchema,
   AgentResponsePayloadSchema,
   AgentSpawnedPayloadSchema,
   AgentTerminatedPayloadSchema,
@@ -34,6 +36,7 @@ import {
   BranchLifecyclePayloadSchema,
   BranchListPayloadSchema,
   BranchListResultPayloadSchema,
+  BranchListViewSchema,
   BroadcastMessagePayloadSchema,
   ChainHistoryResultPayloadSchema,
   ChatMessageWireSchema,
@@ -50,6 +53,18 @@ import {
   HealthStatusPayloadSchema,
   HITLRequestPayloadSchema,
   HITLResolvedPayloadSchema,
+  HistoryViewSchema,
+  HitlRequestListViewSchema,
+  DeliveryViewSchema,
+  DeliveryAcceptanceViewSchema,
+  DeliveryQueueEntryViewSchema,
+  DeliveryQueueViewSchema,
+  MessageAcceptanceViewSchema,
+  TurnOpenedPayloadSchema,
+  TurnWaitingHitlPayloadSchema,
+  TurnClosedPayloadSchema,
+  TurnDetailSchema,
+  RoomTranscriptSchema,
   HITLResponsePayloadSchema,
   ListAgentsPayloadSchema,
   PersistDeletePayloadSchema,
@@ -113,6 +128,7 @@ import {
   SessionInfoPayloadSchema,
   SessionListPayloadSchema,
   SessionListResultPayloadSchema,
+  SessionCatalogViewSchema,
   SpawnAgentPayloadSchema,
   SubscribePayloadSchema,
   TaskAssignPayloadSchema,
@@ -186,6 +202,8 @@ const PAYLOAD_SCHEMA_MAP: Record<string, import("zod").ZodTypeAny> = {
   GetAgentInfoPayload: GetAgentInfoPayloadSchema,
   AgentCompactContextPayload: AgentCompactContextPayloadSchema,
   AgentResetPayload: AgentResetPayloadSchema,
+  TurnAbortPayload: TurnAbortPayloadSchema,
+  TurnRollbackPayload: TurnRollbackPayloadSchema,
   GetChainHistoryPayload: GetChainHistoryPayloadSchema,
   ChainHistoryResultPayload: ChainHistoryResultPayloadSchema,
   SubscribePayload: SubscribePayloadSchema,
@@ -228,6 +246,14 @@ const PAYLOAD_SCHEMA_MAP: Record<string, import("zod").ZodTypeAny> = {
   HITLRequestPayload: HITLRequestPayloadSchema,
   HITLRequestPayload_with_args: HITLRequestPayloadSchema,
   HITLResolvedPayload: HITLResolvedPayloadSchema,
+  DeliveryView: DeliveryViewSchema,
+  DeliveryAcceptanceView: DeliveryAcceptanceViewSchema,
+  DeliveryQueueEntryView: DeliveryQueueEntryViewSchema,
+  DeliveryQueueView: DeliveryQueueViewSchema,
+  MessageAcceptanceView: MessageAcceptanceViewSchema,
+  TurnOpenedPayload: TurnOpenedPayloadSchema,
+  TurnWaitingHitlPayload: TurnWaitingHitlPayloadSchema,
+  TurnClosedPayload: TurnClosedPayloadSchema,
   WorkspaceCreatedPayload: WorkspaceCreatedPayloadSchema,
   WorkspaceDestroyedPayload: WorkspaceDestroyedPayloadSchema,
   WorkspaceSnapshotCreatedPayload: WorkspaceSnapshotCreatedPayloadSchema,
@@ -412,6 +438,28 @@ describe("ServerMessage cross-validation", () => {
   });
 });
 
+it("TurnDetailSchema preserves the Python REST snapshot", () => {
+  const snapshot = loadSnapshot("TurnDetailView");
+  const parsed = TurnDetailSchema.parse(snapshot);
+  expect(parsed).toEqual(snapshot);
+  expect(parsed.nodes[0]?.turn_id).toBe(parsed.turn.turn_id);
+});
+
+it("session, history and pending approval REST views preserve the Python response fields", () => {
+  const catalog = loadSnapshot("SessionCatalogView");
+  expect(SessionCatalogViewSchema.parse(catalog)).toEqual(catalog);
+  expect(BranchListViewSchema.parse(catalog)).toEqual({ branches: catalog.branches });
+  const history = loadSnapshot("HistoryView");
+  expect(HistoryViewSchema.parse(history)).toEqual(history);
+  const pending = loadSnapshot("HitlRequestListView");
+  const parsedPending = HitlRequestListViewSchema.parse(pending);
+  expect(parsedPending).toEqual(pending);
+  expect(parsedPending.items.find((item) => item.shell_remember)?.shell_remember?.exact_key).toBe(
+    "git status",
+  );
+  expect(parsedPending.items.find((item) => !item.shell_remember)?.shell_remember).toBeNull();
+});
+
 // NOTE: ActionChainUpdatedPayload 快照为 synthetic 样本（由 Python serialize_node
 // 离线生成、手贴入仓），非运行时真实产物；字段形态对齐 serialize_node 输出契约。
 describe("ActionNode typed schema alignment", () => {
@@ -514,4 +562,26 @@ describe("ActionNode typed schema alignment", () => {
     expect(parsed.lifecycle).toBe("open");
     expect(parsed.head_node_id).toBe("node-001");
   });
+});
+
+it("RoomTranscriptSchema preserves the Python REST snapshot", () => {
+  const snapshot = loadSnapshot("RoomTranscriptView");
+  expect(RoomTranscriptSchema.parse(snapshot)).toEqual(snapshot);
+});
+
+it("RoomTranscriptSchema rejects unknown authors and non-positive injection steps", () => {
+  const snapshot = RoomTranscriptSchema.parse(loadSnapshot("RoomTranscriptView"));
+  const [entry] = snapshot.entries;
+  expect(
+    RoomTranscriptSchema.safeParse({
+      ...snapshot,
+      entries: [{ ...entry, author_type: "system" }],
+    }).success,
+  ).toBe(false);
+  expect(
+    RoomTranscriptSchema.safeParse({
+      ...snapshot,
+      entries: [{ ...entry, injection_step: 0 }],
+    }).success,
+  ).toBe(false);
 });

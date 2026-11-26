@@ -125,7 +125,7 @@ class ToolSurfaceRuntime:
             self.closed
             or not self.run
             or (identity.project_id, identity.agent, identity.run)
-            != (self.store.project_id, self.agent, self.run)
+            != (self.store.scope_id, self.agent, self.run)
             or self.store.current_run(self.agent) != self.run
         ):
             raise AccessError("access_denied")
@@ -220,7 +220,7 @@ class ToolSurfaceRuntime:
             and ability.bind_tool() is not None
         ]
         view = await self.store.view(
-            AccessIdentity(self.store.project_id, self.agent, self.run), self.agent
+            AccessIdentity(self.store.scope_id, self.agent, self.run), self.agent
         )
         scripts = any(
             script.available
@@ -564,7 +564,7 @@ class ToolSurfaceRuntime:
             return _failure("Invalid script request or stale Agent/run")
         result = await execute_run_script(
             store=self.store,
-            actor=AccessIdentity(self.store.project_id, self.agent, self.run),
+            actor=AccessIdentity(self.store.scope_id, self.agent, self.run),
             agent=self.agent,
             source=self.source,
             script=request.script,

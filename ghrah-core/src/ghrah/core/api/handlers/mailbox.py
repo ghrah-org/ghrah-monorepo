@@ -10,7 +10,12 @@ from typing import Any
 from ghrah.protocol.interface import Handler
 from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import AckView, Page
-from ghrah.protocol.views.core import MailboxSummaryView, MessageView, PublishedMessageView
+from ghrah.protocol.views.core import (
+    MailboxSummaryView,
+    MessageAcceptanceView,
+    MessageView,
+    PublishedMessageView,
+)
 
 from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.interfaces import (
@@ -21,7 +26,9 @@ from ghrah.core.api.interfaces import (
     MailboxRecoverProjectionsRequest,
     MailboxSummaryRequest,
 )
-from ghrah.core.read.mailbox import MailboxReadStore, MailboxUnavailableError
+from ghrah.core.message_acceptance import message_acceptance_view
+from ghrah.core.read.mailbox import MailboxUnavailableError
+from ghrah.core.read.queries import MailboxQueries
 
 __all__ = ["make_mailbox_handlers"]
 
@@ -42,7 +49,7 @@ def _manager(registry: Any, capability: str) -> Any:
     return manager
 
 
-def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, Handler]:
+def make_mailbox_handlers(store: MailboxQueries, registry: Any) -> dict[str, Handler]:
     """构造 ``mailbox`` 分组处理器。
 
     Args:
@@ -85,7 +92,7 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
             message_id=request.message_id,
         )
 
-    async def publish_external(request: MailboxPublishExternalRequest) -> PublishedMessageView:
+    async def publish_external(request: MailboxPublishExternalRequest) -> MessageAcceptanceView:
         """以外部（人）身份发布消息：写入消息表并投递给收件人。"""
         await registry.ensure()
         manager = _manager(registry, "mailbox.publish_external")
@@ -98,14 +105,27 @@ def make_mailbox_handlers(store: MailboxReadStore, registry: Any) -> dict[str, H
                     for block in request.content_blocks
                 ],
             }
-        record = await manager.send_external(
-            sender=request.sender,
-            recipient_ids=tuple(request.recipient_ids),
-            content=request.content,
-            idempotency_key=request.idempotency_key,
-            metadata=metadata,
-        )
-        return PublishedMessageView(message_id=str(record.message_id))
+        try:
+            record = await manager.send_external(
+                sender=request.sender,
+                recipient_ids=tuple(request.recipient_ids),
+                content=request.content,
+                idempotency_key=request.idempotency_key,
+                metadata=metadata,
+                delivery_policy=request.delivery_policy,
+                await_reply=request.await_reply,
+            )
+        except ValueError as exc:
+            if not str(exc).startswith("Idempotency key conflicts with "):
+                raise
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.CONFLICT,
+                    capability="mailbox.publish_external",
+                    detail="idempotency_conflict",
+                )
+            ) from exc
+        return message_acceptance_view(record)
 
     async def publish_notification(
         request: MailboxPublishNotificationRequest,

@@ -110,7 +110,11 @@ async def test_tools_commit_before_delivery_and_reply_through_mailbox(tmp_path, 
     await bootstrap(path)
     sender_llm = SenderLLM(broadcast)
     async with GateManager(
-        path, project_id="p", agent_ids=("controller", "a", "b", "c"), session_routing=True
+        path,
+        adopt_legacy_chain=True,
+        project_id="p",
+        agent_ids=("controller", "a", "b", "c"),
+        session_routing=True,
     ) as mm:
         supervisor, b_llm = await assemble(mm, sender_llm)
         try:
@@ -154,7 +158,11 @@ async def test_failed_source_commit_does_not_send(tmp_path):
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
     async with GateManager(
-        path, project_id="p", agent_ids=("controller", "a", "b", "c"), session_routing=True
+        path,
+        adopt_legacy_chain=True,
+        project_id="p",
+        agent_ids=("controller", "a", "b", "c"),
+        session_routing=True,
     ) as mm:
         supervisor, b_llm = await assemble(mm, SenderLLM())
         try:
@@ -187,7 +195,11 @@ async def test_terminated_recipient_is_offline_and_respawn_restores_pending(tmp_
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
     async with GateManager(
-        path, project_id="p", agent_ids=("controller", "a", "b", "c"), session_routing=True
+        path,
+        adopt_legacy_chain=True,
+        project_id="p",
+        agent_ids=("controller", "a", "b", "c"),
+        session_routing=True,
     ) as mm:
         supervisor, old_llm = await assemble(mm, SenderLLM())
         try:
@@ -245,8 +257,14 @@ async def test_supervisor_requires_scoped_manager_and_declared_identity(tmp_path
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
     with pytest.raises(ValueError, match="session_routing"):
-        SupervisorActor(message_manager=MessageManager(path, project_id="p", agent_ids=("a",)))
-    async with MessageManager(path, project_id="p", agent_ids=("a",), session_routing=True) as mm:
+        SupervisorActor(
+            message_manager=MessageManager(
+                path, adopt_legacy_chain=True, project_id="p", agent_ids=("a",)
+            )
+        )
+    async with MessageManager(
+        path, adopt_legacy_chain=True, project_id="p", agent_ids=("a",), session_routing=True
+    ) as mm:
         supervisor = SupervisorActor(message_manager=mm)
         with pytest.raises(RegistryError, match="not declared"):
             await supervisor.spawn_agent(
@@ -258,7 +276,9 @@ async def test_supervisor_requires_scoped_manager_and_declared_identity(tmp_path
 async def test_wrong_backend_is_rejected_before_registering_or_binding(tmp_path):
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
-    async with MessageManager(path, project_id="p", agent_ids=("a",), session_routing=True) as mm:
+    async with MessageManager(
+        path, adopt_legacy_chain=True, project_id="p", agent_ids=("a",), session_routing=True
+    ) as mm:
         supervisor = SupervisorActor(message_manager=mm)
         with pytest.raises(RegistryError, match="same-file"):
             await supervisor.spawn_agent(
@@ -327,7 +347,11 @@ async def test_two_tool_calls_in_one_action_have_independent_message_ids(tmp_pat
     path = tmp_path / "core.sqlite"
     await bootstrap(path)
     async with GateManager(
-        path, project_id="p", agent_ids=("controller", "a", "b", "c"), session_routing=True
+        path,
+        adopt_legacy_chain=True,
+        project_id="p",
+        agent_ids=("controller", "a", "b", "c"),
+        session_routing=True,
     ) as mm:
         supervisor, b_llm = await assemble(mm, TwoCallsLLM())
         b_llm._replies.append("second b reply")
@@ -364,7 +388,12 @@ async def test_persistent_input_preserves_image_blocks(tmp_path, legacy_metadata
     llm = ScriptedLLM(["seen"])
     image = {"type": "image", "base64": "aGVsbG8=", "mime_type": "image/png"}
     async with MessageManager(
-        path, project_id="p", agent_ids=(), session_routing=True, allow_persisted_agents=True
+        path,
+        adopt_legacy_chain=True,
+        project_id="p",
+        agent_ids=(),
+        session_routing=True,
+        allow_persisted_agents=True,
     ) as manager:
         supervisor = SupervisorActor(message_manager=manager)
         try:

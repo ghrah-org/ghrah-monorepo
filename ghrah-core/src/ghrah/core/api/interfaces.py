@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Self
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -65,17 +65,27 @@ from ghrah.protocol.views.core import (
     BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
+    DeliveryQueueView,
     DeliveryView,
     HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MailboxSummaryView,
+    MessageAcceptanceView,
     MessageReplyView,
     MessageView,
     NodeView,
     PublishedMessageView,
     SessionCatalogView,
     ToolListView,
+    TurnAbortView,
+    TurnListView,
+    TurnRollbackPreviewView,
+    TurnRollbackView,
+    TurnView,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView, TurnDetailView
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 __all__ = [
     "CORE_CATALOG_INTERFACES",
@@ -205,6 +215,8 @@ class MailboxPublishExternalRequest(BaseModel):
     idempotency_key: str
     metadata: dict[str, Any] | None = None
     content_blocks: list[InputContentBlock] | None = None
+    delivery_policy: Literal["inject", "queue"] = "queue"
+    await_reply: bool = True
 
 
 class MailboxPublishNotificationRequest(BaseModel):
@@ -470,6 +482,7 @@ class MessagesAppendRequest(BaseModel):
     content: str
     sender: str = "user"
     timeout: float | None = None
+    delivery_policy: Literal["inject", "queue"] = "queue"
     metadata: dict[str, Any] | None = None
     content_blocks: list[InputContentBlock] | None = None
 
@@ -577,6 +590,24 @@ class AbilitiesPackageGroupsGlobalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class DeliveriesQueueRequest(BaseModel):
+    """查询指定会话的投递队列。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None
+
+
+class DeliveriesCancelRequest(BaseModel):
+    """取消一条尚未领取的排队投递。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    delivery_id: str
+
+
 class DeliveriesRetryRequest(BaseModel):
     """``deliveries.retry`` 的请求信封。"""
 
@@ -665,9 +696,91 @@ class AbilitiesDisableToolRequest(BaseModel):
     change: UnbindToolRequest
 
 
+class TurnGetRequest(BaseModel):
+    """读取单个所属轮次。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str
+
+
+class TurnListRequest(BaseModel):
+    """按 Agent 列出轮次。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None = None
+    status: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class TurnAbortRequest(BaseModel):
+    """按 Agent、显式轮次或目标会话中止执行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str | None = Field(default=None, min_length=1)
+    session_id: str | None = Field(default=None, min_length=1)
+    reason: str = ""
+
+
+class TurnRollbackRequest(BaseModel):
+    """从终态轮次的起点前或轮内节点新建分支。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    turn_id: str = Field(min_length=1)
+    target: Literal["base", "node"] = "base"
+    node_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def check_target(self) -> Self:
+        if (self.target == "node") != (self.node_id is not None):
+            raise ValueError("node_id is required exactly when target is node")
+        return self
+
+
+class TurnRollbackPreviewRequest(TurnRollbackRequest):
+    """使用同一目标契约请求只读预览。"""
+
+
+class HitlGetRequest(BaseModel):
+    """读取某条审批记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    promise_id: str
+
+
+class HitlListRequest(BaseModel):
+    """查询本 Agent 当前待审批项。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    session_id: str | None = None
+
+
+class MessageAppendResponse(RootModel[MessageReplyView | MessageAcceptanceView]):
+    """同步回复或异步受理回执，按实际载荷校验。"""
+
+
 CORE_INTERFACES = InterfaceRegistry(
     (
         Interface("nodes.get", NodeGetRequest, NodeView),
+        Interface("turns.abort", TurnAbortRequest, TurnAbortView),
+        Interface("turns.detail", TurnGetRequest, TurnDetailView),
+        Interface("turns.get", TurnGetRequest, TurnView),
+        Interface("turns.list", TurnListRequest, TurnListView),
+        Interface("turns.rollback", TurnRollbackRequest, TurnRollbackView),
+        Interface("turns.rollback_preview", TurnRollbackPreviewRequest, TurnRollbackPreviewView),
+        Interface("hitl.get", HitlGetRequest, HitlRequestView),
+        Interface("hitl.list_pending", HitlListRequest, HitlRequestListView),
         Interface("sessions.catalog", SessionsCatalogRequest, SessionCatalogView),
         Interface("sessions.history", SessionsHistoryRequest, HistoryView),
         Interface("sessions.head", SessionsHeadRequest, NodeIdView),
@@ -676,7 +789,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("mailbox.summary", MailboxSummaryRequest, MailboxSummaryView),
         Interface("mailbox.list", MailboxListRequest, Page[MessageView]),
         Interface("mailbox.get", MailboxGetRequest, MessageView),
-        Interface("mailbox.publish_external", MailboxPublishExternalRequest, PublishedMessageView),
+        Interface("mailbox.publish_external", MailboxPublishExternalRequest, MessageAcceptanceView),
         Interface(
             "mailbox.publish_notification",
             MailboxPublishNotificationRequest,
@@ -688,9 +801,12 @@ CORE_INTERFACES = InterfaceRegistry(
             AckView,
         ),
         Interface("deliveries.get", DeliveriesGetRequest, DeliveryView),
+        Interface("deliveries.queue", DeliveriesQueueRequest, DeliveryQueueView),
+        Interface("deliveries.cancel", DeliveriesCancelRequest, AckView),
         Interface("deliveries.retry", DeliveriesRetryRequest, AckView),
         Interface("deliveries.resume", DeliveriesResumeRequest, AckView),
         Interface("rooms.recover", RoomsRecoverRequest, AckView),
+        Interface("transcript.facts", RoomFactsQuery, TranscriptFactsView),
         Interface("manifests.resolve", ManifestsResolveRequest, AgentSpecView),
         Interface("abilities.tree", AbilitiesTreeRequest, AbilityTreeView),
         Interface("abilities.changes", AbilitiesChangesRequest, AbilityChangesPage),
@@ -733,7 +849,7 @@ CORE_INTERFACES = InterfaceRegistry(
         Interface("branches.activate", BranchesActivateRequest, AckView),
         Interface("branches.archive", BranchesArchiveRequest, AckView),
         Interface("branches.delete", BranchesDeleteRequest, AckView),
-        Interface("messages.append", MessagesAppendRequest, MessageReplyView),
+        Interface("messages.append", MessagesAppendRequest, MessageAppendResponse),
         Interface("messages.broadcast", MessagesBroadcastRequest, BroadcastRepliesView),
         Interface("messages.delegate", MessagesDelegateRequest, MessageReplyView),
     )

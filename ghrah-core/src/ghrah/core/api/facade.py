@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from ghrah.protocol.ability_control import (
     AbilityAdminView,
@@ -36,6 +36,7 @@ from ghrah.protocol.ports.core import (
     BranchOperations,
     DeliveriesOperations,
     DeliveryId,
+    HitlOperations,
     MailboxOperations,
     ManifestOperations,
     MessageId,
@@ -45,6 +46,8 @@ from ghrah.protocol.ports.core import (
     RoomOperations,
     SessionId,
     SessionOperations,
+    TranscriptOperations,
+    TurnOperations,
 )
 from ghrah.protocol.views.common import (
     AgentIdView,
@@ -67,9 +70,13 @@ from ghrah.protocol.views.core import (
     BroadcastRepliesView,
     ChainMetaView,
     ContentReadResult,
+    DeliveryQueueView,
     DeliveryView,
     HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
     MailboxSummaryView,
+    MessageAcceptanceView,
     MessageReplyView,
     MessageView,
     NodeView,
@@ -77,7 +84,13 @@ from ghrah.protocol.views.core import (
     SessionCatalogView,
     ToolListView,
     ToolView,
+    TurnAbortView,
+    TurnListView,
+    TurnRollbackPreviewView,
+    TurnRollbackView,
+    TurnView,
 )
+from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView, TurnDetailView
 
 from ghrah.core.api.runtime import CoreRuntime
 
@@ -109,11 +122,14 @@ class CoreFacade:
         self._closer = closer
         self._registry = registry
         self._nodes = _Nodes(self)
+        self._turns = _Turns(self)
+        self._hitl = _Hitl(self)
         self._sessions = _Sessions(self)
         self._branches = _Branches(self)
         self._mailbox = _Mailbox(self)
         self._deliveries = _Deliveries(self)
         self._rooms = _Rooms(self)
+        self._transcript = _Transcript(self)
         self._manifests = _Manifests(self)
         self._abilities = _Abilities(self)
         self._agents = _Agents(self)
@@ -125,6 +141,16 @@ class CoreFacade:
     def nodes(self) -> NodeOperations:
         """链节点读取。"""
         return self._nodes
+
+    @property
+    def turns(self) -> TurnOperations:
+        """轮次读取。"""
+        return self._turns
+
+    @property
+    def hitl(self) -> HitlOperations:
+        """待审批请求读取。"""
+        return self._hitl
 
     @property
     def sessions(self) -> SessionOperations:
@@ -150,6 +176,11 @@ class CoreFacade:
     def rooms(self) -> RoomOperations:
         """Room 投影维护。"""
         return self._rooms
+
+    @property
+    def transcript(self) -> TranscriptOperations:
+        """Room 日志与运行时事实的批量读面。"""
+        return self._transcript
 
     @property
     def manifests(self) -> ManifestOperations:
@@ -212,6 +243,119 @@ class CoreFacade:
             JSON 形状的出参
         """
         return await self._runtime.invoke(capability, dict(kwargs))
+
+
+class _Turns:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def get(self, *, agent_id: AgentId, turn_id: str) -> TurnView:
+        return TurnView.model_validate(
+            await self._facade._call("turns.get", agent_id=agent_id, turn_id=turn_id)
+        )
+
+    async def detail(self, *, agent_id: AgentId, turn_id: str) -> TurnDetailView:
+        """读取所属轮次的完整详情。"""
+        return TurnDetailView.model_validate(
+            await self._facade._call("turns.detail", agent_id=agent_id, turn_id=turn_id)
+        )
+
+    async def list(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> TurnListView:
+        return TurnListView.model_validate(
+            await self._facade._call(
+                "turns.list",
+                agent_id=agent_id,
+                session_id=session_id,
+                status=status,
+                limit=limit,
+            )
+        )
+
+    async def abort(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str | None = None,
+        session_id: SessionId | None = None,
+        reason: str = "",
+    ) -> TurnAbortView:
+        """中止显式指定或可唯一确定的活动轮次。"""
+        return TurnAbortView.model_validate(
+            await self._facade._call(
+                "turns.abort",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                session_id=session_id,
+                reason=reason,
+            )
+        )
+
+    async def rollback(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackView:
+        return TurnRollbackView.model_validate(
+            await self._facade._call(
+                "turns.rollback",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+            )
+        )
+
+    async def rollback_preview(
+        self,
+        *,
+        agent_id: AgentId,
+        turn_id: str,
+        target: Literal["base", "node"] = "base",
+        node_id: str | None = None,
+    ) -> TurnRollbackPreviewView:
+        return TurnRollbackPreviewView.model_validate(
+            await self._facade._call(
+                "turns.rollback_preview",
+                agent_id=agent_id,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+            )
+        )
+
+
+class _Hitl:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def get(self, *, agent_id: AgentId, promise_id: str) -> HitlRequestView:
+        return HitlRequestView.model_validate(
+            await self._facade._call("hitl.get", agent_id=agent_id, promise_id=promise_id)
+        )
+
+    async def list_pending(
+        self,
+        *,
+        agent_id: AgentId,
+        session_id: SessionId | None = None,
+    ) -> HitlRequestListView:
+        return HitlRequestListView.model_validate(
+            await self._facade._call(
+                "hitl.list_pending",
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        )
 
 
 class _Nodes:
@@ -434,8 +578,10 @@ class _Mailbox:
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> PublishedMessageView:
-        """以外部（人）身份发布消息。"""
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
+    ) -> MessageAcceptanceView:
+        """以外部（人）身份发布消息并返回投递回执。"""
         raw = await self._facade._call(
             "mailbox.publish_external",
             sender=sender,
@@ -444,8 +590,10 @@ class _Mailbox:
             idempotency_key=idempotency_key,
             metadata=metadata,
             content_blocks=content_blocks,
+            delivery_policy=delivery_policy,
+            await_reply=await_reply,
         )
-        return PublishedMessageView.model_validate(raw)
+        return MessageAcceptanceView.model_validate(raw)
 
     async def publish_notification(
         self,
@@ -489,6 +637,20 @@ class _Deliveries:
         )
         return DeliveryView.model_validate(raw)
 
+    async def queue(self, *, agent_id: AgentId, session_id: str | None) -> DeliveryQueueView:
+        """读取会话队列及活动轮次。"""
+        return DeliveryQueueView.model_validate(
+            await self._facade._call(
+                "deliveries.queue",
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        )
+
+    async def cancel(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
+        """取消未领取的排队投递。"""
+        await self._facade._call("deliveries.cancel", agent_id=agent_id, delivery_id=delivery_id)
+
     async def retry(self, *, agent_id: AgentId, delivery_id: DeliveryId) -> None:
         """重试一条失败投递。"""
         await self._facade._call(
@@ -518,6 +680,17 @@ class _Manifests:
         return AgentSpecView.model_validate(raw)
 
 
+class _Transcript:
+    def __init__(self, facade: CoreFacade) -> None:
+        self._facade = facade
+
+    async def facts(self, query: RoomFactsQuery) -> TranscriptFactsView:
+        """读取 Room 引用的运行时事实。"""
+        return TranscriptFactsView.model_validate(
+            await self._facade._call("transcript.facts", **query.model_dump())
+        )
+
+
 class _Rooms:
     """``rooms`` 分组的门面实现。"""
 
@@ -543,9 +716,10 @@ class _Messages:
         content: str,
         sender: str = "user",
         timeout: float | None = None,
+        delivery_policy: Literal["inject", "queue"] = "queue",
         metadata: dict[str, Any] | None = None,
         content_blocks: Sequence[dict[str, Any]] | None = None,
-    ) -> MessageReplyView:
+    ) -> MessageReplyView | MessageAcceptanceView:
         """发送一条消息。"""
         raw = await self._facade._call(
             "messages.append",
@@ -554,9 +728,12 @@ class _Messages:
             content=content,
             sender=sender,
             timeout=timeout,
+            delivery_policy=delivery_policy,
             metadata=metadata,
             content_blocks=content_blocks,
         )
+        if delivery_policy == "inject":
+            return MessageAcceptanceView.model_validate(raw)
         return MessageReplyView.model_validate(raw)
 
     async def broadcast(self, *, content: str, sender: str = "user") -> BroadcastRepliesView:

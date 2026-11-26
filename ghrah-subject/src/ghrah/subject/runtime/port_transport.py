@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
+from ghrah.protocol.enums import CommandType
 from ghrah.protocol.errors import ApiError
+from ghrah.protocol.payloads.agent import SendMessagePayload
 from ghrah.protocol.ports.keys import CORE_PORT
-from ghrah.protocol.views.core import AgentSpawnSpec, BranchListView
+from ghrah.protocol.views.core import AgentSpawnSpec, BranchListView, MessageAcceptanceView
 
 from ghrah.subject.runtime.core_ports import CorePorts
 
@@ -77,6 +79,10 @@ class PortMailbox:
             delivery_id=delivery_id,
         )
 
+    async def cancel(self, delivery_id: str, *, agent_id: str) -> None:
+        """经 Core 端口取消本实体的排队投递。"""
+        await self._port.deliveries.cancel(agent_id=agent_id, delivery_id=delivery_id)
+
     async def resume(self, delivery_id: str, *, agent_id: str) -> None:
         """恢复一条投递。"""
         await self._port.deliveries.resume(
@@ -93,17 +99,20 @@ class PortMailbox:
         idempotency_key: str,
         metadata: dict[str, Any] | None = None,
         content_blocks: list[dict[str, Any]] | None = None,
-    ) -> _Published:
+        delivery_policy: Literal["inject", "queue"] = "queue",
+        await_reply: bool = True,
+    ) -> MessageAcceptanceView:
         """以外部（人）身份发布消息：转 ``mailbox.publish_external``。"""
-        view = await self._port.mailbox.publish_external(
+        return await self._port.mailbox.publish_external(
             sender=sender,
             recipient_ids=[str(item) for item in recipient_ids],
             content=content,
             idempotency_key=idempotency_key,
             metadata=metadata,
             content_blocks=content_blocks,
+            delivery_policy=delivery_policy,
+            await_reply=await_reply,
         )
-        return _Published(view.message_id)
 
     async def send(
         self,
@@ -342,11 +351,11 @@ class PortClusterHandle:
         await self._port.agents.delete_assembly(agent_id=agent_id)
         return {"success": True, "data": None}
 
-    async def send_message(self, payload: Any) -> dict[str, Any]:
+    async def send_message(self, payload: SendMessagePayload) -> dict[str, Any]:
         """把消息定向发给指定 Agent：转 ``messages.append``。"""
         if not self.is_connected:
             return {"success": False, "error": f"cluster '{self._cluster_id}' is shut down"}
-        if str(getattr(payload, "project_id", "")) != self.project_id:
+        if payload.project_id != self.project_id:
             return {"success": False, "error": "cluster_project_mismatch"}
         reply = await self._port.messages.append(
             agent_id=payload.agent_id,
@@ -355,6 +364,7 @@ class PortClusterHandle:
             sender=payload.sender,
             timeout=payload.timeout,
             metadata=payload.metadata,
+            delivery_policy=payload.delivery_policy,
             content_blocks=(
                 [
                     block.model_dump(mode="json", exclude_none=True)
@@ -368,16 +378,31 @@ class PortClusterHandle:
 
     async def dispatch(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         """把 Core 命令名映射成能力调用（新旧命令表并存期间的主干入口）。"""
+        is_turn_command = command in (CommandType.TURN_ABORT.value, CommandType.TURN_ROLLBACK.value)
         if not self.is_connected:
             return {
                 "success": False,
                 "data": None,
-                "error": f"cluster '{self._cluster_id}' is shut down",
+                "error": (
+                    "agent_offline"
+                    if is_turn_command
+                    else f"cluster '{self._cluster_id}' is shut down"
+                ),
             }
         try:
             data = await self._dispatch_command(command, payload)
         except ApiError as exc:
             problem = exc.problem
+            if is_turn_command:
+                reason = problem.detail or problem.code.value
+                if reason == "agent_not_online":
+                    reason = "agent_offline"
+                return {
+                    "success": False,
+                    "data": None,
+                    "error": reason,
+                    "details": problem.details or None,
+                }
             if problem.capability == "messages.append" and (
                 problem.details.get("reason") == "source_ability_missing"
             ):
@@ -411,6 +436,22 @@ class PortClusterHandle:
         if command == "terminate_agent":
             await port.agents.delete(agent_id=agent_id)
             return {"agent_id": agent_id}
+        if command == CommandType.TURN_ABORT.value:
+            view = await port.turns.abort(
+                agent_id=agent_id,
+                turn_id=payload.get("turn_id"),
+                session_id=payload.get("session_id"),
+                reason=payload.get("reason", ""),
+            )
+            return view.model_dump(mode="json")
+        if command == CommandType.TURN_ROLLBACK.value:
+            view = await port.turns.rollback(
+                agent_id=agent_id,
+                turn_id=payload["turn_id"],
+                target=payload.get("target", "base"),
+                node_id=payload.get("node_id"),
+            )
+            return view.model_dump(mode="json")
 
         if command == "session_create":
             session_id = await port.sessions.create(

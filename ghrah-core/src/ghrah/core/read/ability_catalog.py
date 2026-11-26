@@ -493,7 +493,7 @@ async def build_instances_view(store: Any, operator: Any) -> AbilityInstancesVie
         if version.digest not in claimed
     ]
     return AbilityInstancesView(
-        project_id=operator.project_id, instances=instances, unbound_versions=unbound
+        project_id=operator.scope_id, instances=instances, unbound_versions=unbound
     )
 
 

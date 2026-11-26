@@ -15,7 +15,7 @@ from ghrah.subject.project.errors import ProjectArchivedError
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.chat_action_store import ChatActionStore
 from ghrah.subject.room.models import RoomLogRecord, RoomRecord
-from ghrah.subject.room.store import RoomStore
+from ghrah.subject.room.store import RoomLogPage, RoomStore
 from ghrah.subject.task.models import TaskRecord
 from ghrah.subject.task.store import TaskStore
 
@@ -399,6 +399,35 @@ class ProjectScopedRoomStore:
     async def get_log(self, room_id: str, **kwargs: Any) -> list[RoomLogRecord]:
         store = await self._locate(room_id)
         return [] if store is None else await store.get_log(room_id, **kwargs)
+
+    async def get_log_page(
+        self,
+        room_id: str,
+        *,
+        project_id: str,
+        before_seq: int | None = None,
+        since_seq: int | None = None,
+        limit: int = 50,
+    ) -> RoomLogPage | None:
+        """按已核验的项目查找 Room 页，不启动或迁移 Room 数据库。"""
+        if project_id in self._frozen_projects:
+            raise ProjectArchivedError(project_id)
+        locator = (await self._resolved_roots()).get(project_id)
+        store = (
+            RoomStore(ProjectPaths.from_locator(locator).room_db_path) if locator else self._legacy
+        )
+        page = await store.get_log_page(
+            room_id, project_id=project_id, before_seq=before_seq, since_seq=since_seq, limit=limit
+        )
+        if page is None and store is not self._legacy:
+            return await self._legacy.get_log_page(
+                room_id,
+                project_id=project_id,
+                before_seq=before_seq,
+                since_seq=since_seq,
+                limit=limit,
+            )
+        return page
 
     async def get_log_page(self, room_id: str, **kwargs: Any) -> list[RoomLogRecord]:
         """按升序有界读取日志，不使用聊天窗口的尾部截取语义。"""

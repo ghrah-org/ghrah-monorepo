@@ -31,12 +31,15 @@ from ghrah.core.units.registry import RuntimeRegistry
 __all__ = ["make_session_write_handlers"]
 
 
-async def resolve_agent_name(registry: RuntimeRegistry, agent_id: str) -> str:
+async def resolve_agent_name(
+    registry: RuntimeRegistry, agent_id: str, *, running_only: bool = False
+) -> str:
     """按 agent_id 解析单元使用的 agent_name。
 
     Args:
         registry: 运行时注册表
         agent_id: 稳定 Agent ID
+        running_only: 仅查已经启动的单元。
 
     Returns:
         单元登记的名字
@@ -45,9 +48,10 @@ async def resolve_agent_name(registry: RuntimeRegistry, agent_id: str) -> str:
         CoreApiError: Agent 不在线（``NOT_FOUND``）
     """
     capability = "agents.resolve"
+    dispatch = registry.try_dispatch_command if running_only else registry.handle_command
     with translate(capability):
-        result = await registry.handle_command(command="list_agents", payload={})
-    if not result.get("success"):
+        result = await dispatch(command="list_agents", payload={})
+    if result is not None and not result.get("success"):
         raise CoreApiError(
             Problem.make(
                 ProblemCode.FAILED_PRECONDITION,
@@ -55,7 +59,7 @@ async def resolve_agent_name(registry: RuntimeRegistry, agent_id: str) -> str:
                 detail=str(result.get("error") or "list_agents failed"),
             ),
         )
-    agents = list((result.get("data") or {}).get("agents") or [])
+    agents = list(((result or {}).get("data") or {}).get("agents") or [])
     for item in agents:
         if str(item.get("agent_id") or "") == agent_id:
             return str(item.get("name") or "")

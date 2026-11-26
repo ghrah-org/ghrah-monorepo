@@ -20,7 +20,7 @@ RUN = "run-one"
 class _Store:
     """只提供目录快照的最小关系库替身。"""
 
-    project_id = "project"
+    scope_id = "project"
 
     def __init__(self, catalog: Any) -> None:
         self.catalog = catalog

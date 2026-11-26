@@ -11,6 +11,7 @@ from ghrah.protocol.payloads.entity import AgentIdentity
 
 from ghrah.communication.mailbox_reader import MailboxReader
 from ghrah.communication.message_manager import MessageKind, MessageManager
+from ghrah.core.wiring import build_core_port
 
 
 async def test_mailbox_scope_pagination_and_offline_reads(tmp_path: Path) -> None:
@@ -41,8 +42,12 @@ async def test_mailbox_scope_pagination_and_offline_reads(tmp_path: Path) -> Non
         assert [item["message"]["message_id"] for item in items] == [
             r.message_id for r in reversed(records)
         ]
+        assert all("project_id" not in item["message"] for item in items)
         assert all(len(item["deliveries"]) == 1 for item in items)
         assert all(item["deliveries"][0]["recipient_id"] == "b" for item in items)
+        assert all(item["deliveries"][0]["display_state"] == "queued" for item in items)
+        detail = await reader.get_delivery(items[0]["deliveries"][0]["delivery_id"])
+        assert (detail["state"], detail["display_state"]) == ("pending", "queued")
         assert (await reader.summary())["inbox_counts"] == {"pending": 3}
         assert second["next_before_seq"] is None
     async with MailboxReader(db, AgentIdentity(project_id="p", agent_id="a")) as reader:
@@ -55,3 +60,12 @@ async def test_mailbox_scope_pagination_and_offline_reads(tmp_path: Path) -> Non
     with pytest.raises(ValueError, match="mailbox_project_mismatch"):
         async with MailboxReader(db, AgentIdentity(project_id="other", agent_id="a")):
             pass
+
+    port = build_core_port(scope_id="p", db_path=str(db))
+    try:
+        message = await port.mailbox.get(agent_id="b", message_id=records[-1].message_id)
+        page = await port.mailbox.list(agent_id="b", limit=2)
+        assert message.model_dump(mode="json")["project_id"] == ""
+        assert [item["project_id"] for item in page.model_dump(mode="json")["items"]] == ["", ""]
+    finally:
+        await port.aclose()

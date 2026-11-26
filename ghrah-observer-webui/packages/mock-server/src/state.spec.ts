@@ -351,3 +351,87 @@ describe("MockState task attribution commands", () => {
     expect((none.data as Record<string, unknown>).claims).toEqual([]);
   });
 });
+
+describe("injection acceptance and queued cancellation", () => {
+  it("returns a queued acceptance and permits explicit cancel and retry", () => {
+    const state = new MockState();
+    try {
+      const created = state.handleCommand(CommandType.PROJECT_CREATE, { name: "queue" }).data as {
+        project: { project_id: string };
+      };
+      const agent = AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: created.project.project_id,
+          name: "worker",
+          template_id: "mock.agent",
+          revision: 1,
+          start: true,
+        }).data,
+      );
+      const payload = {
+        ...agent.identity,
+        target: "worker",
+        content: "correct this",
+        delivery_policy: "inject",
+        metadata: { request_id: "retry-key" },
+      };
+      const accepted = state.handleCommand(CommandType.SEND_MESSAGE, payload);
+      const receipt = accepted.data as {
+        message_id: string;
+        accepted_at: number;
+        deliveries: { delivery_id: string; policy_applied: boolean; display_state: string }[];
+      };
+      expect(accepted.success).toBe(true);
+      expect(receipt.deliveries[0].policy_applied).toBe(false);
+      expect(receipt.deliveries[0].display_state).toBe("queued");
+      expect(state.handleCommand(CommandType.SEND_MESSAGE, payload).data).toEqual(receipt);
+      const operation = (type: string) =>
+        state.handleCommand(CommandType.AGENT_ENTITY, {
+          ...agent.identity,
+          operation: { type, delivery_id: receipt.deliveries[0].delivery_id },
+        });
+      const cancelled = operation("mailbox.cancel").data as { delivery: { display_state: string } };
+      expect(cancelled.delivery.display_state).toBe("cancelled");
+      expect(operation("mailbox.cancel").error).toBe("delivery_not_cancelable");
+      expect(operation("mailbox.retry").success).toBe(true);
+    } finally {
+      state.dispose();
+    }
+  });
+
+  it("binds mock HITL inputs and rejects cancelling a bound delivery", () => {
+    const state = new MockState();
+    try {
+      const created = state.handleCommand(CommandType.PROJECT_CREATE, { name: "hitl" }).data as {
+        project: { project_id: string };
+      };
+      const agent = AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: created.project.project_id,
+          name: "worker",
+          template_id: "mock.agent",
+          revision: 1,
+          start: true,
+        }).data,
+      );
+      const hitl = state.triggerHitl("worker", "tool", {}, {}, agent.identity.project_id);
+      const receipt = state.handleCommand(CommandType.SEND_MESSAGE, {
+        ...agent.identity,
+        target: "worker",
+        content: "additional",
+        delivery_policy: "inject",
+      }).data as {
+        deliveries: { delivery_id: string; turn_id: string; policy_applied: boolean }[];
+      };
+      expect(receipt.deliveries[0].turn_id).toBe(hitl.turn_id);
+      expect(receipt.deliveries[0].policy_applied).toBe(true);
+      const cancelled = state.handleCommand(CommandType.AGENT_ENTITY, {
+        ...agent.identity,
+        operation: { type: "mailbox.cancel", delivery_id: receipt.deliveries[0].delivery_id },
+      });
+      expect(cancelled.error).toBe("delivery_not_cancelable");
+    } finally {
+      state.dispose();
+    }
+  });
+});

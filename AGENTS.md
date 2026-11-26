@@ -28,7 +28,7 @@
   - Subject `ActionChainLedger` 为**只读投影**，经同文件 WAL 双连接直读 Core sqlite，**无写侧**；
   - Observer stores 由 `core:*` 事件驱动实时更新，并在（重）连接时经 `get_chain_history` 从权威**重建**——事件是实时投影，读通量是重建路径。
 - **契约平面**：`ghrah-protocol` 是 wire 契约的唯一权威；TS `packages/protocol` 与其对齐（双侧同步 + 一致性测试），不得单侧手改。
-- **身份/请求关联**：HITL pending 的权威是 Core `HITLPromiseRegistry`（`promise_id`）；Observer 只持 `promise_id` 引用，不复制真相。
+- **身份/请求关联**：持久轮次的 HITL 请求及裁定以 Core 数据库为权威；`HITLPromiseRegistry` 只关联进程内等待者，Observer 按 `promise_id` 引用持久记录。
 
 ### 新增共享状态/事件时的检查清单
 

@@ -6,23 +6,27 @@
 from __future__ import annotations
 
 from ghrah.protocol.interface import Handler
+from ghrah.protocol.problem import Problem, ProblemCode
 from ghrah.protocol.views.common import AckView
-from ghrah.protocol.views.core import DeliveryView
+from ghrah.protocol.views.core import DeliveryQueueView, DeliveryView
 
+from ghrah.core.api.errors import CoreApiError
 from ghrah.core.api.interfaces import (
+    DeliveriesCancelRequest,
     DeliveriesGetRequest,
+    DeliveriesQueueRequest,
     DeliveriesResumeRequest,
     DeliveriesRetryRequest,
     RoomsRecoverRequest,
 )
-from ghrah.core.read.mailbox import MailboxReadStore
+from ghrah.core.read.queries import MailboxQueries
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["make_delivery_handlers"]
 
 
 def make_delivery_handlers(
-    store: MailboxReadStore,
+    store: MailboxQueries,
     registry: RuntimeRegistry,
 ) -> dict[str, Handler]:
     """构造 ``deliveries`` 分组处理器。
@@ -41,6 +45,26 @@ def make_delivery_handlers(
             agent_id=request.agent_id,
             delivery_id=request.delivery_id,
         )
+
+    async def queue(request: DeliveriesQueueRequest) -> DeliveryQueueView:
+        """查询本实体指定会话的实时队列。"""
+        return await store.queue(agent_id=request.agent_id, session_id=request.session_id)
+
+    async def cancel(request: DeliveriesCancelRequest) -> AckView:
+        """校验投递可见性后原子取消排队项。"""
+        await store.get_delivery(agent_id=request.agent_id, delivery_id=request.delivery_id)
+        try:
+            await registry.cancel_delivery(delivery_id=request.delivery_id)
+        except ValueError as exc:
+            raise CoreApiError(
+                Problem.make(
+                    ProblemCode.FAILED_PRECONDITION,
+                    capability="deliveries.cancel",
+                    detail=str(exc),
+                    details={"reason": str(exc)},
+                )
+            ) from exc
+        return AckView(ok=True)
 
     async def retry(request: DeliveriesRetryRequest) -> AckView:
         """重试一条失败投递（先校验该投递对本实体可见）。"""
@@ -67,6 +91,8 @@ def make_delivery_handlers(
 
     return {
         "deliveries.get": get_delivery,
+        "deliveries.queue": queue,
+        "deliveries.cancel": cancel,
         "deliveries.retry": retry,
         "deliveries.resume": resume,
         "rooms.recover": recover,

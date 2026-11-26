@@ -10,6 +10,7 @@ export const CommandResultPayloadSchema = z.object({
   data: z.unknown().nullable().optional(),
   error: z.string().nullable().optional(),
   error_detail: z.string().nullable().optional(),
+  details: z.record(z.unknown()).nullable().optional(),
 });
 
 export const ErrorPayloadSchema = z.object({

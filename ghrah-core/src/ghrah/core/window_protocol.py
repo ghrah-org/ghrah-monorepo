@@ -23,7 +23,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from ghrah.context.turn_store import HitlWriteResult
 
 __all__ = [
     "WindowableBlock",
@@ -141,3 +144,33 @@ class ContextManagerProtocol(Protocol):
     """
 
     def apply_state_changes(self, changes: dict[str, Any]) -> dict[str, Any]: ...
+
+    @property
+    def active_turn_id(self) -> str | None: ...
+
+    async def open_hitl_request(
+        self,
+        *,
+        promise_id: str,
+        ability_name: str,
+        tool_call_id: str,
+        tool_call: dict[str, Any],
+        reason: str,
+        options: dict[str, Any],
+        deadline_at: str | None,
+    ) -> HitlWriteResult: ...
+
+    async def resolve_hitl_request(
+        self,
+        promise_id: str,
+        *,
+        approved: bool,
+        resolved_by: str | None,
+        resolution: Any,
+    ) -> HitlWriteResult: ...
+
+    async def expire_hitl_request(self, promise_id: str) -> HitlWriteResult: ...
+
+    async def read_hitl_request(self, promise_id: str) -> HitlWriteResult: ...
+
+    def require_turn(self, expected_turn_id: str | None) -> None: ...

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 chenxya <chenxya@ghrah.org>
 #
 # SPDX-License-Identifier: Apache-2.0
-"""项目资源关系唯一写者；定义读提交快照，来源可用性由宿主显式提供。"""
+"""作用域能力关系唯一写者；定义读提交快照，来源可用性由宿主显式提供。"""
 
 from __future__ import annotations
 
@@ -55,41 +55,66 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=5));
-INSERT OR IGNORE INTO ability_tree_schema VALUES(5);
+CREATE TABLE IF NOT EXISTS ability_tree_schema (version INTEGER PRIMARY KEY CHECK(version=6));
+INSERT OR IGNORE INTO ability_tree_schema VALUES(6);
 CREATE TABLE IF NOT EXISTS ability_versions (
- project TEXT NOT NULL, digest TEXT NOT NULL, definition TEXT NOT NULL,
+ scope TEXT NOT NULL, digest TEXT NOT NULL, definition TEXT NOT NULL,
  implementation TEXT NOT NULL, manifest TEXT NOT NULL DEFAULT '{}',
- PRIMARY KEY(project,digest));
+ PRIMARY KEY(scope,digest));
 CREATE TABLE IF NOT EXISTS ability_content (
- project TEXT NOT NULL, digest TEXT NOT NULL, data BLOB NOT NULL,
- PRIMARY KEY(project,digest));
+ scope TEXT NOT NULL, digest TEXT NOT NULL, data BLOB NOT NULL,
+ PRIMARY KEY(scope,digest));
 CREATE TABLE IF NOT EXISTS ability_instances (
- project TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, root TEXT NOT NULL,
- revision INTEGER NOT NULL, PRIMARY KEY(project,id));
+ scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, root TEXT NOT NULL,
+ revision INTEGER NOT NULL, PRIMARY KEY(scope,id));
 CREATE TABLE IF NOT EXISTS ability_agents (
- project TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
- PRIMARY KEY(project,id));
+ scope TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
+ PRIMARY KEY(scope,id));
 CREATE TABLE IF NOT EXISTS ability_grants (
- project TEXT NOT NULL, agent TEXT NOT NULL, alias TEXT NOT NULL, instance TEXT NOT NULL,
+ scope TEXT NOT NULL, agent TEXT NOT NULL, alias TEXT NOT NULL, instance TEXT NOT NULL,
  members TEXT NOT NULL, roots TEXT NOT NULL, revision INTEGER NOT NULL,
  content TEXT NOT NULL DEFAULT '[]', axes TEXT NOT NULL DEFAULT '{}',
  source TEXT NOT NULL DEFAULT 'admin',
- PRIMARY KEY(project,agent,alias));
+ PRIMARY KEY(scope,agent,alias));
 CREATE TABLE IF NOT EXISTS ability_tools (
- project TEXT NOT NULL, agent TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL,
+ scope TEXT NOT NULL, agent TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL,
  member TEXT NOT NULL, grant_revision INTEGER NOT NULL, revision INTEGER NOT NULL,
- PRIMARY KEY(project,agent,name));
+ PRIMARY KEY(scope,agent,name));
 CREATE TABLE IF NOT EXISTS ability_changes (
- seq INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, agent TEXT NOT NULL,
+ seq INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, agent TEXT NOT NULL,
  revision INTEGER NOT NULL, reason TEXT NOT NULL, actor TEXT,
  before_revision INTEGER, version_digest TEXT,
  source TEXT NOT NULL DEFAULT 'admin', policy TEXT);
 CREATE TABLE IF NOT EXISTS ability_registrations (
- project TEXT NOT NULL, agent TEXT NOT NULL, token TEXT NOT NULL, state TEXT NOT NULL,
- owned_revision INTEGER NOT NULL, PRIMARY KEY(project,agent));
-CREATE INDEX IF NOT EXISTS idx_ability_changes_project_seq ON ability_changes(project,seq);
+ scope TEXT NOT NULL, agent TEXT NOT NULL, token TEXT NOT NULL, state TEXT NOT NULL,
+ owned_revision INTEGER NOT NULL, PRIMARY KEY(scope,agent));
+CREATE INDEX IF NOT EXISTS idx_ability_changes_scope_seq ON ability_changes(scope,seq);
 """
+
+_SCHEMA_VERSION = 6
+_UPGRADABLE_VERSIONS = (5,)
+_LEGACY_V5_TABLES = (
+    "ability_versions",
+    "ability_content",
+    "ability_instances",
+    "ability_agents",
+    "ability_grants",
+    "ability_tools",
+    "ability_changes",
+    "ability_registrations",
+)
+
+
+async def _upgrade_v5_to_v6(db: aiosqlite.Connection) -> None:
+    """把 v5 的 ``project`` 租户列原地改名为 ``scope``。
+
+    只做标识改名，不改写授权事实；调用方须已持有写事务。旧版本标记表带
+    ``CHECK(version=5)`` 无法原地更新，由后续 ``_SCHEMA`` 重建为 v6。
+    """
+    for table in _LEGACY_V5_TABLES:
+        await db.execute(f"ALTER TABLE {table} RENAME COLUMN project TO scope")
+    await db.execute("DROP INDEX IF EXISTS idx_ability_changes_project_seq")
+    await db.execute("DROP TABLE ability_tree_schema")
 
 
 @dataclass
@@ -110,17 +135,22 @@ _GRANT_SOURCES = frozenset({"admin", "deployment", "agent-default", "migration",
 
 @dataclass(frozen=True)
 class AccessIdentity:
-    """受信调用方提供的身份；operator 资格还须匹配宿主项目配置。
+    """受信调用方提供的身份；operator 资格还须匹配宿主作用域配置。
 
     ``source`` 记录这一次写入的来源，进入关系库与变更历史，便于审计区分
     “管理员明确授予”“启动核定物化”“迁移补齐”与“Agent 默认集”。
     """
 
-    project_id: str
+    scope_id: str
     subject_id: str
     run_id: str
     operator: bool = False
     source: GrantSource = "admin"
+
+    @property
+    def project_id(self) -> str:
+        """兼容旧调用方的只读别名；新代码使用 ``scope_id``。"""
+        return self.scope_id
 
     def __post_init__(self) -> None:
         if self.source not in _GRANT_SOURCES:
@@ -244,19 +274,19 @@ class GrantRecord:
 
 
 class AbilityAccessStore:
-    """项目关系的唯一写入口；独立连接可与 ContextBackend 使用同一数据库文件。"""
+    """作用域关系的唯一写入口；独立连接可与 ContextBackend 使用同一数据库文件。"""
 
     def __init__(
         self,
         db: aiosqlite.Connection,
-        project_id: str,
+        scope_id: str,
         operators: frozenset[str],
         runs: Callable[[str], str | None],
         *,
         reclaim_stale: bool = False,
     ) -> None:
         self._db = db
-        self.project_id = TypeAdapter(TreeId).validate_python(project_id)
+        self.scope_id = TypeAdapter(TreeId).validate_python(scope_id)
         self._operators = operators
         self._runs = runs
         self._reclaim_stale = reclaim_stale
@@ -299,20 +329,42 @@ class AbilityAccessStore:
     async def open(
         cls,
         path: str | Path,
-        project_id: str,
+        scope_id: str,
         *,
         operators: frozenset[str],
         runs: Callable[[str], str | None],
         read_limit: int = 65536,
         reclaim_stale: bool = False,
+        read_only: bool = False,
+        immutable: bool = False,
     ) -> AbilityAccessStore:
-        """显式初始化项目表；不修改既有上下文 schema 或启动 Agent。"""
+        """打开关系库，写入口负责建表和迁移，读入口只接受当前 schema。"""
         if type(read_limit) is not int or not 1 <= read_limit <= 65536:
             raise ValueError("内容单次读取上限必须在 1..65536 内")
-        db = await aiosqlite.connect(str(path), isolation_level=None)
+        if immutable and not read_only:
+            raise ValueError("Immutable ability databases require read-only access")
+        filename = str(path)
+        if read_only:
+            filename = Path(path).resolve().as_uri() + "?mode=ro"
+            if immutable:
+                filename += "&immutable=1"
+        db = await aiosqlite.connect(filename, uri=read_only, isolation_level=None)
         db.row_factory = aiosqlite.Row
         try:
             await db.execute("PRAGMA busy_timeout=5000")
+            if read_only:
+                await db.execute("PRAGMA query_only=ON")
+                tables = await db.execute_fetchall(
+                    "SELECT 1 FROM sqlite_master WHERE name='ability_tree_schema' AND type='table'"
+                )
+                if not tables:
+                    raise AccessError("unavailable")
+                rows = await db.execute_fetchall("SELECT version FROM ability_tree_schema")
+                if not rows or rows[0][0] != _SCHEMA_VERSION:
+                    raise AccessError("ability_schema_not_current")
+                store = cls(db, scope_id, operators, runs)
+                store.read_limit = read_limit
+                return store
             await db.execute("BEGIN IMMEDIATE")
             try:
                 async with db.execute(
@@ -330,12 +382,15 @@ class AbilityAccessStore:
                             )
                 if exists:
                     async with db.execute("SELECT version FROM ability_tree_schema") as cursor:
-                        version = await cursor.fetchone()
-                    if version is None or version[0] != 5:
+                        row = await cursor.fetchone()
+                    version = None if row is None else row[0]
+                    if version not in (_SCHEMA_VERSION, *_UPGRADABLE_VERSIONS):
                         raise ValueError(
                             "Ability 关系数据库使用旧主体语义；稳定 Agent ID 需要显式重建 "
                             "Ability 域（scripts/reset_ability_grants.py），不能按名称继承授权"
                         )
+                    if version != _SCHEMA_VERSION:
+                        await _upgrade_v5_to_v6(db)
                 for statement in _SCHEMA.split(";"):
                     if statement.strip():
                         await db.execute(statement)
@@ -343,7 +398,7 @@ class AbilityAccessStore:
             except BaseException:
                 await db.rollback()
                 raise
-            store = cls(db, project_id, operators, runs, reclaim_stale=reclaim_stale)
+            store = cls(db, scope_id, operators, runs, reclaim_stale=reclaim_stale)
             store.read_limit = read_limit
             return store
         except BaseException:
@@ -369,15 +424,15 @@ class AbilityAccessStore:
     async def _row(self, table: str, condition: str, *params: object) -> Any:
         # table 和 condition 只由本模块常量提供，不接受调用输入。
         async with self._db.execute(
-            f"SELECT * FROM {table} WHERE project=? AND {condition}",
-            (self.project_id, *params),
+            f"SELECT * FROM {table} WHERE scope=? AND {condition}",
+            (self.scope_id, *params),
         ) as cursor:
             row = await cursor.fetchone()
         return row
 
     def _operator(self, actor: AccessIdentity) -> bool:
         return (
-            actor.project_id == self.project_id
+            actor.scope_id == self.scope_id
             and actor.operator
             and actor.subject_id in self._operators
         )
@@ -387,7 +442,7 @@ class AbilityAccessStore:
             raise AccessError("access_denied")
 
     def require_operator(self, actor: AccessIdentity) -> None:
-        """核对受信操作员是否获宿主配置允许管理此项目。"""
+        """核对受信操作员是否获宿主配置允许管理此作用域。"""
         self._require_operator(actor)
 
     def current_run(self, agent: str) -> str:
@@ -399,7 +454,7 @@ class AbilityAccessStore:
 
     async def _agent(self, actor: AccessIdentity, agent: str) -> Any:
         """核对目标 Agent 行；操作员不依赖运行实例身份，Agent 自身必须匹配当前 run。"""
-        if actor.project_id != self.project_id:
+        if actor.scope_id != self.scope_id:
             raise AccessError("access_denied")
         row = await self._row("ability_agents", "id=?", agent)
         if row is None:
@@ -425,14 +480,14 @@ class AbilityAccessStore:
             raise AccessError("conflict")
         revision = expected + 1
         await self._db.execute(
-            "UPDATE ability_agents SET revision=? WHERE project=? AND id=?",
-            (revision, self.project_id, agent),
+            "UPDATE ability_agents SET revision=? WHERE scope=? AND id=?",
+            (revision, self.scope_id, agent),
         )
         await self._db.execute(
-            "INSERT INTO ability_changes(project,agent,revision,reason,actor,"
+            "INSERT INTO ability_changes(scope,agent,revision,reason,actor,"
             "before_revision,version_digest,source,policy) VALUES(?,?,?,?,?,?,?,?,?)",
             (
-                self.project_id,
+                self.scope_id,
                 agent,
                 revision,
                 reason,
@@ -447,8 +502,8 @@ class AbilityAccessStore:
         if owner is not None and owner[0] == agent and owner[2] is asyncio.current_task():
             await self._db.execute(
                 "UPDATE ability_registrations SET owned_revision=? "
-                "WHERE project=? AND agent=? AND token=? AND state='pending'",
-                (revision, self.project_id, agent, owner[1]),
+                "WHERE scope=? AND agent=? AND token=? AND state='pending'",
+                (revision, self.scope_id, agent, owner[1]),
             )
         return revision
 
@@ -479,8 +534,8 @@ class AbilityAccessStore:
                     row["state"],
                 )
                 await self._db.execute(
-                    "DELETE FROM ability_registrations WHERE project=? AND agent=?",
-                    (self.project_id, agent),
+                    "DELETE FROM ability_registrations WHERE scope=? AND agent=?",
+                    (self.scope_id, agent),
                 )
             for table, key in (
                 ("ability_agents", "id"),
@@ -488,19 +543,19 @@ class AbilityAccessStore:
                 ("ability_tools", "agent"),
             ):
                 async with self._db.execute(
-                    f"SELECT * FROM {table} WHERE project=? AND {key}=?", (self.project_id, agent)
+                    f"SELECT * FROM {table} WHERE scope=? AND {key}=?", (self.scope_id, agent)
                 ) as cursor:
                     snapshots[table] = [dict(row) for row in await cursor.fetchall()]
             old = snapshots["ability_agents"]
             revision = old[0]["revision"] if old else 0
             async with self._db.execute(
-                "SELECT COALESCE(MAX(seq),0) FROM ability_changes WHERE project=? AND agent=?",
-                (self.project_id, agent),
+                "SELECT COALESCE(MAX(seq),0) FROM ability_changes WHERE scope=? AND agent=?",
+                (self.scope_id, agent),
             ) as cursor:
                 sequence = (await cursor.fetchone())[0]
             await self._db.execute(
                 "INSERT INTO ability_registrations VALUES(?,?,?,?,?)",
-                (self.project_id, agent, token, "pending", revision),
+                (self.scope_id, agent, token, "pending", revision),
             )
         registration = StartupRegistration()
         context = self._startup_context.set((agent, token, asyncio.current_task()))
@@ -516,9 +571,8 @@ class AbilityAccessStore:
                     raise AccessError("conflict")
                 if registration.committed:
                     await self._db.execute(
-                        "UPDATE ability_registrations SET state='active' "
-                        "WHERE project=? AND agent=?",
-                        (self.project_id, agent),
+                        "UPDATE ability_registrations SET state='active' WHERE scope=? AND agent=?",
+                        (self.scope_id, agent),
                     )
                 else:
                     row = await self._row("ability_agents", "id=?", agent)
@@ -532,8 +586,8 @@ class AbilityAccessStore:
                         ("ability_agents", "id"),
                     ):
                         await self._db.execute(
-                            f"DELETE FROM {table} WHERE project=? AND {key}=?",
-                            (self.project_id, agent),
+                            f"DELETE FROM {table} WHERE scope=? AND {key}=?",
+                            (self.scope_id, agent),
                         )
                     for table in ("ability_agents", "ability_grants", "ability_tools"):
                         for saved in snapshots[table]:
@@ -544,12 +598,12 @@ class AbilityAccessStore:
                                 tuple(saved.values()),
                             )
                     await self._db.execute(
-                        "DELETE FROM ability_changes WHERE project=? AND agent=? AND seq>?",
-                        (self.project_id, agent, sequence),
+                        "DELETE FROM ability_changes WHERE scope=? AND agent=? AND seq>?",
+                        (self.scope_id, agent, sequence),
                     )
                     await self._db.execute(
-                        "DELETE FROM ability_registrations WHERE project=? AND agent=? AND token=?",
-                        (self.project_id, agent, token),
+                        "DELETE FROM ability_registrations WHERE scope=? AND agent=? AND token=?",
+                        (self.scope_id, agent, token),
                     )
 
     async def release_registration(self, actor: AccessIdentity, agent: str) -> None:
@@ -557,8 +611,8 @@ class AbilityAccessStore:
         self._require_operator(actor)
         async with self._tx(write=True):
             await self._db.execute(
-                "DELETE FROM ability_registrations WHERE project=? AND agent=? AND state='active'",
-                (self.project_id, agent),
+                "DELETE FROM ability_registrations WHERE scope=? AND agent=? AND state='active'",
+                (self.scope_id, agent),
             )
 
     async def commit_version(self, actor: AccessIdentity, version: AbilityVersion) -> None:
@@ -595,7 +649,7 @@ class AbilityAccessStore:
                     raise AccessError("invalid_change")
                 await self._db.execute(
                     "INSERT OR IGNORE INTO ability_content VALUES(?,?,?)",
-                    (self.project_id, digest, data),
+                    (self.scope_id, digest, data),
                 )
             for entry in manifest.values():
                 blob = await self._row("ability_content", "digest=?", entry["digest"])
@@ -608,7 +662,7 @@ class AbilityAccessStore:
             await self._db.execute(
                 "INSERT OR IGNORE INTO ability_versions VALUES(?,?,?,?,?)",
                 (
-                    self.project_id,
+                    self.scope_id,
                     version.digest,
                     version.definition_json,
                     version.implementation_digest,
@@ -629,7 +683,7 @@ class AbilityAccessStore:
                 if expected_revision:
                     raise AccessError("conflict")
                 await self._db.execute(
-                    "INSERT INTO ability_agents VALUES(?,?,0)", (self.project_id, agent)
+                    "INSERT INTO ability_agents VALUES(?,?,0)", (self.scope_id, agent)
                 )
             elif row["revision"] != expected_revision:
                 raise AccessError("conflict")
@@ -656,7 +710,7 @@ class AbilityAccessStore:
             row = await self._row("ability_agents", "id=?", agent)
             if row is None:
                 await self._db.execute(
-                    "INSERT INTO ability_agents VALUES(?,?,0)", (self.project_id, agent)
+                    "INSERT INTO ability_agents VALUES(?,?,0)", (self.scope_id, agent)
                 )
                 return 0
             return int(row["revision"])
@@ -700,8 +754,8 @@ class AbilityAccessStore:
         self._require_operator(actor)
         async with self._tx():
             async with self._db.execute(
-                "SELECT 1 FROM ability_changes WHERE project=? AND agent=? AND source=? LIMIT 1",
-                (self.project_id, agent, MIGRATION_SOURCE),
+                "SELECT 1 FROM ability_changes WHERE scope=? AND agent=? AND source=? LIMIT 1",
+                (self.scope_id, agent, MIGRATION_SOURCE),
             ) as cursor:
                 return await cursor.fetchone() is not None
 
@@ -718,8 +772,8 @@ class AbilityAccessStore:
         self._require_operator(actor)
         async with self._tx():
             async with self._db.execute(
-                "SELECT name FROM ability_tools WHERE project=? AND agent=? ORDER BY name",
-                (self.project_id, agent),
+                "SELECT name FROM ability_tools WHERE scope=? AND agent=? ORDER BY name",
+                (self.scope_id, agent),
             ) as cursor:
                 return tuple(row[0] for row in await cursor.fetchall())
 
@@ -730,8 +784,8 @@ class AbilityAccessStore:
             rows = await (
                 await self._db.execute(
                     "SELECT name,alias,member,grant_revision,revision FROM ability_tools "
-                    "WHERE project=? AND agent=? ORDER BY name",
-                    (self.project_id, agent),
+                    "WHERE scope=? AND agent=? ORDER BY name",
+                    (self.scope_id, agent),
                 )
             ).fetchall()
             return tuple(BoundToolNode.model_validate(dict(row)) for row in rows)
@@ -743,8 +797,8 @@ class AbilityAccessStore:
             row = await (
                 await self._db.execute(
                     "SELECT 1 FROM ability_changes "
-                    "WHERE project=? AND agent=? AND source='admin' LIMIT 1",
-                    (self.project_id, agent),
+                    "WHERE scope=? AND agent=? AND source='admin' LIMIT 1",
+                    (self.scope_id, agent),
                 )
             ).fetchone()
             return row is not None
@@ -771,8 +825,8 @@ class AbilityAccessStore:
             if row is None:
                 raise AccessError("not_found")
             async with self._db.execute(
-                "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
-                (self.project_id, agent),
+                "SELECT * FROM ability_grants WHERE scope=? AND agent=? ORDER BY alias",
+                (self.scope_id, agent),
             ) as cursor:
                 rows = await cursor.fetchall()
             return [
@@ -803,11 +857,11 @@ class AbilityAccessStore:
 
         Args:
             actor: 操作员身份。
-            instance: 实例标识（同一项目内所有 Agent 共享）。
+            instance: 实例标识（同一作用域内所有 Agent 共享）。
             digest: 目标版本摘要。
             root: 实例根；None 表示不写根。
             expected_revision: CAS 期望修订。
-            invalidate_grants: 是否在版本/根变化时撤销该项目下该实例的既有
+            invalidate_grants: 是否在版本/根变化时撤销该作用域下该实例的既有
                 授予。默认 True（立即失效）。**无启动策略的存量模式必须传
                 False**：该模式唯一的重建源就是关系库里的授予，撤销它会让
                 其它 Agent 既无法继续使用、也无法在下次启动时重建。
@@ -835,12 +889,12 @@ class AbilityAccessStore:
             revision = expected_revision + 1
             await self._db.execute(
                 "INSERT OR REPLACE INTO ability_instances VALUES(?,?,?,?,?)",
-                (self.project_id, instance, digest, resolved, revision),
+                (self.scope_id, instance, digest, resolved, revision),
             )
             if invalidate_grants:
                 async with self._db.execute(
-                    "SELECT agent,alias FROM ability_grants WHERE project=? AND instance=?",
-                    (self.project_id, instance),
+                    "SELECT agent,alias FROM ability_grants WHERE scope=? AND instance=?",
+                    (self.scope_id, instance),
                 ) as cursor:
                     affected = await cursor.fetchall()
                 for grant in affected:
@@ -876,12 +930,12 @@ class AbilityAccessStore:
 
     async def _remove_grant(self, agent: str, alias: str) -> None:
         await self._db.execute(
-            "DELETE FROM ability_tools WHERE project=? AND agent=? AND alias=?",
-            (self.project_id, agent, alias),
+            "DELETE FROM ability_tools WHERE scope=? AND agent=? AND alias=?",
+            (self.scope_id, agent, alias),
         )
         await self._db.execute(
-            "DELETE FROM ability_grants WHERE project=? AND agent=? AND alias=?",
-            (self.project_id, agent, alias),
+            "DELETE FROM ability_grants WHERE scope=? AND agent=? AND alias=?",
+            (self.scope_id, agent, alias),
         )
 
     async def grant(
@@ -969,7 +1023,7 @@ class AbilityAccessStore:
             await self._db.execute(
                 "INSERT INTO ability_grants VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
-                    self.project_id,
+                    self.scope_id,
                     agent,
                     change.alias,
                     change.instance_id,
@@ -1034,33 +1088,33 @@ class AbilityAccessStore:
             else:
                 await self._db.execute(
                     "UPDATE ability_grants SET members=?,content=?,axes=?,revision=? "
-                    "WHERE project=? AND agent=? AND alias=?",
+                    "WHERE scope=? AND agent=? AND alias=?",
                     (
                         json.dumps(sorted(facts.members)),
                         json.dumps(sorted(facts.content)),
                         json.dumps(facts.normalized_axes()),
                         revision,
-                        self.project_id,
+                        self.scope_id,
                         agent,
                         change.alias,
                     ),
                 )
                 async with self._db.execute(
-                    "SELECT name,member FROM ability_tools WHERE project=? AND agent=? AND alias=?",
-                    (self.project_id, agent, change.alias),
+                    "SELECT name,member FROM ability_tools WHERE scope=? AND agent=? AND alias=?",
+                    (self.scope_id, agent, change.alias),
                 ) as cursor:
                     tools = await cursor.fetchall()
                 for tool in tools:
                     if tool["member"] not in facts.members:
                         await self._db.execute(
-                            "DELETE FROM ability_tools WHERE project=? AND agent=? AND name=?",
-                            (self.project_id, agent, tool["name"]),
+                            "DELETE FROM ability_tools WHERE scope=? AND agent=? AND name=?",
+                            (self.scope_id, agent, tool["name"]),
                         )
                     else:
                         await self._db.execute(
                             "UPDATE ability_tools SET grant_revision=? "
-                            "WHERE project=? AND agent=? AND name=?",
-                            (revision, self.project_id, agent, tool["name"]),
+                            "WHERE scope=? AND agent=? AND name=?",
+                            (revision, self.scope_id, agent, tool["name"]),
                         )
             return revision
 
@@ -1112,7 +1166,7 @@ class AbilityAccessStore:
             await self._db.execute(
                 "INSERT OR REPLACE INTO ability_tools VALUES(?,?,?,?,?,?,?)",
                 (
-                    self.project_id,
+                    self.scope_id,
                     agent,
                     change.tool_name,
                     change.alias,
@@ -1157,8 +1211,8 @@ class AbilityAccessStore:
                 return current["revision"]
             revision = await self._bump(actor, agent, change.expected_revision, "unbind_tool")
             await self._db.execute(
-                "DELETE FROM ability_tools WHERE project=? AND agent=? AND name=?",
-                (self.project_id, agent, change.tool_name),
+                "DELETE FROM ability_tools WHERE scope=? AND agent=? AND name=?",
+                (self.scope_id, agent, change.tool_name),
             )
             return revision
 
@@ -1169,8 +1223,8 @@ class AbilityAccessStore:
         abilities = []
         available_aliases: set[str] = set()
         async with self._db.execute(
-            "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
-            (self.project_id, agent),
+            "SELECT * FROM ability_grants WHERE scope=? AND agent=? ORDER BY alias",
+            (self.scope_id, agent),
         ) as cursor:
             grants = await cursor.fetchall()
         for grant in grants:
@@ -1233,8 +1287,8 @@ class AbilityAccessStore:
                 )
             )
         async with self._db.execute(
-            "SELECT * FROM ability_tools WHERE project=? AND agent=? ORDER BY name",
-            (self.project_id, agent),
+            "SELECT * FROM ability_tools WHERE scope=? AND agent=? ORDER BY name",
+            (self.scope_id, agent),
         ) as cursor:
             tools = await cursor.fetchall()
         visible = {
@@ -1243,7 +1297,7 @@ class AbilityAccessStore:
             if include_unavailable_bindings or node.alias in available_aliases
         }
         return AbilityTreeView(
-            project_id=self.project_id,
+            project_id=self.scope_id,
             agent_id=agent,
             run_id=self.current_run(agent),
             revision=row["revision"],
@@ -1444,8 +1498,8 @@ class AbilityAccessStore:
             if actor.subject_id != agent or actor.run_id != self.current_run(agent):
                 raise AccessError("access_denied")
             async with self._db.execute(
-                "SELECT * FROM ability_grants WHERE project=? AND agent=? ORDER BY alias",
-                (self.project_id, agent),
+                "SELECT * FROM ability_grants WHERE scope=? AND agent=? ORDER BY alias",
+                (self.scope_id, agent),
             ) as cursor:
                 grants = await cursor.fetchall()
             matches: list[tuple[Any, Any, Any]] = []
@@ -1711,7 +1765,7 @@ class AbilityAccessStore:
         self._require_operator(actor)
         async with self._tx():
             async with self._db.execute(
-                "SELECT id FROM ability_instances WHERE project=? ORDER BY id", (self.project_id,)
+                "SELECT id FROM ability_instances WHERE scope=? ORDER BY id", (self.scope_id,)
             ) as cursor:
                 return [row[0] for row in await cursor.fetchall()]
 
@@ -1721,8 +1775,8 @@ class AbilityAccessStore:
         async with self._tx():
             async with self._db.execute(
                 "SELECT digest,definition,implementation,manifest FROM ability_versions "
-                "WHERE project=? ORDER BY digest",
-                (self.project_id,),
+                "WHERE scope=? ORDER BY digest",
+                (self.scope_id,),
             ) as cursor:
                 return [AbilityVersion(*row) for row in await cursor.fetchall()]
 
@@ -1804,7 +1858,7 @@ class AbilityAccessStore:
     async def changes(
         self, actor: AccessIdentity, *, after_seq: int = 0, limit: int = 100
     ) -> list[dict[str, Any]]:
-        """有界读取本项目修订通知；完整重建使用权威表，不回放此通知。"""
+        """有界读取本作用域修订通知；完整重建使用权威表，不回放此通知。"""
         self._require_operator(actor)
         if (
             type(after_seq) is not int
@@ -1815,7 +1869,7 @@ class AbilityAccessStore:
             raise AccessError("invalid_change")
         async with self._tx():
             async with self._db.execute(
-                "SELECT * FROM ability_changes WHERE project=? AND seq>? ORDER BY seq LIMIT ?",
-                (self.project_id, after_seq, limit),
+                "SELECT * FROM ability_changes WHERE scope=? AND seq>? ORDER BY seq LIMIT ?",
+                (self.scope_id, after_seq, limit),
             ) as cursor:
                 return [dict(row) for row in await cursor.fetchall()]

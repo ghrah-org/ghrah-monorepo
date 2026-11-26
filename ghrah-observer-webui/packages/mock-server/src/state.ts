@@ -108,6 +108,12 @@ export interface MockDeliveryRecord {
   state: string;
   error: string | null;
   blocked_reason: string | null;
+  turn_id?: string | null;
+  target_session_id?: string | null;
+  delivery_policy?: "inject" | "queue";
+  display_state?: string;
+  queue_position?: number;
+  cancelable?: boolean;
 }
 
 interface AgentRecord {
@@ -131,6 +137,7 @@ interface AgentActionState {
 
 interface DirectMessage {
   projectId: string;
+  acceptedAt?: number;
   message: { message_id: string; sender_id: string; content: string; reply_to: string | null };
   deliveries: Array<MockDeliveryRecord & { consumed_node_id: string | null }>;
 }
@@ -722,8 +729,15 @@ export class MockState {
         ? ok({ message: item.message, deliveries: item.deliveries })
         : fail("message_not_found");
     }
-    if (op.type === "mailbox.retry" || op.type === "mailbox.resume") {
-      if (project.status !== "active" || agent.runtimeState !== "running")
+    if (
+      op.type === "mailbox.retry" ||
+      op.type === "mailbox.resume" ||
+      op.type === "mailbox.cancel"
+    ) {
+      if (
+        op.type !== "mailbox.cancel" &&
+        (project.status !== "active" || agent.runtimeState !== "running")
+      )
         return fail("agent_not_running");
       const delivery = this._directMessages
         .filter((item) => item.projectId === payload.project_id)
@@ -731,7 +745,26 @@ export class MockState {
         .find(
           (item) => item.delivery_id === op.delivery_id && item.recipient_id === payload.agent_id,
         );
-      return fail(delivery ? "invalid_delivery_state" : "delivery_not_found");
+      if (!delivery) return fail("delivery_not_found");
+      if (op.type === "mailbox.cancel") {
+        if (delivery.state !== "pending" || delivery.turn_id || delivery.consumed_node_id)
+          return fail("delivery_not_cancelable");
+        delivery.state = "interrupted";
+        delivery.error = "cancelled_by_user";
+        delivery.blocked_reason = null;
+        delivery.display_state = "cancelled";
+        delivery.cancelable = false;
+        delivery.queue_position = 0;
+        return ok({ delivery });
+      }
+      if (op.type === "mailbox.retry" && delivery.error === "cancelled_by_user") {
+        delivery.state = "pending";
+        delivery.error = null;
+        delivery.display_state = "queued";
+        delivery.cancelable = true;
+        return ok({ delivery });
+      }
+      return fail("invalid_delivery_state");
     }
     if (
       "expected_revision" in op &&
@@ -822,6 +855,75 @@ export class MockState {
     const branch = state.branches.get(session.active_branch_id)!;
     if (session.lifecycle !== "open" || branch.lifecycle !== "open")
       return fail("context_not_open");
+    if (payload.delivery_policy === "inject") {
+      const prior = this._directMessages.find(
+        (item) =>
+          item.projectId === payload.project_id &&
+          item.message.message_id === payload.metadata?.request_id &&
+          item.deliveries[0]?.recipient_id === recipient.agentId,
+      );
+      const existing = prior?.deliveries[0];
+      if (prior && prior.message.content !== content) return fail("idempotency_conflict");
+      const active = [...this.pendingHitl.values()].find(
+        (item) =>
+          item.status === "pending" &&
+          item.payload.project_id === payload.project_id &&
+          item.payload.agent_id === recipient.agentId,
+      );
+      const turnId = execute ? null : (active?.payload.turn_id ?? null);
+      const position =
+        1 +
+        this._directMessages
+          .filter((item) => item.projectId === payload.project_id)
+          .flatMap((item) => item.deliveries)
+          .filter(
+            (delivery) =>
+              delivery.recipient_id === recipient.agentId &&
+              delivery.target_session_id === session.session_id &&
+              delivery.state === "pending" &&
+              !delivery.turn_id &&
+              !delivery.consumed_node_id,
+          ).length;
+      const delivery = existing ?? {
+        delivery_id: uuid(),
+        recipient_id: recipient.agentId,
+        state: "pending",
+        error: null,
+        blocked_reason: null,
+        consumed_node_id: null,
+        delivery_policy: "inject" as const,
+        turn_id: turnId,
+        display_state: turnId ? "injected" : "queued",
+        queue_position: turnId ? 0 : position,
+        target_session_id: session.session_id,
+        cancelable: !turnId,
+      };
+      const messageId =
+        prior?.message.message_id ??
+        (typeof payload.metadata?.request_id === "string" ? payload.metadata.request_id : uuid());
+      const acceptedAt = prior?.acceptedAt ?? Date.now() / 1000;
+      if (!prior)
+        this._directMessages.push({
+          projectId: payload.project_id,
+          acceptedAt,
+          message: { message_id: messageId, sender_id: senderId, content, reply_to: null },
+          deliveries: [delivery],
+        });
+      return ok({
+        message_id: messageId,
+        accepted_at: acceptedAt,
+        deliveries: [
+          {
+            delivery_id: delivery.delivery_id,
+            policy: delivery.delivery_policy ?? "inject",
+            policy_applied: Boolean(delivery.turn_id),
+            turn_id: delivery.turn_id ?? null,
+            display_state: delivery.display_state,
+            queue_position: delivery.queue_position ?? 0,
+          },
+        ],
+      });
+    }
     const reply = `[mock:${recipient.name}] ${content}`;
     const node: ActionNode = {
       id: uuid(),
@@ -2302,8 +2404,10 @@ export class MockState {
       throw new Error(`agent scope is ambiguous or missing: ${agentName}`);
     }
     const agent = matches[0];
+    const promiseId = `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`;
     const payload: HITLRequestPayload = {
-      promise_id: `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`,
+      promise_id: promiseId,
+      turn_id: `mock-turn-${promiseId}`,
       agent_id: agent.agentId,
       project_id: agent.projectId,
       agent_name: agentName,

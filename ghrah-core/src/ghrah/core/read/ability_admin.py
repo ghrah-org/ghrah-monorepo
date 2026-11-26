@@ -219,7 +219,7 @@ async def build_admin_view(
     )
 
     return AbilityAdminView(
-        project_id=operator.project_id,
+        project_id=operator.scope_id,
         agent_id=agent_id,
         revision=revision,
         run_id=view.run_id if view is not None else None,

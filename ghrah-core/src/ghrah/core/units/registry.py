@@ -180,6 +180,13 @@ class RuntimeRegistry:
             raise LookupError("message_manager_unavailable")
         await self._manager.retry(delivery_id)
 
+    async def cancel_delivery(self, *, delivery_id: str) -> None:
+        """取消未领取的排队投递。"""
+        await self.ensure()
+        if self._manager is None:
+            raise LookupError("message_manager_unavailable")
+        await self._manager.cancel(delivery_id)
+
     async def resume_delivery(self, *, delivery_id: str) -> None:
         """恢复一条中断投递。"""
         await self.ensure()

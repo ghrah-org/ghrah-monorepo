@@ -21,6 +21,7 @@ import uuid
 
 from fastapi import WebSocket, WebSocketDisconnect
 from ghrah.protocol.types import (
+    CommandType,
     EventType,
     Message,
     SystemType,
@@ -28,7 +29,9 @@ from ghrah.protocol.types import (
     create_error,
     create_pong,
     envelope_from_dict,
+    generate_request_id,
 )
+from pydantic import ValidationError
 
 from ghrah.subject.server.config import ObserverServerConfig
 from ghrah.subject.server.connection_manager import ConnectionManager
@@ -39,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 
 _EVENT_TYPE_VALUES = frozenset(et.value for et in EventType)
+_TURN_VALIDATION_ERRORS = {
+    CommandType.TURN_ABORT.value: "invalid_abort_request",
+    CommandType.TURN_ROLLBACK.value: "invalid_rollback_target",
+}
 
 
 class ObserverServer:
@@ -153,6 +160,29 @@ class ObserverServer:
             try:
                 message = envelope_from_dict(raw_data)
             except Exception as e:
+                if isinstance(e, ValidationError):
+                    command = raw_data.get("type")
+                    if command in _TURN_VALIDATION_ERRORS:
+                        error = _TURN_VALIDATION_ERRORS[command]
+                        payload = raw_data.get("payload")
+                        if (
+                            command == CommandType.TURN_ROLLBACK.value
+                            and isinstance(payload, dict)
+                            and "dry_run" in payload
+                        ):
+                            error = "invalid_request"
+                        request_id = raw_data.get("request_id")
+                        error_msg = create_command_result(
+                            request_id=request_id
+                            if isinstance(request_id, str) and request_id
+                            else generate_request_id(),
+                            success=False,
+                            error=error,
+                        )
+                        await self._connection_manager.send_to(
+                            session_id, error_msg.model_dump_with_timestamp()
+                        )
+                        continue
                 error_msg = create_error(
                     code="INVALID_MESSAGE",
                     message=f"Failed to parse message: {e}",

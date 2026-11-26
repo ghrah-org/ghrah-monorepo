@@ -207,6 +207,15 @@ from ghrah.protocol.payloads.task import (  # noqa: F401
     TaskVerificationPayload,
     TaskVerifyPayload,
 )
+
+# 全部域模型符号（新增类型须同步此处，否则不出现在聚合导出面）
+from ghrah.protocol.payloads.turn import (
+    TurnAbortPayload,
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnRollbackPayload,
+    TurnWaitingHitlPayload,
+)
 from ghrah.protocol.payloads.workspace import (  # noqa: F401
     CreateWorkspacePayload,
     DestroyWorkspacePayload,
@@ -223,8 +232,12 @@ from ghrah.protocol.payloads.workspace import (  # noqa: F401
     WorkspaceStatusPayload,
 )
 
-# 全部域模型符号（新增类型须同步此处，否则不出现在聚合导出面）
 __all__ = [
+    "TurnOpenedPayload",
+    "TurnWaitingHitlPayload",
+    "TurnClosedPayload",
+    "TurnAbortPayload",
+    "TurnRollbackPayload",
     "MaterialPatchEventPayload",
     "MaterialPatchFieldPayload",
     "MaterialStateGetPayload",

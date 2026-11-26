@@ -245,6 +245,15 @@ class HITLPromiseRegistry:
             logger.warning(f"HITL promise already registered for '{promise_id}', replacing")
         self._promises[promise_id] = (agent_name, ability_name, tool_call_id)
 
+    def lookup(self, promise_id: str) -> tuple[str, str, str] | None:
+        """查询待审批路由，保留它直至审批完成。"""
+        return self._promises.get(promise_id)
+
+    def lookup_promise(self, agent_name: str, ability_name: str, tool_call_id: str) -> str | None:
+        """为兼容三元组回包定位当前待审批项。"""
+        triplet = (agent_name, ability_name, tool_call_id)
+        return next((key for key, value in self._promises.items() if value == triplet), None)
+
     def resolve(self, promise_id: str) -> tuple[str, str, str] | None:
         """取出并移除 promise 对应的三元组。
 

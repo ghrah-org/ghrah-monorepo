@@ -11,10 +11,20 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from ghrah.plugin.negotiator import PythonHalfInfo, TsHalfReport, negotiate
 
+from ghrah.protocol.payloads.agent import ShellRememberOptions
+from ghrah.protocol.payloads.room import RoomSendPayload
+from ghrah.protocol.payloads.turn import (
+    TurnAbortPayload,
+    TurnClosedPayload,
+    TurnOpenedPayload,
+    TurnRollbackPayload,
+    TurnWaitingHitlPayload,
+)
 from ghrah.protocol.types import (
     MaterialStateGetPayload,
     MaterialStateRegisterPayload,
@@ -30,6 +40,7 @@ from ghrah.protocol.types import (
     ProjectTransitionPayload,
     ProjectTransitionRequest,
     ProjectUpdateRequest,
+    RoomSubjectType,
     SendMessagePayload,
     TaskCheckOutcomePayload,
     TaskClaimEventPayload,
@@ -46,6 +57,28 @@ from ghrah.protocol.types import (
     TaskVerificationGapsPayload,
     TaskVerifyPayload,
 )
+from ghrah.protocol.views.core import (
+    BranchView,
+    DeliveryAcceptanceView,
+    DeliveryQueueEntryView,
+    DeliveryQueueView,
+    DeliveryView,
+    HistoryView,
+    HitlRequestListView,
+    HitlRequestView,
+    MessageAcceptanceView,
+    NodeView,
+    SessionCatalogView,
+    SessionView,
+)
+from ghrah.protocol.views.observer_room import (
+    RoomTranscriptView,
+    TranscriptDeliveryView,
+    TranscriptEntryView,
+    TurnCardView,
+    TurnDetailView,
+    TurnStatsView,
+)
 
 SNAPSHOTS_DIR = (
     Path(__file__).resolve().parents[3]
@@ -57,6 +90,121 @@ SNAPSHOTS_DIR = (
 )
 
 SAMPLES: dict[str, object] = {
+    "DeliveryView": DeliveryView(
+        delivery_id="delivery", display_state="queued", cancelable=True, queue_position=1
+    ),
+    "DeliveryAcceptanceView": DeliveryAcceptanceView(
+        delivery_id="delivery",
+        policy="inject",
+        policy_applied=False,
+        display_state="queued",
+        queue_position=1,
+    ),
+    "MessageAcceptanceView": MessageAcceptanceView(message_id="message", accepted_at=1.0),
+    "DeliveryQueueEntryView": DeliveryQueueEntryView(
+        delivery_id="delivery",
+        message_id="message",
+        display_state="queued",
+        position=1,
+        cancelable=True,
+    ),
+    "DeliveryQueueView": DeliveryQueueView(agent_id="agent", session_id="session"),
+    "SessionCatalogView": SessionCatalogView(
+        active_session_id="session",
+        sessions=[SessionView(session_id="session", agent_name="agent")],
+        branches=[BranchView(branch_id="main", session_id="session")],
+    ),
+    "HistoryView": HistoryView(
+        agent_id="agent",
+        agent_name="agent",
+        session_id="session",
+        branch_id="main",
+        nodes=[NodeView(id="node", turn_id="turn")],
+    ),
+    "HitlRequestListView": HitlRequestListView(
+        agent_id="agent",
+        items=[
+            HitlRequestView(
+                promise_id="promise",
+                turn_id="turn",
+                ability_name="tool",
+                tool_call={},
+                reason="review",
+                options={},
+                status="pending",
+                created_at="2026-11-20T09:00:00+00:00",
+            ),
+            HitlRequestView(
+                promise_id="promise-shell",
+                turn_id="turn",
+                ability_name="shell",
+                tool_call={},
+                reason="review",
+                options={
+                    "exact_key": "git status",
+                    "exact_label": "git status",
+                    "class_key": "git",
+                    "class_label": "git *",
+                },
+                status="pending",
+                created_at="2026-11-20T09:00:01+00:00",
+                shell_remember=ShellRememberOptions(
+                    exact_key="git status",
+                    exact_label="git status",
+                    class_key="git",
+                    class_label="git *",
+                ),
+            ),
+        ],
+    ),
+    "TurnDetailView": TurnDetailView(
+        turn=TurnCardView(
+            turn_id="turn",
+            agent_name="agent",
+            session_id="session",
+            status="closed",
+            opened_at="2026-11-20T09:00:00+00:00",
+            closed_at="2026-11-20T09:00:01+00:00",
+            turn_index=1,
+            stats=TurnStatsView(
+                steps=1,
+                node_count=1,
+                token_input=40,
+                token_cache_read=20,
+                token_output=10,
+                token_total=50,
+                cache_hit_rate=0.5,
+                duration_ms=1000,
+            ),
+        ),
+        nodes=[NodeView(id="end", turn_id="turn")],
+    ),
+    "TurnAbortPayload": TurnAbortPayload(
+        project_id="project", agent_id="agent", session_id="session", reason="用户中止"
+    ),
+    "TurnRollbackPayload": TurnRollbackPayload(
+        project_id="project", agent_id="agent", turn_id="turn", target="node", node_id="node"
+    ),
+    "RoomSendPayload": RoomSendPayload(
+        room_id="room-001",
+        author="human:yuki",
+        author_type=RoomSubjectType.HUMAN,
+        data={"message": "请评审最新架构草案"},
+    ),
+    "TurnOpenedPayload": TurnOpenedPayload(
+        agent_name="beta", turn_id="turn", session_id="session", opener_delivery_id="delivery"
+    ),
+    "TurnWaitingHitlPayload": TurnWaitingHitlPayload(
+        agent_name="beta", turn_id="turn", session_id="session", promise_id="promise"
+    ),
+    "TurnClosedPayload": TurnClosedPayload(
+        agent_name="beta",
+        turn_id="turn",
+        session_id="session",
+        status="closed",
+        closing_kind="completed",
+        end_node_id="end",
+    ),
     "MaterialStateGetPayload": MaterialStateGetPayload(project_id="project-1"),
     "MaterialStateRegisterPayload": MaterialStateRegisterPayload(
         project_id="project-1",
@@ -361,10 +509,47 @@ SAMPLES: dict[str, object] = {
 }
 
 
-def main() -> None:
+SAMPLES["RoomTranscriptView"] = RoomTranscriptView(
+    project_id="project",
+    room_id="room",
+    entries=[
+        TranscriptEntryView(
+            entry_id="entry",
+            seq=3,
+            author="user",
+            author_type="human",
+            timestamp=1.0,
+            message_id="message",
+            content="请继续",
+            insert_before_turn_id="turn",
+            injection_step=2,
+            human_state="injected",
+            deliveries=[
+                TranscriptDeliveryView(
+                    delivery_id="inject",
+                    message_id="message",
+                    recipient_id="agent",
+                    state="pending",
+                    turn_id="turn",
+                    delivery_policy="inject",
+                    display_state="consumed",
+                    injection_step=2,
+                )
+            ],
+        )
+    ],
+    turns=[SAMPLES["TurnDetailView"].turn],  # type: ignore[attr-defined]
+    latest_seq=4,
+    next_since_seq=3,
+    has_more=True,
+    read_at="2026-11-24T09:00:00+00:00",
+)
+
+
+def main(names: list[str]) -> None:
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-    for name, sample in SAMPLES.items():
-        model = sample  # type: ignore[assignment]
+    for name in names or SAMPLES:
+        model = SAMPLES[name]  # type: ignore[assignment]
         data = model.model_dump(mode="json")  # type: ignore[attr-defined]
         path = SNAPSHOTS_DIR / f"{name}.json"
         path.write_text(
@@ -374,4 +559,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

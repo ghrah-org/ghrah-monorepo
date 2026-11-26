@@ -5,7 +5,7 @@ import { ShellRememberOptionsSchema } from "../hitl.generated.js";
 
 import { z } from "zod";
 import { InputContentBlockSchema } from "./content.js";
-import { BranchInfoPayloadSchema } from "./session.js";
+import { BranchInfoPayloadSchema, ChainHistoryResultPayloadSchema } from "./session.js";
 
 export const AgentConfigPayloadSchema = z
   .object({
@@ -56,6 +56,7 @@ export const SendMessagePayloadSchema = z.object({
   content_blocks: z.array(InputContentBlockSchema).nullable().optional(),
   sender: z.string().optional().default("user"),
   timeout: z.number().nullable().optional(),
+  delivery_policy: z.enum(["inject", "queue"]).optional().default("queue"),
   metadata: z.record(z.unknown()).nullable().optional(),
 });
 
@@ -148,6 +149,7 @@ export const HITLResolvedPayloadSchema = z.object({
   ability_name: z.string(),
   tool_call_id: z.string().optional().default(""),
   status: z.enum(["approved", "rejected", "timeout"]),
+  turn_id: z.string().nullable().optional(),
 });
 
 export const AgentSpawnedPayloadSchema = z.object({
@@ -280,8 +282,15 @@ export const ActionNodeSchema = z.object({
   metadata: z.record(z.unknown()).optional().default({}),
   session_id: z.string().optional().default(""),
   created_on_branch_id: z.string().optional().default(""),
+  turn_id: z.string().nullable().optional(),
 });
 export type ActionNode = z.infer<typeof ActionNodeSchema>;
+
+export const HistoryViewSchema = ChainHistoryResultPayloadSchema.omit({ project_id: true }).extend({
+  nodes: z.array(ActionNodeSchema),
+});
+
+export type HistoryView = z.infer<typeof HistoryViewSchema>;
 
 export const AgentResponsePayloadSchema = z.object({
   project_id: z.string().optional().default(""),
@@ -353,6 +362,9 @@ export const HITLRequestPayloadSchema = z.object({
   context: z.record(z.unknown()).optional().default({}),
   reason: z.string().optional().default(""),
   shell_remember: ShellRememberOptionsSchema.nullable().optional(),
+  turn_id: z.string().nullable().optional(),
+  delivery_id: z.string().nullable().optional(),
+  deadline_at: z.string().nullable().optional(),
 });
 export type HITLRequestPayload = z.infer<typeof HITLRequestPayloadSchema>;
 

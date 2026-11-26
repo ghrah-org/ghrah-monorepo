@@ -22,19 +22,21 @@ from ghrah.core.api.handlers.nodes import make_node_handlers
 from ghrah.core.api.handlers.session_write import make_session_write_handlers
 from ghrah.core.api.handlers.sessions import make_session_handlers
 from ghrah.core.api.handlers.shell import make_shell_handlers
+from ghrah.core.api.handlers.turn import make_hitl_handlers, make_turn_handlers
 from ghrah.core.read.ability import AbilityReadStore
-from ghrah.core.read.chain import ChainReadStore
-from ghrah.core.read.mailbox import MailboxReadStore
+from ghrah.core.read.queries import ChainQueries, MailboxQueries, TranscriptQueries, TurnQueries
 from ghrah.core.units.registry import RuntimeRegistry
 
 __all__ = ["build_catalog_handlers", "build_handlers"]
 
 
 def build_handlers(
-    store: ChainReadStore,
-    mailbox: MailboxReadStore,
+    store: ChainQueries,
+    mailbox: MailboxQueries,
     abilities: AbilityReadStore,
     agents: RuntimeRegistry,
+    turns: TurnQueries,
+    transcript: TranscriptQueries,
 ) -> dict[str, Handler]:
     """汇总全部能力处理器。
 
@@ -43,12 +45,17 @@ def build_handlers(
         mailbox: 消息表只读适配层
         abilities: 能力关系库只读适配层
         agents: 运行时注册表
+        turns: 轮次和审批只读适配层
+        transcript: Room 日志引用只读适配层
 
     Returns:
         能力名到处理器的映射
     """
     return {
         **make_node_handlers(store),
+        **make_turn_handlers(turns, agents),
+        "transcript.facts": transcript.facts,
+        **make_hitl_handlers(turns),
         **make_session_handlers(store),
         **make_branch_handlers(store),
         **make_mailbox_handlers(mailbox, agents),

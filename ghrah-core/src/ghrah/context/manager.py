@@ -25,8 +25,10 @@ import dataclasses
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+from uuid import uuid4
 
+from ghrah.context import turn
 from ghrah.context.action_session import ActionSession
 from ghrah.context.branch import ActionBranch
 from ghrah.context.chain import ActionChain
@@ -41,11 +43,13 @@ from ghrah.context.persistence import ContextChanges, PersistenceBackend
 from ghrah.context.session_runtime import SessionRuntime
 from ghrah.context.state import StateManager
 from ghrah.context.token_estimator import DEFAULT_TOKEN_ESTIMATOR, TokenEstimator
+from ghrah.context.turn_store import DeliverySettlement, HitlWriteResult, TurnStore
 from ghrah.context.window import WindowManager
 from ghrah.core.window_protocol import MessageFactory
 
 if TYPE_CHECKING:
-    pass
+    from ghrah.context import recovery
+    from ghrah.context.turn import HitlOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +123,14 @@ class ContextManager:
         self._window_manager = window_manager
         self._persistence = persistence
         self._auto_persist = auto_persist
+        self._active_turn: turn.ActiveTurn | None = None
+        self._iteration_turn_id: str | None = None
+        self._revoked_turns: set[str] = set()
+        self._turn_abort_event: asyncio.Event | None = None
+        self._convergence_lock = asyncio.Lock()
+        self._pending_convergences: list[ContextChanges] = []
+        self._rollback_candidate: ContextManager | None = None
+        self.execution_phase = "unknown"
         self._message_factory = message_factory
         self._estimator: TokenEstimator = estimator or DEFAULT_TOKEN_ESTIMATOR
         validate_agent = getattr(ability_content, "validate_agent", None)
@@ -257,6 +269,519 @@ class ContextManager:
     def compact_method(self) -> str:
         """compact 综合方法名。"""
         return self._compact_method
+
+    @property
+    def active_turn(self) -> turn.ActiveTurn | None:
+        """当前执行轮次的内存引用。"""
+        return self._active_turn
+
+    @property
+    def active_turn_id(self) -> str | None:
+        """当前执行轮次 ID。"""
+        return self._active_turn.turn_id if self._active_turn else None
+
+    def attach_turn(self, *, turn_id: str, session_id: str, opener_delivery_id: str) -> None:
+        """挂载调度器已持久化的轮次。"""
+        self._attach_turn(
+            turn.ActiveTurn(turn_id, self._agent_name, session_id, opener_delivery_id, "mm")
+        )
+
+    async def attach_claimed_turn(
+        self, *, turn_id: str, session_id: str, opener_delivery_id: str
+    ) -> None:
+        """复核领取事实后挂载轮次，与同进程的中止串行。"""
+        async with self._convergence_lock:
+            store = self._turn_store
+            if store is not None:
+                record = await store.load_turn(self._agent_name, turn_id)
+                if (
+                    record is None
+                    or record.status in turn.TERMINAL_STATUSES
+                    or record.session_id != session_id
+                    or record.opener_delivery_id != opener_delivery_id
+                ):
+                    raise turn.TurnRevokedError("claimed turn is no longer active")
+            self.attach_turn(
+                turn_id=turn_id, session_id=session_id, opener_delivery_id=opener_delivery_id
+            )
+
+    def _attach_turn(self, active: turn.ActiveTurn) -> None:
+        self._active_turn = active
+        self._turn_abort_event = asyncio.Event()
+        if active.turn_id in self._revoked_turns:
+            self._turn_abort_event.set()
+
+    def request_turn_abort(self, turn_id: str) -> None:
+        """吊销该轮提交资格，并唤醒属于该轮的审批和同步回复等待。"""
+        if self.active_turn_id == turn_id:
+            self._revoked_turns.add(turn_id)
+            self.consume_compact_request()
+            if self._turn_abort_event is not None:
+                self._turn_abort_event.set()
+
+    def turn_abort_event(self) -> asyncio.Event | None:
+        """获取该轮等待者使用的中止信号。"""
+        return self._turn_abort_event
+
+    def check_turn_revoked(self) -> None:
+        """确认当前执行与迭代归属仍持有提交资格。"""
+        active_id = self.active_turn_id
+        if active_id in self._revoked_turns or (
+            self._in_iteration and self._iteration_turn_id != active_id
+        ):
+            raise turn.TurnRevokedError("turn is no longer active")
+
+    def require_turn(self, expected_turn_id: str | None) -> None:
+        """验证跨异步边界的操作仍属于原轮次。"""
+        if self.active_turn_id != expected_turn_id:
+            raise turn.TurnRevokedError("execution turn changed")
+        self.check_turn_revoked()
+
+    @property
+    def has_durable_turn(self) -> bool:
+        """当前执行有持久轮次，可依据现场收敛。"""
+        return self._active_turn is not None and self._turn_store is not None
+
+    @property
+    def _turn_store(self) -> TurnStore | None:
+        """同一存储域的轮次存储；后端未提供时为 None。"""
+        backend = self._persistence
+        if backend is None or not getattr(backend, "connected", True):
+            return None
+        return backend.turn_store
+
+    async def open_turn(self, *, opener_delivery_id: str | None = None) -> str | None:
+        """为直接收到的输入开启轮次。"""
+        active = turn.ActiveTurn(
+            uuid4().hex, self._agent_name, self.active_session_id, opener_delivery_id, "self"
+        )
+        async with self._convergence_lock:
+            store = self._turn_store
+            if store is not None:
+                try:
+                    await store.open_turn(active)
+                except Exception:
+                    logger.warning(
+                        "Failed to persist direct turn %s", active.turn_id, exc_info=True
+                    )
+                    return None
+            self._attach_turn(active)
+            return active.turn_id
+
+    async def close_turn(
+        self, *, status: turn.TurnCloseStatus, closing_kind: str, end_node_id: str | None = None
+    ) -> None:
+        """清除当前轮次引用，直收轮次同时保存终态。"""
+        active = self._active_turn
+        self._active_turn = None
+        self._turn_abort_event = None
+        self.consume_compact_request()
+        self.execution_phase = "unknown"
+        if active is not None:
+            self._revoked_turns.discard(active.turn_id)
+        if active is None or active.owner == "mm":
+            return
+        store = self._turn_store
+        if store is None:
+            return
+        try:
+            await self.wait_for_persist()
+            await store.close_turn(
+                turn_id=active.turn_id,
+                status=status,
+                closing_kind=closing_kind,
+                end_node_id=end_node_id,
+            )
+        except Exception:
+            logger.warning("Failed to close turn %s", active.turn_id, exc_info=True)
+
+    async def abort_turn(
+        self,
+        *,
+        turn_id: str | None,
+        session_id: str | None = None,
+        reason: str = "",
+        settlement: DeliverySettlement | None = None,
+    ) -> recovery.ConvergenceOutcome:
+        """提交中止事务，登记内存收敛后唤醒旧执行。"""
+        task = asyncio.create_task(
+            self._converge_turn(
+                turn_id=turn_id,
+                session_id=session_id,
+                reason="external_abort",
+                status="aborted",
+                closing_kind="external_abort",
+                description=reason,
+                settlement=settlement,
+            )
+        )
+        cancelled = False
+        while True:
+            try:
+                outcome = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return outcome
+
+    async def converge_turn(
+        self,
+        *,
+        turn_id: str,
+        error: Exception,
+        settlement: DeliverySettlement | None,
+    ) -> recovery.ConvergenceOutcome:
+        """依据持久现场终结失败的执行。"""
+        return await self._converge_turn(
+            turn_id=turn_id,
+            session_id=None,
+            reason="error",
+            status="failed",
+            closing_kind="error",
+            description=str(error),
+            error=error,
+            settlement=settlement,
+        )
+
+    async def _converge_turn(
+        self,
+        *,
+        turn_id: str | None,
+        session_id: str | None,
+        reason: str,
+        status: Literal["aborted", "failed"],
+        closing_kind: str,
+        description: str,
+        settlement: DeliverySettlement | None,
+        error: Exception | None = None,
+    ) -> recovery.ConvergenceOutcome:
+        store = self._turn_store
+        if store is None:
+            raise ValueError("persistence_unavailable")
+
+        async with self._convergence_lock:
+            await self.wait_for_persist()
+            outcome = await store.converge_turn(
+                agent_name=self._agent_name,
+                turn_id=turn_id,
+                session_id=session_id,
+                reason=reason,
+                status=status,
+                closing_kind=closing_kind,
+                description=description,
+                execution_phase=self.execution_phase,
+                active_turn_id=self.active_turn_id,
+                error=error,
+                settlement=settlement,
+            )
+            changes = outcome.changes
+            if outcome.changed:
+                if changes is not None:
+                    if self.in_iteration or self.active_turn is not None:
+                        self._pending_convergences.append(changes)
+                    else:
+                        self._install_convergence(changes)
+                if status == "aborted":
+                    self.request_turn_abort(outcome.record.turn_id)
+            return outcome
+
+    def _install_convergence(self, changes: ContextChanges) -> None:
+        self._ensure_not_in_iteration("install a convergence branch")
+        session = changes.sessions[0]
+        runtime = self._get_runtime(session.session_id)
+        for node in changes.nodes:
+            if runtime.chain.checkout(node.id) is None:
+                runtime.chain.ingest_node(node)
+        runtime.branches.update((branch.branch_id, branch) for branch in changes.branches)
+        runtime.session = session
+        runtime.validate()
+        if session.session_id == self.active_session_id:
+            self._restore_active_context()
+
+    async def finish_received_turn(
+        self,
+        *,
+        status: turn.TurnCloseStatus,
+        closing_kind: str,
+        end_node_id: str | None,
+        revoked: bool = False,
+    ) -> turn.TurnClosure | None:
+        """收尾并安装已提交的分支，只返回已确认的普通关闭事实。"""
+        async with self._convergence_lock:
+            self.ensure_iteration_closed()
+            active = self._active_turn
+            revoked = revoked or self.active_turn_id in self._revoked_turns
+            if revoked and active is not None:
+                self._revoked_turns.discard(active.turn_id)
+                self._active_turn = None
+            await self.close_turn(status=status, closing_kind=closing_kind, end_node_id=end_node_id)
+            for changes in self._pending_convergences:
+                self._install_convergence(changes)
+            self._pending_convergences.clear()
+            if revoked or active is None:
+                return None
+            store = self._turn_store
+            if store is not None:
+                try:
+                    record = await store.load_turn(self._agent_name, active.turn_id)
+                except Exception:
+                    logger.warning(
+                        "Could not read persisted closure for %s", active.turn_id, exc_info=True
+                    )
+                    return None
+                return turn.ordinary_closure(record)
+            return turn.TurnClosure(
+                active.turn_id, active.session_id, status, closing_kind, end_node_id
+            )
+
+    async def _apply_pending_diagnoses(self, agent_name: str) -> None:
+        store = self._turn_store
+        if store is None:
+            return
+        await store.apply_pending_diagnoses(agent_name)
+
+    def ensure_rollback_idle(self, turn_id: str) -> None:
+        """运行中立即返回忙碌，避免回滚请求等到审批结束才执行。"""
+        if self.active_turn_id == turn_id:
+            raise turn.RollbackError("turn_active")
+        if self._in_iteration or self._active_turn is not None:
+            raise turn.RollbackError("turn_busy")
+
+    def _rollback_store(
+        self, turn_id: str, target: turn.RollbackTarget, node_id: str | None
+    ) -> TurnStore:
+        if (
+            target not in ("base", "node")
+            or (target == "node") != (node_id is not None)
+            or node_id == ""
+        ):
+            raise turn.RollbackError("invalid_rollback_target")
+        self.ensure_rollback_idle(turn_id)
+        store = self._turn_store
+        if store is None:
+            raise turn.RollbackError("persistence_unavailable")
+        return store
+
+    def _rollback_branch_factory(
+        self, turn_id: str
+    ) -> Callable[[turn.RollbackPoint, str], tuple[ActionBranch, ContextChanges]]:
+        """构造在事务内按回滚点创建新分支的纯内存回调。"""
+
+        def create_branch(
+            point: turn.RollbackPoint, session_id: str
+        ) -> tuple[ActionBranch, ContextChanges]:
+            try:
+                runtime = self._get_runtime(session_id, error_type=KeyError)
+            except KeyError as exc:
+                raise turn.RollbackError("turn_session_missing") from exc
+            candidate = copy.copy(runtime)
+            candidate.branches = runtime.branches.copy()
+            branch = candidate.create_branch(
+                name=f"rollback-{turn_id[:8]}",
+                parent_branch_id=point.branch_id,
+                fork_point_node_id=point.node_id,
+                metadata={
+                    "is_rollback": True,
+                    "rollback_from_branch_id": point.previous_branch_id,
+                    "rollback_from_node_id": point.previous_head_id,
+                    "rollback_to_node_id": point.node_id,
+                    "turn_id": turn_id,
+                },
+            )
+            candidate.activate_branch(branch.branch_id)
+            self._rollback_candidate = candidate
+            return branch, ContextChanges(
+                agent_name=self._agent_name,
+                sessions=(candidate.session,),
+                branches=(branch,),
+            )
+
+        return create_branch
+
+    async def rollback_turn(
+        self,
+        *,
+        turn_id: str,
+        target: turn.RollbackTarget,
+        node_id: str | None = None,
+        settlement: DeliverySettlement | None = None,
+    ) -> turn.RollbackOutcome:
+        """从已关闭轮次分叉，在同一事务内更新分支、轮次和待处理输入。"""
+        store = self._rollback_store(turn_id, target, node_id)
+        await self.wait_for_persist()
+        self._rollback_candidate = None
+
+        async def apply() -> turn.RollbackOutcome:
+            outcome = await store.rollback_turn(
+                agent_name=self._agent_name,
+                turn_id=turn_id,
+                target=target,
+                node_id=node_id,
+                create_branch=self._rollback_branch_factory(turn_id),
+                settlement=settlement,
+            )
+            branch = outcome.branch
+            if branch is not None:
+                session_id = branch.session_id
+                candidate = self._rollback_candidate
+                self._rollback_candidate = None
+                try:
+                    assert candidate is not None
+                    self._session_runtimes[session_id] = candidate
+                    if session_id == self._active_session_id:
+                        self._restore_active_context()
+                except Exception as exc:
+                    logger.exception("Failed to load committed rollback for turn %s", turn_id)
+                    raise RuntimeError(
+                        "rollback applied but runtime reload failed; restart required"
+                    ) from exc
+            return outcome
+
+        # 等事务提交并同步内存后，才允许取消释放 Runner。
+        task = asyncio.create_task(apply())
+        cancelled = False
+        while True:
+            try:
+                outcome = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+        return outcome
+
+    async def preview_rollback(
+        self,
+        *,
+        turn_id: str,
+        target: turn.RollbackTarget,
+        node_id: str | None = None,
+        settlement: DeliverySettlement | None = None,
+    ) -> dict[str, Any]:
+        """从已提交的数据计算回滚目标和影响。"""
+        store = self._rollback_store(turn_id, target, node_id)
+        await self.wait_for_persist()
+        preview = await store.preview_rollback(
+            agent_name=self._agent_name,
+            turn_id=turn_id,
+            target=target,
+            node_id=node_id,
+            settlement=settlement,
+        )
+        return {
+            "turn_id": preview.turn_id,
+            "session_id": preview.session_id,
+            "target": preview.target,
+            "target_node_id": preview.target_node_id,
+            "target_branch_id": preview.target_branch_id,
+            "target_is_compact": preview.target_is_compact,
+            "base_node_id": preview.base_node_id,
+            "start_node_id": preview.start_node_id,
+            "end_node_id": preview.end_node_id,
+            "truncated_node_count": preview.truncated_node_count,
+            "crosses_compact": preview.crosses_compact,
+            "head_unchanged": preview.head_unchanged,
+            "released_delivery_ids": preview.released_delivery_ids,
+        }
+
+    async def normalize_turns(self) -> None:
+        """恢复上下文时归一属于该 Agent 的遗留轮次。"""
+        store = self._turn_store
+        if store is None:
+            return
+        try:
+            await store.normalize_turns(self._agent_name)
+        except Exception:
+            logger.warning("Failed to normalize turns for %s", self._agent_name, exc_info=True)
+
+    async def open_hitl_request(
+        self,
+        *,
+        promise_id: str,
+        ability_name: str,
+        tool_call_id: str,
+        tool_call: dict[str, Any],
+        reason: str,
+        options: dict[str, Any],
+        deadline_at: str | None,
+    ) -> HitlWriteResult:
+        """在持久轮次内登记审批，返回事务提交后的结果。"""
+        self.check_turn_revoked()
+        active = self._active_turn
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
+        if active is None:
+            return HitlWriteResult(error="no_active_turn")
+        try:
+            return await store.open_hitl_request(
+                turn_id=active.turn_id,
+                promise_id=promise_id,
+                ability_name=ability_name,
+                tool_call_id=tool_call_id,
+                tool_call=tool_call,
+                reason=reason,
+                options=options,
+                last_node_id=self.active_head.id,
+                deadline_at=deadline_at,
+            )
+        except turn.TurnRevokedError:
+            raise
+        except Exception:
+            logger.warning("Failed to persist HITL request %s", promise_id, exc_info=True)
+        return HitlWriteResult(error="unconfirmed")
+
+    async def resolve_hitl_request(
+        self,
+        promise_id: str,
+        *,
+        approved: bool,
+        resolved_by: str | None,
+        resolution: Any,
+    ) -> HitlWriteResult:
+        """原子记录人工审批结果。"""
+        return await self._finish_hitl_request(
+            promise_id, "approved" if approved else "rejected", resolved_by, resolution
+        )
+
+    async def expire_hitl_request(self, promise_id: str) -> HitlWriteResult:
+        """标记审批到期，返回竞争中先提交的终态。"""
+        return await self._finish_hitl_request(promise_id, "expired", None, {})
+
+    async def read_hitl_request(self, promise_id: str) -> HitlWriteResult:
+        """用独立只读连接读取已提交的审批，避免观察到写事务中的状态。"""
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
+        try:
+            return await store.read_hitl_request(self._agent_name, promise_id)
+        except Exception:
+            logger.warning("Failed to read HITL request %s", promise_id, exc_info=True)
+            return HitlWriteResult(error="unconfirmed")
+
+    async def _finish_hitl_request(
+        self, promise_id: str, status: HitlOutcome, resolved_by: str | None, resolution: Any
+    ) -> HitlWriteResult:
+        store = self._turn_store
+        if store is None:
+            return HitlWriteResult()
+        try:
+            return await store.finish_hitl_request(
+                agent_name=self._agent_name,
+                promise_id=promise_id,
+                status=status,
+                resolved_by=resolved_by,
+                resolution=resolution,
+            )
+        except Exception:
+            logger.warning("Failed to update HITL request %s", promise_id, exc_info=True)
+            return HitlWriteResult(error="unconfirmed")
 
     @property
     def persistence(self) -> PersistenceBackend | None:
@@ -732,6 +1257,9 @@ class ContextManager:
         """
         if self._in_iteration:
             raise RuntimeError("Iteration already in progress")
+        self.check_turn_revoked()
+        self._iteration_turn_id = self.active_turn_id
+        self.execution_phase = "iteration"
         self._state_manager.begin_transaction()
         self._pending_messages = []
         self._in_iteration = True
@@ -799,6 +1327,8 @@ class ContextManager:
         if not self._in_iteration:
             raise RuntimeError("No iteration in progress")
 
+        self.check_turn_revoked()
+
         effective_names: list[str]
         effective_result: Any | None
 
@@ -839,6 +1369,7 @@ class ContextManager:
             messages_delta=delta,
             action_results=effective_result or [],
             metadata=node_metadata or None,
+            turn_id=self.active_turn_id or "",
         )
 
         # 7. 清理迭代状态
@@ -860,7 +1391,8 @@ class ContextManager:
         llm_metadata: dict[str, Any] | None = None,
     ) -> ContextNode:
         """原子作用域内先持久提交再推进内存；旧调用保留原提交方式。"""
-        committer = get_iteration_committer(self)
+        self.check_turn_revoked()
+        committer = self._turn_committer()
         options = {
             "ability_names": ability_names,
             "action_results": action_results,
@@ -876,6 +1408,21 @@ class ContextManager:
         candidate = self._commit_candidate()
         node = candidate.commit_iteration(**options)
         return await self._commit_durable_candidate(candidate, node, committer)
+
+    def _turn_committer(self, *, idle_compact: bool = False) -> IterationCommitter | None:
+        committer = get_iteration_committer(self)
+        store = self._turn_store
+        active = self._active_turn
+        if committer is not None or store is None or (active is None and not idle_compact):
+            return committer
+        turn_id = active.turn_id if active is not None else None
+
+        async def commit(changes: ContextChanges) -> None:
+            await store.commit_context_iteration(
+                changes, turn_id=turn_id, idle_compact=idle_compact
+            )
+
+        return commit
 
     def _commit_candidate(self) -> ContextManager:
         """复制本次提交会修改的内存聚合，暂不推进权威 Head。"""
@@ -917,6 +1464,7 @@ class ContextManager:
         self._pending_compaction = candidate._pending_compaction
         self._in_iteration = candidate._in_iteration
         self._window_occupied = candidate._window_occupied
+        self._active_turn = candidate._active_turn
         self._system_prompt = candidate._system_prompt
         if node.metadata.get("node_kind") == "compact":
             self._compact_requested = False
@@ -1226,6 +1774,7 @@ class ContextManager:
         Raises:
             RuntimeError: 迭代进行中（compact 回合必须不在迭代事务内）
         """
+        self.check_turn_revoked()
         if self._in_iteration:
             raise RuntimeError("Cannot commit compact node during an iteration")
 
@@ -1234,6 +1783,7 @@ class ContextManager:
 
         node = self._active_runtime.commit_node(
             ability_names=["compact"],
+            turn_id=self.active_turn_id or "",
             agent_state=self._active_runtime.active_head.agent_state,
             messages_delta=[],
             messages_snapshot=copy.deepcopy(snapshot_messages),
@@ -1251,15 +1801,22 @@ class ContextManager:
         return node
 
     async def commit_compact_node_async(
-        self, snapshot_messages: list[Any], metadata: dict[str, Any] | None = None
+        self,
+        snapshot_messages: list[Any],
+        metadata: dict[str, Any] | None = None,
+        *,
+        idle: bool = False,
     ) -> ContextNode:
         """原子接收内持久提交压缩节点，压缩本身不消费新的输入消息。"""
-        committer = get_iteration_committer(self)
+        self.check_turn_revoked()
+        expected_turn_id = self.active_turn_id
+        committer = self._turn_committer(idle_compact=idle)
         if committer is None:
             return self.commit_compact_node(snapshot_messages, metadata)
         if self._in_iteration:
             raise RuntimeError("Cannot commit compact node during an iteration")
         await self.wait_for_persist()
+        self.require_turn(expected_turn_id)
         candidate = self._commit_candidate()
         node = candidate.commit_compact_node(snapshot_messages, metadata)
         return await self._commit_durable_candidate(candidate, node, committer)
@@ -1573,6 +2130,7 @@ class ContextManager:
         if self._persistence is None:
             raise RuntimeError("No persistence backend configured")
 
+        await self._apply_pending_diagnoses(agent_name)
         checkpoint = await self._persistence.load_checkpoint(
             agent_name, snapshot_payloads="boundaries"
         )
@@ -1599,6 +2157,14 @@ class ContextManager:
         self._active_session_id = checkpoint.active_session_id
         self._restore_active_context()
         self._in_iteration = False
+        self._active_turn = None
+        self._turn_abort_event = None
+        self._iteration_turn_id = None
+        self._revoked_turns.clear()
+        self._pending_convergences.clear()
+        self.consume_compact_request()
+        self.execution_phase = "unknown"
+        await self.normalize_turns()
 
         logger.debug(
             "Restored context for agent '%s': %d nodes, %d sessions, %d messages",

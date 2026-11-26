@@ -1,0 +1,7 @@
+{
+  "project_id": "project",
+  "agent_id": "agent",
+  "turn_id": null,
+  "session_id": "session",
+  "reason": "用户中止"
+}

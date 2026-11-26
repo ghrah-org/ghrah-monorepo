@@ -22,6 +22,12 @@ ghrah-protocol/
     └── factories.py      # create_command_result / create_event 等构造辅助
 ```
 
+## 轮次控制命令
+
+`turn_abort` 和 `turn_rollback` 通过 Observer WebSocket 调用 Core 已有的轮次控制能力，复用原处理器。回滚预览使用独立的 HTTP 查询，命令回执通过 `command_result` 返回。
+
+`room_send` 的 `delivery_policy` 缺省为 `queue`。人类发送方可以显式请求 `inject`，并从回执的 `data.deliveries` 查看每个收件人的实际投递结果。
+
 ## 许可证
 
 Apache 2.0

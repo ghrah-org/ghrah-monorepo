@@ -1,0 +1,26 @@
+{
+  "agent_name": "agent",
+  "agent_id": "agent",
+  "session_id": "session",
+  "branch_id": "main",
+  "active_session_id": "",
+  "nodes": [
+    {
+      "id": "node",
+      "parent_id": null,
+      "agent_name": "",
+      "session_id": "",
+      "created_on_branch_id": "",
+      "turn_id": "turn",
+      "timestamp": "",
+      "iteration": 0,
+      "ability_names": [],
+      "agent_state": {},
+      "messages_delta": [],
+      "messages_snapshot": null,
+      "is_snapshot": false,
+      "action_results": [],
+      "metadata": {}
+    }
+  ]
+}

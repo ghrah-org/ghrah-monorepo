@@ -29,11 +29,14 @@ async def mount_builtin_units(
     """Mount built-in units as Ouroboros plugins.
 
     聚合裁决后收敛：默认配置（``taskstore`` 与 ``room_filter`` 两个可选切片
+    均启用）下 coexistence = 7（sandbox/manifest_store/ledger/workspace
+    + taskstore + task/desired_state）；full = 22（coexistence 6 +
     均启用）下 coexistence = 6（sandbox/ledger/workspace
     + taskstore + task/desired_state）；full = 21（coexistence 6 +
     shipped_abilities + websocket_observer_endpoint/core_cluster_registry/
     project/project_control/ability_control/agent_template_control/
     agent_control/agentconf_control/media_control/artifact_control/
+    room/room_control/turn_control/recovery + room_filter）。
     room/material_state/recovery + room_filter）。
     关闭 ``config.taskstore.enabled`` / ``config.room_filter.enabled`` 时对应
     unit 不挂载。**逐个挂载并等 ACTIVE**（对齐旧 engine 顺序 start 语义；
@@ -92,8 +95,10 @@ async def mount_builtin_units(
         from ghrah.subject.units.project_control import ProjectControlUnit
         from ghrah.subject.units.recovery import RecoveryUnit
         from ghrah.subject.units.room import RoomUnit
+        from ghrah.subject.units.room_control import RoomControlUnit
         from ghrah.subject.units.room_filter import RoomFilterUnit
         from ghrah.subject.units.shipped_abilities import ShippedAbilityUnit
+        from ghrah.subject.units.turn_control import TurnControlUnit
         from ghrah.subject.units.websocket_observer_endpoint import (
             WebSocketObserverEndpointUnit,
         )
@@ -126,6 +131,8 @@ async def mount_builtin_units(
                 # （ProjectUnit/WorkspaceUnit 之后）；REST 错误映射由 AbilityControlUnit 提供。
                 ArtifactControlUnit(config),
                 RoomUnit(config),
+                RoomControlUnit(config),
+                TurnControlUnit(config),
                 MaterialStateUnit(config),
                 RecoveryUnit(config),
             ]

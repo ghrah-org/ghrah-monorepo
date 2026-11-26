@@ -221,8 +221,15 @@ class ProjectPaths:
             raise ValueError(
                 f"Project Root marker is missing or invalid: {self.marker_path}"
             ) from exc
-        if marker.get("project_id") != project_id:
+        if not isinstance(marker, dict) or marker.get("project_id") != project_id:
             raise ValueError(f"Project Root marker owner mismatch: {self.marker_path}")
+
+    def permits_legacy_chain_adoption(self, project_id: str) -> bool:
+        """仅允许认领受信项目根内的旧链库。"""
+        if not self.marker_path.is_file():
+            return False
+        self.validate_owner(project_id)
+        return self.action_chain_db_path.resolve().is_relative_to(self.root.resolve())
 
     def purge(self, project_id: str) -> None:
         """Delete an explicitly requested Project Root after owner verification."""
