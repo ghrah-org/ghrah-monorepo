@@ -14,6 +14,15 @@ export {
   type AbilityControlClientFactory,
 } from "./ability-client.js";
 export {
+  agentControlClient,
+  createAgentControlClient,
+  setAgentControlClientFactory,
+  type AgentControlClient,
+  type AgentControlClientFactory,
+  type AgentControlClientOptions,
+  type AgentDesiredState,
+} from "./agent-control.js";
+export {
   AbilityConflictError,
   createAbilityControlClient,
   type AbilityAdminQuery,

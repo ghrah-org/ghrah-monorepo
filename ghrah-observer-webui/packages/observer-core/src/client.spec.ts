@@ -170,6 +170,52 @@ describe("ObserverClient", () => {
     });
   });
 
+  describe("abortTurn", () => {
+    it("sends turn_abort with the stable agent target", async () => {
+      await connectClient(client, mockWs);
+
+      const abortPromise = client.abortTurn(AGENT_TARGET, { reason: "user request" });
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.type).toBe(CommandType.TURN_ABORT);
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+        agent_name: "agent-1",
+        reason: "user request",
+      });
+
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          payload: {
+            request_id: parsed.request_id,
+            success: true,
+            data: { aborted: true, already_terminal: false },
+          },
+          request_id: parsed.request_id,
+        }),
+      });
+
+      const result = await abortPromise;
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ aborted: true, already_terminal: false });
+    });
+
+    it("leaves optional turn and session ids out when absent", async () => {
+      await connectClient(client, mockWs);
+
+      void client.abortTurn(AGENT_TARGET);
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+        agent_name: "agent-1",
+      });
+    });
+  });
+
   describe("sendMessage", () => {
     it("builds correct send_message payload", async () => {
       await connectClient(client, mockWs);

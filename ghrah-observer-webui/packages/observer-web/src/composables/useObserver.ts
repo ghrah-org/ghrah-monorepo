@@ -218,6 +218,13 @@ export function useObserver() {
     return withClient((c) => c.terminateAgent(target));
   }
 
+  async function abortTurn(
+    target: AgentTarget,
+    options?: { turnId?: string; sessionId?: string; reason?: string },
+  ) {
+    return withClient((c) => c.abortTurn(target, options));
+  }
+
   async function agentCompactContext(target: AgentTarget) {
     return withClient((c) => c.agentCompactContext(target));
   }
@@ -547,6 +554,7 @@ export function useObserver() {
     deleteShellAllow,
     spawnAgent,
     terminateAgent,
+    abortTurn,
     agentCompactContext,
     agentReset,
     roomSend,

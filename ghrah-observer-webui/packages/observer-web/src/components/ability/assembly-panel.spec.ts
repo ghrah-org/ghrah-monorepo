@@ -6,6 +6,7 @@
 
 import {
   setAbilityControlClientFactory,
+  setAgentControlClientFactory,
   useAbilityAdminStore,
   useProjectsStore,
 } from "@ghrah/observer-core";
@@ -15,6 +16,7 @@ import {
   AbilityChangesPageSchema,
   AbilityTreeChangeResultSchema,
   AbilityTreeViewSchema,
+  AgentAdminViewSchema,
 } from "@ghrah/protocol";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -114,6 +116,34 @@ function setProjectAgents(agents: Array<{ name: string; agent_id: string }>) {
   ]);
 }
 
+const agentView = AgentAdminViewSchema.parse({
+  project_id: "p1",
+  specification: {
+    agent_id: "a1",
+    name: "Coder",
+    presentation: {},
+    desired_state: "running",
+    runtime_status: "running",
+    project_version: 3,
+  },
+  runtime: { availability: "online", incarnation_id: "i1", busy: false },
+});
+
+function setAgentClient() {
+  setAgentControlClientFactory(
+    () =>
+      ({
+        get: async () => agentView,
+        setDesiredState: async () => agentView,
+        delete: async () => ({
+          project_id: "p1",
+          agent_id: "a1",
+          project_version: 4,
+        }),
+      }) as never,
+  );
+}
+
 function clientFactory(overrides: Record<string, unknown> = {}) {
   return () =>
     ({
@@ -130,8 +160,12 @@ describe("AssemblyPanel", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     setProjectAgents([{ name: "Coder", agent_id: "a1" }]);
+    setAgentClient();
   });
-  afterEach(() => setAbilityControlClientFactory(null));
+  afterEach(() => {
+    setAbilityControlClientFactory(null);
+    setAgentControlClientFactory(null);
+  });
 
   it("shows a read-only builtin assembly and refreshes the selected agent", async () => {
     const adminRead = vi.fn(async () =>
@@ -541,6 +575,20 @@ describe("AssemblyPanel", () => {
     await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(1));
     expect(adminRead).toHaveBeenCalledWith("a2");
     expect(wrapper.text()).toContain("Runner");
+    wrapper.unmount();
+  });
+
+  it("clears the detail selection after the agent is deleted", async () => {
+    setAbilityControlClientFactory(clientFactory());
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await flushPromises();
+    await wrapper.get("li button").trigger("click");
+    await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+
+    wrapper.findComponent({ name: "AssemblyDetail" }).vm.$emit("deleted");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Select an agent to inspect its assembly.");
     wrapper.unmount();
   });
 });
