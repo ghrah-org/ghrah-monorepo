@@ -184,6 +184,7 @@ class TranscriptEntryView(BaseModel):
     injection_step: Annotated[int, Field(gt=0)] | None = None
     human_state: str | None = None
     node_id: str | None = None
+    ability: str | None = None
 
 
 class RoomTranscriptView(BaseModel):

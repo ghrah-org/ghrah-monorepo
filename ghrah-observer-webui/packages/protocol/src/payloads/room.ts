@@ -181,6 +181,7 @@ export const TranscriptEntrySchema = z.object({
   injection_step: z.number().int().positive().nullable(),
   human_state: z.string().nullable(),
   node_id: z.string().nullable(),
+  ability: z.string().nullable().optional(),
 });
 
 export const RoomTranscriptSchema = z.object({

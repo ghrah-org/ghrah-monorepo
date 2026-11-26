@@ -114,6 +114,7 @@ class RoomLogFacts:
             else None
         )
         human_state = _human_state(deliveries) if human else None
+        ability = data.get("ability")
         return TranscriptEntryView(
             entry_id=record.id,
             seq=record.seq,
@@ -132,6 +133,7 @@ class RoomLogFacts:
             injection_step=injected.injection_step if injected else None,
             human_state=human_state,
             node_id=node_id,
+            ability=ability if isinstance(ability, str) else None,
         )
 
     def transcript(self, page: RoomLogPage) -> RoomTranscriptView:
