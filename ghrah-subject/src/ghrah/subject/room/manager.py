@@ -16,10 +16,12 @@ ValidationError 收窄；纯 store + 回调，不依赖 SubjectContext，便于�
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
+import aiosqlite
 from ghrah.protocol.errors import ApiError
 from ghrah.protocol.types import (
     RoomCreatePayload,
@@ -43,6 +45,7 @@ from pydantic import ValidationError
 
 from ghrah.subject.errors import StableError
 from ghrah.subject.project.errors import ProjectArchivedError
+from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.content_blocks import (
     CONTENT_TEXT_REQUIRED,
     validate_content_blocks,
@@ -412,15 +415,81 @@ class RoomManager:
         members = [m.model_dump(mode="json") for m in existing.members]
         return _ok({"room_id": existing.room_id, "members": members, "count": len(members)})
 
+    async def _hydrate_reference(self, record: RoomLogRecord) -> RoomLogRecord:
+        """从 Core MM 权威读通正文，Room 日志仅持消息引用。"""
+        message_id = record.data.get("mm_message_id")
+        if not message_id:
+            return record
+        room, project, error = await self._require_room_access(record.room_id)
+        if error or project is None or room is None:
+            raise ValueError(error or "Room project unavailable")
+        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
+        async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
+            row = await (
+                await db.execute(
+                    "SELECT content, sender_id, metadata, reply_to "
+                    "FROM mm_messages WHERE message_id=?",
+                    (message_id,),
+                )
+            ).fetchone()
+            deliveries = await (
+                await db.execute(
+                    "SELECT delivery_id, recipient_id, state, error, blocked_reason "
+                    "FROM mm_deliveries WHERE message_id=? ORDER BY seq",
+                    (message_id,),
+                )
+            ).fetchall()
+        if row is None or row[1] not in (record.author, f"human:{record.author}"):
+            raise ValueError("Room message reference is missing or has a different author")
+        metadata = json.loads(row[2])
+        rooms = metadata.get("room_ids") or [metadata.get("room_id")]
+        if record.room_id not in rooms:
+            raise ValueError("Message does not belong to this Room")
+        data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
+        data.pop("reply_to", None)
+        if row[3] is not None:
+            data["reply_to"] = row[3]
+        metadata_blocks = metadata.get("content_blocks")
+        blocks: list[dict[str, Any]] | None = (
+            metadata_blocks if isinstance(metadata_blocks, list) and metadata_blocks else None
+        )
+        if blocks is not None:
+            data["content_blocks"] = blocks
+        if metadata.get("room_has_message", True):
+            data["message"] = row[0]
+        elif blocks is not None:
+            data.pop("message", None)
+        if metadata.get("targets"):
+            data["targets"] = metadata["targets"]
+        data["deliveries"] = [
+            {
+                "delivery_id": d[0],
+                "recipient_id": d[1],
+                "state": "blocked" if d[4] else d[2],
+                "error": d[3],
+                "blocked_reason": d[4],
+            }
+            for d in deliveries
+        ]
+        return record.model_copy(update={"data": data})
+
     async def get_log_page(
         self, room_id: str, *, since_seq: int, limit: int
     ) -> list[RoomLogRecord]:
         """供业务消费者按序读通消息正文；引用缺失时失败，不跳过消费位置。"""
-        _room, _project, error = await self._require_room_access(room_id)
+        room, _project, error = await self._require_room_access(room_id)
         if error is not None:
             raise ValueError(error)
-        records = await self._store.get_log_page(room_id, since_seq=since_seq, limit=limit)
-        return [await self._hydrate_reference(record) for record in records]
+        assert room is not None
+        page = await self._store.get_log_page(
+            room_id,
+            project_id=room.project_id,
+            since_seq=since_seq,
+            limit=limit,
+        )
+        if page is None:
+            return []
+        return [await self._hydrate_reference(record) for record in page.entries]
 
     async def _handle_get_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         p = RoomGetLogPayload.model_validate(payload)
@@ -621,46 +690,6 @@ class RoomManager:
         """读取指定项目的 Room 页，再批取该页引用的权威事实。"""
         page = await self._store.get_log_page(
             room_id, project_id=project_id, before_seq=before_seq, since_seq=since_seq, limit=limit
-    async def _hydrate_reference(self, record: RoomLogRecord) -> RoomLogRecord:
-        """从 Core MM 权威读通正文，Room 日志仅持消息引用。"""
-        message_id = record.data.get("mm_message_id")
-        if not message_id:
-            return record
-        room, project, error = await self._require_room_access(record.room_id)
-        if error or project is None or room is None:
-            raise ValueError(error or "Room project unavailable")
-        path = ProjectPaths.from_locator(project["project_root_locator"]).action_chain_db_path
-        async with aiosqlite.connect(f"file:{path}?mode=ro", uri=True) as db:
-            row = await (
-                await db.execute(
-                    "SELECT content, sender_id, metadata, reply_to "
-                    "FROM mm_messages WHERE message_id=?",
-                    (message_id,),
-                )
-            ).fetchone()
-            deliveries = await (
-                await db.execute(
-                    "SELECT delivery_id, recipient_id, state, error, blocked_reason "
-                    "FROM mm_deliveries WHERE message_id=? ORDER BY seq",
-                    (message_id,),
-                )
-            ).fetchall()
-        if row is None or row[1] not in (record.author, f"human:{record.author}"):
-            raise ValueError("Room message reference is missing or has a different author")
-        metadata = json.loads(row[2])
-        rooms = metadata.get("room_ids") or [metadata.get("room_id")]
-        if record.room_id not in rooms:
-            raise ValueError("Message does not belong to this Room")
-        data = {**metadata.get("room_data", {}), **record.data, "via": "message_manager"}
-        # 从 MM 读通因果关系，供页面动作将回执关联到准确的请求。
-        data.pop("reply_to", None)
-        if row[3] is not None:
-            data["reply_to"] = row[3]
-        # MM metadata 顶层的 content_blocks 是人类消息块的权威副本（投递平面
-        # 也从这里还原块）；日志引用只持有消息 id，回读时把块复制进 data。
-        metadata_blocks = metadata.get("content_blocks")
-        blocks: list[dict[str, Any]] | None = (
-            metadata_blocks if isinstance(metadata_blocks, list) and metadata_blocks else None
         )
         if page is None:
             return None

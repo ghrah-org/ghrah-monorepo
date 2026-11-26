@@ -9,14 +9,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from ghrah.protocol.types import ChatActionSendPayload, SendMessagePayload
-from pydantic import ValidationError
 from ghrah.protocol.enums import RoomSubjectType
 from ghrah.protocol.errors import ApiError
 from ghrah.protocol.problem import ProblemCode
-from ghrah.protocol.types import RoomSendPayload, SendMessagePayload
+from ghrah.protocol.types import ChatActionSendPayload, RoomSendPayload, SendMessagePayload
 from ghrah.protocol.views.core import DeliveryAcceptanceView
 from ghrah.protocol.views.observer_room import RoomFactsQuery, TranscriptFactsView
+from pydantic import ValidationError
 
 from ghrah.subject.config import SubjectConfig
 from ghrah.subject.project.scoped_stores import (

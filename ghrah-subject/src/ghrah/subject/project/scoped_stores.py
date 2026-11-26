@@ -429,11 +429,6 @@ class ProjectScopedRoomStore:
             )
         return page
 
-    async def get_log_page(self, room_id: str, **kwargs: Any) -> list[RoomLogRecord]:
-        """按升序有界读取日志，不使用聊天窗口的尾部截取语义。"""
-        store = await self._locate(room_id)
-        return [] if store is None else await store.get_log_page(room_id, **kwargs)
-
     async def migrate_project(self, project_id: str) -> int:
         target = await self._project_store(project_id)
         if target is self._legacy:
