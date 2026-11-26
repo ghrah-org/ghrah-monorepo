@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ActionNode, ContentBlock, RoomLogEntryPayload } from "@ghrah/protocol";
+import type { ActionNode, RoomLogEntryPayload } from "@ghrah/protocol";
 import { type ChatBlock, parseChatBlock, textFromChatBlocks } from "./block-compat.js";
 
 export type ChatEntryKind =
@@ -99,12 +99,6 @@ export function withTextContent(
   return [{ type: "text", text: content }, ...blocks];
 }
 
-function _blockArg(block: ContentBlock, key: string): string {
-  if (block.type !== "tool_call") return "";
-  const v = block.arguments?.[key];
-  return typeof v === "string" ? v : "";
-}
-
 /**
  * RoomLog data.ability → ChatEntryKind。仅作者为 agent 的条目需要区分：
  * ``end_task``（任务终止的最终答复）单独成类以便渲染成结束态；其余 agent
@@ -177,129 +171,6 @@ export function roomLogToChatEntries(
     roomId: entry.room_id,
     targets: targets && targets.length > 0 ? targets : undefined,
   };
-}
-
-/**
- * @deprecated chat 已改为按 Room 投影（roomLogToChatEntries）；本函数仅保留给
- * ActionChain 面板等 chain 维度消费，不要再用于 chat 流。
- */
-export function projectNodeToChatEntries(node: ActionNode): ChatEntry[] {
-  const entries: ChatEntry[] = [];
-  const agentName = node.agent_name ?? "";
-  const timestamp = node.timestamp ?? "";
-  const nodeId = node.id ?? "";
-  const abilityNames = node.ability_names ?? [];
-  const msgs = node.messages_delta ?? [];
-  const ars = node.action_results ?? [];
-
-  let childSeq = 0;
-  const push = (e: Omit<ChatEntry, "childSeq">): void => {
-    entries.push({ ...e, childSeq });
-    childSeq += 1;
-  };
-
-  for (const m of msgs) {
-    const role = m.role;
-    const source = m.source ?? "";
-    const blocks = m.content_blocks ?? [];
-
-    if (role === "user") {
-      if (source.startsWith("human:") || source === "human") {
-        const text = textFromBlocks(blocks);
-        if (text) {
-          push({
-            from: source.startsWith("human:") ? source.slice("human:".length) || "user" : "user",
-            to: agentName,
-            content: text,
-            kind: "human_input",
-            timestamp,
-            nodeId,
-            agentName,
-          });
-        }
-      } else if (source.startsWith("agent:")) {
-        // R3: inter-agent echo (receiver side) → skip (projected by sender R2)
-      }
-    } else if (role === "ai") {
-      // R2/R6: tool_call 块（send_message / broadcast_message）
-      for (const block of blocks) {
-        if (block.type !== "tool_call") continue;
-        const name = block.name ?? "";
-        if (name === "send_message") {
-          push({
-            from: agentName,
-            to: _blockArg(block, "target"),
-            content: _blockArg(block, "content"),
-            kind: "send_message",
-            timestamp,
-            nodeId,
-            agentName,
-          });
-        } else if (name === "broadcast_message") {
-          push({
-            from: agentName,
-            to: "all",
-            content: _blockArg(block, "content"),
-            kind: "broadcast",
-            timestamp,
-            nodeId,
-            agentName,
-          });
-        }
-      }
-      // R4: conversation reply (AI TextBlock when ability conversation)
-      if (abilityNames.includes("conversation")) {
-        const text = textFromBlocks(blocks);
-        if (text) {
-          push({
-            from: agentName,
-            to: "user",
-            content: text,
-            blocks,
-            kind: "conversation",
-            timestamp,
-            nodeId,
-            agentName,
-          });
-        }
-      }
-    }
-  }
-
-  // R5: end_task (from action_results, uniform across auto/toolcall modes)
-  if (abilityNames.includes("end_task")) {
-    for (const ar of ars) {
-      if (ar.ability_name !== "end_task") continue;
-      const data = ar.action_result?.data;
-      const response = typeof data?.response === "string" ? data.response : "";
-      if (response) {
-        push({
-          from: agentName,
-          to: "user",
-          content: response,
-          kind: "end_task",
-          timestamp,
-          nodeId,
-          agentName,
-        });
-      }
-    }
-  }
-
-  // R7: non-comm abilities → no ChatEntry (only in ActionChain view)
-  return entries;
-}
-
-/**
- * @deprecated chat 已改为按 Room 投影；chain → chat 重建已废弃（chain 投影仅用于
- * ActionChain 面板）。保留仅为兼容，勿用于 chat 流。
- */
-export function rebuildChatEntriesFromChain(nodes: ActionNode[]): ChatEntry[] {
-  const entries: ChatEntry[] = [];
-  for (const node of nodes) {
-    entries.push(...projectNodeToChatEntries(node));
-  }
-  return entries;
 }
 
 export function projectNodeToFileChanges(

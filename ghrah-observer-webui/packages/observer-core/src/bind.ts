@@ -27,7 +27,6 @@ import type {
   RoomDeletedEventPayload,
   RoomEventPayload,
   RoomInfoPayload,
-  RoomLogEntryPayload,
   RoomLogEventPayload,
   RoomMemberEventPayload,
   ServerMessage,
@@ -364,15 +363,6 @@ export function connectStores(
         const removed = rooms.replaceProjectRooms(projectId, list, status);
         for (const target of removed) clearRoomDerived(target, false);
       }
-    }
-
-    if (!transcript && command === CommandType.ROOM_GET_LOG && Array.isArray(data.entries)) {
-      const entries = data.entries as RoomLogEntryPayload[];
-      const roomId =
-        stringField(context?.payload.room_id) ??
-        stringField(data.room_id) ??
-        stringField(entries[0]?.room_id);
-      if (roomId) rooms.setRoomLog(roomId, entries);
     }
 
     if (command === CommandType.GET_AGENT_INFO && data.context_usage != null) {

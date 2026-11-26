@@ -671,13 +671,6 @@ describe("ObserverClient", () => {
       expect(parsed.payload).toEqual({ room_id: "r1" });
     });
 
-    it("getRoomLog sends room_get_log with since_seq/limit", async () => {
-      await connectClient(client, mockWs);
-      const parsed = await runRequest(client.getRoomLog("r1", 5, 50));
-      expect(parsed.type).toBe(CommandType.ROOM_GET_LOG);
-      expect(parsed.payload).toEqual({ room_id: "r1", since_seq: 5, limit: 50 });
-    });
-
     it("roomSend sends room_send with data map and default human author", async () => {
       await connectClient(client, mockWs);
       const parsed = await runRequest(client.roomSend("r1", { message: "hello" }));

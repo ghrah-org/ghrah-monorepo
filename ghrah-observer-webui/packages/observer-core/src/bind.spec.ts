@@ -1959,45 +1959,6 @@ describe("connectStores", () => {
       expect(projectsStore.projects.get("p1")?.name).toBe("proj");
     });
 
-    it("sets room log on room_get_log command_result (room_id from entries)", async () => {
-      await connectClient();
-      const roomsStore = useRoomsStore();
-
-      internals(client)._dispatch(
-        SystemType.COMMAND_RESULT,
-        makeMsg(SystemType.COMMAND_RESULT, {
-          request_id: "r1",
-          success: true,
-          original_command: CommandType.ROOM_GET_LOG,
-          data: {
-            entries: [
-              {
-                id: "e2",
-                room_id: "r1",
-                seq: 2,
-                author: "agent-1",
-                author_type: "agent",
-                timestamp: 1750000001,
-                data: { message: "second" },
-              },
-              {
-                id: "e1",
-                room_id: "r1",
-                seq: 1,
-                author: "user",
-                author_type: "human",
-                timestamp: 1750000000,
-                data: { message: "first" },
-              },
-            ],
-            count: 2,
-          },
-        }),
-      );
-
-      expect(roomsStore.logs.get("r1")?.map((e) => e.seq)).toEqual([1, 2]);
-    });
-
     it("ignores non-agents command_result", async () => {
       await connectClient();
       const agentsStore = useAgentsStore();

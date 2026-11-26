@@ -5,8 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * 端到端 Mock 冒烟（计划任务 8.2）：真实 ObserverClient + connectStores 连接
- * @ghrah/mock-server（demo 场景，4 agent + 4 room），走完整 WS 协议断言全链路。
+ * 端到端 Mock 冒烟：通过 ObserverClient、connectStores 和 TurnApiClient
+ * 使用 @ghrah/mock-server 的 demo 场景，验证 WS 命令、事件与 REST 历史读取。
  *
  * 用法（在 ghrah-observer-webui 目录执行）：
  *   pnpm build:deps      # 构建 protocol / plugin-registry / observer-core / mock-server 的 dist
@@ -28,6 +28,7 @@ import {
   ObserverClient,
   createAbilityControlClient,
   HttpClient,
+  TurnApiClient,
   useActionChainsStore,
   useAgentsStore,
   useBranchesStore,
@@ -86,6 +87,8 @@ async function main() {
   check("client connected", client.connected);
   const http = createMockHttpServer({ port: 0, state });
   await http.start();
+  const httpClient = new HttpClient({ baseUrl: `http://127.0.0.1:${http.port}` });
+  const turnApi = new TurnApiClient(httpClient);
 
   // ── 3. 初始同步：projects/rooms/agents ──
   const synced =
@@ -126,12 +129,11 @@ async function main() {
   await waitFor("scenario kickoff broadcast into architecture log", () =>
     (rooms.logs.get(arch.room_id) ?? []).some((e) => e.author_type === "human"),
   );
-  await client.getRoomLog(arch.room_id);
-  const historyOk = await waitFor(
-    "getRoomLog hydrates store",
-    () => (rooms.logs.get(arch.room_id) ?? []).length >= 1,
+  const roomHistory = await turnApi.roomTranscript(arch.project_id, arch.room_id);
+  check(
+    "room history via REST transcript",
+    roomHistory.entries.some((entry) => entry.author_type === "human"),
   );
-  check("room history via get_room_log", historyOk);
 
   chat.addPendingEntry({
     projectId: demoProjectId,
@@ -331,15 +333,12 @@ async function main() {
       const roomRestored = await waitFor("Room restored projection", () =>
         rooms.activeRooms.has(smokeRoomId),
       );
-      await client.getRoomLog(smokeRoomId);
-      const logPreserved = await waitFor("Room log restored", () =>
-        (rooms.logs.get(smokeRoomId) ?? []).some(
-          (entry) => entry.data?.message === "survives archive",
-        ),
-      );
+      const restoredHistory = await turnApi.roomTranscript(smokeProjectId, smokeRoomId);
       check(
         "Room restore preserves AppendOnly Log",
-        restored.success && roomRestored && logPreserved,
+        restored.success &&
+          roomRestored &&
+          restoredHistory.entries.some((entry) => entry.content === "survives archive"),
       );
 
       const deleted = await client.deleteRoom({
@@ -535,10 +534,7 @@ async function main() {
       restarted.context.active_session_id === session.session_id,
   );
 
-  const control = createAbilityControlClient(
-    new HttpClient({ baseUrl: `http://127.0.0.1:${http.port}` }),
-    { projectId: demoProjectId },
-  );
+  const control = createAbilityControlClient(httpClient, { projectId: demoProjectId });
   const notifications = [];
   client.on(EventType.ABILITY_TREE_CHANGED, (event) => notifications.push(event));
   const admin = await control.admin(stopped.identity.agent_id);
