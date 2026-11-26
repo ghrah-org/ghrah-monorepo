@@ -549,9 +549,10 @@ describe("connectStores", () => {
 
       chat.clearAll();
       const current = chat.addPendingEntry(draft);
-      expect(current.clientSeq).toBe(previous.clientSeq);
+      const attachServerEntryId = vi.spyOn(chat, "attachServerEntryId");
       reader.acknowledgeSend(roomTarget, previous.clientSeq, "old-entry");
-      expect(chat.pendingOf(roomTarget)[0]?.serverEntryId).toBeUndefined();
+      expect(attachServerEntryId).not.toHaveBeenCalled();
+      expect(chat.pendingOf(roomTarget)).toEqual([current]);
     });
 
     it.each([

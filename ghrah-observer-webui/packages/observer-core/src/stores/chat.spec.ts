@@ -150,11 +150,14 @@ describe("useChatStore", () => {
     expect(store.entries).toEqual([]);
   });
 
-  it("clearAll resets pending sequence", () => {
+  it("clearAll restarts display ordering and keeps client sequences increasing", () => {
     const store = useChatStore();
-    expect(store.addPendingEntry(pending()).childSeq).toBe(-1);
+    const previous = store.addPendingEntry(pending());
+    expect(previous.childSeq).toBe(-1);
     store.clearAll();
-    expect(store.addPendingEntry(pending()).childSeq).toBe(-1);
+    const current = store.addPendingEntry(pending());
+    expect(current.childSeq).toBe(-1);
+    expect(current.clientSeq).toBeGreaterThan(previous.clientSeq);
   });
 
   describe("transcript reconciliation", () => {
@@ -220,6 +223,35 @@ describe("useChatStore", () => {
         { clientSeq: second.clientSeq, pending: false, error: "send failed" },
       ]);
       expect(store.entries[0].error).toBeUndefined();
+    });
+
+    it("ignores a late receipt and transcript echo from before clearAll", () => {
+      const store = useChatStore();
+      const previous = store.addPendingEntry(pending({ content: "old message" }));
+      store.clearAll();
+      const current = store.addPendingEntry(pending({ content: "new message" }));
+      const oldEcho = transcriptEntry(1, { content: previous.content });
+      store.attachServerEntryId(room, previous.clientSeq, oldEcho.entry_id);
+      store.onTranscriptEntry(room, oldEcho);
+      expect(store.pendingOf(room)).toEqual([current]);
+
+      const newEcho = transcriptEntry(2, { content: current.content });
+      store.attachServerEntryId(room, current.clientSeq, newEcho.entry_id, newEcho);
+      expect(store.pendingOf(room)).toEqual([]);
+    });
+
+    it("ignores a late send failure from before clearAll", () => {
+      const store = useChatStore();
+      const previous = store.addPendingEntry(pending());
+      store.clearAll();
+      const current = store.addPendingEntry(pending());
+      store.markPendingErrorBySeq(room, previous.clientSeq, "old send failed");
+      expect(store.pendingOf(room)).toEqual([current]);
+
+      store.markPendingErrorBySeq(room, current.clientSeq, "new send failed");
+      expect(store.entries).toMatchObject([
+        { clientSeq: current.clientSeq, pending: false, error: "new send failed" },
+      ]);
     });
   });
 });

@@ -28,7 +28,9 @@ export const useChatStore = defineStore("ghrah-chat", () => {
   const currentAuthor = ref<string>(DEFAULT_HUMAN_AUTHOR);
   /** 服务端回读确认时没带回我们发出的媒体块 → 提示「图片可能被旧核丢弃」。 */
   const blockLossRooms = ref<Set<string>>(new Set());
-  let pendingSeq = 0;
+  // 清空列表后，迟到的回执仍可能携带已经分配过的 clientSeq。
+  let lastClientSeq = 0;
+  let pendingChildSeq = 0;
 
   function addPendingEntry(partial: {
     projectId: string;
@@ -40,7 +42,7 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     targets?: string[];
     blocks?: ChatBlock[];
   }): OptimisticChatEntry {
-    const seq = ++pendingSeq;
+    const clientSeq = ++lastClientSeq;
     const blocks = withTextContent(partial.blocks, partial.content);
     const entry: OptimisticChatEntry = {
       projectId: partial.projectId,
@@ -53,8 +55,8 @@ export const useChatStore = defineStore("ghrah-chat", () => {
       timestamp: new Date().toISOString(),
       nodeId: "",
       agentName: partial.agentName,
-      childSeq: -seq,
-      clientSeq: seq,
+      childSeq: --pendingChildSeq,
+      clientSeq,
       roomId: partial.roomId,
       targets: partial.targets?.length ? partial.targets : undefined,
       pending: true,
@@ -209,7 +211,7 @@ export const useChatStore = defineStore("ghrah-chat", () => {
 
   function clearAll() {
     entries.value = [];
-    pendingSeq = 0;
+    pendingChildSeq = 0;
   }
 
   return {
