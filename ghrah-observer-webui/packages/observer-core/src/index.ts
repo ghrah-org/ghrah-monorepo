@@ -120,6 +120,17 @@ export {
   type ProjectApiMode,
   resolveProjectApiMode,
 } from "./project-api.js";
+export { TurnApiClient, type TranscriptPageOptions, type TurnListOptions } from "./turn-api.js";
+export { createTranscriptReader, type TranscriptReader } from "./transcript-reader.js";
+export { humanStateOf, isAnchor, projectExchanges, type Exchange } from "./exchanges.js";
+export {
+  MAX_TURN_DETAILS,
+  MAX_CACHED_TRANSCRIPTS,
+  type TranscriptPageMode,
+  type TranscriptRoom,
+  type TurnTarget,
+  useTranscriptStore,
+} from "./stores/transcript.js";
 export {
   createFrameBatcher,
   createSyncBatcher,
@@ -141,11 +152,7 @@ export {
   contentBlocksFromData,
   type FileChange,
   type FileChangeScope,
-  projectNodeToChatEntries,
   projectNodeToFileChanges,
-  type RoomLogProjectionScope,
-  rebuildChatEntriesFromChain,
-  roomLogToChatEntries,
   textFromBlocks,
   withTextContent,
 } from "./projection.js";
@@ -185,7 +192,7 @@ export {
 export { type AgentInfo, type AgentListItem, useAgentsStore } from "./stores/agents.js";
 export { type BranchProjection, useBranchesStore } from "./stores/branches.js";
 export { useChangesStore } from "./stores/changes.js";
-export { DEFAULT_HUMAN_AUTHOR, useChatStore } from "./stores/chat.js";
+export { DEFAULT_HUMAN_AUTHOR, type OptimisticChatEntry, useChatStore } from "./stores/chat.js";
 export { type ConnectionState, useConnectionStore } from "./stores/connection.js";
 export {
   type ContextUsageDisplay,
@@ -206,7 +213,7 @@ export {
 } from "./stores/manifests.js";
 export { useProjectsStore } from "./stores/projects.js";
 export { usePluginsStore } from "./stores/plugins.js";
-export { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./stores/rooms.js";
+export { useRoomsStore } from "./stores/rooms.js";
 export { type SessionProjection, useSessionsStore } from "./stores/sessions.js";
 export { useTasksStore } from "./stores/tasks.js";
 export { getVisibleNodes } from "./visible-nodes.js";

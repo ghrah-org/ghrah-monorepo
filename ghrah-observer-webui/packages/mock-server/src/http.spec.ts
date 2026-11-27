@@ -1,8 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMockHttpServer, type MockHttpServer } from "./http.js";
 import { MockState } from "./state.js";
-import { AgentSnapshotSchema, CommandType, EventType } from "@ghrah/protocol";
+import {
+  AgentSnapshotSchema,
+  CommandType,
+  EventType,
+  HitlRequestListViewSchema,
+  RoomInfoPayloadSchema,
+  RoomTranscriptSchema,
+  TurnDetailSchema,
+  TurnListSchema,
+} from "@ghrah/protocol";
 
 const servers: MockHttpServer[] = [];
 
@@ -23,6 +32,153 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 describe("MockHttpServer", () => {
+  it("serves Room transcript, turns and pending HITL from shared state", async () => {
+    const state = new MockState({ simulateDeliveries: true, deliveryIntervalMs: 100 });
+    const server = createMockHttpServer({ port: 0, host: "127.0.0.1", state });
+    servers.push(server);
+    await server.start();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const project = state.handleCommand(CommandType.PROJECT_CREATE, { name: "transcript-http" });
+      const projectId = (project.data as { project: { project_id: string } }).project.project_id;
+      function createAgent(name: string) {
+        const agent = state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: projectId,
+          name,
+          template_id: "mock.agent",
+          revision: 1,
+          start: true,
+        });
+        return AgentSnapshotSchema.parse(agent.data).identity.agent_id;
+      }
+      const worker = createAgent("worker");
+      const peer = createAgent("peer");
+      const created = state.handleCommand(CommandType.ROOM_CREATE, {
+        project_id: projectId,
+        name: "read counts",
+      });
+      const room = RoomInfoPayloadSchema.parse((created.data as { room: unknown }).room);
+      for (const agentId of [worker, peer]) {
+        expect(
+          state.handleCommand(CommandType.ROOM_JOIN, {
+            room_id: room.room_id,
+            subject: agentId,
+            subject_type: "agent",
+          }).success,
+        ).toBe(true);
+      }
+      const base = `http://127.0.0.1:${server.port}/api/v1/projects/${projectId}`;
+      const transcript = `${base}/rooms/${room.room_id}/transcript`;
+      expect(RoomTranscriptSchema.parse(await getJson(transcript))).toMatchObject({
+        latest_seq: 0,
+        next_since_seq: null,
+        entries: [],
+      });
+      expect((await fetch(`${transcript}?before_seq=1&since_seq=0`)).status).toBe(400);
+      expect((await fetch(`${transcript}?limit=201`)).status).toBe(400);
+      expect(
+        state.handleCommand(CommandType.ROOM_SEND, {
+          room_id: room.room_id,
+          author: "user",
+          author_type: "human",
+          data: { message: "start", targets: [worker, peer] },
+        }).success,
+      ).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(100);
+      const active = RoomTranscriptSchema.parse(await getJson(`${transcript}?since_seq=0`));
+      expect(active).toMatchObject({ next_since_seq: 1, latest_seq: 1, next_before_seq: null });
+      expect(active.turns).toHaveLength(2);
+      expect(
+        active.turns.every((turn) => turn.opener_message_id === active.entries[0].message_id),
+      ).toBe(true);
+      const turnsUrl = `${base}/agents/${worker}/turns`;
+      const listing = TurnListSchema.parse(await getJson(`${turnsUrl}?status=open&limit=1`));
+      expect(listing.items).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(RoomTranscriptSchema.parse(await getJson(`${transcript}?since_seq=1`))).toMatchObject({
+        entries: [],
+        turns: [],
+        next_since_seq: 1,
+      });
+      const reread = RoomTranscriptSchema.parse(
+        await getJson(`${transcript}?before_seq=2&limit=1`),
+      );
+      expect(reread.entries[0].deliveries.map(({ state }) => state)).toEqual([
+        "completed",
+        "completed",
+      ]);
+      expect(
+        TurnDetailSchema.parse(await getJson(`${turnsUrl}/${listing.items[0].turn_id}`)).turn
+          .status,
+      ).toBe("closed");
+      expect((await fetch(`${base}/agents/${peer}/turns/${listing.items[0].turn_id}`)).status).toBe(
+        404,
+      );
+
+      const remember = {
+        exact_key: "shell-key",
+        exact_label: "ls",
+        class_key: null,
+        class_label: null,
+      };
+      const request = state.triggerHitl("worker", "shell", {}, {}, projectId, remember);
+      const pending = `${base}/agents/${worker}/hitl/pending`;
+      expect(HitlRequestListViewSchema.parse(await getJson(pending)).items).toMatchObject([
+        { promise_id: request.promise_id, shell_remember: remember },
+      ]);
+      state.resolveHitl(request.promise_id, true, null);
+      expect(HitlRequestListViewSchema.parse(await getJson(pending)).items).toEqual([]);
+    } finally {
+      state.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it("returns scoped not-found and archive errors for the Room transcript", async () => {
+    const state = new MockState();
+    const server = createMockHttpServer({ port: 0, host: "127.0.0.1", state });
+    servers.push(server);
+    await server.start();
+    try {
+      const owner = state.handleCommand(CommandType.PROJECT_CREATE, { name: "owner" });
+      const foreign = state.handleCommand(CommandType.PROJECT_CREATE, { name: "foreign" });
+      const { project: ownedProject } = owner.data as { project: { project_id: string } };
+      const { project: foreignProject } = foreign.data as { project: { project_id: string } };
+      const projectId = ownedProject.project_id;
+      const created = state.handleCommand(CommandType.ROOM_CREATE, {
+        project_id: projectId,
+        name: "hidden history",
+      });
+      const room = RoomInfoPayloadSchema.parse((created.data as { room: unknown }).room);
+      const root = `http://127.0.0.1:${server.port}/api/v1/projects`;
+      const transcript = (id: string) => `${root}/${id}/rooms/${room.room_id}/transcript`;
+      async function expectError(url: string, status: number, code: string) {
+        const response = await fetch(url);
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({ error: { code } });
+      }
+
+      await expectError(transcript(foreignProject.project_id), 404, "not_found");
+      expect(
+        state.handleCommand(CommandType.ROOM_ARCHIVE, {
+          room_id: room.room_id,
+          expected_version: room.version,
+        }).success,
+      ).toBe(true);
+      await expectError(transcript(projectId), 409, "resource_archived");
+      expect(
+        state.handleCommand(CommandType.PROJECT_ARCHIVE, {
+          project_id: projectId,
+          expected_version: state.projects.get(projectId)?.version,
+        }).success,
+      ).toBe(true);
+      await expectError(transcript(projectId), 409, "project_archived");
+    } finally {
+      state.dispose();
+    }
+  });
+
   it("uses WS identities and runtime, emits changes, and restores revoked grants", async () => {
     const state = new MockState();
     const projectResult = state.handleCommand(CommandType.PROJECT_CREATE, { name: "http-shared" });

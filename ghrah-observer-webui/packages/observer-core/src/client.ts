@@ -884,24 +884,6 @@ export class ObserverClient extends ServerClient {
     return this.request(msg, 30_000);
   }
 
-  async getRoomLog(
-    roomId: string,
-    sinceSeq?: number | null,
-    limit?: number,
-  ): Promise<CommandResultPayload> {
-    const payload: Record<string, unknown> = { room_id: roomId };
-    if (sinceSeq != null) payload["since_seq"] = sinceSeq;
-    if (limit != null) payload["limit"] = limit;
-
-    const msg: ServerMessage = {
-      type: CommandType.ROOM_GET_LOG,
-      payload,
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
   async roomSend(
     roomId: string,
     data: Record<string, unknown>,

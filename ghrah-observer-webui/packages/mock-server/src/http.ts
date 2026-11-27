@@ -17,6 +17,7 @@ import {
   AgentSnapshotSchema,
   CommandType,
   EventType,
+  HitlRequestListViewSchema,
   ProjectCreatePayloadSchema,
   ProjectDeletedViewSchema,
   ProjectInfoPayloadSchema,
@@ -25,6 +26,9 @@ import {
   ProjectListResultPayloadSchema,
   ProjectTransitionRequestSchema,
   ProjectUpdateRequestSchema,
+  RoomTranscriptSchema,
+  TurnDetailSchema,
+  TurnListSchema,
   type AbilityPackageGroupsView,
   type AbilityTreeView,
   type MemberAxes,
@@ -518,8 +522,83 @@ const PROJECT_RESOURCE =
   /^\/api\/v1\/projects(?:\/([^/]+))?(?:\/(archive|restore|pause|resume|stop))?$/;
 const PROJECT_AGENT = /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)(\/.*)?$/;
 const AGENT_RESOURCE = /^\/api\/v1\/projects\/([^/]+)\/agents(?:\/([^/]+))?(\/desired-state)?$/;
+const ROOM_TRANSCRIPT = /^\/api\/v1\/projects\/([^/]+)\/rooms\/([^/]+)\/transcript$/;
+const AGENT_TURN_READ =
+  /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/(turns|hitl\/pending)(?:\/([^/]+))?$/;
 const CONTENT =
   /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/ability-tree\/abilities\/([^/]+)\/content\/(.+)$/;
+
+function queryInteger(query: URLSearchParams, field: string, min: number, max: number) {
+  const value = query.get(field);
+  if (value === null) return undefined;
+  const number = Number(value);
+  return /^\d+$/.test(value) && Number.isInteger(number) && number >= min && number <= max
+    ? number
+    : null;
+}
+
+function handleTurnRead(state: MockState | undefined, url: URL, response: ServerResponse): boolean {
+  const roomPath = ROOM_TRANSCRIPT.exec(url.pathname);
+  const agentPath = AGENT_TURN_READ.exec(url.pathname);
+  const match = roomPath ?? agentPath;
+  if (!match) return false;
+  function error(status: number, code: string, message: string): true {
+    json(response, status, { error: { code, message, detail: null } });
+    return true;
+  }
+  if (!state) return error(503, "capability_unavailable", "shared MockState required");
+  const projectId = decodeURIComponent(match[1]);
+  const resourceId = decodeURIComponent(match[2]);
+  const project = state.projects.get(projectId);
+  if (!project) return error(404, "not_found", "项目不存在");
+  if (project.archived_at != null) return error(409, "project_archived", "项目已归档");
+  const query = url.searchParams;
+  if (roomPath) {
+    const room = state.rooms.get(resourceId);
+    if (room?.project_id !== projectId) return error(404, "not_found", "Room 不存在");
+    if (room.status === "archived") return error(409, "resource_archived", "Room 已归档");
+    const beforeSeq = queryInteger(query, "before_seq", 0, 2 ** 63 - 1);
+    const sinceSeq = queryInteger(query, "since_seq", 0, 2 ** 63 - 1);
+    const limit = queryInteger(query, "limit", 1, 200);
+    if (
+      beforeSeq === null ||
+      sinceSeq === null ||
+      limit === null ||
+      (beforeSeq !== undefined && sinceSeq !== undefined)
+    ) {
+      return error(400, "invalid_request", "无效的 transcript 分页参数");
+    }
+    const view = state.roomTranscript(room, { beforeSeq, sinceSeq, limit: limit ?? 50 });
+    json(response, 200, RoomTranscriptSchema.parse(view));
+    return true;
+  }
+  if (!project.agents.some((agent) => agent.agent_id === resourceId)) {
+    return error(404, "not_found", "项目内的 Agent 不存在");
+  }
+  const [, , , resource, encodedTurnId] = match;
+  const sessionId = query.get("session_id") ?? undefined;
+  if (resource === "hitl/pending" && encodedTurnId === undefined) {
+    json(
+      response,
+      200,
+      HitlRequestListViewSchema.parse(state.hitlPending(projectId, resourceId, sessionId)),
+    );
+    return true;
+  }
+  if (resource === "turns" && encodedTurnId !== undefined) {
+    const detail = state.turnDetail(projectId, resourceId, decodeURIComponent(encodedTurnId));
+    if (!detail) return error(404, "not_found", "轮次不存在");
+    json(response, 200, TurnDetailSchema.parse(detail));
+    return true;
+  }
+  if (resource !== "turns") return error(404, "not_found", "读面不存在");
+  const limit = queryInteger(query, "limit", 1, 200);
+  if (limit === null) return error(400, "invalid_request", "无效的轮次分页参数");
+  const turns = state.listTurns(projectId, resourceId, sessionId, query.get("status") ?? undefined);
+  const items = turns.slice(0, limit ?? 50).map((turn) => ({ ...turn, injections: 0 }));
+  json(response, 200, TurnListSchema.parse({ agent_id: resourceId, items }));
+  return true;
+}
 
 /** 观察端 REST 管理面的确定性 mock；只服务演示与契约测试，不实现授权规则。 */
 export function createMockHttpServer(options: MockHttpServerOptions): MockHttpServer {
@@ -595,6 +674,7 @@ export function createMockHttpServer(options: MockHttpServerOptions): MockHttpSe
       json(response, 200, { status: "ok" });
       return;
     }
+    if (method === "GET" && handleTurnRead(options.state, url, response)) return;
     const projectResource = PROJECT_RESOURCE.exec(path);
     if (projectResource) {
       const state = options.state;

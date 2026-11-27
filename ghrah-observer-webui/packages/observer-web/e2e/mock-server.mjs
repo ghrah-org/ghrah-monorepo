@@ -19,6 +19,7 @@ const child = spawn(
     "demo",
     "--replay-on-connect",
     "--no-chains",
+    "--room-turn-examples",
     "--hitl-timeout",
     "600000",
   ],

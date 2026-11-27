@@ -14,6 +14,7 @@ import "./style.css";
 import App from "./app.vue";
 import { initConversationWidth } from "./composables/useConversationWidth";
 import { initFontScale } from "./composables/useFontScale";
+import { initRoomAlign } from "./composables/useRoomAlign";
 import { i18n } from "./i18n";
 
 // 插件宿主装配：暴露宿主 Vue 实例（import map 的 "vue" shim 消费，单实例共享）。
@@ -30,6 +31,7 @@ function initDarkMode() {
 initDarkMode();
 initFontScale();
 initConversationWidth();
+initRoomAlign();
 
 const app = createApp(App);
 app.use(createPinia());

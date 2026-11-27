@@ -15,12 +15,17 @@ import {
   fontScalePercent,
   setFontScale,
 } from "@/composables/useFontScale";
+import { roomAlign, setRoomAlign } from "@/composables/useRoomAlign";
 import { type AppLocale, SUPPORTED_LOCALES, setLocale } from "@/i18n";
 
 const { t, locale } = useI18n();
 
 function onLocaleChange(event: Event) {
   setLocale((event.target as HTMLSelectElement).value as AppLocale);
+}
+
+function onAlignChange(event: Event) {
+  setRoomAlign((event.target as HTMLSelectElement).value);
 }
 
 function onScaleInput(event: Event) {
@@ -46,7 +51,7 @@ function onScaleInput(event: Event) {
       </UiSelect>
     </section>
 
-    <section>
+    <section class="mb-6">
       <label for="general-scale" class="block text-sm font-medium mb-1">
         {{ t("config.general.interfaceScale") }}
       </label>
@@ -67,5 +72,30 @@ function onScaleInput(event: Event) {
         <span class="text-sm w-12 text-right tabular-nums">{{ fontScalePercent }}%</span>
       </div>
     </section>
+    <section>
+      <label for="general-room-align" class="block text-sm font-medium mb-1">{{
+        t("config.general.roomAlign")
+      }}</label>
+      <p id="general-room-align-description" class="setting-description">
+        {{ t("config.general.roomAlignDescription") }}
+      </p>
+      <UiSelect
+        id="general-room-align"
+        aria-describedby="general-room-align-description"
+        :model-value="roomAlign"
+        @change="onAlignChange"
+      >
+        <option value="self-right">{{ t("config.general.roomAlignOptions.selfRight") }}</option>
+        <option value="left-all">{{ t("config.general.roomAlignOptions.leftAll") }}</option>
+      </UiSelect>
+    </section>
   </div>
 </template>
+
+<style scoped>
+.setting-description {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+  margin-block-end: var(--spacing-2);
+}
+</style>

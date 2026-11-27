@@ -13,7 +13,7 @@ from ghrah.context.persistence import ContextChanges
 from ghrah.protocol.types import RoomSubjectType
 from ouroboros import Context
 
-from ghrah.subject.config import RecoveryConfig, SubjectConfig
+from ghrah.subject.config import RecoveryConfig, SubjectConfig, TaskStoreConfig
 from ghrah.subject.project.models import make_project_record
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.models import make_room_log_record
@@ -34,6 +34,7 @@ def _config(tmp_path: Path, *, enabled: bool = True) -> SubjectConfig:
         observer_http_api_enabled=enabled,
         observer_http_api_token="test-token",
         recovery_slice=RecoveryConfig(enabled=False, reconcile_on_start=False),
+        taskstore_slice=TaskStoreConfig(db_path=str(tmp_path / "taskstore.sqlite3")),
     )
 
 
@@ -86,23 +87,25 @@ async def test_transcript_paginates_and_preserves_missing_references(tmp_path: P
             assert entry["success"], entry
             await rooms.append_log(
                 room_id,
-                author="reader",
-                author_type=RoomSubjectType.HUMAN,
-                data={"message": "历史正文"},
+                author="worker",
+                author_type=RoomSubjectType.AGENT,
+                data={"message": "历史正文", "via": "chain_filter", "ability": "end_task"},
             )
             await rooms.append_log(
                 room_id,
                 author="reader",
                 author_type=RoomSubjectType.HUMAN,
-                data={"message": "最后一条"},
+                data={"message": "最后一条", "ability": 42},
             )
 
             current = (await client.get(url, params={"limit": 1})).json()
             assert [e["seq"] for e in current["entries"]] == [3]
+            assert current["entries"][0]["ability"] is None
             assert current["next_before_seq"] == current["latest_seq"] == 3
             previous = (await client.get(url, params={"before_seq": 3})).json()
             assert [e["content"] for e in previous["entries"]] == ["Core 正文", "历史正文"]
             assert [e["human_state"] for e in previous["entries"]] == [None, None]
+            assert [e["ability"] for e in previous["entries"]] == [None, "end_task"]
             incremental = (await client.get(url, params={"since_seq": 0, "limit": 1})).json()
             assert incremental["next_since_seq"] == 1
             assert incremental["has_more"]
@@ -127,7 +130,11 @@ async def test_transcript_paginates_and_preserves_missing_references(tmp_path: P
                     seq=seq,
                     author="reader",
                     author_type=RoomSubjectType.HUMAN,
-                    data={"mm_message_id": "missing", "message": "未验证的旧正文"},
+                    data={
+                        "mm_message_id": "missing",
+                        "message": "未验证的旧正文",
+                        "ability": "end_task",
+                    },
                 ),
             )
             missing = (await client.get(url, params={"since_seq": 3})).json()
@@ -135,6 +142,7 @@ async def test_transcript_paginates_and_preserves_missing_references(tmp_path: P
             assert missing["entries"][0]["message_id"] == "missing"
             assert missing["entries"][0]["content"] == ""
             assert missing["entries"][0]["human_state"] is None
+            assert missing["entries"][0]["ability"] is None
             legacy = await rooms.handle_command("room_get_log", {"room_id": room_id})
             assert legacy["data"]["count"] == 3
 

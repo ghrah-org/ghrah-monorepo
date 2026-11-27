@@ -2,26 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RoomLogEntryPayload } from "@ghrah/protocol";
+import type { TranscriptEntryView } from "@ghrah/protocol";
 import type { ChatBlock } from "../block-compat.js";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import {
-  type ChatEntry,
-  contentBlocksFromData,
-  textFromBlocks,
-  withTextContent,
-} from "../projection.js";
+import { type ChatEntry, contentBlocksFromData, withTextContent } from "../projection.js";
 import type { AgentTarget, RoomTarget } from "../scope.js";
 
 export const DEFAULT_HUMAN_AUTHOR = "user";
 
+export interface OptimisticChatEntry extends ChatEntry {
+  projectId: string;
+  roomId: string;
+  clientSeq: number;
+  serverEntryId?: string;
+}
+
 export const useChatStore = defineStore("ghrah-chat", () => {
-  const entries = ref<ChatEntry[]>([]);
+  const entries = ref<OptimisticChatEntry[]>([]);
   const currentAuthor = ref<string>(DEFAULT_HUMAN_AUTHOR);
   /** 服务端回读确认时没带回我们发出的媒体块 → 提示「图片可能被旧核丢弃」。 */
   const blockLossRooms = ref<Set<string>>(new Set());
-  let pendingSeq = 0;
+  // 清空列表后，迟到的回执仍可能携带已经分配过的 clientSeq。
+  let lastClientSeq = 0;
+  let pendingChildSeq = 0;
 
   function addPendingEntry(partial: {
     projectId: string;
@@ -32,10 +36,10 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     roomId: string;
     targets?: string[];
     blocks?: ChatBlock[];
-  }): ChatEntry {
-    const seq = ++pendingSeq;
+  }): OptimisticChatEntry {
+    const clientSeq = ++lastClientSeq;
     const blocks = withTextContent(partial.blocks, partial.content);
-    const entry: ChatEntry = {
+    const entry: OptimisticChatEntry = {
       projectId: partial.projectId,
       agentId: partial.agentId,
       from: currentAuthor.value,
@@ -46,7 +50,8 @@ export const useChatStore = defineStore("ghrah-chat", () => {
       timestamp: new Date().toISOString(),
       nodeId: "",
       agentName: partial.agentName,
-      childSeq: -seq,
+      childSeq: --pendingChildSeq,
+      clientSeq,
       roomId: partial.roomId,
       targets: partial.targets?.length ? partial.targets : undefined,
       pending: true,
@@ -55,38 +60,60 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     return entry;
   }
 
-  function entryContent(entry: RoomLogEntryPayload): string {
-    const data = entry.data ?? {};
-    const message = data.message;
-    if (typeof message === "string" && message) return message;
-    const blocks = contentBlocksFromData(data);
-    if (blocks) return textFromBlocks(blocks);
-    return typeof message === "string" ? message : JSON.stringify(data);
-  }
-
-  function onRoomLogAppended(entry: RoomLogEntryPayload, projectId: string) {
-    if (entry.author_type !== "human" || entry.author !== currentAuthor.value) return;
-    const content = entryContent(entry);
-    const index = entries.value.findIndex(
-      (pending) =>
-        pending.pending === true &&
-        pending.projectId === projectId &&
-        pending.roomId === entry.room_id &&
-        pending.content === content,
-    );
-    if (index < 0) return;
+  function acknowledgePending(index: number, data: Record<string, unknown>) {
     const pending = entries.value[index];
     const sentMedia = pending.blocks?.some((block) => block.type !== "text") === true;
-    const incoming = contentBlocksFromData(entry.data ?? {});
+    const incoming = contentBlocksFromData(data);
     const echoedMedia = incoming?.some((block) => block.type !== "text") === true;
     if (sentMedia && !echoedMedia) {
       const next = new Set(blockLossRooms.value);
-      next.add(entry.room_id);
+      next.add(pending.roomId);
       blockLossRooms.value = next;
     }
     const next = [...entries.value];
     next.splice(index, 1);
     entries.value = next;
+  }
+
+  function pendingForRoom(entry: OptimisticChatEntry, target: RoomTarget): boolean {
+    return (
+      entry.pending === true &&
+      entry.projectId === target.projectId &&
+      entry.roomId === target.roomId
+    );
+  }
+
+  function pendingOf(target: RoomTarget): OptimisticChatEntry[] {
+    return entries.value.filter((entry) => pendingForRoom(entry, target));
+  }
+
+  function hasPending(target: RoomTarget): boolean {
+    return entries.value.some((entry) => pendingForRoom(entry, target));
+  }
+
+  function attachServerEntryId(
+    target: RoomTarget,
+    clientSeq: number,
+    entryId: string,
+    received?: TranscriptEntryView,
+  ): void {
+    const index = entries.value.findIndex(
+      (entry) => entry.clientSeq === clientSeq && pendingForRoom(entry, target),
+    );
+    if (index < 0) return;
+    if (received?.entry_id === entryId) {
+      acknowledgePending(index, { content_blocks: received.content_blocks });
+      return;
+    }
+    entries.value[index] = { ...entries.value[index], serverEntryId: entryId };
+  }
+
+  function onTranscriptEntry(target: RoomTarget, received: TranscriptEntryView): void {
+    if (received.author_type !== "human") return;
+    const index = entries.value.findIndex(
+      (entry) => entry.serverEntryId === received.entry_id && pendingForRoom(entry, target),
+    );
+    if (index >= 0) acknowledgePending(index, { content_blocks: received.content_blocks });
   }
 
   function clearBlockLoss(roomId?: string) {
@@ -117,7 +144,17 @@ export const useChatStore = defineStore("ghrah-chat", () => {
           (pending.blocks?.filter((block) => block.type !== "text").length ?? 0) ===
             mediaBlockCount),
     );
-    if (index < 0) return;
+    if (index >= 0) failPending(index, error);
+  }
+
+  function markPendingErrorBySeq(target: RoomTarget, clientSeq: number, error: string) {
+    const index = entries.value.findIndex(
+      (entry) => entry.clientSeq === clientSeq && pendingForRoom(entry, target),
+    );
+    if (index >= 0) failPending(index, error);
+  }
+
+  function failPending(index: number, error: string) {
     const next = [...entries.value];
     next[index] = { ...next[index], pending: false, error };
     entries.value = next;
@@ -147,7 +184,7 @@ export const useChatStore = defineStore("ghrah-chat", () => {
 
   function clearAll() {
     entries.value = [];
-    pendingSeq = 0;
+    pendingChildSeq = 0;
   }
 
   return {
@@ -157,9 +194,13 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     blockLossRooms,
     setCurrentAuthor,
     addPendingEntry,
-    onRoomLogAppended,
+    onTranscriptEntry,
+    attachServerEntryId,
+    pendingOf,
+    hasPending,
     clearBlockLoss,
     markPendingError,
+    markPendingErrorBySeq,
     clearAgent,
     clearRoom,
     clearProject,

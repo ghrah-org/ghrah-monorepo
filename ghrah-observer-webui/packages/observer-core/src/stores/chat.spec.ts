@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RoomLogEntryPayload } from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
+import { entry as transcriptEntry } from "../test-fixtures/transcript.js";
 import { useChatStore } from "./chat.js";
+
+const room = { projectId: "p1", roomId: "r1" };
 
 const pending = (overrides: Record<string, unknown> = {}) => ({
   projectId: "p1",
@@ -15,17 +17,6 @@ const pending = (overrides: Record<string, unknown> = {}) => ({
   agentName: "",
   ...overrides,
 });
-const log = (overrides: Partial<RoomLogEntryPayload> = {}): RoomLogEntryPayload => ({
-  id: "e1",
-  room_id: "r1",
-  seq: 1,
-  author: "user",
-  author_type: "human",
-  timestamp: 1,
-  data: { message: "hello" },
-  ...overrides,
-});
-
 describe("useChatStore", () => {
   beforeEach(() => setActivePinia(createPinia()));
 
@@ -36,9 +27,11 @@ describe("useChatStore", () => {
 
   it("echo confirmation only removes the exact project/room pending", () => {
     const store = useChatStore();
-    store.addPendingEntry(pending());
-    store.addPendingEntry(pending({ projectId: "p2" }));
-    store.onRoomLogAppended(log(), "p1");
+    const local = store.addPendingEntry(pending());
+    const foreign = store.addPendingEntry(pending({ projectId: "p2" }));
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.attachServerEntryId({ ...room, projectId: "p2" }, foreign.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1));
     expect(store.entries).toHaveLength(1);
     expect(store.entries[0].projectId).toBe("p2");
   });
@@ -58,20 +51,19 @@ describe("useChatStore", () => {
 
   it("image-only pending matches an empty-content echo and clears", () => {
     const store = useChatStore();
-    store.addPendingEntry(
+    const local = store.addPendingEntry(
       pending({
         content: "",
         blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
     );
-    store.onRoomLogAppended(
-      log({
-        data: {
-          message: "",
-          content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
-        },
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(
+      room,
+      transcriptEntry(1, {
+        content: "",
+        content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
-      "p1",
     );
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(false);
@@ -89,22 +81,24 @@ describe("useChatStore", () => {
       height: 360,
       frames: [{ type: "image" as const, base64: "RlJBTUU=", mime_type: "image/jpeg" }],
     };
-    store.addPendingEntry(pending({ content: "", blocks: [video] }));
+    const local = store.addPendingEntry(pending({ content: "", blocks: [video] }));
     expect(store.entries[0].blocks).toEqual([video]);
-    store.onRoomLogAppended(log({ data: { message: "", content_blocks: [video] } }), "p1");
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1, { content: "", content_blocks: [video] }));
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(false);
   });
 
   it("flags block loss when the echo carries no media blocks", () => {
     const store = useChatStore();
-    store.addPendingEntry(
+    const local = store.addPendingEntry(
       pending({
         content: "",
         blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
     );
-    store.onRoomLogAppended(log({ data: { message: "" } }), "p1");
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1, { content: "" }));
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(true);
     store.clearBlockLoss("r1");
@@ -147,10 +141,108 @@ describe("useChatStore", () => {
     expect(store.entries).toEqual([]);
   });
 
-  it("clearAll resets pending sequence", () => {
+  it("clearAll restarts display ordering and keeps client sequences increasing", () => {
     const store = useChatStore();
-    expect(store.addPendingEntry(pending()).childSeq).toBe(-1);
+    const previous = store.addPendingEntry(pending());
+    expect(previous.childSeq).toBe(-1);
     store.clearAll();
-    expect(store.addPendingEntry(pending()).childSeq).toBe(-1);
+    const current = store.addPendingEntry(pending());
+    expect(current.childSeq).toBe(-1);
+    expect(current.clientSeq).toBeGreaterThan(previous.clientSeq);
+  });
+
+  describe("transcript reconciliation", () => {
+    it.each(["receipt first", "transcript first"])("matches by entry ID with %s", (order) => {
+      const store = useChatStore();
+      const draft = store.addPendingEntry(pending());
+      const received = transcriptEntry(1, { content: "normalized by server" });
+      if (order === "receipt first") {
+        store.attachServerEntryId(room, draft.clientSeq, received.entry_id);
+        expect(store.pendingOf(room)).toMatchObject([{ serverEntryId: received.entry_id }]);
+        store.onTranscriptEntry(room, received);
+      } else {
+        store.onTranscriptEntry(room, received);
+        expect(store.pendingOf(room)).toMatchObject([{ clientSeq: draft.clientSeq }]);
+        store.attachServerEntryId(room, draft.clientSeq, received.entry_id, received);
+      }
+      expect(store.pendingOf(room)).toEqual([]);
+    });
+
+    it("handles reversed receipts and replay for identical sends in the same Room", () => {
+      const store = useChatStore();
+      const first = store.addPendingEntry(pending());
+      const second = store.addPendingEntry(pending());
+      const echo = transcriptEntry(2, { content: second.content });
+      store.attachServerEntryId(room, second.clientSeq, echo.entry_id);
+      store.attachServerEntryId(room, first.clientSeq, "entry-1");
+
+      store.onTranscriptEntry({ ...room, projectId: "other" }, echo);
+      expect(store.pendingOf(room)).toHaveLength(2);
+      store.onTranscriptEntry(room, echo);
+      store.onTranscriptEntry(room, echo);
+      store.attachServerEntryId(room, second.clientSeq, echo.entry_id, echo);
+      expect(store.pendingOf(room)).toMatchObject([
+        { clientSeq: first.clientSeq, serverEntryId: "entry-1" },
+      ]);
+
+      store.onTranscriptEntry(room, transcriptEntry(1, { content: first.content }));
+      expect(store.pendingOf(room)).toEqual([]);
+    });
+
+    it.each([true, false])(
+      "sets the media loss flag when the echo lacks media (%s)",
+      (hasMedia) => {
+        const store = useChatStore();
+        const image = { type: "image" as const, base64: "aGk=", mime_type: "image/png" };
+        const draft = store.addPendingEntry(pending({ blocks: [image] }));
+        const echo = transcriptEntry(1, { content_blocks: hasMedia ? [image] : null });
+        store.attachServerEntryId(room, draft.clientSeq, echo.entry_id);
+        store.onTranscriptEntry(room, echo);
+        expect(store.pendingOf(room)).toEqual([]);
+        expect(store.blockLossRooms.has(room.roomId)).toBe(!hasMedia);
+      },
+    );
+
+    it("marks only the requested client sequence as failed for identical sends", () => {
+      const store = useChatStore();
+      const first = store.addPendingEntry(pending());
+      const second = store.addPendingEntry(pending());
+      store.markPendingErrorBySeq({ ...room, roomId: "other" }, first.clientSeq, "wrong Room");
+      store.markPendingErrorBySeq(room, second.clientSeq, "send failed");
+      expect(store.entries).toMatchObject([
+        { clientSeq: first.clientSeq, pending: true },
+        { clientSeq: second.clientSeq, pending: false, error: "send failed" },
+      ]);
+      expect(store.entries[0].error).toBeUndefined();
+    });
+
+    it("ignores a late receipt and transcript echo from before clearAll", () => {
+      const store = useChatStore();
+      const previous = store.addPendingEntry(pending({ content: "old message" }));
+      store.clearAll();
+      const current = store.addPendingEntry(pending({ content: "new message" }));
+      const oldEcho = transcriptEntry(1, { content: previous.content });
+      store.attachServerEntryId(room, previous.clientSeq, oldEcho.entry_id);
+      store.onTranscriptEntry(room, oldEcho);
+      expect(store.pendingOf(room)).toEqual([current]);
+
+      const newEcho = transcriptEntry(2, { content: current.content });
+      store.attachServerEntryId(room, current.clientSeq, newEcho.entry_id, newEcho);
+      expect(store.pendingOf(room)).toEqual([]);
+    });
+
+    it("ignores a late send failure from before clearAll", () => {
+      const store = useChatStore();
+      const previous = store.addPendingEntry(pending());
+      store.clearAll();
+      const current = store.addPendingEntry(pending());
+      store.markPendingErrorBySeq(room, previous.clientSeq, "old send failed");
+      expect(store.pendingOf(room)).toEqual([current]);
+
+      store.markPendingErrorBySeq(room, current.clientSeq, "new send failed");
+      expect(store.entries).toMatchObject([
+        { clientSeq: current.clientSeq, pending: false, error: "new send failed" },
+      ]);
+    });
   });
 });

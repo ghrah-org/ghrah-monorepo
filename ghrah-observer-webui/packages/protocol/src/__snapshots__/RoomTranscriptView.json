@@ -33,7 +33,8 @@
       "insert_before_turn_id": "turn",
       "injection_step": 2,
       "human_state": "injected",
-      "node_id": null
+      "node_id": null,
+      "ability": null
     }
   ],
   "turns": [

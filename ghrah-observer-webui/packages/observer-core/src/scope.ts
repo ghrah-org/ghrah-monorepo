@@ -34,6 +34,10 @@ export function agentKey(target: AgentKey): string {
   return tupleKey([target.projectId, target.agentId]);
 }
 
+export function roomKey(target: RoomTarget): string {
+  return tupleKey([target.projectId, target.roomId]);
+}
+
 export function sessionKey(
   target: Pick<SessionTarget, "projectId" | "agentId" | "sessionId">,
 ): string {
