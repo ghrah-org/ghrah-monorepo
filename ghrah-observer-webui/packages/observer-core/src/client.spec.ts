@@ -178,12 +178,13 @@ describe("ObserverClient", () => {
       const parsed = JSON.parse(mockWs.sent[0]);
 
       expect(parsed.type).toBe(CommandType.TURN_ABORT);
+      // TurnAbortPayload 是 extra=forbid：只允许 project_id/agent_id 与可选定位键。
       expect(parsed.payload).toEqual({
         project_id: "p1",
         agent_id: "a1",
-        agent_name: "agent-1",
         reason: "user request",
       });
+      expect(parsed.payload).not.toHaveProperty("agent_name");
 
       mockWs.onmessage!({
         data: JSON.stringify({
@@ -211,7 +212,6 @@ describe("ObserverClient", () => {
       expect(parsed.payload).toEqual({
         project_id: "p1",
         agent_id: "a1",
-        agent_name: "agent-1",
       });
     });
   });

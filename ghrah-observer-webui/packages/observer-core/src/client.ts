@@ -188,10 +188,11 @@ export class ObserverClient extends ServerClient {
     target: AgentTarget,
     options: { turnId?: string; sessionId?: string; reason?: string } = {},
   ): Promise<CommandResultPayload> {
+    // wire 契约是 TurnAbortPayload（extra="forbid"）：只带稳定寻址键，
+    // agent_name 不在协议里；多带会被 Subject 以 invalid_abort_request 拒绝。
     const payload: Record<string, unknown> = {
       project_id: target.projectId,
       agent_id: target.agentId,
-      agent_name: target.agentName,
     };
     if (options.turnId) payload["turn_id"] = options.turnId;
     if (options.sessionId) payload["session_id"] = options.sessionId;
