@@ -238,6 +238,8 @@ async function applyDesiredState(state: AgentDesiredState): Promise<void> {
     void refreshControl();
   } finally {
     pendingAction.value = null;
+    // 启动要等装配完成、停止要等运行态回收，回执里的运行态还不稳，补读收敛。
+    nudgeControl();
   }
 }
 
@@ -286,6 +288,9 @@ async function abort(): Promise<void> {
     };
   } finally {
     pendingAction.value = null;
+    // 中断只改轮次与运行态、不改项目版本；且 Core 侧 busy 释放略晚于命令回执，
+    // 单次补读常常仍读到 true，因此用一串短延迟补读收敛。
+    nudgeControl();
   }
 }
 
@@ -321,15 +326,61 @@ function refresh(): void {
   void refreshControl();
 }
 
+/**
+ * 运行态短轮询。
+ *
+ * ``busy`` 只在 GET /agents/{id} 的运行态里，轮次开始/结束既不推进项目版本、
+ * 也不产生 observer 侧已投影的 turn 事件，所以条上的「处理中」与删除可用性
+ * 必须自己跟上。页面不可见或动作进行中时不发请求。
+ */
+const POLL_INTERVAL_MS = 2000;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+const settleTimers: ReturnType<typeof setTimeout>[] = [];
+
+/** 动作结束后的短延迟补读：命令回执与 Core 侧释放/装配不同步时收敛条上状态。 */
+function nudgeControl(delaysMs: readonly number[] = [0, 400, 1200]) {
+  for (const delay of delaysMs) {
+    settleTimers.push(
+      setTimeout(() => {
+        if (shown) void refreshControl();
+      }, delay),
+    );
+  }
+}
+
+function clearSettleTimers() {
+  while (settleTimers.length) {
+    clearTimeout(settleTimers.pop() as ReturnType<typeof setTimeout>);
+  }
+}
+
+function startPolling() {
+  if (pollTimer !== null) return;
+  pollTimer = setInterval(() => {
+    if (pendingAction.value !== null) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    void refreshControl();
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  clearSettleTimers();
+  if (pollTimer === null) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
 function show() {
   if (shown) return;
   shown = true;
+  startPolling();
   if (treeEnabled.value) void admin.setVisible(props.projectId, props.agentId, true);
 }
 
 function hide() {
   if (!shown) return;
   shown = false;
+  stopPolling();
   void admin.setVisible(props.projectId, props.agentId, false);
 }
 

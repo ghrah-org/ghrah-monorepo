@@ -199,7 +199,10 @@ describe("AssemblyDetail lifecycle actions", () => {
   });
 
   it("asks before stopping and declares the desired state", async () => {
-    const client = setAgentClient();
+    const client = setAgentClient({
+      // 动作后的补读必须读到停止态，否则条上会回跳成在线（服务端此时已是停止态）。
+      get: vi.fn().mockResolvedValueOnce(agentView()).mockResolvedValue(stoppedView()),
+    });
     const wrapper = await mountDetail();
 
     await wrapper.get(".assembly-agent-stop").trigger("click");
@@ -237,6 +240,31 @@ describe("AssemblyDetail lifecycle actions", () => {
     const remove = wrapper.get(".assembly-agent-delete");
     expect(remove.attributes("disabled")).toBeDefined();
     wrapper.unmount();
+  });
+
+  it("picks up the processing state without a manual refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      let view = agentView({ busy: false });
+      setAgentClient({ get: vi.fn(async () => view) });
+      const wrapper = await mountDetail();
+      expect(wrapper.find(".assembly-agent-busy").exists()).toBe(false);
+
+      view = agentView({ busy: true });
+      vi.advanceTimersByTime(2000);
+      await flushPromises();
+      expect(wrapper.find(".assembly-agent-busy").exists()).toBe(true);
+      expect(wrapper.get(".assembly-agent-delete").attributes("disabled")).toBeDefined();
+
+      view = agentView({ busy: false });
+      vi.advanceTimersByTime(2000);
+      await flushPromises();
+      expect(wrapper.find(".assembly-agent-busy").exists()).toBe(false);
+      expect(wrapper.get(".assembly-agent-delete").attributes("disabled")).toBeUndefined();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("deletes after a strong confirmation and emits the deleted event", async () => {
@@ -288,16 +316,22 @@ describe("AssemblyDetail lifecycle actions", () => {
   });
 
   it("aborts the current turn and reports the outcome", async () => {
-    setAgentClient();
+    const client = setAgentClient();
     const wrapper = await mountDetail();
+    const readsBefore = client.get.mock.calls.length;
 
     await wrapper.get(".assembly-agent-abort").trigger("click");
+    await flushPromises();
+    // nudgeControl 的首个补读是 0ms setTimeout：等一拍宏任务再断言。
+    await new Promise((resolve) => setTimeout(resolve, 10));
     await flushPromises();
     expect(abortTurn).toHaveBeenCalledWith({
       projectId: PROJECT_ID,
       agentId: AGENT_ID,
       agentName: "Coder",
     });
+    // 中断只改轮次与运行态、不改项目版本：必须主动补读一次，条上状态才会更新。
+    expect(client.get.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(wrapper.text()).toContain("Current turn aborted.");
 
     abortTurn.mockResolvedValue({ success: false, error: "turn_not_found" });
