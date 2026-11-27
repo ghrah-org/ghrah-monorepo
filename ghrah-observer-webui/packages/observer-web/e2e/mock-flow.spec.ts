@@ -76,15 +76,17 @@ test("Room reads transcript and reconciles identical sends without the WS histor
     );
     await page.locator(".room-list-row", { hasText: room.name }).press("Enter");
     expect((await tail).status()).toBe(200);
-    await expect(page.locator(".entry-endtask")).toHaveText(/Archived final reply/);
+    await expect(page.locator("[data-ability=end_task]")).toHaveText(/Archived final reply/);
 
     const composer = page.locator(".chat-composer");
     for (let count = 0; count < 2; count += 1) {
       await composer.locator("textarea").fill("same text twice");
       await composer.locator('button[type="submit"]').click();
     }
-    await expect(page.locator(".entry-human", { hasText: "same text twice" })).toHaveCount(2);
-    await expect(page.locator(".entry-pending")).toHaveCount(0);
+    await expect(
+      page.locator("[class*=entry-human--]", { hasText: "same text twice" }),
+    ).toHaveCount(2);
+    await expect(page.locator("[data-pending=true]")).toHaveCount(0);
     expect(wsRoomSends).toHaveLength(2);
 
     await page.locator('button[aria-controls="room-detail-drawer"]').click();
@@ -120,7 +122,9 @@ test("Room reads transcript and reconciles identical sends without the WS histor
     await browserSocket!.close({ code: 1001, reason: "reconnect test" });
     expect((await reloadedTail).status()).toBe(200);
     await expect(page.getByText("Reply while disconnected", { exact: true })).toBeVisible();
-    await expect(page.locator(".entry-human", { hasText: "same text twice" })).toHaveCount(2);
+    await expect(
+      page.locator("[class*=entry-human--]", { hasText: "same text twice" }),
+    ).toHaveCount(2);
     expect(wsHistoryCommands).toEqual([]);
   } finally {
     const current = await client.getProject(projectId);

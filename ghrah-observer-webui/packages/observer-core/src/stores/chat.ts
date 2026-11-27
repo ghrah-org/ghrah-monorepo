@@ -2,16 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RoomLogEntryPayload, TranscriptEntryView } from "@ghrah/protocol";
+import type { TranscriptEntryView } from "@ghrah/protocol";
 import type { ChatBlock } from "../block-compat.js";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import {
-  type ChatEntry,
-  contentBlocksFromData,
-  textFromBlocks,
-  withTextContent,
-} from "../projection.js";
+import { type ChatEntry, contentBlocksFromData, withTextContent } from "../projection.js";
 import type { AgentTarget, RoomTarget } from "../scope.js";
 
 export const DEFAULT_HUMAN_AUTHOR = "user";
@@ -63,28 +58,6 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     };
     entries.value = [...entries.value, entry];
     return entry;
-  }
-
-  function entryContent(entry: RoomLogEntryPayload): string {
-    const data = entry.data ?? {};
-    const message = data.message;
-    if (typeof message === "string" && message) return message;
-    const blocks = contentBlocksFromData(data);
-    if (blocks) return textFromBlocks(blocks);
-    return typeof message === "string" ? message : JSON.stringify(data);
-  }
-
-  function onRoomLogAppended(entry: RoomLogEntryPayload, projectId: string) {
-    if (entry.author_type !== "human" || entry.author !== currentAuthor.value) return;
-    const content = entryContent(entry);
-    const index = entries.value.findIndex(
-      (pending) =>
-        pending.pending === true &&
-        pending.projectId === projectId &&
-        pending.roomId === entry.room_id &&
-        pending.content === content,
-    );
-    if (index >= 0) acknowledgePending(index, entry.data);
   }
 
   function acknowledgePending(index: number, data: Record<string, unknown>) {
@@ -221,7 +194,6 @@ export const useChatStore = defineStore("ghrah-chat", () => {
     blockLossRooms,
     setCurrentAuthor,
     addPendingEntry,
-    onRoomLogAppended,
     onTranscriptEntry,
     attachServerEntryId,
     pendingOf,

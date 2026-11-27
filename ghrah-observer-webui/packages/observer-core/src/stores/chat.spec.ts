@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RoomLogEntryPayload } from "@ghrah/protocol";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
 import { entry as transcriptEntry } from "../test-fixtures/transcript.js";
@@ -18,17 +17,6 @@ const pending = (overrides: Record<string, unknown> = {}) => ({
   agentName: "",
   ...overrides,
 });
-const log = (overrides: Partial<RoomLogEntryPayload> = {}): RoomLogEntryPayload => ({
-  id: "e1",
-  room_id: "r1",
-  seq: 1,
-  author: "user",
-  author_type: "human",
-  timestamp: 1,
-  data: { message: "hello" },
-  ...overrides,
-});
-
 describe("useChatStore", () => {
   beforeEach(() => setActivePinia(createPinia()));
 
@@ -39,9 +27,11 @@ describe("useChatStore", () => {
 
   it("echo confirmation only removes the exact project/room pending", () => {
     const store = useChatStore();
-    store.addPendingEntry(pending());
-    store.addPendingEntry(pending({ projectId: "p2" }));
-    store.onRoomLogAppended(log(), "p1");
+    const local = store.addPendingEntry(pending());
+    const foreign = store.addPendingEntry(pending({ projectId: "p2" }));
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.attachServerEntryId({ ...room, projectId: "p2" }, foreign.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1));
     expect(store.entries).toHaveLength(1);
     expect(store.entries[0].projectId).toBe("p2");
   });
@@ -61,20 +51,19 @@ describe("useChatStore", () => {
 
   it("image-only pending matches an empty-content echo and clears", () => {
     const store = useChatStore();
-    store.addPendingEntry(
+    const local = store.addPendingEntry(
       pending({
         content: "",
         blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
     );
-    store.onRoomLogAppended(
-      log({
-        data: {
-          message: "",
-          content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
-        },
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(
+      room,
+      transcriptEntry(1, {
+        content: "",
+        content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
-      "p1",
     );
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(false);
@@ -92,22 +81,24 @@ describe("useChatStore", () => {
       height: 360,
       frames: [{ type: "image" as const, base64: "RlJBTUU=", mime_type: "image/jpeg" }],
     };
-    store.addPendingEntry(pending({ content: "", blocks: [video] }));
+    const local = store.addPendingEntry(pending({ content: "", blocks: [video] }));
     expect(store.entries[0].blocks).toEqual([video]);
-    store.onRoomLogAppended(log({ data: { message: "", content_blocks: [video] } }), "p1");
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1, { content: "", content_blocks: [video] }));
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(false);
   });
 
   it("flags block loss when the echo carries no media blocks", () => {
     const store = useChatStore();
-    store.addPendingEntry(
+    const local = store.addPendingEntry(
       pending({
         content: "",
         blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
       }),
     );
-    store.onRoomLogAppended(log({ data: { message: "" } }), "p1");
+    store.attachServerEntryId(room, local.clientSeq, "entry-1");
+    store.onTranscriptEntry(room, transcriptEntry(1, { content: "" }));
     expect(store.entries).toHaveLength(0);
     expect(store.blockLossRooms.has("r1")).toBe(true);
     store.clearBlockLoss("r1");

@@ -435,3 +435,49 @@ describe("injection acceptance and queued cancellation", () => {
     }
   });
 });
+
+it("serves six Room turn examples and a waiting turn through transcript and detail", () => {
+  const state = new MockState();
+  const project = state.handleCommand(CommandType.PROJECT_CREATE, { name: "turn examples" })
+    .data as {
+    project: { project_id: string };
+  };
+  const projectId = project.project.project_id;
+  const agent = AgentSnapshotSchema.parse(
+    state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+      project_id: projectId,
+      name: "reviewer",
+      template_id: "mock.agent",
+      revision: 1,
+      start: true,
+    }).data,
+  );
+  state.handleCommand(CommandType.ROOM_CREATE, { project_id: projectId, name: "Review" });
+  const room = [...state.rooms.values()][0];
+  state.seedRoomTurnExamples(room.room_id, agent.identity.agent_id, "waiting");
+  state.seedRoomTurnExamples(room.room_id, agent.identity.agent_id, "waiting");
+  const transcript = state.roomTranscript(room, { limit: 50 });
+  expect(transcript.entries).toHaveLength(7);
+  expect(new Set(transcript.entries.map((entry) => entry.author))).toEqual(
+    new Set(["user", "Ada"]),
+  );
+  expect(transcript.turns.map(({ status }) => status)).toEqual([
+    "closed",
+    "failed",
+    "closed",
+    "aborted",
+    "interrupted",
+    "rolled_back",
+    "waiting_hitl",
+  ]);
+  expect(transcript.turns[5].recovery_branch_id).toBe("example-rollback");
+  expect(
+    state.turnDetail(projectId, agent.identity.agent_id, transcript.turns[1].turn_id)?.nodes,
+  ).toEqual([]);
+  const compact = state.turnDetail(projectId, agent.identity.agent_id, transcript.turns[2].turn_id);
+  expect(compact?.nodes[0]).toMatchObject({
+    is_snapshot: true,
+    metadata: { node_kind: "compact" },
+  });
+  state.dispose();
+});

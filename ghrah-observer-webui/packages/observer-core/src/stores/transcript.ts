@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
-  RoomLogEntryPayload,
   RoomTranscriptView,
   TranscriptEntryView,
   TurnCardView,
@@ -12,8 +11,9 @@ import type {
 import { defineStore } from "pinia";
 import { reactive, shallowRef } from "vue";
 import { type AgentKey, roomKey, type RoomTarget } from "../scope.js";
-import { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./rooms.js";
+import { useRoomsStore } from "./rooms.js";
 
+export const MAX_CACHED_TRANSCRIPTS = 10;
 export const MAX_TURN_DETAILS = 10;
 
 export interface TurnTarget extends AgentKey {
@@ -54,28 +54,6 @@ function withKnownOpener(incoming: TurnCardView, current?: TurnCardView): TurnCa
   return incoming;
 }
 
-function toRoomLogEntry(entry: TranscriptEntryView, roomId: string): RoomLogEntryPayload {
-  return {
-    id: entry.entry_id,
-    room_id: roomId,
-    seq: entry.seq,
-    author: entry.author,
-    author_type: entry.author_type,
-    timestamp: entry.timestamp,
-    data: {
-      message: entry.content,
-      content_blocks: entry.content_blocks,
-      targets: entry.targets,
-      deliveries: entry.deliveries,
-      node_id: entry.node_id,
-      ability: entry.ability ?? null,
-      ...(entry.author_type === "human" && entry.message_id
-        ? { mm_message_id: entry.message_id }
-        : {}),
-    },
-  };
-}
-
 export const useTranscriptStore = defineStore("ghrah-transcript", () => {
   const rooms = shallowRef(new Map<string, TranscriptRoom>());
   const details = shallowRef(new Map<string, { target: TurnTarget; view: TurnDetailView }>());
@@ -103,13 +81,12 @@ export const useTranscriptStore = defineStore("ghrah-transcript", () => {
       });
     next.delete(key);
     next.set(key, state);
-    if (next.size > MAX_CACHED_ROOM_LOGS) {
+    if (next.size > MAX_CACHED_TRANSCRIPTS) {
       const evicted = [...next.entries()].find(
         ([, cached]) => cached !== state && cached.roomId !== roomDirectory.activeRoomId,
       );
       if (evicted) {
         next.delete(evicted[0]);
-        roomDirectory.replaceRoomLog(evicted[1], null);
       }
     }
     rooms.value = next;
@@ -163,7 +140,6 @@ export const useTranscriptStore = defineStore("ghrah-transcript", () => {
       state.latestSeq = Math.max(state.latestSeq, page.latest_seq);
     }
     state.readAt = page.read_at;
-    syncRoomLog(state);
   }
 
   function replaceEntry(state: TranscriptRoom, entry: TranscriptEntryView): boolean {
@@ -172,15 +148,7 @@ export const useTranscriptStore = defineStore("ghrah-transcript", () => {
     );
     if (index < 0) return false;
     state.entries[index] = entry;
-    syncRoomLog(state);
     return true;
-  }
-
-  function syncRoomLog(state: TranscriptRoom) {
-    roomDirectory.replaceRoomLog(
-      state,
-      state.entries.map((entry) => toRoomLogEntry(entry, state.roomId)),
-    );
   }
 
   function touchDetail(key: string) {
@@ -239,7 +207,6 @@ export const useTranscriptStore = defineStore("ghrah-transcript", () => {
     const next = new Map(rooms.value);
     next.delete(key);
     rooms.value = next;
-    roomDirectory.replaceRoomLog(target, null);
     discardUnusedDetails();
   }
 
@@ -260,14 +227,12 @@ export const useTranscriptStore = defineStore("ghrah-transcript", () => {
     for (const [key, state] of rooms.value) {
       if (state.projectId !== projectId) continue;
       next.delete(key);
-      roomDirectory.replaceRoomLog(state, null);
     }
     rooms.value = next;
     discardUnusedDetails();
   }
 
   function clearAll() {
-    for (const state of rooms.value.values()) roomDirectory.replaceRoomLog(state, null);
     rooms.value = new Map();
     details.value = new Map();
     detailRecency.clear();

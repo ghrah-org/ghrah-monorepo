@@ -6,23 +6,17 @@ import type {
   RoomDeletedEventPayload,
   RoomEventPayload,
   RoomInfoPayload,
-  RoomLogEntryPayload,
-  RoomLogEventPayload,
   RoomMemberEventPayload,
 } from "@ghrah/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { RoomTarget } from "../scope.js";
 
-/** room log cache limit (least recently used room is evicted first). */
-export const MAX_CACHED_ROOM_LOGS = 10;
-
 export const useRoomsStore = defineStore("ghrah-rooms", () => {
   const activeRooms = ref<Map<string, RoomInfoPayload>>(new Map());
   const archivedRooms = ref<Map<string, RoomInfoPayload>>(new Map());
   /** Compatibility alias: the shell only consumes active rooms before M4. */
   const rooms = activeRooms;
-  const logs = ref<Map<string, RoomLogEntryPayload[]>>(new Map());
   const activeRoomId = ref<string | null>(null);
 
   const roomList = computed(() => [...activeRooms.value.values()]);
@@ -30,11 +24,6 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
   const activeRoom = computed(() =>
     activeRoomId.value ? (activeRooms.value.get(activeRoomId.value) ?? null) : null,
   );
-  const activeRoomLog = computed<RoomLogEntryPayload[]>(() => {
-    if (!activeRoomId.value) return [];
-    return [...(logs.value.get(activeRoomId.value) ?? [])].sort((a, b) => a.seq - b.seq);
-  });
-
   function roomsForProject(projectId: string, status: "active" | "archived" = "active") {
     const source = status === "active" ? activeRooms.value : archivedRooms.value;
     return [...source.values()].filter((room) => room.project_id === projectId);
@@ -53,25 +42,6 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     }
     activeRooms.value = active;
     archivedRooms.value = archived;
-  }
-
-  function touchLog(roomId: string) {
-    const map = logs.value;
-    const list = map.get(roomId);
-    if (list !== undefined) {
-      map.delete(roomId);
-      map.set(roomId, list);
-    }
-    while (map.size > MAX_CACHED_ROOM_LOGS) {
-      let evicted = false;
-      for (const key of map.keys()) {
-        if (key === activeRoomId.value) continue;
-        map.delete(key);
-        evicted = true;
-        break;
-      }
-      if (!evicted) break;
-    }
   }
 
   function onRoomCreated(payload: RoomEventPayload) {
@@ -99,14 +69,12 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     archived.delete(target.roomId);
     activeRooms.value = active;
     archivedRooms.value = archived;
-    logs.value.delete(target.roomId);
     if (activeRoomId.value === target.roomId) activeRoomId.value = null;
   }
 
-  function clearRoomLog(target: RoomTarget) {
+  function clearRoomSelection(target: RoomTarget) {
     const room = activeRooms.value.get(target.roomId) ?? archivedRooms.value.get(target.roomId);
     if (room && room.project_id !== target.projectId) return;
-    logs.value.delete(target.roomId);
     if (activeRoomId.value === target.roomId) activeRoomId.value = null;
   }
 
@@ -120,22 +88,6 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
 
   function onRoomMemberLeft(payload: RoomMemberEventPayload) {
     upsertRoom(payload.room);
-  }
-
-  function onRoomLogAppended(payload: RoomLogEventPayload) {
-    const entry = payload.entry;
-    if (!entry) return;
-    const map = logs.value;
-    let list = map.get(entry.room_id);
-    if (!list) {
-      list = [];
-      map.set(entry.room_id, list);
-    }
-    if (list.some((existing) => existing.id === entry.id)) return;
-    let index = list.length;
-    while (index > 0 && list[index - 1].seq > entry.seq) index -= 1;
-    list.splice(index, 0, entry);
-    touchLog(entry.room_id);
   }
 
   function replaceProjectRooms(
@@ -171,28 +123,8 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     return removed;
   }
 
-  function setRoomLog(roomId: string, entries: RoomLogEntryPayload[]) {
-    const existing = logs.value.get(roomId) ?? [];
-    const byId = new Map(existing.map((entry) => [entry.id, entry] as const));
-    for (const entry of entries) byId.set(entry.id, entry);
-    logs.value.set(
-      roomId,
-      [...byId.values()].sort((a, b) => a.seq - b.seq),
-    );
-    touchLog(roomId);
-  }
-
-  /** transcript 已按 Room 维护缓存上限，镜像只跟随替换和逐出。 */
-  function replaceRoomLog(target: RoomTarget, entries: RoomLogEntryPayload[] | null) {
-    const room = activeRooms.value.get(target.roomId) ?? archivedRooms.value.get(target.roomId);
-    if (room && room.project_id !== target.projectId) return;
-    if (entries === null) logs.value.delete(target.roomId);
-    else logs.value.set(target.roomId, entries);
-  }
-
   function setActiveRoom(roomId: string | null) {
     activeRoomId.value = roomId !== null && activeRooms.value.has(roomId) ? roomId : null;
-    if (activeRoomId.value && logs.value.has(activeRoomId.value)) touchLog(activeRoomId.value);
   }
 
   function clearProject(projectId: string) {
@@ -206,14 +138,12 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     archivedRooms.value = new Map(
       [...archivedRooms.value.entries()].filter(([, room]) => room.project_id !== projectId),
     );
-    for (const roomId of roomIds) logs.value.delete(roomId);
     if (activeRoomId.value && roomIds.has(activeRoomId.value)) activeRoomId.value = null;
   }
 
   function clearAll() {
     activeRooms.value = new Map();
     archivedRooms.value = new Map();
-    logs.value = new Map();
     activeRoomId.value = null;
   }
 
@@ -221,12 +151,10 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     rooms,
     activeRooms,
     archivedRooms,
-    logs,
     activeRoomId,
     roomList,
     archivedRoomList,
     activeRoom,
-    activeRoomLog,
     roomsForProject,
     onRoomCreated,
     onRoomUpdated,
@@ -235,13 +163,10 @@ export const useRoomsStore = defineStore("ghrah-rooms", () => {
     onRoomDeleted,
     onRoomMemberJoined,
     onRoomMemberLeft,
-    onRoomLogAppended,
     replaceProjectRooms,
-    setRoomLog,
-    replaceRoomLog,
     setActiveRoom,
     clearRoom,
-    clearRoomLog,
+    clearRoomSelection,
     clearProject,
     clearAll,
   };

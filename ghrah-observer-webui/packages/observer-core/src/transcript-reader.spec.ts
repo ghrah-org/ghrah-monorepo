@@ -7,8 +7,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { HttpError } from "./http.js";
 import { useChatStore } from "./stores/chat.js";
-import { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./stores/rooms.js";
-import { useTranscriptStore } from "./stores/transcript.js";
+import { MAX_CACHED_TRANSCRIPTS, useTranscriptStore } from "./stores/transcript.js";
 import { deferred, entry, page, target, turn } from "./test-fixtures/transcript.js";
 import { createTranscriptReader, type TranscriptReader } from "./transcript-reader.js";
 import type { TurnApiClient } from "./turn-api.js";
@@ -86,7 +85,7 @@ it("makes the initial history available before active turn details arrive", asyn
   const entering = reader.loadInitial(target).then(ready);
   await vi.advanceTimersByTimeAsync(0);
   expect(ready).toHaveBeenCalledOnce();
-  expect(useRoomsStore().logs.get("r")?.[0].id).toBe("entry-1");
+  expect(useTranscriptStore().entriesOf(target)[0]?.entry_id).toBe("entry-1");
   expect(useTranscriptStore().turnDetail(turnTarget)).toBeUndefined();
   detail.resolve({ turn: turn(), nodes: [] });
   await entering;
@@ -154,9 +153,9 @@ it("stops a stalled incremental cycle and retries from the committed cursor", as
   expect(roomTranscript).toHaveBeenCalledTimes(2);
   expect(useTranscriptStore().room(target)?.nextSinceSeq).toBe(1);
   expect(
-    useRoomsStore()
-      .logs.get(target.roomId)
-      ?.map(({ id }) => id),
+    useTranscriptStore()
+      .entriesOf(target)
+      .map(({ entry_id }) => entry_id),
   ).toEqual(["entry-1"]);
 
   await vi.advanceTimersByTimeAsync(999);
@@ -169,9 +168,9 @@ it("stops a stalled incremental cycle and retries from the committed cursor", as
   ]);
   expect(useTranscriptStore().room(target)?.nextSinceSeq).toBe(2);
   expect(
-    useRoomsStore()
-      .logs.get(target.roomId)
-      ?.map(({ id }) => id),
+    useTranscriptStore()
+      .entriesOf(target)
+      .map(({ entry_id }) => entry_id),
   ).toEqual(["entry-1", "entry-2"]);
 });
 
@@ -201,9 +200,6 @@ it.each([
       expect.objectContaining({ beforeSeq: 2, limit: 1 }),
     );
     expect(useTranscriptStore().entriesOf(target)[0].deliveries[0].state).toBe(deliveryState);
-    expect(useRoomsStore().logs.get(target.roomId)?.[0].data.deliveries).toMatchObject([
-      { state: deliveryState },
-    ]);
     expect(useTranscriptStore().turnsOf(target)).toMatchObject([
       { status: turnStatus, opener_entry_id: "entry-1" },
     ]);
@@ -237,10 +233,6 @@ it.each(["manual", "timer"])(
     expect(useTranscriptStore().entriesOf(target)).toMatchObject([
       { entry_id: "entry-1" },
       { entry_id: "entry-2" },
-    ]);
-    expect(useRoomsStore().logs.get(target.roomId)).toMatchObject([
-      { id: "entry-1" },
-      { id: "entry-2" },
     ]);
   },
 );
@@ -277,9 +269,9 @@ it("drops only the missing turn when its detail returns 404", async () => {
   expect(useTranscriptStore().turnDetail(scope)).toBeUndefined();
   expect(useTranscriptStore().turnDetail(keepScope)).toBeDefined();
   expect(
-    useRoomsStore()
-      .logs.get(target.roomId)
-      ?.map(({ id }) => id),
+    useTranscriptStore()
+      .entriesOf(target)
+      .map(({ entry_id }) => entry_id),
   ).toEqual(["entry-1"]);
   expect(unavailable).not.toHaveBeenCalled();
 });
@@ -316,14 +308,13 @@ it("ignores the late page of an evicted Room", async () => {
   expect(signal?.aborted).toBe(false);
 
   const store = useTranscriptStore();
-  for (let index = 0; index < MAX_CACHED_ROOM_LOGS; index += 1) {
+  for (let index = 0; index < MAX_CACHED_TRANSCRIPTS; index += 1) {
     store.enterRoom({ ...target, roomId: `other-${index}` });
   }
   expect(signal?.aborted).toBe(true);
   pending.resolve(page([entry(2)], { next_since_seq: 2 }));
   await refreshing;
   expect(store.room(target)).toBeUndefined();
-  expect(useRoomsStore().logs.has(target.roomId)).toBe(false);
   expect(roomTranscript).toHaveBeenCalledTimes(2);
 });
 
@@ -402,11 +393,6 @@ it("retries an idle Room after a failed event read and resets from a fresh tail 
     useTranscriptStore()
       .entriesOf(target)
       .map(({ seq }) => seq),
-  ).toEqual([4]);
-  expect(
-    useRoomsStore()
-      .logs.get(target.roomId)
-      ?.map(({ seq }) => seq),
   ).toEqual([4]);
   expect(useTranscriptStore().room(target)).toMatchObject({ nextSinceSeq: 4, nextBeforeSeq: 4 });
 });

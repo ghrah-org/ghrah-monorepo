@@ -5,8 +5,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, expect, it } from "vitest";
 import { entry, page, target, turn } from "../test-fixtures/transcript.js";
-import { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./rooms.js";
-import { MAX_TURN_DETAILS, useTranscriptStore } from "./transcript.js";
+import { MAX_CACHED_TRANSCRIPTS, MAX_TURN_DETAILS, useTranscriptStore } from "./transcript.js";
 
 beforeEach(() => setActivePinia(createPinia()));
 
@@ -17,7 +16,7 @@ it("opens an empty transcript with a zero incremental cursor", () => {
   store.applyPage(state, page([]), "initial");
   expect(store.has(target)).toBe(true);
   expect(state).toMatchObject({ nextBeforeSeq: null, nextSinceSeq: 0, latestSeq: 0 });
-  expect(useRoomsStore().logs.get(target.roomId)).toEqual([]);
+  expect(store.entriesOf(target)).toEqual([]);
 });
 
 it("keeps the history and incremental cursors independent through a point update", () => {
@@ -36,18 +35,14 @@ it("keeps the history and incremental cursors independent through a point update
   expect(store.replaceEntry(state, entry(3, { content: "point update" }))).toBe(true);
   expect(store.replaceEntry(state, entry(3, { entry_id: "wrong-entry" }))).toBe(false);
   expect(state).toMatchObject({ nextBeforeSeq: 2, nextSinceSeq: 4, latestSeq: 4 });
-  expect(
-    useRoomsStore()
-      .logs.get(target.roomId)
-      ?.map(({ id, data }) => [id, data.message]),
-  ).toEqual([
+  expect(store.entriesOf(target).map(({ entry_id, content }) => [entry_id, content])).toEqual([
     ["entry-2", entry(2).content],
     ["entry-3", "point update"],
     ["entry-4", entry(4).content],
   ]);
 });
 
-it("replaces the entire mirror and preserves media, targets, and ability data", () => {
+it("replaces the transcript and preserves media, targets, and ability data", () => {
   const store = useTranscriptStore();
   const state = store.enterRoom(target);
   const media = [{ type: "image", base64: "aGk=", mime_type: "image/png" }];
@@ -61,12 +56,14 @@ it("replaces the entire mirror and preserves media, targets, and ability data", 
     "initial",
   );
   expect(store.entriesOf(target).map(({ entry_id }) => entry_id)).toEqual(["entry-4", "entry-5"]);
-  expect(useRoomsStore().logs.get(target.roomId)).toMatchObject([
+  expect(store.entriesOf(target)).toMatchObject([
     {
-      id: "entry-4",
-      data: { content_blocks: media, targets: ["agent"], mm_message_id: "message-4" },
+      entry_id: "entry-4",
+      content_blocks: media,
+      targets: ["agent"],
+      message_id: "message-4",
     },
-    { id: "entry-5", data: { ability: "end_task", node_id: "last-node" } },
+    { entry_id: "entry-5", ability: "end_task", node_id: "last-node" },
   ]);
 });
 
@@ -93,22 +90,20 @@ it("keeps the known opener when an older page or detail lacks it", () => {
   });
 });
 
-it("evicts and clears only the affected Room log mirrors", () => {
+it("bounds and clears the transcript cache", () => {
   const store = useTranscriptStore();
-  const rooms = useRoomsStore();
-  for (let index = 0; index <= MAX_CACHED_ROOM_LOGS; index += 1) {
+  for (let index = 0; index <= MAX_CACHED_TRANSCRIPTS; index += 1) {
     const roomId = `r${index}`;
     const state = store.enterRoom({ ...target, roomId });
     store.applyPage(state, page([entry(1)], { room_id: roomId }), "initial");
   }
-  expect(store.rooms.size).toBe(MAX_CACHED_ROOM_LOGS);
-  expect(rooms.logs.size).toBe(MAX_CACHED_ROOM_LOGS);
-  expect(rooms.logs.has("r0")).toBe(false);
+  expect(store.rooms.size).toBe(MAX_CACHED_TRANSCRIPTS);
+  expect(store.room({ ...target, roomId: "r0" })).toBeUndefined();
   store.clearRoom({ ...target, roomId: "r1" });
-  expect(rooms.logs.has("r1")).toBe(false);
-  expect(rooms.logs.has("r2")).toBe(true);
+  expect(store.room({ ...target, roomId: "r1" })).toBeUndefined();
+  expect(store.entriesOf({ ...target, roomId: "r2" })).toHaveLength(1);
   store.clearProject(target.projectId);
-  expect(rooms.logs.size).toBe(0);
+  expect(store.rooms.size).toBe(0);
 });
 
 it("evicts the least recently used detail without removing the turn card", () => {

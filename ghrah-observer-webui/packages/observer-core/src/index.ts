@@ -116,6 +116,7 @@ export { createTranscriptReader, type TranscriptReader } from "./transcript-read
 export { humanStateOf, isAnchor, projectExchanges, type Exchange } from "./exchanges.js";
 export {
   MAX_TURN_DETAILS,
+  MAX_CACHED_TRANSCRIPTS,
   type TranscriptPageMode,
   type TranscriptRoom,
   type TurnTarget,
@@ -143,8 +144,6 @@ export {
   type FileChange,
   type FileChangeScope,
   projectNodeToFileChanges,
-  type RoomLogProjectionScope,
-  roomLogToChatEntries,
   textFromBlocks,
   withTextContent,
 } from "./projection.js";
@@ -205,7 +204,7 @@ export {
 } from "./stores/manifests.js";
 export { useProjectsStore } from "./stores/projects.js";
 export { usePluginsStore } from "./stores/plugins.js";
-export { MAX_CACHED_ROOM_LOGS, useRoomsStore } from "./stores/rooms.js";
+export { useRoomsStore } from "./stores/rooms.js";
 export { type SessionProjection, useSessionsStore } from "./stores/sessions.js";
 export { useTasksStore } from "./stores/tasks.js";
 export { getVisibleNodes } from "./visible-nodes.js";

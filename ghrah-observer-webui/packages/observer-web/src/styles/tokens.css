@@ -9,6 +9,25 @@
  */
 @layer tokens {
   :root {
+    --agent-a1: #2e7d62;
+    --agent-a2: #a55b2c;
+    --agent-a3: #b03a2a;
+    --agent-a4: #886d21;
+    --agent-a5: #3f6c86;
+    --agent-a6: #a3425a;
+    --agent-a7: #63605a;
+    --agent-a8: #7c5a8f;
+    --row-tint-expanded: color-mix(in srgb, var(--color-surface-2) 55%, transparent);
+    --row-tint-hover: color-mix(in srgb, var(--color-surface-2) 70%, transparent);
+    --chain-think: var(--agent-a5);
+    --chain-read: var(--agent-a1);
+    --chain-write: var(--agent-a4);
+    --chain-converse: var(--agent-a2);
+    --chain-tool: var(--agent-a6);
+    --chain-spawn: var(--agent-a8);
+    --chain-compact: var(--agent-a7);
+    --chain-error: var(--color-danger);
+    --chain-unknown: var(--color-text-subtle);
     --font-scale: 1;
     --spacing-2: 0.5rem;
     --spacing-3: 0.75rem;
@@ -31,10 +50,6 @@
     --radius-chat-card: 0.875rem;
     --color-chat-input: #ffffff;
     --color-chat-input-border: #d2d2d2;
-    --color-chat-human: #dcf9e6;
-    --color-chat-human-text: #153d32;
-    --color-chat-agent: #eaf3ff;
-    --color-chat-agent-text: #172f55;
     --shadow-chat-composer: 0 0.25rem 1rem rgb(27 26 23 / 5%);
     --color-chrome: #f0ede4;
     --color-bg: #fcfaf4;
@@ -77,12 +92,18 @@
   }
 
   :root.dark {
+    --agent-a1: #8fb79c;
+    --agent-a2: #d2a879;
+    --agent-a3: #d98a7f;
+    --agent-a4: #d6c07a;
+    --agent-a5: #94a8b8;
+    --agent-a6: #c99aa8;
+    --agent-a7: #a9aeb6;
+    --agent-a8: #b6a6c9;
+    --row-tint-expanded: color-mix(in srgb, var(--color-surface-2) 36%, transparent);
+    --row-tint-hover: color-mix(in srgb, var(--color-surface-2) 60%, transparent);
     --color-chat-input: #1f2320;
     --color-chat-input-border: #3e443f;
-    --color-chat-human: #153c2c;
-    --color-chat-human-text: #d3f3df;
-    --color-chat-agent: #1c2e46;
-    --color-chat-agent-text: #dceaff;
     --shadow-chat-composer: 0 0.25rem 1rem rgb(0 0 0 / 15%);
     --color-chrome: #0a0d0c;
     --color-bg: #101312;

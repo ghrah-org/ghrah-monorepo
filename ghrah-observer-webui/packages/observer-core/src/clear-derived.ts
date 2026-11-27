@@ -31,7 +31,7 @@ export function clearRoomDerived(target: RoomTarget, removeRoom = true) {
   useChatStore().clearRoom(target);
   const rooms = useRoomsStore();
   if (removeRoom) rooms.clearRoom(target);
-  else rooms.clearRoomLog(target);
+  else rooms.clearRoomSelection(target);
 }
 
 export function clearProjectDerived(projectId: string) {

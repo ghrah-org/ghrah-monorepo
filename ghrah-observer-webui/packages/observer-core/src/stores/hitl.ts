@@ -16,6 +16,8 @@ export interface HitlRequest {
   toolArgs: Record<string, unknown>;
   context: Record<string, unknown>;
   reason: string;
+  turnId?: string | null;
+  deadline?: string | null;
   shellRemember?: HITLRequestPayload["shell_remember"];
 }
 
@@ -40,6 +42,8 @@ export const useHitlStore = defineStore("ghrah-hitl", () => {
       toolArgs: payload.tool_args,
       context: payload.context,
       reason: payload.reason ?? "",
+      ...(payload.turn_id ? { turnId: payload.turn_id } : {}),
+      ...(payload.deadline_at ? { deadline: payload.deadline_at } : {}),
       shellRemember: payload.shell_remember ?? null,
     });
     return true;
@@ -87,6 +91,8 @@ export const useHitlStore = defineStore("ghrah-hitl", () => {
           toolArgs: item.tool_call,
           context: next.get(item.promise_id)?.context ?? {},
           reason: item.reason,
+          turnId: item.turn_id,
+          ...(item.deadline_at ? { deadline: item.deadline_at } : {}),
           shellRemember: item.shell_remember ?? null,
         });
       }

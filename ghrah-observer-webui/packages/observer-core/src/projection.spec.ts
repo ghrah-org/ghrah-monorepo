@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ActionNode, RoomLogEntryPayload } from "@ghrah/protocol";
+import type { ActionNode } from "@ghrah/protocol";
 import { ActionNodeSchema } from "@ghrah/protocol";
 import { describe, expect, it } from "vitest";
-import { projectNodeToFileChanges, roomLogToChatEntries } from "./projection.js";
+import { contentBlocksFromData, projectNodeToFileChanges, withTextContent } from "./projection.js";
 
 function makeNode(overrides: Partial<ActionNode> = {}): ActionNode {
   return ActionNodeSchema.parse(overrides);
@@ -24,197 +24,14 @@ function actionResults(
   }));
 }
 
-describe("roomLogToChatEntries", () => {
-  function makeRoomEntry(overrides: Partial<RoomLogEntryPayload> = {}): RoomLogEntryPayload {
-    return {
-      id: "e1",
-      room_id: "r1",
-      seq: 3,
-      author: "agent-1",
-      author_type: "agent",
-      timestamp: 1750000000,
-      data: { message: "hi from room" },
-      ...overrides,
-    };
-  }
+describe("Room rich content", () => {
+  const image = { type: "image", base64: "aGk=", mime_type: "image/png" } as const;
 
-  it("agent entry → conversation with structured Project/Agent scope", () => {
-    const e = roomLogToChatEntries(makeRoomEntry(), { projectId: "p1", agentId: "a1" });
-    expect(e).toMatchObject({
-      from: "agent-1",
-      to: "r1",
-      content: "hi from room",
-      kind: "conversation",
-      nodeId: "e1",
-      childSeq: 3,
-      agentName: "agent-1",
-      projectId: "p1",
-      agentId: "a1",
-      roomId: "r1",
-    });
-    expect(e.timestamp).toBe(new Date(1750000000 * 1000).toISOString());
-  });
-
-  it("data.ability=end_task → end_task 条目（不再并入 conversation）", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({
-        data: { message: "全部完成", via: "message_manager", ability: "end_task" },
-      }),
-      { projectId: "p1", agentId: "a1" },
-    );
-    expect(e).toMatchObject({
-      kind: "end_task",
-      content: "全部完成",
-      from: "agent-1",
-      agentId: "a1",
-    });
-  });
-
-  it("data.ability 缺省或其他能力 → conversation", () => {
-    expect(roomLogToChatEntries(makeRoomEntry()).kind).toBe("conversation");
-    expect(
-      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", ability: "conversation" } })).kind,
-    ).toBe("conversation");
-    expect(
-      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", ability: "send" } })).kind,
-    ).toBe("conversation");
-  });
-
-  it("human entry 即使带 ability 也仍是 human_input", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({
-        author: "user",
-        author_type: "human",
-        data: { message: "m", ability: "end_task" },
-      }),
-    );
-    expect(e.kind).toBe("human_input");
-  });
-
-  it("human entry → human_input", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({ author: "user", author_type: "human", data: { message: "hello" } }),
-    );
-    expect(e.kind).toBe("human_input");
-    expect(e.from).toBe("user");
-    expect(e.agentName).toBe("");
-  });
-
-  it("data 缺 message 时 content 回退 JSON.stringify(data)", () => {
-    const e = roomLogToChatEntries(makeRoomEntry({ data: { foo: 1 } }));
-    expect(e.content).toBe(JSON.stringify({ foo: 1 }));
-  });
-
-  it("data.content_blocks → entry.blocks；纯块消息 content 不回退 JSON", () => {
-    const blocks = [
-      { type: "image", base64: "aGk=", mime_type: "image/png" },
-      { type: "text", text: "图纸" },
-    ];
-    const e = roomLogToChatEntries(
-      makeRoomEntry({ author: "user", author_type: "human", data: { content_blocks: blocks } }),
-    );
-    expect(e.blocks).toEqual(blocks);
-    expect(e.content).toBe("图纸");
-  });
-
-  it("纯图片块（无正文）content 为空字符串而不是 data 的 JSON", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({
-        author: "user",
-        author_type: "human",
-        data: { content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }] },
-      }),
-    );
-    expect(e.content).toBe("");
-    expect(e.blocks).toHaveLength(1);
-    expect(e.blocks?.[0]?.type).toBe("image");
-  });
-
-  it("data.content_blocks 含 video 块时保留 attachment_id 与 frames", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({
-        author: "user",
-        author_type: "human",
-        data: {
-          content_blocks: [
-            {
-              type: "video",
-              attachment_id: "att-v",
-              mime_type: "video/mp4",
-              filename: "clip.mp4",
-              duration_s: 5,
-              width: 640,
-              height: 360,
-              frames: [{ type: "image", base64: "RlJBTUU=", mime_type: "image/jpeg" }],
-            },
-          ],
-        },
-      }),
-    );
-    expect(e.content).toBe("");
-    expect(e.blocks).toHaveLength(1);
-    const block = e.blocks?.[0];
-    expect(block?.type).toBe("video");
-    if (block?.type === "video") {
-      expect(block.attachment_id).toBe("att-v");
-      expect(block.frames).toHaveLength(1);
-    }
-  });
-
-  it("正文与图片块并存时正文补成前置 text 块（不重复）", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({
-        author: "user",
-        author_type: "human",
-        data: {
-          message: "请识别这张图",
-          content_blocks: [{ type: "image", base64: "aGk=", mime_type: "image/png" }],
-        },
-      }),
-    );
-    expect(e.content).toBe("请识别这张图");
-    expect(e.blocks?.[0]).toEqual({ type: "text", text: "请识别这张图" });
-    expect(e.blocks).toHaveLength(2);
-  });
-
-  it("坏块逐个跳过：剩余合法块保留，全部坏则回退旧正文语义", () => {
-    const partial = roomLogToChatEntries(
-      makeRoomEntry({
-        data: {
-          content_blocks: [
-            { type: "image", base64: "aGk=", mime_type: "image/png" },
-            { type: "not-a-block" },
-          ],
-        },
-      }),
-    );
-    expect(partial.blocks).toHaveLength(1);
-
-    const broken = roomLogToChatEntries(
-      makeRoomEntry({ data: { content_blocks: [{ type: "nope" }] } }),
-    );
-    expect(broken.blocks).toBeUndefined();
-    expect(broken.content).toBe(JSON.stringify({ content_blocks: [{ type: "nope" }] }));
-  });
-
-  it("data.targets 为 string[] 时投影到 targets", () => {
-    const e = roomLogToChatEntries(
-      makeRoomEntry({ data: { message: "hi", targets: ["frontend", "backend"] } }),
-    );
-    expect(e.targets).toEqual(["frontend", "backend"]);
-  });
-
-  it("targets 缺省/空数组/非 string[] 时均为 undefined（广播）", () => {
-    expect(roomLogToChatEntries(makeRoomEntry()).targets).toBeUndefined();
-    expect(
-      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", targets: [] } })).targets,
-    ).toBeUndefined();
-    expect(
-      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", targets: "frontend" } })).targets,
-    ).toBeUndefined();
-    expect(
-      roomLogToChatEntries(makeRoomEntry({ data: { message: "m", targets: [1, 2] } })).targets,
-    ).toBeUndefined();
+  it("skips invalid blocks and preserves media alongside text", () => {
+    const blocks = contentBlocksFromData({ content_blocks: [{ type: "invalid" }, image] });
+    expect(blocks).toEqual([image]);
+    expect(withTextContent(blocks, "caption")).toEqual([{ type: "text", text: "caption" }, image]);
+    expect(withTextContent(blocks, "")).toEqual([image]);
   });
 });
 

@@ -86,7 +86,7 @@ async function approveFirst() {
       </div>
     </div>
 
-    <div v-if="expanded" id="hitl-bar-panel" class="hitl-bar-panel">
+    <div v-if="expanded" id="hitl-bar-panel" tabindex="-1" class="hitl-bar-panel">
       <HitlInbox />
     </div>
   </footer>

@@ -470,15 +470,19 @@ describe("connectStores", () => {
         event,
         makeMsg(event, { project_id: "p1", agent_id: "a1", ...payload }),
       );
-      expect(rooms.logs.get(roomId)).toEqual([]);
+      expect(useTranscriptStore().entriesOf({ projectId: "p1", roomId })).toEqual([]);
       await vi.advanceTimersByTimeAsync(150);
       expect(roomTranscript).toHaveBeenCalledExactlyOnceWith(
         "p1",
         roomId,
         expect.objectContaining({ sinceSeq: 0 }),
       );
-      expect(rooms.logs.get(roomId)?.map(({ id }) => id)).toEqual(["entry-1"]);
-      expect(rooms.logs.get("r3")).toEqual([]);
+      expect(
+        useTranscriptStore()
+          .entriesOf({ projectId: "p1", roomId })
+          .map(({ entry_id }) => entry_id),
+      ).toEqual(["entry-1"]);
+      expect(useTranscriptStore().entriesOf({ projectId: "foreign", roomId: "r3" })).toEqual([]);
     });
 
     it("pauses in-flight transcript reads on disconnect and reloads the tail on reconnect", async () => {
@@ -503,7 +507,11 @@ describe("connectStores", () => {
       pending.resolve(page([entry(2)], { ...roomIdentity, next_since_seq: 2 }));
       await vi.advanceTimersByTimeAsync(1000);
       expect(roomTranscript).toHaveBeenCalledTimes(2);
-      expect(rooms.logs.get("r1")?.map(({ id }) => id)).toEqual(["entry-1"]);
+      expect(
+        useTranscriptStore()
+          .entriesOf(roomTarget)
+          .map(({ entry_id }) => entry_id),
+      ).toEqual(["entry-1"]);
 
       internals(client)._notifyReconnected();
       await vi.advanceTimersByTimeAsync(0);
@@ -513,7 +521,11 @@ describe("connectStores", () => {
         expect.objectContaining({ limit: 50 }),
       );
       expect(roomTranscript.mock.calls[2][2]?.sinceSeq).toBeUndefined();
-      expect(rooms.logs.get("r1")?.map(({ id }) => id)).toEqual(["entry-3"]);
+      expect(
+        useTranscriptStore()
+          .entriesOf(roomTarget)
+          .map(({ entry_id }) => entry_id),
+      ).toEqual(["entry-3"]);
     });
 
     it("unbinds transcript events and invalidates late reads and receipts", async () => {
@@ -539,7 +551,7 @@ describe("connectStores", () => {
       pending.resolve(page([entry(2)], { ...roomIdentity, next_since_seq: 2 }));
       await refreshing;
       expect(useTranscriptStore().room(roomTarget)).toBeUndefined();
-      expect(useRoomsStore().logs.has("r1")).toBe(false);
+      expect(useTranscriptStore().has(roomTarget)).toBe(false);
 
       internals(client)._dispatch(
         EventType.TURN_OPENED,
@@ -586,7 +598,7 @@ describe("connectStores", () => {
       }
       rooms.setActiveRoom(target.roomId);
       await reader.loadInitial(target);
-      expect(rooms.logs.has(target.roomId)).toBe(true);
+      expect(useTranscriptStore().has(target)).toBe(true);
 
       if (path === "reconnect") {
         internals(client)._notifyReconnected();
@@ -606,7 +618,6 @@ describe("connectStores", () => {
       }
 
       expect(useTranscriptStore().room(target)).toBeUndefined();
-      expect(rooms.logs.has(target.roomId)).toBe(false);
       expect(rooms.rooms.has(target.roomId)).toBe(false);
       expect(rooms.activeRoomId).toBeNull();
       expect(chat.pendingOf(target)).toEqual([]);
@@ -628,7 +639,13 @@ describe("connectStores", () => {
       ]);
       store.onRoomCreated({ room: makeRoom("r1") as never });
       store.setActiveRoom("r1");
-      store.setRoomLog("r1", [makeLogEntry("r1") as never]);
+      const transcript = useTranscriptStore();
+      const target = { projectId: "p1", roomId: "r1" };
+      transcript.applyPage(
+        transcript.enterRoom(target),
+        page([entry(1)], { project_id: "p1", room_id: "r1" }),
+        "initial",
+      );
       chatStore.addPendingEntry({
         projectId: "p1",
         to: "r1",
@@ -644,7 +661,7 @@ describe("connectStores", () => {
 
       expect(store.activeRooms.has("r1")).toBe(false);
       expect(store.archivedRooms.has("r1")).toBe(true);
-      expect(store.logs.has("r1")).toBe(false);
+      expect(transcript.room(target)).toBeUndefined();
       expect(store.activeRoomId).toBeNull();
       expect(chatStore.allEntries).toHaveLength(0);
 
@@ -680,44 +697,6 @@ describe("connectStores", () => {
         }),
       );
       expect(store.rooms.get("r1")?.members).toHaveLength(0);
-    });
-
-    it("room_log_appended appends to rooms store and dedups replay", async () => {
-      await connectClient();
-      const store = useRoomsStore();
-
-      const msg = makeMsg(EventType.ROOM_LOG_APPENDED, { entry: makeLogEntry("r1") });
-      internals(client)._dispatch(EventType.ROOM_LOG_APPENDED, msg);
-      internals(client)._dispatch(EventType.ROOM_LOG_APPENDED, msg);
-
-      expect(store.logs.get("r1")).toHaveLength(1);
-    });
-
-    it("room_log_appended confirms matching human pending in chat store", async () => {
-      await connectClient();
-      const chatStore = useChatStore();
-      useRoomsStore().onRoomCreated({ room: makeRoom("r1") as never });
-      chatStore.addPendingEntry({
-        projectId: "p1",
-        to: "r1",
-        content: "hello",
-        agentName: "",
-        roomId: "r1",
-      });
-      expect(chatStore.allEntries).toHaveLength(1);
-
-      internals(client)._dispatch(
-        EventType.ROOM_LOG_APPENDED,
-        makeMsg(EventType.ROOM_LOG_APPENDED, {
-          entry: makeLogEntry("r1", {
-            author: "user",
-            author_type: "human",
-            data: { message: "hello" },
-          }),
-        }),
-      );
-
-      expect(chatStore.allEntries).toHaveLength(0);
     });
 
     it("action_chain_updated no longer feeds chat store", async () => {
@@ -1494,32 +1473,6 @@ describe("connectStores", () => {
       expect(changesStore.changes).toHaveLength(1);
     });
 
-    it("reconnect replay dedup: same ROOM_LOG_APPENDED entry dispatched twice = single log entry", async () => {
-      await connectClient();
-      const roomsStore = useRoomsStore();
-
-      const entry = {
-        id: "e1",
-        room_id: "r1",
-        seq: 1,
-        author: "agent-1",
-        author_type: "agent",
-        timestamp: 1750000000,
-        data: { message: "hi" },
-      };
-
-      internals(client)._dispatch(
-        EventType.ROOM_LOG_APPENDED,
-        makeMsg(EventType.ROOM_LOG_APPENDED, { entry }),
-      );
-      internals(client)._dispatch(
-        EventType.ROOM_LOG_APPENDED,
-        makeMsg(EventType.ROOM_LOG_APPENDED, { entry }),
-      );
-
-      expect(roomsStore.logs.get("r1")).toHaveLength(1);
-    });
-
     it("reconnect replay dedup across multiple agents: chain buckets both deduped", async () => {
       await connectClient();
       const chainStore = useActionChainsStore();
@@ -1666,17 +1619,13 @@ describe("connectStores", () => {
       roomsStore.replaceProjectRooms("p1", [room("r1", "p1", "active")], "active");
       roomsStore.replaceProjectRooms("p2", [room("r2", "p2", "active")], "active");
       roomsStore.replaceProjectRooms("p1", [room("ra", "p1", "archived")], "archived");
-      roomsStore.setRoomLog("r1", [
-        {
-          id: "e1",
-          room_id: "r1",
-          seq: 1,
-          author: "user",
-          author_type: "human",
-          timestamp: 1,
-          data: { message: "pending" },
-        },
-      ]);
+      const transcript = useTranscriptStore();
+      const target = { projectId: "p1", roomId: "r1" };
+      transcript.applyPage(
+        transcript.enterRoom(target),
+        page([entry(1)], { project_id: "p1", room_id: "r1" }),
+        "initial",
+      );
       useChatStore().addPendingEntry({
         projectId: "p1",
         to: "r1",
@@ -1701,7 +1650,7 @@ describe("connectStores", () => {
       expect(roomsStore.roomsForProject("p1", "active")).toHaveLength(0);
       expect(roomsStore.roomsForProject("p2", "active")).toHaveLength(1);
       expect(roomsStore.roomsForProject("p1", "archived")).toHaveLength(1);
-      expect(roomsStore.logs.has("r1")).toBe(false);
+      expect(transcript.room(target)).toBeUndefined();
       expect(useChatStore().allEntries).toHaveLength(0);
     });
 
@@ -2127,25 +2076,14 @@ describe("connectStores", () => {
     it("disconnect function stops event routing", async () => {
       await connectClient();
       const roomsStore = useRoomsStore();
-
       disconnect();
-
       internals(client)._dispatch(
-        EventType.ROOM_LOG_APPENDED,
-        makeMsg(EventType.ROOM_LOG_APPENDED, {
-          entry: {
-            id: "e1",
-            room_id: "r1",
-            seq: 1,
-            author: "agent-1",
-            author_type: "agent",
-            timestamp: 1750000000,
-            data: { message: "hi" },
-          },
+        EventType.ROOM_CREATED,
+        makeMsg(EventType.ROOM_CREATED, {
+          room: { room_id: "r1", project_id: "p1", name: "room" },
         }),
       );
-
-      expect(roomsStore.logs.size).toBe(0);
+      expect(roomsStore.rooms.has("r1")).toBe(false);
     });
   });
 
@@ -2218,50 +2156,6 @@ describe("connectStores", () => {
       };
     }
 
-    it("coalesces a burst of room_log_appended into one flush (order preserved)", async () => {
-      const manual = makeManualBatcher();
-      await connectClient({ batcher: manual.batcher });
-      const roomsStore = useRoomsStore();
-      roomsStore.replaceProjectRooms(
-        "p1",
-        [
-          {
-            room_id: "r1",
-            project_id: "p1",
-            name: "arch",
-            members: [],
-          } as never,
-        ],
-        "active",
-      );
-
-      for (let i = 1; i <= 20; i++) {
-        internals(client)._dispatch(
-          EventType.ROOM_LOG_APPENDED,
-          makeMsg(EventType.ROOM_LOG_APPENDED, {
-            entry: {
-              id: `e${i}`,
-              room_id: "r1",
-              seq: i,
-              author: "agent-1",
-              author_type: "agent",
-              timestamp: 1750000000 + i,
-              data: { message: `m${i}` },
-            },
-          }),
-        );
-      }
-      // 未 flush 前 store 不更新（合帧：一条不漏但只渲染一帧）
-      expect(roomsStore.logs.get("r1")).toBeUndefined();
-
-      manual.drain();
-
-      const log = roomsStore.logs.get("r1") ?? [];
-      expect(log).toHaveLength(20);
-      // FIFO 顺序保持（seq 递增）
-      expect(log.map((e) => e.seq)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
-    });
-
     it("coalesces action_chain_updated bursts per frame", async () => {
       const manual = makeManualBatcher();
       await connectClient({ batcher: manual.batcher });
@@ -2279,59 +2173,6 @@ describe("connectStores", () => {
       expect(chainsStore.getChain(chainTarget("agent-1"))).toHaveLength(0);
       manual.drain();
       expect(chainsStore.getChain(chainTarget("agent-1"))).toHaveLength(10);
-    });
-
-    it("unbind cancels pending batched events (no store writes after disconnect)", async () => {
-      const manual = makeManualBatcher();
-      await connectClient({ batcher: manual.batcher });
-      const roomsStore = useRoomsStore();
-
-      internals(client)._dispatch(
-        EventType.ROOM_LOG_APPENDED,
-        makeMsg(EventType.ROOM_LOG_APPENDED, {
-          entry: {
-            id: "e1",
-            room_id: "r1",
-            seq: 1,
-            author: "a",
-            author_type: "agent",
-            timestamp: 1750000000,
-            data: {},
-          },
-        }),
-      );
-      disconnect();
-      manual.drain();
-      expect(roomsStore.logs.size).toBe(0);
-    });
-
-    it("setRoomLog union-merges with entries already landed this frame", () => {
-      const roomsStore = useRoomsStore();
-      roomsStore.setRoomLog("r1", [
-        {
-          id: "e6",
-          room_id: "r1",
-          seq: 6,
-          author: "a",
-          author_type: "agent",
-          timestamp: 6,
-          data: {},
-        },
-      ]);
-      // get_log 回执只覆盖 1-5：并集保留已见 6
-      roomsStore.setRoomLog("r1", [
-        {
-          id: "e1",
-          room_id: "r1",
-          seq: 1,
-          author: "a",
-          author_type: "agent",
-          timestamp: 1,
-          data: {},
-        },
-      ]);
-      const log = roomsStore.logs.get("r1") ?? [];
-      expect(log.map((e) => e.seq)).toEqual([1, 6]);
     });
   });
 

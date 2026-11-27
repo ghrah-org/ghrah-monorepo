@@ -25,6 +25,7 @@ import {
 import { AgentSnapshotSchema, CommandType, EventType } from "../../protocol/dist/index.js";
 import {
   connectStores,
+  createTranscriptReader,
   ObserverClient,
   createAbilityControlClient,
   HttpClient,
@@ -37,6 +38,7 @@ import {
   useProjectsStore,
   useRoomsStore,
   useSessionsStore,
+  useTranscriptStore,
 } from "../dist/index.js";
 
 let failures = 0;
@@ -82,13 +84,15 @@ async function main() {
   const chat = useChatStore();
 
   const client = new ObserverClient(`ws://localhost:${server.port}/ws`);
-  const unbind = connectStores(client);
-  await client.connect();
-  check("client connected", client.connected);
   const http = createMockHttpServer({ port: 0, state });
   await http.start();
   const httpClient = new HttpClient({ baseUrl: `http://127.0.0.1:${http.port}` });
   const turnApi = new TurnApiClient(httpClient);
+  const reader = createTranscriptReader(turnApi);
+  const transcript = useTranscriptStore();
+  const unbind = connectStores(client, { transcriptReader: reader });
+  await client.connect();
+  check("client connected", client.connected);
 
   // ── 3. 初始同步：projects/rooms/agents ──
   const synced =
@@ -126,8 +130,10 @@ async function main() {
   // ── 5. room chat：历史拉取 + room_send → ROOM_LOG_APPENDED 闭环 + pending 确认 ──
   const arch = roomByName("architecture");
   rooms.setActiveRoom(arch.room_id);
+  const archTarget = { projectId: arch.project_id, roomId: arch.room_id };
+  await reader.loadInitial(archTarget);
   await waitFor("scenario kickoff broadcast into architecture log", () =>
-    (rooms.logs.get(arch.room_id) ?? []).some((e) => e.author_type === "human"),
+    transcript.entriesOf(archTarget).some((e) => e.author_type === "human"),
   );
   const roomHistory = await turnApi.roomTranscript(arch.project_id, arch.room_id);
   check(
@@ -135,7 +141,7 @@ async function main() {
     roomHistory.entries.some((entry) => entry.author_type === "human"),
   );
 
-  chat.addPendingEntry({
+  const pending = chat.addPendingEntry({
     projectId: demoProjectId,
     to: arch.room_id,
     content: "smoke hello",
@@ -147,16 +153,26 @@ async function main() {
     "room_send COMMAND_RESULT success + entry echoed",
     sendRes.success && !!sendRes.data?.entry,
   );
+  if (sendRes.success && sendRes.data?.entry?.id) {
+    const id = sendRes.data.entry.id;
+    chat.attachServerEntryId(
+      archTarget,
+      pending.clientSeq,
+      id,
+      transcript.entriesOf(archTarget).find((entry) => entry.entry_id === id),
+    );
+    await reader.refreshRoom(archTarget);
+  }
   const echoOk = await waitFor(
     "ROOM_LOG_APPENDED confirms pending entry",
     () =>
       !(chat.entries ?? []).some((e) => e.content === "smoke hello" && e.pending) &&
-      (rooms.logs.get(arch.room_id) ?? []).some((e) => e.data?.message === "smoke hello"),
+      transcript.entriesOf(archTarget).some((e) => e.content === "smoke hello"),
   );
   check("pending echo confirmed & entry in room log", echoOk);
 
   // ── 6. seq 单调 ──
-  const seqs = (rooms.logs.get(arch.room_id) ?? []).map((e) => e.seq);
+  const seqs = transcript.entriesOf(archTarget).map((e) => e.seq);
   check(
     "room log seq strictly increasing",
     seqs.every((s, i) => i === 0 || s > seqs[i - 1]),
@@ -180,12 +196,13 @@ async function main() {
     "invalid target rejected",
     !badTarget.success && /target not in room/.test(badTarget.error ?? ""),
   );
+  const frontend = roomByName("frontend");
+  const frontendTarget = { projectId: frontend.project_id, roomId: frontend.room_id };
+  await reader.loadInitial(frontendTarget);
   const scenarioTargeted = await waitFor("scenario targeted message in frontend room", () =>
-    (rooms.logs.get(roomByName("frontend")?.room_id) ?? []).some(
-      (e) => Array.isArray(e.data?.targets) && e.data.targets.includes(demoFrontendId),
-    ),
+    transcript.entriesOf(frontendTarget).some((entry) => entry.targets.includes(demoFrontendId)),
   );
-  check("scenario targeted entry visible in room log", scenarioTargeted);
+  check("scenario targeted entry visible in transcript", scenarioTargeted);
 
   // ── 6.6 Project-scoped Agent + Session/Branch v2 + 生命周期 ──
   const newProject = await client.createProject("smoke-project", {
@@ -450,8 +467,6 @@ async function main() {
   }
 
   // ── 9. 重连 seq resume：断开后同 client 重连，回放不重复 ──
-  const idsBefore = new Map();
-  for (const [rid, list] of rooms.logs) idsBefore.set(rid, new Set(list.map((e) => e.id)));
   const seqIdBefore = client.lastSeqId;
   await client.disconnect();
   await client.connect();
@@ -459,16 +474,16 @@ async function main() {
   check("reconnect succeeded", resumed && client.lastSeqId >= seqIdBefore);
   let dupes = 0;
   let allIncreasing = true;
-  for (const [rid, list] of rooms.logs) {
-    const before = idsBefore.get(rid) ?? new Set();
+  await reader.refreshRoom(archTarget);
+  await reader.refreshRoom(frontendTarget);
+  for (const { entries } of transcript.rooms.values()) {
     const seen = new Set();
     let prev = 0;
-    for (const e of list) {
-      if (seen.has(e.id)) dupes += 1;
-      seen.add(e.id);
-      if (e.seq <= prev) allIncreasing = false;
-      prev = e.seq;
-      before.delete(e.id);
+    for (const entry of entries) {
+      if (seen.has(entry.entry_id)) dupes += 1;
+      seen.add(entry.entry_id);
+      if (entry.seq <= prev) allIncreasing = false;
+      prev = entry.seq;
     }
   }
   check("no duplicate room log entries after resume", dupes === 0);

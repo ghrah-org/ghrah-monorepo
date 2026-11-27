@@ -65,7 +65,6 @@ import { useActionChainsStore } from "./stores/action-chains.js";
 import { type AgentListItem, useAgentsStore } from "./stores/agents.js";
 import { useBranchesStore } from "./stores/branches.js";
 import { useChangesStore } from "./stores/changes.js";
-import { useChatStore } from "./stores/chat.js";
 import { useConnectionStore } from "./stores/connection.js";
 import { useContextUsageStore } from "./stores/context-usage.js";
 import { useHitlStore } from "./stores/hitl.js";
@@ -108,7 +107,6 @@ export function connectStores(
   const sessions = useSessionsStore();
   const branches = useBranchesStore();
   const hitl = useHitlStore();
-  const chat = useChatStore();
   const changes = useChangesStore();
   const contextUsage = useContextUsageStore();
   const manifests = useManifestsStore();
@@ -495,18 +493,8 @@ export function connectStores(
   client.on(EventType.ROOM_LOG_APPENDED, (msg: ServerMessage) => {
     const payload = msg.payload as RoomLogEventPayload;
     if (!payload.entry) return;
-    if (transcript) {
-      const room = rooms.activeRooms.get(payload.entry.room_id);
-      if (room) transcript.invalidate({ projectId: room.project_id, roomId: room.room_id });
-      return;
-    }
-    batcher.add(() => {
-      const room =
-        rooms.activeRooms.get(payload.entry.room_id) ??
-        rooms.archivedRooms.get(payload.entry.room_id);
-      rooms.onRoomLogAppended(payload);
-      if (room) chat.onRoomLogAppended(payload.entry, room.project_id);
-    });
+    const room = rooms.activeRooms.get(payload.entry.room_id);
+    if (room) transcript?.invalidate({ projectId: room.project_id, roomId: room.room_id });
   });
 
   const ordinaryProjectEvent = (msg: ServerMessage) => {
