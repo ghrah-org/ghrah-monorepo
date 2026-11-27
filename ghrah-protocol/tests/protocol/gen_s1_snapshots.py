@@ -30,10 +30,6 @@ from ghrah.protocol.types import (
     MaterialStateRegisterPayload,
     MaterialStateResultPayload,
     MaterialStateSyncPayload,
-    PageChangedPayload,
-    PageGetPayload,
-    PagePayload,
-    PageStateResultPayload,
     PluginCrashedPayload,
     PluginLifecyclePayload,
     PluginNegotiatedPayload,
@@ -218,21 +214,6 @@ SAMPLES: dict[str, object] = {
         data_schema={"type": "object", "properties": {"quantity": {"type": "integer"}}},
     ),
     "MaterialStateSyncPayload": MaterialStateSyncPayload(project_id="project-1", room_id="room-1"),
-    "PageGetPayload": PageGetPayload(project_id="project-1"),
-    "PageStateResultPayload_empty": PageStateResultPayload(),
-    "PageStateResultPayload_ready": PageStateResultPayload(
-        page=PagePayload(
-            project_id="project-1",
-            page_id="main",
-            title="需求核对",
-            html="<section>ok</section>",
-            data={"quantity": 24},
-            revision=1,
-            updated_at="2026-11-27T00:00:00Z",
-            updated_by="agent-1",
-        )
-    ),
-    "PageChangedPayload": PageChangedPayload(project_id="project-1", page_id="main", revision=2),
     "MaterialStateResultPayload_empty": MaterialStateResultPayload(),
     "MaterialStateResultPayload_applied": MaterialStateResultPayload.model_validate(
         {

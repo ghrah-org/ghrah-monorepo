@@ -85,7 +85,6 @@ async def test_full_assembly_all_fibers_active(
             "room_control",
             "turn_control",
             "material_state",
-            "page",
             "recovery",
             "room_filter",
         }

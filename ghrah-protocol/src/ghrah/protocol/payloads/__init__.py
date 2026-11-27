@@ -78,12 +78,6 @@ from ghrah.protocol.payloads.material import (  # noqa: F401
     MaterialStateResultPayload,
     MaterialStateSyncPayload,
 )
-from ghrah.protocol.payloads.page import (  # noqa: F401
-    PageChangedPayload,
-    PageGetPayload,
-    PagePayload,
-    PageStateResultPayload,
-)
 from ghrah.protocol.payloads.persist import (  # noqa: F401
     PersistDeletePayload,
     PersistListPayload,
@@ -251,10 +245,6 @@ __all__ = [
     "MaterialStateRegisterPayload",
     "MaterialStateResultPayload",
     "MaterialStateSyncPayload",
-    "PageChangedPayload",
-    "PageGetPayload",
-    "PagePayload",
-    "PageStateResultPayload",
     "AgentIdentity",
     "AgentSnapshot",
     "AgentRuntimeSnapshot",

@@ -117,11 +117,6 @@ class ProjectPaths:
         return self.db_dir / "material-state.sqlite3"
 
     @property
-    def page_db_path(self) -> Path:
-        """工作台动态页面当前值（单页 main）。"""
-        return self.db_dir / "pages.sqlite3"
-
-    @property
     def action_chain_db_path(self) -> Path:
         return self.db_dir / "action-chains.sqlite3"
 

@@ -72,13 +72,6 @@ _PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS: dict[str, frozenset[str]] = {
     ),
 }
 
-WORKBENCH_PAGE_INSTANCE_ID = "workbench-page"
-
-_WORKBENCH_PAGE_HOST_COMMAND_GRANTS: dict[str, frozenset[str]] = {
-    # 外置包 workbench.page 的成员只允许写工作台页面状态。
-    WORKBENCH_PAGE_INSTANCE_ID: frozenset({"page_set", "page_patch"}),
-}
-
 logger = logging.getLogger(__name__)
 
 _INTERNAL_CMD_CTX = CommandContext.internal()
@@ -664,10 +657,7 @@ def default_core_unit_factory(
             ability_filesystem_roots=config.ability.filesystem_roots,
             mcp=config.mcp,
             llm_factory=llm_factory,
-            host_command_grants={
-                **_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
-                **_WORKBENCH_PAGE_HOST_COMMAND_GRANTS,
-            },
+            host_command_grants=_PROJECT_AGENT_MANAGE_HOST_COMMAND_GRANTS,
             # 启动授权策略：把 manifest 声明的能力包转成授权事实。
             ability_grant_policy=config.ability_grant_policy,
             # Room 投影器：房间状态归 Subject，Core 只回调。
