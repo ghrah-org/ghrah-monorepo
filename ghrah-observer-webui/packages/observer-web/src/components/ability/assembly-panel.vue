@@ -96,6 +96,11 @@ function retry(agentId: string) {
   void admin.load(props.projectId, agentId);
 }
 
+/** 详情删除成功后清空选中；列表本身由 project_agent_removed 事件推进。 */
+function onDeleted() {
+  selectedId.value = "";
+}
+
 function show() {
   if (shown) return;
   shown = true;
@@ -209,7 +214,12 @@ onUnmounted(hide);
         <p v-if="!selectedId" class="assembly-state assembly-state-empty">
           {{ t("assembly.selectAgent") }}
         </p>
-        <AssemblyDetail v-else :project-id="projectId" :agent-id="selectedId" />
+        <AssemblyDetail
+          v-else
+          :project-id="projectId"
+          :agent-id="selectedId"
+          @deleted="onDeleted"
+        />
       </div>
     </div>
   </section>

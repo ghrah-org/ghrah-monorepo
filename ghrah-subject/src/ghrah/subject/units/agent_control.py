@@ -55,6 +55,7 @@ _VERSION_GOT = re.compile(r"got (\d+)")
 
 _COMMAND_STATUS: dict[str, tuple[str, int]] = {
     "agent_name_exists": ("agent_name_exists", 409),
+    "agent_busy": ("agent_busy", 409),
     "agent_not_found": ("not_found", 404),
     "project_not_active": ("project_not_active", 409),
     "agent_terminate_failed": ("agent_terminate_failed", 503),
