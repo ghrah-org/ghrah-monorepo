@@ -54,7 +54,6 @@ TAGS = [
 ]
 EFFECTS = ["filesystem:write"]
 TIMEOUT_MS = 60_000
-AXES = {"visible": True, "bind": False}
 # --- 成员声明结束
 
 logger = logging.getLogger(__name__)
