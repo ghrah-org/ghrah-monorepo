@@ -4,11 +4,13 @@
 
 import { demoScenario } from "./demo-4agent-4room.js";
 import { pluginsScenario } from "./plugins.js";
+import { turnControlScenario } from "./turn-control.js";
 import type { Scenario } from "./types.js";
 
 const REGISTRY = new Map<string, Scenario>([
   [demoScenario.name, demoScenario],
   [pluginsScenario.name, pluginsScenario],
+  [turnControlScenario.name, turnControlScenario],
 ]);
 
 export function getScenario(name: string): Scenario {
@@ -25,5 +27,6 @@ export function listScenarios(): Scenario[] {
 
 export { demoScenario } from "./demo-4agent-4room.js";
 export { pluginsScenario } from "./plugins.js";
+export { turnControlScenario } from "./turn-control.js";
 export type { Scenario, ScenarioContext, TimelineAction, TimelineEntry } from "./types.js";
 export { runScenario } from "./types.js";
