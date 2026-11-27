@@ -40,7 +40,7 @@ const packages = useAbilityPackagesStore();
 const agents = useAgentsStore();
 const projects = useProjectsStore();
 const connection = useConnectionStore();
-const { abortTurn, error: observerError } = useObserver();
+const { turnAbort, error: observerError } = useObserver();
 const { t } = useI18n();
 const tabs = ["overview", "grants", "tools", "versions", "changes"] as const;
 const tab = ref<(typeof tabs)[number]>("overview");
@@ -257,7 +257,7 @@ async function abort(): Promise<void> {
   pendingAction.value = "abort";
   notice.value = null;
   try {
-    const result = await abortTurn(agentTarget.value);
+    const result = await turnAbort(agentTarget.value);
     if (result === null) {
       notice.value = {
         kind: "error",
