@@ -184,7 +184,7 @@ export class ObserverClient extends ServerClient {
    * 服务端按 Agent 级寻址取当前活动轮次；带 `turn_id`/`session_id` 时收窄目标。
    * 没有活动轮次回 `turn_not_found`，Agent 不在线回 `agent_offline`。
    */
-  async abortTurn(
+  async turnAbort(
     target: AgentTarget,
     options: { turnId?: string; sessionId?: string; reason?: string } = {},
   ): Promise<CommandResultPayload> {
@@ -199,6 +199,42 @@ export class ObserverClient extends ServerClient {
     if (options.reason) payload["reason"] = options.reason;
     const msg: ServerMessage = {
       type: CommandType.TURN_ABORT,
+      payload,
+      request_id: generateRequestId(),
+      client_type: ClientType.OBSERVER,
+    };
+    return this.request(msg, 30_000);
+  }
+
+  /**
+   * 回滚一个已结束的轮次到 base 或指定节点。
+   *
+   * `target` 默认 `base`；`target=node` 时 `nodeId` 必填，否则本地拒绝，
+   * 不把非法组合发给服务端。`already_applied=true` 是成功回执（幂等重放）。
+   */
+  async turnRollback(
+    target: AgentTarget,
+    options: { turnId: string; target?: "base" | "node"; nodeId?: string | null },
+  ): Promise<CommandResultPayload> {
+    const rollbackTarget = options.target ?? "base";
+    const nodeId = options.nodeId ?? null;
+    if (!options.turnId) {
+      throw new Error("turnRollback: turnId 不能为空");
+    }
+    if (rollbackTarget === "node" && !nodeId) {
+      throw new Error("turnRollback: target=node 时 nodeId 必填");
+    }
+    // 走 wire 契约 TurnRollbackPayload（extra=forbid）：target 与 node_id 必须配对，
+    // target=base 时 node_id 只能是 null。
+    const payload: Record<string, unknown> = {
+      project_id: target.projectId,
+      agent_id: target.agentId,
+      turn_id: options.turnId,
+      target: rollbackTarget,
+      node_id: rollbackTarget === "node" ? nodeId : null,
+    };
+    const msg: ServerMessage = {
+      type: CommandType.TURN_ROLLBACK,
       payload,
       request_id: generateRequestId(),
       client_type: ClientType.OBSERVER,

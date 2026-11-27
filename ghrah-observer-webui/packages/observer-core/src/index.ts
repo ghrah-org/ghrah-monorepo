@@ -120,7 +120,12 @@ export {
   type ProjectApiMode,
   resolveProjectApiMode,
 } from "./project-api.js";
-export { TurnApiClient, type TranscriptPageOptions, type TurnListOptions } from "./turn-api.js";
+export {
+  TurnApiClient,
+  type RollbackPreviewOptions,
+  type TranscriptPageOptions,
+  type TurnListOptions,
+} from "./turn-api.js";
 export { createTranscriptReader, type TranscriptReader } from "./transcript-reader.js";
 export { humanStateOf, isAnchor, projectExchanges, type Exchange } from "./exchanges.js";
 export {

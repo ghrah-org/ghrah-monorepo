@@ -170,11 +170,11 @@ describe("ObserverClient", () => {
     });
   });
 
-  describe("abortTurn", () => {
+  describe("turnAbort", () => {
     it("sends turn_abort with the stable agent target", async () => {
       await connectClient(client, mockWs);
 
-      const abortPromise = client.abortTurn(AGENT_TARGET, { reason: "user request" });
+      const abortPromise = client.turnAbort(AGENT_TARGET, { reason: "user request" });
       const parsed = JSON.parse(mockWs.sent[0]);
 
       expect(parsed.type).toBe(CommandType.TURN_ABORT);
@@ -206,13 +206,102 @@ describe("ObserverClient", () => {
     it("leaves optional turn and session ids out when absent", async () => {
       await connectClient(client, mockWs);
 
-      void client.abortTurn(AGENT_TARGET);
+      void client.turnAbort(AGENT_TARGET);
       const parsed = JSON.parse(mockWs.sent[0]);
 
       expect(parsed.payload).toEqual({
         project_id: "p1",
         agent_id: "a1",
       });
+    });
+  });
+
+  describe("turnRollback", () => {
+    it("sends turn_rollback with the default base target", async () => {
+      await connectClient(client, mockWs);
+
+      const rollbackPromise = client.turnRollback(AGENT_TARGET, { turnId: "turn-1" });
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.type).toBe(CommandType.TURN_ROLLBACK);
+      // TurnRollbackPayload 是 extra=forbid：字段集合固定，target=base 时 node_id 为 null。
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+        turn_id: "turn-1",
+        target: "base",
+        node_id: null,
+      });
+      expect(parsed.payload).not.toHaveProperty("agent_name");
+
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          payload: {
+            request_id: parsed.request_id,
+            success: true,
+            data: { turn_id: "turn-1", status: "rolled_back", already_applied: false },
+          },
+          request_id: parsed.request_id,
+        }),
+      });
+
+      const result = await rollbackPromise;
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({
+        turn_id: "turn-1",
+        status: "rolled_back",
+        already_applied: false,
+      });
+    });
+
+    it("sends node_id when rolling back to a node", async () => {
+      await connectClient(client, mockWs);
+
+      void client.turnRollback(AGENT_TARGET, { turnId: "turn-1", target: "node", nodeId: "n1" });
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+        turn_id: "turn-1",
+        target: "node",
+        node_id: "n1",
+      });
+    });
+
+    it("rejects target=node without nodeId before sending", async () => {
+      await connectClient(client, mockWs);
+
+      await expect(
+        client.turnRollback(AGENT_TARGET, { turnId: "turn-1", target: "node" }),
+      ).rejects.toThrow(/nodeId/);
+      await expect(
+        client.turnRollback(AGENT_TARGET, { turnId: "", target: "base" }),
+      ).rejects.toThrow(/turnId/);
+      expect(mockWs.sent).toHaveLength(0);
+    });
+
+    it("passes a failure receipt through unchanged", async () => {
+      await connectClient(client, mockWs);
+
+      const rollbackPromise = client.turnRollback(AGENT_TARGET, { turnId: "turn-1" });
+      const parsed = JSON.parse(mockWs.sent[0]);
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          payload: {
+            request_id: parsed.request_id,
+            success: false,
+            error: "turn_active",
+          },
+          request_id: parsed.request_id,
+        }),
+      });
+
+      const result = await rollbackPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("turn_active");
     });
   });
 
