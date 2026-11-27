@@ -15,7 +15,7 @@ members:
   ability_type: kernel
   axes:
     visible: true
-    bind: true
+    bind: false
   data:
     title: Delete File
     description: Delete a file at the specified path. This operation is irreversible.
@@ -67,7 +67,7 @@ members:
   ability_type: kernel
   axes:
     visible: true
-    bind: true
+    bind: false
   data:
     title: Edit File
     description: Edit a file by replacing a unique string. The old_str must appear exactly once in the file.
@@ -244,7 +244,7 @@ members:
   ability_type: kernel
   axes:
     visible: true
-    bind: true
+    bind: false
   data:
     title: Move File
     description: Move or rename a file. Supports cross-directory moves. The source and destination paths are both subject to permission checks.
@@ -498,7 +498,7 @@ members:
   ability_type: kernel
   axes:
     visible: true
-    bind: true
+    bind: false
   data:
     title: Write File
     description: Write content to a file. Creates the file and parent directories if they do not exist. Overwrites existing content.

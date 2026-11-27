@@ -49,7 +49,7 @@ except Exception as exc:
 
 payload = {}
 for name in ("TITLE", "SUMMARY", "TAGS", "PERMISSIONS", "EFFECTS",
-             "TIMEOUT_MS", "RESOURCES", "EXPOSE"):
+             "TIMEOUT_MS", "RESOURCES", "EXPOSE", "AXES"):
     payload[name] = getattr(module, name, None)
 
 def model_schema(attr):
@@ -104,6 +104,7 @@ class Declaration:
     timeout_ms: int
     resources: dict[str, Any]
     expose: bool
+    axes: dict[str, bool] | None
     input_schema: dict[str, Any] | None
     output_schema: dict[str, Any] | None
 
@@ -188,6 +189,13 @@ def _validate(name: str, raw: dict[str, Any], *, lenient: bool = False) -> Decla
         expose = True
     if not isinstance(expose, bool):
         raise DeclarationError(f"{name}: EXPOSE 必须是 bool")
+    axes = raw.get("AXES")
+    if axes is not None:
+        if not isinstance(axes, dict) or set(axes) - {"visible", "bind"}:
+            raise DeclarationError(f"{name}: AXES 只允许 visible/bind 两个布尔键")
+        if not all(isinstance(value, bool) for value in axes.values()):
+            raise DeclarationError(f"{name}: AXES 的值必须是 bool")
+        axes = {"visible": axes.get("visible", True), "bind": axes.get("bind", True)}
     if raw.get("INPUT_SCHEMA") is None:
         raise DeclarationError(f"{name}: 缺少 Input 模型（input_schema 无来源）")
     return Declaration(
@@ -199,6 +207,7 @@ def _validate(name: str, raw: dict[str, Any], *, lenient: bool = False) -> Decla
         timeout_ms=raw["TIMEOUT_MS"],
         resources=resources,
         expose=expose,
+        axes=axes,
         input_schema=raw["INPUT_SCHEMA"],
         output_schema=raw["OUTPUT_SCHEMA"],
     )

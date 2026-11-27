@@ -506,6 +506,7 @@ def _operation_member(key: str, script: Path, *, lenient: bool = False) -> dict[
             "retry": "never",
         },
         "expose": decl.expose,
+        "axes": decl.axes,
     }
 
 
@@ -545,6 +546,7 @@ def _render_with_header(
             raise BuildError(f"operations/{key}.py: 保留名（生成期拒绝一次，表面投影再拒绝一次）")
         operations[key] = _operation_member(key, op_files[key], lenient=lenient)
     skills: dict[str, Any] = {}
+    axes_by_key = {key: member.pop("axes", None) for key, member in operations.items()}
     for name in sorted(skill_files):
         skills[name] = _skill_member(name, skill_files[name], tolerant=lenient)
     if not operations and not skills:
@@ -558,10 +560,13 @@ def _render_with_header(
     except ManifestValidationError as exc:
         raise BuildError(f"生成的索引未通过解析器自检: {exc}") from exc
     kernel = builtin and header["identity"]["namespace"] == "ghrah"
-    wire_members = [
-        member.to_wire()
-        for member in definition.to_members(ability_type="kernel" if kernel else "external")
-    ]
+    wire_members = []
+    for member in definition.to_members(ability_type="kernel" if kernel else "external"):
+        wire = member.to_wire()
+        axes = axes_by_key.get(wire["member"].rsplit(".", 1)[-1])
+        if axes is not None:
+            wire["axes"] = dict(axes)
+        wire_members.append(wire)
     document["members"] = wire_members
     rendered = yaml.safe_dump(
         document, allow_unicode=True, sort_keys=False, default_flow_style=False, width=4096
