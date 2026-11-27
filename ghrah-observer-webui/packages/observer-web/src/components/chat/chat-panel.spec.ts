@@ -4,16 +4,21 @@
 
 // @vitest-environment happy-dom
 
-import { useChatStore, useConnectionStore, useRoomsStore } from "@ghrah/observer-core";
-import type { RoomInfoPayload, RoomLogEntryPayload } from "@ghrah/protocol";
+import {
+  useChatStore,
+  useConnectionStore,
+  useRoomsStore,
+  useTranscriptStore,
+} from "@ghrah/observer-core";
+import type { RoomInfoPayload, TranscriptDeliveryView, TranscriptEntryView } from "@ghrah/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const roomSendMock = vi.fn();
-const getRoomLogMock = vi.fn();
+const refreshRoomMock = vi.fn();
 vi.mock("@/composables/useObserver", () => ({
-  useObserver: () => ({ roomSend: roomSendMock, getRoomLog: getRoomLogMock }),
+  useObserver: () => ({ roomSend: roomSendMock, refreshRoom: refreshRoomMock }),
 }));
 
 import ChatPanel from "./chat-panel.vue";
@@ -44,16 +49,45 @@ function logEntry(
   author: string,
   authorType: "agent" | "human",
   message: string,
-  data: Record<string, unknown> = {},
-): RoomLogEntryPayload {
+  data: {
+    targets?: string[];
+    ability?: string;
+    content_blocks?: TranscriptEntryView["content_blocks"];
+    deliveries?: Partial<TranscriptDeliveryView>[];
+  } = {},
+): TranscriptEntryView {
   return {
-    id: `${roomId}-${seq}`,
-    room_id: roomId,
+    entry_id: `${roomId}-${seq}`,
     seq,
     author,
     author_type: authorType,
     timestamp: 1767225600,
-    data: { message, ...data },
+    content: message,
+    message_id: null,
+    targets: data.targets ?? [],
+    ability: data.ability ?? null,
+    content_blocks: data.content_blocks ?? null,
+    deliveries: (data.deliveries ?? []).map((delivery) => ({
+      delivery_id: "d",
+      message_id: "m",
+      recipient_id: "agent-1",
+      state: "processing",
+      error: null,
+      blocked_reason: null,
+      turn_id: null,
+      delivery_policy: "queue",
+      display_state: "processing",
+      queue_position: 0,
+      queue_reason: null,
+      cancelable: false,
+      injection_step: null,
+      ...delivery,
+    })),
+    turn_id: null,
+    insert_before_turn_id: null,
+    injection_step: null,
+    node_id: null,
+    human_state: data.deliveries?.some((d) => d.state === "failed") ? "failed" : null,
   };
 }
 
@@ -64,6 +98,37 @@ function setup() {
   const connection = useConnectionStore();
   connection.setConnected();
   return { rooms, chat, connection };
+}
+
+function applyTranscript(roomId: string, entries: TranscriptEntryView[], incremental = false) {
+  const target = { projectId: "p1", roomId };
+  const transcript = useTranscriptStore();
+  const state = transcript.enterRoom(target);
+  const seq = entries.at(-1)?.seq ?? 0;
+  transcript.applyPage(
+    state,
+    {
+      project_id: target.projectId,
+      room_id: roomId,
+      entries,
+      turns: [],
+      next_before_seq: null,
+      next_since_seq: seq,
+      latest_seq: seq,
+      has_more: false,
+      read_at: "",
+    },
+    incremental ? "incremental" : "initial",
+  );
+  for (const entry of entries) useChatStore().onTranscriptEntry(target, entry);
+}
+
+function publishTranscriptEntry(
+  seq: number,
+  content: string,
+  overrides: Partial<TranscriptEntryView> = {},
+) {
+  applyTranscript("r1", [{ ...logEntry("r1", seq, "user", "human", content), ...overrides }], true);
 }
 
 function mountPanel(roomId = "r1") {
@@ -106,7 +171,7 @@ describe("ChatPanel", () => {
   it("会话头一行展示成员数、消息数与连接状态", async () => {
     const { rooms } = setup();
     rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend"])], "active");
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".room-header-title").text()).toBe("arch");
@@ -119,7 +184,7 @@ describe("ChatPanel", () => {
   it("详情抽屉展示诊断与成员，Esc 关闭", async () => {
     const { rooms } = setup();
     rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend"])], "active");
-    rooms.setRoomLog("r1", [
+    applyTranscript("r1", [
       logEntry("r1", 1, "user", "human", "question", {
         deliveries: [
           { delivery_id: "d1", recipient_id: "frontend", state: "failed", error: "boom" },
@@ -140,40 +205,46 @@ describe("ChatPanel", () => {
   });
 
   it("renders entries of the target room only", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "architect", "agent", "hello from agent"),
       logEntry("r1", 2, "user", "human", "hello from human"),
     ]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const entries = wrapper.findAll(".chat-entry");
+    const entries = wrapper.findAll("[data-room-item]");
     expect(entries).toHaveLength(2);
-    expect(entries[0].classes()).toContain("entry-conversation");
+    expect(entries[0].classes()).toContain("entry-agent");
     expect(entries[0].text()).toContain("hello from agent");
-    expect(entries[1].classes()).toContain("entry-human");
+    expect(entries[1].classes()).toContain("entry-human--right");
     expect(entries[1].text()).toContain("hello from human");
   });
 
-  it("end_task 结果投影为结束态条目并渲染（不再被当成普通会话）", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
-      logEntry("r1", 1, "architect", "agent", "开始梳理", { ability: "conversation" }),
-      logEntry("r1", 2, "architect", "agent", "梳理完成", { ability: "end_task" }),
-    ]);
+  it("transcript 的 end_task 经镜像保留旧页面结束标记", async () => {
+    setup();
+    publishTranscriptEntry(1, "开始梳理", {
+      author: "architect",
+      author_type: "agent",
+      ability: "conversation",
+    });
+    publishTranscriptEntry(2, "梳理完成", {
+      author: "architect",
+      author_type: "agent",
+      ability: "end_task",
+    });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const entries = wrapper.findAll(".chat-entry");
+    const entries = wrapper.findAll("[data-room-item]");
     expect(entries).toHaveLength(2);
-    expect(entries[0].classes()).toContain("entry-conversation");
-    expect(entries[1].classes()).toContain("entry-endtask");
+    expect(entries[0].classes()).toContain("entry-agent");
+    expect(entries[1].attributes("data-ability")).toBe("end_task");
     expect(entries[1].text()).toContain("梳理完成");
-    expect(entries[1].find(".entry-header").text()).toContain("✓");
+    expect(entries[1].find(".entry-meta").text()).toContain("Final reply");
   });
 
   it("merges pending entries of the target room only", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     chat.addPendingEntry({
       projectId: "p1",
       to: "r1",
@@ -190,52 +261,60 @@ describe("ChatPanel", () => {
     });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const entries = wrapper.findAll(".chat-entry");
+    const entries = wrapper.findAll("[data-room-item]");
     expect(entries).toHaveLength(2);
     expect(wrapper.text()).toContain("history");
     expect(wrapper.text()).toContain("pending-r1");
     expect(wrapper.text()).not.toContain("pending-r2");
-    expect(entries[1].classes()).toContain("entry-pending");
+    expect(entries[1].attributes("data-pending")).toBeDefined();
   });
 
   it("handleSend calls roomSend and adds pending entry", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     await wrapper.find("textarea").setValue("hello room");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "hello room", [], []);
-    const pending = chat.allEntries.find((e) => e.content === "hello room");
+    const pending = chat
+      .pendingOf({ projectId: "p1", roomId: "r1" })
+      .find((e) => e.content === "hello room");
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      pending?.clientSeq,
+      "hello room",
+      [],
+      [],
+    );
     expect(pending?.roomId).toBe("r1");
     expect(pending?.pending).toBe(true);
   });
 
   it("pending entry is removed when echo arrives and history shows instead", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    publishTranscriptEntry(1, "history", { author: "architect", author_type: "agent" });
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     await wrapper.find("textarea").setValue("echo me");
     await wrapper.find("form").trigger("submit");
     expect(wrapper.text()).toContain("echo me");
-    // 模拟 bind 的 ROOM_LOG_APPENDED 分发：rooms 追加 + chat echo 确认
-    const echo = logEntry("r1", 2, "user", "human", "echo me");
-    rooms.onRoomLogAppended({ entry: echo });
-    chat.onRoomLogAppended(echo, "p1");
+    const target = { projectId: "p1", roomId: "r1" };
+    const [pending] = chat.pendingOf(target);
+    chat.attachServerEntryId(target, pending.clientSeq, "r1-2");
+    publishTranscriptEntry(2, "echo me");
     await wrapper.vm.$nextTick();
     expect(chat.allEntries.find((e) => e.content === "echo me")).toBeUndefined();
-    const entries = wrapper.findAll(".chat-entry");
+    const entries = wrapper.findAll("[data-room-item]");
     expect(entries).toHaveLength(2);
-    expect(entries[1].classes()).toContain("entry-human");
-    expect(entries[1].classes()).not.toContain("entry-pending");
+    expect(entries[1].classes()).toContain("entry-human--right");
+    expect(entries[1].attributes("data-pending")).toBeUndefined();
   });
 
   it("marks pending error when roomSend returns null", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce(null);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
@@ -248,13 +327,13 @@ describe("ChatPanel", () => {
     expect(e?.error).toContain("Send failed");
     expect(e?.roomId).toBe("r1");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".entry-error").exists()).toBe(true);
+    expect(wrapper.find(".send-error").exists()).toBe(true);
   });
 
   it("targeted send: 目标下拉选择后 roomSend 携带非空 targets", async () => {
     const { rooms } = setup();
     rooms.replaceProjectRooms("p1", [room("r1", "arch", ["frontend", "backend"])], "active");
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
@@ -264,19 +343,25 @@ describe("ChatPanel", () => {
     await options[1].find('input[type="checkbox"]').trigger("change");
     await wrapper.find("textarea").setValue("please review");
     await wrapper.find("form").trigger("submit");
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "please review", ["frontend", "backend"], []);
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      expect.any(Number),
+      "please review",
+      ["frontend", "backend"],
+      [],
+    );
   });
 
   it("entry 带 targets 时 header 显示定向标记", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "architect", "agent", "targeted msg", { targets: ["frontend"] }),
       logEntry("r1", 2, "architect", "agent", "broadcast msg"),
     ]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const headers = wrapper.findAll(".entry-header");
-    expect(headers[0].text()).toContain("→ @frontend");
+    const headers = wrapper.findAll("[data-room-item]");
+    expect(headers[0].text()).toContain("@frontend");
     expect(headers[1].text()).not.toContain("→");
   });
 
@@ -287,7 +372,7 @@ describe("ChatPanel", () => {
       [room("r1", "arch", ["447c4313e38242fb8e173bcb68e183ea", "b2a1"])],
       "active",
     );
-    rooms.setRoomLog("r1", [
+    applyTranscript("r1", [
       logEntry("r1", 1, "447c4313e38242fb8e173bcb68e183ea", "agent", "reply", {
         targets: ["b2a1"],
       }),
@@ -297,15 +382,15 @@ describe("ChatPanel", () => {
     ]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const headers = wrapper.findAll(".entry-header");
-    expect(headers[0].text()).toBe("@Name-447c4313e38242fb8e173bcb68e183ea → @Name-b2a1");
-    expect(headers[1].text()).toContain("→ @Name-447c4313e38242fb8e173bcb68e183ea");
+    const headers = wrapper.findAll("[data-room-item]");
+    expect(headers[0].text()).toContain("@Name-b2a1");
+    expect(headers[1].text()).toContain("@Name-447c4313e38242fb8e173bcb68e183ea");
     expect(headers[1].text()).not.toContain("@447c4313e38242fb8e173bcb68e183ea→");
   });
 
   it("does not send when input is empty", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     await wrapper.find("form").trigger("submit");
@@ -313,18 +398,18 @@ describe("ChatPanel", () => {
   });
 
   it("无块回退分支走 Markdown 渲染", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "**bold** log entry")]);
+    setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "**bold** log entry")]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    const body = wrapper.find(".chat-entry .markdown-body");
+    const body = wrapper.find("[data-room-item] .markdown-body");
     expect(body.exists()).toBe(true);
     expect(body.html()).toContain("<strong>bold</strong>");
   });
 
   it("贴底时新消息自动滚底，上翻时不打断", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "first")]);
+    setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "first")]);
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
     const container = wrapper.find(".flex-1.overflow-y-auto");
@@ -334,7 +419,7 @@ describe("ChatPanel", () => {
     // 贴底视口：追加消息 → sticky 生效，scrollToBottom 落到 scrollHeight
     mockViewport(el, 1000, 200, 800);
     await container.trigger("scroll");
-    rooms.onRoomLogAppended({ entry: logEntry("r1", 2, "architect", "agent", "second") });
+    applyTranscript("r1", [logEntry("r1", 2, "architect", "agent", "second")], true);
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
     expect(el.scrollTop).toBe(1000);
@@ -342,7 +427,7 @@ describe("ChatPanel", () => {
     // 上翻浏览历史：追加消息 → 位置不被强制滚底
     mockViewport(el, 2000, 200, 300);
     await container.trigger("scroll");
-    rooms.onRoomLogAppended({ entry: logEntry("r1", 3, "architect", "agent", "third") });
+    applyTranscript("r1", [logEntry("r1", 3, "architect", "agent", "third")], true);
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
     expect(el.scrollTop).toBe(300);
@@ -350,8 +435,8 @@ describe("ChatPanel", () => {
   });
 
   it("发送图片：roomSend 携带 blocks，pending 立即渲染图片", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    applyTranscript("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
     roomSendMock.mockResolvedValueOnce({ success: true });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
@@ -362,19 +447,25 @@ describe("ChatPanel", () => {
     await vi.waitFor(() => expect(wrapper.find(".attachment-chip").exists()).toBe(true));
     await wrapper.find("form").trigger("submit");
     const blocks = [{ type: "image", base64: "AQID", mime_type: "image/png" }];
-    expect(roomSendMock).toHaveBeenCalledWith("r1", "", [], blocks);
+    expect(roomSendMock).toHaveBeenCalledWith(
+      { projectId: "p1", roomId: "r1" },
+      expect.any(Number),
+      "",
+      [],
+      blocks,
+    );
     const pending = chat.allEntries.find((entry) => entry.pending);
     expect(pending?.blocks).toEqual(blocks);
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".chat-entry img").exists()).toBe(true);
+    expect(wrapper.find("[data-room-item] img").exists()).toBe(true);
   });
 
   it("旧核未回显图片时给出块丢失提示", async () => {
-    const { rooms, chat } = setup();
-    rooms.setRoomLog("r1", [logEntry("r1", 1, "architect", "agent", "history")]);
+    const { chat } = setup();
+    publishTranscriptEntry(1, "history", { author: "architect", author_type: "agent" });
     const wrapper = mountPanel("r1");
     await wrapper.vm.$nextTick();
-    chat.addPendingEntry({
+    const pending = chat.addPendingEntry({
       projectId: "p1",
       to: "r1",
       content: "",
@@ -383,16 +474,15 @@ describe("ChatPanel", () => {
       blocks: [{ type: "image", base64: "AQID", mime_type: "image/png" }],
     });
     await wrapper.vm.$nextTick();
-    const echo = logEntry("r1", 2, "user", "human", "");
-    rooms.onRoomLogAppended({ entry: echo });
-    chat.onRoomLogAppended(echo, "p1");
+    chat.attachServerEntryId({ projectId: "p1", roomId: "r1" }, pending.clientSeq, "r1-2");
+    publishTranscriptEntry(2, "");
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("did not echo the attached media");
   });
 
   it("渲染 video 块：attachment_id → <video src=附件 URL> + 封面帧", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "user", "human", "", {
         content_blocks: [
           {
@@ -418,8 +508,8 @@ describe("ChatPanel", () => {
   });
 
   it("video 块缺 attachment_id/url 时回退封面帧并明确提示", async () => {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "user", "human", "", {
         content_blocks: [
           {
@@ -445,8 +535,8 @@ describe("ChatPanel", () => {
 it("shows authoritative delivery failure", async () => {
   vi.useFakeTimers();
   try {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "user", "human", "question", {
         deliveries: [
           {
@@ -459,8 +549,7 @@ it("shows authoritative delivery failure", async () => {
       }),
     ]);
     const w = mountPanel();
-    // 投递状态不再出现在消息流里，而是收进详情抽屉的“诊断”分组
-    expect(w.text()).not.toContain("model_configuration_invalid");
+    expect(w.get(".human-state").text()).toContain("model_configuration_invalid");
     const open = w.findAll("button").find((button) => button.text() === "Details");
     expect(open).toBeTruthy();
     await open!.trigger("click");
@@ -472,23 +561,33 @@ it("shows authoritative delivery failure", async () => {
   }
 });
 
-it("refreshes pending delivery status and stops polling after unmount", async () => {
+it("refreshes the scoped Room from the drawer and surfaces errors without component polling", async () => {
   vi.useFakeTimers();
-  getRoomLogMock.mockClear().mockResolvedValue({ success: true });
+  refreshRoomMock.mockReset().mockRejectedValueOnce(new Error("transcript unavailable"));
   try {
-    const { rooms } = setup();
-    rooms.setRoomLog("r1", [
+    setup();
+    applyTranscript("r1", [
       logEntry("r1", 1, "user", "human", "question", {
         deliveries: [{ delivery_id: "d", recipient_id: "a", state: "processing" }],
       }),
     ]);
     const w = mountPanel();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(getRoomLogMock).toHaveBeenCalledOnce();
-    expect(getRoomLogMock).toHaveBeenCalledWith("r1");
+    expect(refreshRoomMock).not.toHaveBeenCalled();
+    await w
+      .findAll("button")
+      .find((button) => button.text() === "Details")!
+      .trigger("click");
+    await w
+      .findAll("button")
+      .find((button) => button.text() === "Refresh delivery status")!
+      .trigger("click");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRoomMock).toHaveBeenCalledWith({ projectId: "p1", roomId: "r1" });
+    expect(w.text()).toContain("transcript unavailable");
     w.unmount();
     await vi.advanceTimersByTimeAsync(6000);
-    expect(getRoomLogMock).toHaveBeenCalledOnce();
+    expect(refreshRoomMock).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
   }

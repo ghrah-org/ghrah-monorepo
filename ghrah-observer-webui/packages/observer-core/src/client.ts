@@ -178,6 +178,34 @@ export class ObserverClient extends ServerClient {
     return this.request(msg, 30_000);
   }
 
+  /**
+   * 中断一个正在进行的轮次。
+   *
+   * 服务端按 Agent 级寻址取当前活动轮次；带 `turn_id`/`session_id` 时收窄目标。
+   * 没有活动轮次回 `turn_not_found`，Agent 不在线回 `agent_offline`。
+   */
+  async abortTurn(
+    target: AgentTarget,
+    options: { turnId?: string; sessionId?: string; reason?: string } = {},
+  ): Promise<CommandResultPayload> {
+    // wire 契约是 TurnAbortPayload（extra="forbid"）：只带稳定寻址键，
+    // agent_name 不在协议里；多带会被 Subject 以 invalid_abort_request 拒绝。
+    const payload: Record<string, unknown> = {
+      project_id: target.projectId,
+      agent_id: target.agentId,
+    };
+    if (options.turnId) payload["turn_id"] = options.turnId;
+    if (options.sessionId) payload["session_id"] = options.sessionId;
+    if (options.reason) payload["reason"] = options.reason;
+    const msg: ServerMessage = {
+      type: CommandType.TURN_ABORT,
+      payload,
+      request_id: generateRequestId(),
+      client_type: ClientType.OBSERVER,
+    };
+    return this.request(msg, 30_000);
+  }
+
   async agentCompactContext(target: AgentTarget): Promise<CommandResultPayload> {
     const msg: ServerMessage = {
       type: CommandType.AGENT_COMPACT_CONTEXT,
@@ -850,24 +878,6 @@ export class ObserverClient extends ServerClient {
     const msg: ServerMessage = {
       type: CommandType.ROOM_GET_MEMBERS,
       payload: { room_id: roomId },
-      request_id: generateRequestId(),
-      client_type: ClientType.OBSERVER,
-    };
-    return this.request(msg, 30_000);
-  }
-
-  async getRoomLog(
-    roomId: string,
-    sinceSeq?: number | null,
-    limit?: number,
-  ): Promise<CommandResultPayload> {
-    const payload: Record<string, unknown> = { room_id: roomId };
-    if (sinceSeq != null) payload["since_seq"] = sinceSeq;
-    if (limit != null) payload["limit"] = limit;
-
-    const msg: ServerMessage = {
-      type: CommandType.ROOM_GET_LOG,
-      payload,
       request_id: generateRequestId(),
       client_type: ClientType.OBSERVER,
     };

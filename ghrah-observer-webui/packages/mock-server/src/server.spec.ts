@@ -440,7 +440,7 @@ describe("mock-server 协议层", () => {
     }
   }, 10_000);
 
-  it("初始同步形态：list_agents / room_list / project_list / room_get_log 与 bind.ts 消费端一致", async () => {
+  it("返回初始同步列表和兼容的 Room 历史回执", async () => {
     const client = await makeClient();
     try {
       const { projectId, roomId } = await setupProjectRoom(client, "sync");
@@ -484,7 +484,7 @@ describe("mock-server 协议层", () => {
       expect(Array.isArray(projectList)).toBe(true);
       expect(projectList[0].name).toBe("p-sync");
 
-      // ROOM_GET_LOG → data.entries: RoomLogEntryPayload[]（bind 从 data.room_id 或 entry.room_id 取）
+      // ROOM_GET_LOG → data.entries: RoomLogEntryPayload[]
       const log = await request(client, CommandType.ROOM_GET_LOG, { room_id: roomId });
       const logData = log.data as { room_id: string; entries: RoomLogEntryPayload[] };
       expect(logData.room_id).toBe(roomId);

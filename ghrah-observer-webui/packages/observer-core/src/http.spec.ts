@@ -78,6 +78,15 @@ describe("HttpClient", () => {
     expect(reject).toHaveBeenCalledTimes(1);
   });
 
+  it("detaches the shared abort listener after a settled read", async () => {
+    const signal = { aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(jsonResponse({}));
+    const client = new HttpClient({ baseUrl: "http://localhost", fetchImpl });
+    await client.get("/api/v1/x", { signal });
+    expect(signal.removeEventListener.mock.calls).toEqual(signal.addEventListener.mock.calls);
+    expect(signal.removeEventListener).toHaveBeenCalledOnce();
+  });
+
   it("reports a timeout as an unavailable HttpError", async () => {
     const fetchImpl = vi.fn<HttpFetch>(
       (_url, init) =>

@@ -170,6 +170,52 @@ describe("ObserverClient", () => {
     });
   });
 
+  describe("abortTurn", () => {
+    it("sends turn_abort with the stable agent target", async () => {
+      await connectClient(client, mockWs);
+
+      const abortPromise = client.abortTurn(AGENT_TARGET, { reason: "user request" });
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.type).toBe(CommandType.TURN_ABORT);
+      // TurnAbortPayload 是 extra=forbid：只允许 project_id/agent_id 与可选定位键。
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+        reason: "user request",
+      });
+      expect(parsed.payload).not.toHaveProperty("agent_name");
+
+      mockWs.onmessage!({
+        data: JSON.stringify({
+          type: "command_result",
+          payload: {
+            request_id: parsed.request_id,
+            success: true,
+            data: { aborted: true, already_terminal: false },
+          },
+          request_id: parsed.request_id,
+        }),
+      });
+
+      const result = await abortPromise;
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ aborted: true, already_terminal: false });
+    });
+
+    it("leaves optional turn and session ids out when absent", async () => {
+      await connectClient(client, mockWs);
+
+      void client.abortTurn(AGENT_TARGET);
+      const parsed = JSON.parse(mockWs.sent[0]);
+
+      expect(parsed.payload).toEqual({
+        project_id: "p1",
+        agent_id: "a1",
+      });
+    });
+  });
+
   describe("sendMessage", () => {
     it("builds correct send_message payload", async () => {
       await connectClient(client, mockWs);
@@ -669,13 +715,6 @@ describe("ObserverClient", () => {
       const parsed = await runRequest(client.getRoomMembers("r1"));
       expect(parsed.type).toBe(CommandType.ROOM_GET_MEMBERS);
       expect(parsed.payload).toEqual({ room_id: "r1" });
-    });
-
-    it("getRoomLog sends room_get_log with since_seq/limit", async () => {
-      await connectClient(client, mockWs);
-      const parsed = await runRequest(client.getRoomLog("r1", 5, 50));
-      expect(parsed.type).toBe(CommandType.ROOM_GET_LOG);
-      expect(parsed.payload).toEqual({ room_id: "r1", since_seq: 5, limit: 50 });
     });
 
     it("roomSend sends room_send with data map and default human author", async () => {

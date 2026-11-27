@@ -379,7 +379,7 @@ test("拖宽时锁定纵向阅读位置", async ({ page }) => {
     page.evaluate(() => {
       const el = document.querySelector(".chat-conversation") as HTMLElement;
       const containerTop = el.getBoundingClientRect().top;
-      const entries = [...el.querySelectorAll(".chat-entry")] as HTMLElement[];
+      const entries = [...el.querySelectorAll("[data-room-item]")] as HTMLElement[];
       const firstVisible = entries.find(
         (entry) => entry.getBoundingClientRect().bottom > containerTop,
       );
@@ -439,4 +439,21 @@ test("拖宽时锁定纵向阅读位置", async ({ page }) => {
   await page.waitForTimeout(120);
   const bottomAfter = await readState();
   expect(bottomAfter.max - bottomAfter.scrollTop).toBeLessThan(2);
+});
+
+test("Room 轮次卡默认密度与展开位置", async ({ page }) => {
+  await openProject(page);
+  await page.locator(".room-list-row", { hasText: "backend" }).click();
+  const card = page.locator('.turn-card[data-turn-id$=":closed"]');
+  await expect(card).toBeVisible();
+  await expect(card.locator(".tc-foot")).toHaveCount(0);
+  const toggle = card.locator(".tc-toggle");
+  await toggle.scrollIntoViewIfNeeded();
+  const top = (await card.boundingBox())!.y;
+  await toggle.click();
+  await expect(card.locator(".tc-foot")).toBeVisible();
+  expect(Math.abs((await card.boundingBox())!.y - top)).toBeLessThanOrEqual(1);
+  const waiting = page.locator('.turn-card[data-status="waiting_hitl"]');
+  await expect(waiting).toHaveAttribute("data-expanded", "true");
+  await expect(waiting.locator(".tc-wait")).toHaveAttribute("data-reply-kind", "object");
 });

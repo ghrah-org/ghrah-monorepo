@@ -5,17 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <script setup lang="ts">
-import type { ChatBlock, ChatEntry } from "@ghrah/observer-core";
+import type { ChatBlock } from "@ghrah/observer-core";
 import {
-  attachmentUrl,
-  isVideoBlock,
-  roomLogToChatEntries,
   useAgentsStore,
   useChatStore,
   useConnectionStore,
   useRoomsStore,
+  useTranscriptStore,
 } from "@ghrah/observer-core";
-import type { ContentBlock } from "@ghrah/protocol";
 import { computed, nextTick, onScopeDispose, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
@@ -27,11 +24,11 @@ import {
   previewConversationWidth,
   setConversationWidth,
 } from "@/composables/useConversationWidth";
-import { useMarkdown } from "@/composables/useMarkdown";
 import { useObserver } from "@/composables/useObserver";
 import { useRoomMemberLabel } from "@/composables/useRoomMemberLabel";
 import { useTabScrollRestore } from "@/composables/useTabScrollRestore";
 import { useWorkspaceColumns } from "@/composables/useWorkspaceColumns";
+import RoomConversation from "@/components/room/room-conversation.vue";
 import ConversationResizer from "./conversation-resizer.vue";
 import MessageInput from "./message-input.vue";
 import RoomDetailDrawer, { type DeliveryDiagnostic } from "./room-detail-drawer.vue";
@@ -49,33 +46,26 @@ const emit = defineEmits<{
 const chat = useChatStore();
 const agents = useAgentsStore();
 const rooms = useRoomsStore();
+const transcript = useTranscriptStore();
 const connection = useConnectionStore();
-const { roomSend, getRoomLog } = useObserver();
+const { roomSend, refreshRoom } = useObserver();
 const refreshing = ref(false);
 const deliveryError = ref("");
 async function refreshDeliveries() {
   if (refreshing.value || connection.state !== "connected") return;
+  const target = { projectId: props.projectId, roomId: props.roomId };
   refreshing.value = true;
   deliveryError.value = "";
   try {
-    const result = await getRoomLog(props.roomId);
-    if (result && !result.success) deliveryError.value = result.error ?? t("agentEntity.failed");
+    await refreshRoom(target);
   } catch (error) {
-    deliveryError.value = String(error);
+    if (props.projectId === target.projectId && props.roomId === target.roomId) {
+      deliveryError.value = String(error);
+    }
   } finally {
     refreshing.value = false;
   }
 }
-const deliveryTimer = setInterval(() => {
-  if (
-    roomEntries.value.some((e) =>
-      e.deliveries?.some((d) => ["pending", "processing"].includes(d.state)),
-    )
-  )
-    void refreshDeliveries();
-}, 3000);
-onScopeDispose(() => clearInterval(deliveryTimer));
-const { render: renderMarkdown } = useMarkdown();
 const { t } = useI18n();
 const memberLabel = useRoomMemberLabel();
 
@@ -136,31 +126,15 @@ const sticky = ref(true);
 
 const room = computed(() => rooms.rooms.get(props.roomId) ?? null);
 
-/** 该 room 历史（room log 投影） + 本 room 的 pending/error 乐观层，按序合并。 */
-const roomEntries = computed<ChatEntry[]>(() => {
-  const projectId = props.projectId;
-  const roomId = props.roomId;
-  if (!projectId || !roomId) return [];
-  const projectAgents = agents.agentsForProject(projectId);
-  const history = [...(rooms.logs.get(roomId) ?? [])]
-    .sort((a, b) => a.seq - b.seq)
-    .map((entry) => {
-      const agentId =
-        entry.author_type === "agent"
-          ? projectAgents.find(
-              (agent) => agent.agentId === entry.author || agent.agentName === entry.author,
-            )?.agentId
-          : undefined;
-      return roomLogToChatEntries(entry, { projectId, agentId });
-    });
-  const pending = chat.allEntries.filter(
-    (e) =>
-      (e.pending === true || e.error !== undefined) &&
-      e.projectId === projectId &&
-      e.roomId === roomId,
-  );
-  return [...history, ...pending];
-});
+const roomEntries = computed(() => transcript.entriesOf(props));
+const outgoingCount = computed(
+  () =>
+    chat.entries.filter(
+      (entry) => entry.projectId === props.projectId && entry.roomId === props.roomId,
+    ).length,
+);
+const messageCount = computed(() => roomEntries.value.length + outgoingCount.value);
+const turnCount = computed(() => transcript.room(props)?.turns.size ?? 0);
 
 const canChat = computed(() => room.value !== null && connection.state === "connected");
 
@@ -192,7 +166,7 @@ const roomMeta = computed(() => {
   if (!current) return "";
   return t("chat.meta", {
     members: current.members.length,
-    messages: roomEntries.value.length,
+    messages: messageCount.value,
     state: t(`app.status.${connection.state}`),
   });
 });
@@ -204,23 +178,27 @@ async function handleSend(targets: string[], content: string, blocks: ChatBlock[
   if (!roomId || !projectId || !currentRoom) return;
   if (!content && blocks.length === 0) return;
   const target = { projectId, roomId };
-  const mediaBlockCount = blocks.filter((block) => block.type !== "text").length;
   chat.clearBlockLoss(roomId);
-  chat.addPendingEntry({ projectId, to: roomId, content, agentName: "", roomId, targets, blocks });
-  roomSend(roomId, content, targets, blocks)
+  const pending = chat.addPendingEntry({
+    ...target,
+    to: roomId,
+    content,
+    agentName: "",
+    targets,
+    blocks,
+  });
+  roomSend(target, pending.clientSeq, content, targets, blocks)
     .then((r) => {
       if (r === null)
-        chat.markPendingError(target, content, t("chat.sendFailedDisconnected"), mediaBlockCount);
-      else if (!r.success)
-        chat.markPendingError(target, content, r.error ?? t("agentEntity.failed"), mediaBlockCount);
-      else void refreshDeliveries();
+        chat.markPendingErrorBySeq(target, pending.clientSeq, t("chat.sendFailedDisconnected"));
+      else if (r && !r.success)
+        chat.markPendingErrorBySeq(target, pending.clientSeq, r.error ?? t("agentEntity.failed"));
     })
     .catch((e) =>
-      chat.markPendingError(
+      chat.markPendingErrorBySeq(
         target,
-        content,
+        pending.clientSeq,
         t("chat.sendFailed", { msg: String(e ?? "") }),
-        mediaBlockCount,
       ),
     );
   sticky.value = true;
@@ -244,7 +222,7 @@ function isNearBottom(): boolean {
 
 // sticky 用户切回落新底；上翻用户切回回原位置，LRU 补拉瞬态靠 pending 重试
 const { onScroll } = useTabScrollRestore(messageContainer, {
-  contentKey: computed(() => roomEntries.value.length),
+  contentKey: messageCount,
   target: () => (sticky.value ? "bottom" : null),
 });
 
@@ -258,7 +236,7 @@ function handleScroll(): void {
 
 function firstVisibleEntry(el: HTMLElement): { node: HTMLElement; offset: number } | null {
   const containerTop = el.getBoundingClientRect().top;
-  for (const node of el.querySelectorAll<HTMLElement>(".chat-entry")) {
+  for (const node of el.querySelectorAll<HTMLElement>("[data-room-item]")) {
     const rect = node.getBoundingClientRect();
     if (rect.bottom > containerTop) return { node, offset: rect.top - containerTop };
   }
@@ -309,27 +287,9 @@ function resetWidth(): void {
 }
 
 // 贴底时新消息才自动跟随滚底；上翻浏览历史不被打断
-watch(roomEntries, () => {
+watch([messageCount, turnCount], () => {
   if (sticky.value) nextTick(() => scrollToBottom());
 });
-
-function entryClass(entry: ChatEntry): string {
-  if (entry.error) return "entry-error";
-  switch (entry.kind) {
-    case "human_input":
-      return "entry-human";
-    case "conversation":
-      return "entry-conversation";
-    case "send_message":
-      return "entry-send";
-    case "broadcast":
-      return "entry-broadcast";
-    case "end_task":
-      return "entry-endtask";
-    default:
-      return "entry-conversation";
-  }
-}
 
 /** 成员 ID → 显示名（subject_name / agents store / room 成员表回退原始值）。 */
 function displayName(id: string): string {
@@ -341,63 +301,6 @@ function displayName(id: string): string {
     agents.agentsForProject(projectId).find((a) => a.agentId === id || a.agentName === id)
       ?.agentName ?? id
   );
-}
-
-function entryHeader(entry: ChatEntry): string {
-  const targetSuffix =
-    entry.targets && entry.targets.length > 0
-      ? ` → ${entry.targets.map((t) => `@${displayName(t)}`).join(" ")}`
-      : "";
-  switch (entry.kind) {
-    case "human_input":
-      return `${t("chat.header.you")}${targetSuffix}`;
-    case "conversation":
-      return `@${displayName(entry.from)}${targetSuffix}`;
-    case "send_message":
-      return `@${displayName(entry.from)} → @${displayName(entry.to)}`;
-    case "broadcast":
-      return `@${displayName(entry.from)} → @${t("chat.header.all")}`;
-    case "end_task":
-      return `✓ @${displayName(entry.from)}`;
-    default:
-      return `@${displayName(entry.from)}`;
-  }
-}
-
-function imgSrc(block: Extract<ContentBlock, { type: "image" }>): string {
-  if (block.url) return block.url;
-  if (block.base64) return `data:${block.mime_type ?? "image/png"};base64,${block.base64}`;
-  return "";
-}
-
-function audioSrc(block: Extract<ContentBlock, { type: "audio" }>): string {
-  return `data:${block.mime_type};base64,${block.data}`;
-}
-
-function fileHref(block: Extract<ContentBlock, { type: "file" }>): string {
-  if (block.url) return block.url;
-  if (block.base64)
-    return `data:${block.mime_type ?? "application/octet-stream"};base64,${block.base64}`;
-  return "";
-}
-
-function fileLabel(block: Extract<ContentBlock, { type: "file" }>): string {
-  return block.filename ?? "file";
-}
-
-function isText(block: ChatBlock): block is Extract<ContentBlock, { type: "text" }> {
-  return block.type === "text";
-}
-
-function videoPoster(block: Extract<ChatBlock, { type: "video" }>): string {
-  const frame = block.frames?.[0];
-  if (!frame?.base64) return "";
-  return `data:${frame.mime_type ?? "image/jpeg"};base64,${frame.base64}`;
-}
-
-function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
-  if (block.attachment_id) return attachmentUrl(props.projectId, block.attachment_id);
-  return block.url ?? "";
 }
 </script>
 
@@ -427,110 +330,13 @@ function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
       {{ t("chat.selectRoom") }}
     </div>
 
-    <div
-      v-else-if="roomEntries.length === 0"
-      class="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-600 text-sm"
-    >
-      {{ t("chat.empty") }}
-    </div>
-
     <div v-else ref="conversationArea" class="relative flex min-h-0 flex-1 flex-col">
       <div
         ref="messageContainer"
-        class="chat-conversation flex-1 overflow-y-auto px-3 py-4 space-y-3"
+        class="chat-conversation flex-1 overflow-y-auto px-3 py-4"
         @scroll.passive="handleScroll"
       >
-        <div
-          v-for="entry in roomEntries"
-          :key="`${entry.nodeId}-${entry.childSeq}`"
-          :class="['chat-entry', entryClass(entry), { 'entry-pending': entry.pending }]"
-        >
-          <div class="entry-header">{{ entryHeader(entry) }}</div>
-
-          <div v-if="entry.error" class="block-error">
-            <span class="text-sm text-red-600 dark:text-red-400">{{ entry.error }}</span>
-          </div>
-
-          <!-- 富块渲染 -->
-          <template v-else-if="entry.blocks && entry.blocks.length > 0">
-            <div
-              v-for="(block, j) in entry.blocks"
-              :key="j"
-              :class="['entry-block', `block-${block.type}`]"
-            >
-              <div v-if="isText(block)" class="markdown-body" v-html="renderMarkdown(block.text)" />
-              <details v-else-if="block.type === 'reasoning'" class="block-reasoning">
-                <summary class="text-xs italic text-gray-500 dark:text-gray-400">
-                  {{ t("chat.reasoning") }}{{ block.incomplete ? "…" : "" }}
-                </summary>
-                <pre class="text-xs whitespace-pre-wrap">{{ block.reasoning }}</pre>
-              </details>
-              <img
-                v-else-if="block.type === 'image'"
-                :src="imgSrc(block)"
-                alt="image"
-                class="max-w-full rounded"
-              />
-              <audio
-                v-else-if="block.type === 'audio'"
-                :src="audioSrc(block)"
-                controls
-                class="w-full"
-              />
-              <a
-                v-else-if="block.type === 'file'"
-                :href="fileHref(block)"
-                :download="fileLabel(block)"
-                class="text-xs text-blue-600 dark:text-blue-400 underline"
-              >
-                📎 {{ fileLabel(block) }}
-              </a>
-              <template v-else-if="isVideoBlock(block)">
-                <video
-                  v-if="videoSrc(block)"
-                  :src="videoSrc(block)"
-                  :poster="videoPoster(block) || undefined"
-                  controls
-                  preload="metadata"
-                  class="max-w-full rounded"
-                />
-                <div v-else class="block-video-fallback">
-                  <img
-                    v-if="videoPoster(block)"
-                    :src="videoPoster(block)"
-                    :alt="block.filename ?? t('chat.video')"
-                    class="max-w-full rounded"
-                  />
-                  <span class="block-video-error">
-                    {{ t("chat.videoUnavailable", { name: block.filename ?? t("chat.video") }) }}
-                  </span>
-                </div>
-              </template>
-              <details v-else-if="block.type === 'tool_call'" class="block-tool">
-                <summary class="text-xs">🔧 {{ block.name }}</summary>
-                <pre class="text-xs whitespace-pre-wrap">{{ block.arguments }}</pre>
-              </details>
-              <details v-else-if="block.type === 'tool_result'" class="block-tool">
-                <summary :class="['text-xs', block.success ? 'text-green-600' : 'text-red-600']">
-                  ↳ {{ block.name ?? block.tool_call_id
-                  }}{{ block.success ? "" : t("chat.failed") }}
-                </summary>
-                <pre class="text-xs whitespace-pre-wrap">{{ block.content }}</pre>
-                <pre v-if="block.error" class="text-xs text-red-500 whitespace-pre-wrap">{{
-                  block.error
-                }}</pre>
-              </details>
-              <div v-else-if="block.type === 'error'" class="block-error">
-                <span class="text-xs text-red-600 dark:text-red-400"
-                  >{{ block.error_type }}: {{ block.message }}</span
-                >
-              </div>
-            </div>
-          </template>
-
-          <!-- 无块：纯 content（与富块 text 同走 Markdown 渲染） -->
-          <div v-else class="markdown-body" v-html="renderMarkdown(entry.content)" />
-        </div>
+        <RoomConversation :key="room.room_id" :room-id="roomId" :project-id="projectId" />
       </div>
 
       <!-- 左右各一只手柄；窄屏列宽本就该占满，不放手柄以免诱导用户把自己拖窄。 -->
@@ -595,6 +401,10 @@ function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
  * 显式锚定第一条可见消息，避免两套锚定互相打架。
  */
 .chat-conversation {
+  display: flex;
+  flex-direction: column;
+  inline-size: 100%;
+  margin-inline: auto;
   max-width: min(var(--width-conversation), calc(100% - 3rem));
   overflow-anchor: none;
   scrollbar-width: thin;
@@ -633,218 +443,12 @@ function videoSrc(block: Extract<ChatBlock, { type: "video" }>): string {
   text-overflow: ellipsis;
 }
 
-.chat-entry {
-  font-size: var(--font-ui-body);
-  line-height: var(--leading-body);
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius-md);
-  max-width: 95%;
-  word-break: break-word;
-}
-
-.entry-human {
-  background: var(--color-chat-human);
-  color: var(--color-chat-human-text);
-  max-width: 90%;
-  align-self: flex-end;
-  margin-left: auto;
-}
-
-.entry-conversation {
-  background: var(--color-chat-agent);
-  color: var(--color-chat-agent-text);
-  align-self: flex-start;
-}
-
-.entry-send {
-  background: #f3f4f6;
-  color: #4b5563;
-  align-self: flex-start;
-  margin-left: 2rem;
-  border-left: 2px solid #9ca3af;
-}
-:root.dark .entry-send {
-  background: #1f2937;
-  color: #9ca3af;
-}
-
-.entry-broadcast {
-  background: #fef3c7;
-  color: #92400e;
-  align-self: center;
-  margin: 0 auto;
-  border: 1px dashed #d97706;
-}
-:root.dark .entry-broadcast {
-  background: #422006;
-  color: #fde68a;
-}
-
-.entry-endtask {
-  background: transparent;
-  color: #6b7280;
-  font-style: italic;
-  align-self: flex-start;
-}
-:root.dark .entry-endtask {
-  color: #9ca3af;
-}
-
-.entry-pending {
-  opacity: 0.55;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 0.85;
-  }
-}
-
-.entry-error {
-  background: #fee2e2;
-  color: #991b1b;
-  align-self: flex-end;
-  margin-left: auto;
-}
-:root.dark .entry-error {
-  background: #7f1d1d;
-  color: #fecaca;
-}
-
-.block-error {
-  margin-top: 0.125rem;
-}
-
-.entry-header {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  margin-bottom: 0.125rem;
-  opacity: 0.8;
-}
-
-.entry-block {
-  margin-top: 0.125rem;
-}
-
-.block-reasoning,
-.block-tool {
-  margin: 0.125rem 0;
-}
-
-.markdown-body :deep(p) {
-  margin: 0.125rem 0;
-}
-.markdown-body :deep(pre) {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  font-size: 0.875rem;
-  overflow-x: auto;
-}
-:root.dark .markdown-body :deep(pre) {
-  background: rgba(0, 0, 0, 0.3);
-}
-
-/* 列表：UnoCSS preflight 会重置 list-style 与缩进，此处恢复 */
-.markdown-body :deep(ul) {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
-  list-style-type: disc;
-}
-.markdown-body :deep(ol) {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
-  list-style-type: decimal;
-}
-.markdown-body :deep(li) {
-  margin: 0.125rem 0;
-}
-
-/* 行内 code（pre 内的 code 由 pre 自身提供背景，去重） */
-.markdown-body :deep(code) {
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 0.25rem;
-  padding: 0 0.25rem;
-  font-size: 0.875rem;
-}
-.markdown-body :deep(pre code) {
-  background: transparent;
-  padding: 0;
-}
-:root.dark .markdown-body :deep(code) {
-  background: rgba(255, 255, 255, 0.12);
-}
-:root.dark .markdown-body :deep(pre code) {
-  background: transparent;
-}
-
-.markdown-body :deep(a) {
-  text-decoration: underline;
-}
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-  font-weight: 600;
-  margin: 0.25rem 0;
-}
-.markdown-body :deep(h1) {
-  font-size: 1.125rem;
-}
-.markdown-body :deep(h2) {
-  font-size: 1rem;
-}
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-  font-size: 0.9375rem;
-}
-
-.markdown-body :deep(blockquote) {
-  margin: 0.25rem 0;
-  padding-left: 0.5rem;
-  border-left: 3px solid rgba(0, 0, 0, 0.15);
-}
-:root.dark .markdown-body :deep(blockquote) {
-  border-left-color: rgba(255, 255, 255, 0.2);
-}
-
-.markdown-body :deep(table) {
-  border-collapse: collapse;
-  margin: 0.25rem 0;
-  font-size: 0.875rem;
-}
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  padding: 0.25rem 0.5rem;
-}
-:root.dark .markdown-body :deep(th),
-:root.dark .markdown-body :deep(td) {
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
 .chat-block-loss {
   margin: 0 0.75rem;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
-  color: var(--color-danger);
-  font-size: var(--font-ui-note);
-}
-
-.block-video-fallback {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.block-video-error {
   color: var(--color-danger);
   font-size: var(--font-ui-note);
 }

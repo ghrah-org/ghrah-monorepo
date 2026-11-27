@@ -8,6 +8,8 @@ import {
   type ChainTarget,
   type CreateProjectOptions,
   connectStores,
+  createTranscriptReader,
+  deriveHttpBase,
   extractAbilityList,
   extractAgentList,
   extractValidationResult,
@@ -17,7 +19,10 @@ import {
   projectControlClient,
   resolveProjectApiMode,
   RestProjectObserverClient,
+  type RoomTarget,
   type SessionTarget,
+  type TranscriptReader,
+  TurnApiClient,
   useActionChainsStore,
   useAgentsStore,
   useChangesStore,
@@ -28,14 +33,21 @@ import {
   useProjectsStore,
   useRoomsStore,
 } from "@ghrah/observer-core";
-import type { AbilityDefinitionPayload, AgentConfigPayload, ContentBlock } from "@ghrah/protocol";
+import {
+  type AbilityDefinitionPayload,
+  type AgentConfigPayload,
+  type ContentBlock,
+  RoomLogEntryPayloadSchema,
+} from "@ghrah/protocol";
 import { ref, shallowRef, watch } from "vue";
 import { i18n } from "@/i18n";
 import { usePlugins } from "@/composables/usePlugins";
 
 const client = shallowRef<ObserverClient | null>(null);
 const error = ref<string | null>(null);
-let unbind: (() => void) | null = null;
+let observer: { client: ObserverClient; reader: TranscriptReader; unbind: () => void } | null =
+  null;
+let connectionAttempt = 0;
 
 // ── 导航状态持久化（active project/room → localStorage） ──
 
@@ -94,32 +106,53 @@ export function useObserver() {
     });
   }
 
+  async function releaseConnection() {
+    const previous = observer;
+    observer = null;
+    client.value = null;
+    if (!previous) return;
+    previous.unbind();
+    chat.clearAll();
+    chat.clearBlockLoss();
+    hitl.clearAll();
+    await previous.client.disconnect();
+  }
+
   async function connect(serverUrl?: string) {
     const url = serverUrl ?? connection.serverUrl;
-
-    if (client.value) {
-      unbind?.();
-      unbind = null;
-      await client.value.disconnect();
-      client.value = null;
-    }
+    const attempt = ++connectionAttempt;
+    await releaseConnection();
+    if (attempt !== connectionAttempt) return;
 
     connection.setConnecting();
     error.value = null;
 
     // 插件清单必须先于连接就绪（连接后补装不会重发协商）；失败走空清单。
-    const { loadManifest, tsHalfProvider } = usePlugins();
-    await loadManifest();
-
     try {
+      const { loadManifest, tsHalfProvider } = usePlugins();
+      await loadManifest();
+      if (attempt !== connectionAttempt) return;
       const mode = resolveProjectApiMode();
       const obsClient =
         mode === "rest"
           ? new RestProjectObserverClient(url, projectControlClient())
           : new ObserverClient(url);
-      unbind = connectStores(obsClient, { tsHalfProvider });
+      const turnApi = new TurnApiClient(
+        new HttpClient({
+          baseUrl: url === connection.serverUrl ? connection.httpBaseUrl : deriveHttpBase(url),
+          token: connection.apiToken,
+        }),
+      );
+      const reader = createTranscriptReader(turnApi);
+      const unbind = connectStores(obsClient, {
+        tsHalfProvider,
+        turnApi,
+        transcriptReader: reader,
+      });
+      observer = { client: obsClient, reader, unbind };
 
       await obsClient.connect();
+      if (attempt !== connectionAttempt) return;
       client.value = obsClient;
 
       // 初始同步完成后恢复持久化的 active project/room。
@@ -131,19 +164,18 @@ export function useObserver() {
         await switchRoom(saved.roomId);
       }
     } catch (err) {
+      if (attempt !== connectionAttempt) return;
+      await releaseConnection();
+      if (attempt !== connectionAttempt) return;
       connection.setDisconnected();
       error.value = err instanceof Error ? err.message : String(err);
     }
   }
 
   async function disconnect() {
-    if (client.value) {
-      unbind?.();
-      unbind = null;
-      await client.value.disconnect();
-      client.value = null;
-    }
-    connection.setDisconnected();
+    const attempt = ++connectionAttempt;
+    await releaseConnection();
+    if (attempt === connectionAttempt) connection.setDisconnected();
   }
 
   async function autoConnect() {
@@ -218,6 +250,13 @@ export function useObserver() {
     return withClient((c) => c.terminateAgent(target));
   }
 
+  async function abortTurn(
+    target: AgentTarget,
+    options?: { turnId?: string; sessionId?: string; reason?: string },
+  ) {
+    return withClient((c) => c.abortTurn(target, options));
+  }
+
   async function agentCompactContext(target: AgentTarget) {
     return withClient((c) => c.agentCompactContext(target));
   }
@@ -230,18 +269,42 @@ export function useObserver() {
 
   /** 人类向 room 发消息（author 默认对齐 DEFAULT_HUMAN_AUTHOR）。 */
   async function roomSend(
-    roomId: string,
+    target: RoomTarget,
+    clientSeq: number,
     content: string,
     targets?: string[],
     blocks?: ContentBlock[],
   ) {
-    return withClient((c) =>
-      c.roomSend(roomId, {
+    const current = observer;
+    if (!current || connection.state !== "connected" || !isActiveRoom(target)) return null;
+    current.reader.invalidate(target);
+    try {
+      const result = await current.client.roomSend(target.roomId, {
         message: content,
         ...(targets && targets.length > 0 ? { targets } : {}),
         ...(blocks && blocks.length > 0 ? { content_blocks: blocks } : {}),
-      }),
-    );
+      });
+      if (observer !== current) return undefined;
+      if (result.success) {
+        const data = result.data;
+        const entry = RoomLogEntryPayloadSchema.safeParse(
+          data !== null && typeof data === "object" && "entry" in data ? data.entry : undefined,
+        );
+        if (
+          !entry.success ||
+          !entry.data.id ||
+          entry.data.room_id !== target.roomId ||
+          entry.data.author_type !== "human"
+        ) {
+          return { ...result, success: false, error: null };
+        }
+        current.reader.acknowledgeSend(target, clientSeq, entry.data.id);
+      }
+      return result;
+    } catch (err) {
+      if (observer !== current) return undefined;
+      throw err;
+    }
   }
 
   async function listRooms(projectId?: string | null, status?: string | null) {
@@ -281,9 +344,27 @@ export function useObserver() {
     return withClient((c) => c.leaveRoom(roomId, subject));
   }
 
-  /** 拉取 room 历史；bind 的 ROOM_GET_LOG 处理会把结果灌入 rooms store。 */
-  async function getRoomLog(roomId: string) {
-    return withClient((c) => c.getRoomLog(roomId));
+  function isActiveRoom(target: RoomTarget) {
+    return rooms.activeRooms.get(target.roomId)?.project_id === target.projectId;
+  }
+
+  async function loadTranscript(roomId: string) {
+    const room = rooms.activeRooms.get(roomId);
+    if (room) await observer?.reader.loadInitial({ projectId: room.project_id, roomId });
+  }
+
+  async function loadOlder(roomId: string) {
+    const room = rooms.activeRooms.get(roomId);
+    if (room) await observer?.reader.loadOlder({ projectId: room.project_id, roomId });
+  }
+
+  async function refreshRoom(target: RoomTarget) {
+    if (isActiveRoom(target)) await observer?.reader.refreshRoom(target);
+  }
+
+  async function loadTurnDetail(roomId: string, turnId: string) {
+    const room = rooms.activeRooms.get(roomId);
+    if (room) await observer?.reader.loadTurnDetail({ projectId: room.project_id, roomId }, turnId);
   }
 
   async function listProjects(options: ListProjectsOptions = {}) {
@@ -379,8 +460,14 @@ export function useObserver() {
   /** 切换 active room；缓存缺失时拉历史。 */
   async function switchRoom(roomId: string | null) {
     rooms.setActiveRoom(roomId);
-    if (roomId !== null && !rooms.logs.has(roomId)) {
-      await getRoomLog(roomId);
+    if (roomId === null) return;
+    const current = observer;
+    try {
+      await loadTranscript(roomId);
+    } catch (err) {
+      if (observer === current && rooms.activeRoomId === roomId) {
+        error.value = err instanceof Error ? err.message : String(err);
+      }
     }
   }
 
@@ -547,6 +634,7 @@ export function useObserver() {
     deleteShellAllow,
     spawnAgent,
     terminateAgent,
+    abortTurn,
     agentCompactContext,
     agentReset,
     roomSend,
@@ -558,7 +646,10 @@ export function useObserver() {
     deleteRoom,
     joinRoom,
     leaveRoom,
-    getRoomLog,
+    loadTranscript,
+    loadOlder,
+    refreshRoom,
+    loadTurnDetail,
     listProjects,
     createProject,
     updateProject,

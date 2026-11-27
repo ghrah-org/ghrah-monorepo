@@ -5,6 +5,7 @@
 import {
   type AbilityDefinitionPayload,
   type ActionNode,
+  ActionNodeSchema,
   AgentCompactContextPayloadSchema,
   AgentEntityCreatePayloadSchema,
   AgentEntityListPayloadSchema,
@@ -24,6 +25,7 @@ import {
   EventType,
   GetChainHistoryPayloadSchema,
   GetAgentInfoPayloadSchema,
+  type HitlRequestListView,
   type HITLRequestPayload,
   HITLResponsePayloadSchema,
   ListAgentsPayloadSchema,
@@ -51,6 +53,7 @@ import {
   RoomListPayloadSchema,
   type RoomLogEntryPayload,
   type RoomMember,
+  type RoomTranscriptView,
   RoomSendPayloadSchema,
   RoomUpdatePayloadSchema,
   SessionActivatePayloadSchema,
@@ -68,6 +71,10 @@ import {
   type TaskInfoPayload,
   TaskListPayloadSchema,
   TerminateAgentPayloadSchema,
+  type TranscriptDeliveryView,
+  type TranscriptEntryView,
+  type TurnCardView,
+  type TurnDetailView,
 } from "@ghrah/protocol";
 import { ZodError, z } from "zod";
 
@@ -91,6 +98,8 @@ export interface MockStateOptions {
   simulateDeliveries?: boolean;
   /** 投递状态每拍推进间隔（ms）。默认 1200。 */
   deliveryIntervalMs?: number;
+  /** 在演示审批所在的 Room 预置轮次卡样例。 */
+  roomTurnExamples?: boolean;
 }
 
 /**
@@ -144,8 +153,16 @@ interface DirectMessage {
 
 export interface PendingHitl {
   payload: HITLRequestPayload;
+  sessionId: string | undefined;
+  createdAt: string;
+  deadlineAt: string | null;
   status: "pending" | "approved" | "rejected";
   reason: string | null;
+}
+
+interface MockRoomTurn extends TurnDetailView {
+  projectId: string;
+  roomId: string;
 }
 
 const ok = (data?: unknown): CommandOutcome => ({ success: true, data: data ?? null });
@@ -165,6 +182,43 @@ function uuid(): string {
 
 function agentKey(projectId: string, agentId: string): string {
   return `${projectId}\u0000${agentId}`;
+}
+
+function mockMessageId(entry: RoomLogEntryPayload): string {
+  return typeof entry.data.mm_message_id === "string" ? entry.data.mm_message_id : `mm:${entry.id}`;
+}
+
+function mockDeliveryView(record: MockDeliveryRecord, messageId: string): TranscriptDeliveryView {
+  const queued = record.state === "pending" && !record.turn_id;
+  return {
+    delivery_id: record.delivery_id,
+    recipient_id: record.recipient_id,
+    state: record.state,
+    error: record.error,
+    blocked_reason: record.blocked_reason,
+    message_id: messageId,
+    turn_id: record.turn_id ?? null,
+    delivery_policy: record.delivery_policy ?? "queue",
+    display_state: record.display_state ?? (queued ? "queued" : record.state),
+    queue_position: record.queue_position ?? (queued ? 1 : 0),
+    cancelable: record.cancelable ?? queued,
+    queue_reason: null,
+    injection_step: null,
+  };
+}
+
+function mockHumanState(deliveries: TranscriptDeliveryView[]): string | null {
+  if (deliveries.length === 0) return null;
+  const states = new Set(deliveries.map((delivery) => delivery.display_state));
+  if (states.has("consumed") || states.has("injected")) return "injected";
+  if (states.has("queued") || states.has("blocked")) return "queued";
+  if (["failed", "interrupted", "parked", "cancelled"].some((state) => states.has(state)))
+    return "failed";
+  return "sent";
+}
+
+function isActiveTurn(turn: TurnCardView): boolean {
+  return turn.status === "open" || turn.status === "waiting_hitl";
 }
 
 const MockSendAbilitySchema = z.object({
@@ -207,6 +261,7 @@ export class MockState {
   /** 由 server 注入：广播事件（带 seq_id 分配与订阅过滤）。 */
   emit: EmitFn = () => {};
 
+  private readonly _roomTurnExamples: boolean;
   private readonly _hitlTimeoutMs: number;
   private readonly _chainIntervalMs: number;
   private readonly _simulateChains: boolean;
@@ -215,6 +270,7 @@ export class MockState {
   private readonly _chainTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** room log entry.id → 该条消息对各 agent 的投递记录（读通时注入 data.deliveries）。 */
   private readonly _deliveries = new Map<string, MockDeliveryRecord[]>();
+  private readonly _roomTurns = new Map<string, MockRoomTurn>();
   private readonly _deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // 累计用量模拟（成本口径）：post_call 模拟时累加，链模拟停止后保留供 get_agent_info 恢复
   private readonly _cumulativeUsage = new Map<
@@ -224,6 +280,7 @@ export class MockState {
   private readonly _hitlTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: MockStateOptions = {}) {
+    this._roomTurnExamples = options.roomTurnExamples ?? false;
     this._hitlTimeoutMs = options.hitlTimeoutMs ?? 30_000;
     this._chainIntervalMs = options.chainIntervalMs ?? 2_000;
     this._simulateChains = options.simulateChains ?? false;
@@ -1245,6 +1302,133 @@ export class MockState {
     return ok({ room_id: p.room_id, entries: projected, count: projected.length });
   }
 
+  roomTranscript(
+    room: RoomInfoPayload,
+    { beforeSeq, sinceSeq, limit }: { beforeSeq?: number; sinceSeq?: number; limit: number },
+  ): RoomTranscriptView {
+    const log = this.roomLogs.get(room.room_id) ?? [];
+    const latestSeq = log.at(-1)?.seq ?? 0;
+    const matching =
+      sinceSeq !== undefined
+        ? log.filter((entry) => entry.seq > sinceSeq)
+        : beforeSeq === undefined
+          ? log
+          : log.filter((entry) => entry.seq < beforeSeq);
+    const hasMore = matching.length > limit;
+    const selected = sinceSeq !== undefined ? matching.slice(0, limit) : matching.slice(-limit);
+    const entries = selected.map((entry) => this._transcriptEntry(entry));
+    const openerEntries = new Map(entries.map((entry) => [entry.message_id, entry.entry_id]));
+    const referencedTurns = new Set(
+      entries.flatMap((entry) => [
+        entry.turn_id,
+        ...entry.deliveries.map((delivery) => delivery.turn_id),
+      ]),
+    );
+    return {
+      project_id: room.project_id,
+      room_id: room.room_id,
+      entries,
+      turns: [...this._roomTurns.values()]
+        .filter(
+          ({ roomId, turn }) =>
+            roomId === room.room_id && (referencedTurns.has(turn.turn_id) || isActiveTurn(turn)),
+        )
+        .map(({ turn }) => ({
+          ...turn,
+          opener_entry_id: openerEntries.get(turn.opener_message_id) ?? null,
+        })),
+      latest_seq: latestSeq,
+      next_before_seq: sinceSeq === undefined && hasMore ? (entries[0]?.seq ?? null) : null,
+      next_since_seq: sinceSeq === undefined ? null : (entries.at(-1)?.seq ?? sinceSeq),
+      has_more: hasMore,
+      read_at: isoNow(),
+    };
+  }
+
+  private _transcriptEntry(entry: RoomLogEntryPayload): TranscriptEntryView {
+    const messageId = mockMessageId(entry);
+    const deliveries = (this._deliveries.get(entry.id) ?? []).map((record) =>
+      mockDeliveryView(record, messageId),
+    );
+    const data = entry.data;
+    const nodeId = typeof data.node_id === "string" ? data.node_id : null;
+    const injection = deliveries.find(
+      (delivery) => delivery.delivery_policy === "inject" && delivery.turn_id,
+    );
+    return {
+      entry_id: entry.id,
+      seq: entry.seq,
+      author: entry.author,
+      author_type: entry.author_type,
+      timestamp: entry.timestamp,
+      message_id: deliveries.length || typeof data.mm_message_id === "string" ? messageId : nodeId,
+      content: typeof data.message === "string" ? data.message : "",
+      content_blocks: Array.isArray(data.content_blocks) ? data.content_blocks : null,
+      targets: Array.isArray(data.targets) ? data.targets : [],
+      deliveries,
+      turn_id: typeof data.turn_id === "string" ? data.turn_id : null,
+      insert_before_turn_id: entry.author_type === "human" ? (injection?.turn_id ?? null) : null,
+      injection_step: injection?.injection_step ?? null,
+      human_state: entry.author_type === "human" ? mockHumanState(deliveries) : null,
+      node_id: nodeId,
+      ability: typeof data.ability === "string" ? data.ability : null,
+    };
+  }
+
+  listTurns(
+    projectId: string,
+    agentId: string,
+    sessionId?: string,
+    status?: string,
+  ): TurnCardView[] {
+    return [...this._roomTurns.values()].reverse().flatMap((record) => {
+      const { turn } = record;
+      const matches =
+        record.projectId === projectId &&
+        turn.agent_name === agentId &&
+        (sessionId === undefined || sessionId === turn.session_id) &&
+        (status === undefined || status === turn.status);
+      return matches ? [turn] : [];
+    });
+  }
+
+  turnDetail(projectId: string, agentId: string, turnId: string): TurnDetailView | null {
+    const record = this._roomTurns.get(turnId);
+    if (record?.projectId !== projectId || record.turn.agent_name !== agentId) return null;
+    return { turn: record.turn, nodes: record.nodes };
+  }
+
+  hitlPending(projectId: string, agentId: string, sessionId?: string): HitlRequestListView {
+    const items: HitlRequestListView["items"] = [];
+    for (const pending of this.pendingHitl.values()) {
+      const { payload } = pending;
+      if (
+        payload.project_id !== projectId ||
+        payload.agent_id !== agentId ||
+        pending.status !== "pending"
+      )
+        continue;
+      if (sessionId !== undefined && pending.sessionId !== sessionId) continue;
+      items.push({
+        promise_id: payload.promise_id,
+        turn_id: payload.turn_id ?? `mock-turn-${payload.promise_id}`,
+        delivery_id: payload.delivery_id ?? null,
+        ability_name: payload.ability_name,
+        tool_call: payload.tool_args,
+        reason: payload.reason ?? "",
+        options: payload.shell_remember ?? {},
+        status: "pending",
+        created_at: pending.createdAt,
+        deadline_at: pending.deadlineAt,
+        resolved_at: null,
+        resolved_by: null,
+        resolution: null,
+        shell_remember: payload.shell_remember ?? null,
+      });
+    }
+    return { agent_id: agentId, items };
+  }
+
   /** room_send：room 内 seq 单点分配 + 追加 RoomLog + 广播 ROOM_LOG_APPENDED；同步返回 {entry}。 */
   private _roomSend(p: {
     room_id: string;
@@ -1308,18 +1492,18 @@ export class MockState {
    * 只在 ``simulateDeliveries`` 开启时动作（默认关闭，不扰动既有用例）。
    * 记录**不经事件**下发：真实 Core 也只在 ``room_get_log`` 读通时注入
    * ``data.deliveries``，前端靠轮询 ``room_get_log`` 取得推进结果。
-   * 之所以不重发 ``ROOM_LOG_APPENDED``：前端 ``onRoomLogAppended`` 按 entry.id 去重，
+   * 之所以不重发 ``ROOM_LOG_APPENDED``：前端 ``onRoomLogAppended`` 仅以其作为 transcript 失效信号，
    * 同 id 重发会被静默丢弃，达不到刷新目的。
    */
   private _startDeliverySimulation(room: RoomInfoPayload, entry: RoomLogEntryPayload): void {
     if (!this._simulateDeliveries) return;
     const declared = entry.data?.targets;
-    const recipients =
-      Array.isArray(declared) && declared.length > 0
-        ? (declared as string[])
-        : room.members
-            .filter((member) => member.subject_type === "agent")
-            .map((member) => member.subject);
+    const targeted = Array.isArray(declared) && declared.length > 0;
+    const recipients = targeted
+      ? (declared as string[])
+      : room.members
+          .filter((member) => member.subject_type === "agent")
+          .map((member) => member.subject);
     if (recipients.length === 0) return;
     this._deliveries.set(
       entry.id,
@@ -1338,6 +1522,11 @@ export class MockState {
         for (const record of records) {
           if (record.state === "pending" || record.state === "processing") {
             record.state = next;
+            if (next === "processing" && (entry.author_type === "human" || targeted)) {
+              this._openRoomTurn(room, entry, record);
+            } else if (next === "completed" && record.turn_id) {
+              this._closeRoomTurn(record.turn_id);
+            }
           }
         }
         this._deliveryTimers.delete(`${entry.id}:${next}`);
@@ -1347,6 +1536,229 @@ export class MockState {
     // 两拍推进：先 processing 表示已接手，再 completed 表示接收回调返回。
     advance("processing", this._deliveryIntervalMs);
     advance("completed", this._deliveryIntervalMs * 2);
+  }
+
+  private _openRoomTurn(
+    room: RoomInfoPayload,
+    entry: RoomLogEntryPayload,
+    delivery: MockDeliveryRecord,
+  ) {
+    const key = agentKey(room.project_id, delivery.recipient_id);
+    const action = this.actionStates.get(key);
+    const session = action?.sessions.get(action.activeSessionId);
+    if (!session) return;
+    const turn: TurnCardView = {
+      turn_id: uuid(),
+      agent_name: delivery.recipient_id,
+      session_id: session.session_id,
+      status: "open",
+      closing_kind: null,
+      base_node_id: null,
+      start_node_id: null,
+      end_node_id: null,
+      branch_id: session.active_branch_id,
+      end_branch_id: null,
+      opener_delivery_id: delivery.delivery_id,
+      opened_at: isoNow(),
+      waiting_since: null,
+      closed_at: null,
+      abort_reason: null,
+      incomplete_node_id: null,
+      recovery_branch_id: null,
+      turn_index:
+        this.listTurns(room.project_id, delivery.recipient_id, session.session_id).length + 1,
+      opener_message_id: mockMessageId(entry),
+      opener_entry_id: null,
+      parent_turn_id: null,
+      stats: {
+        steps: 0,
+        node_count: 0,
+        token_input: 0,
+        token_output: 0,
+        token_total: 0,
+        token_cache_read: 0,
+        token_cache_write: 0,
+        cache_hit_rate: null,
+        duration_ms: null,
+        waiting_ms: 0,
+      },
+    };
+    delivery.turn_id = turn.turn_id;
+    this._roomTurns.set(turn.turn_id, {
+      projectId: room.project_id,
+      roomId: room.room_id,
+      turn,
+      nodes: [],
+    });
+    this.emit(EventType.TURN_OPENED, {
+      project_id: room.project_id,
+      agent_id: delivery.recipient_id,
+      agent_name: this.agents.get(key)?.name ?? delivery.recipient_id,
+      turn_id: turn.turn_id,
+      session_id: turn.session_id,
+      status: turn.status,
+      opener_delivery_id: delivery.delivery_id,
+    });
+  }
+
+  /** 为视觉和组件验收构造一组可通过正常 transcript / detail 读出的历史。 */
+  seedRoomTurnExamples(roomId: string, agentId: string, waitingTurnId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room || this._roomTurns.has(waitingTurnId)) return;
+    const action = this.actionStates.get(agentKey(room.project_id, agentId));
+    const session = action?.sessions.get(action.activeSessionId);
+    const log = this.roomLogs.get(roomId);
+    if (!session || !log) return;
+    const seedId = `example:${roomId}`;
+    if (this._roomTurns.has(`${seedId}:closed`)) return;
+    const start = Date.now();
+    const configurations = [
+      { id: "closed", status: "closed", message: "Summarize the delivery check." },
+      {
+        id: "failed",
+        status: "failed",
+        message: "Read the missing manifest.",
+        reason: "Manifest unavailable",
+      },
+      { id: "compact", status: "closed", message: "Compact the context." },
+      {
+        id: "aborted",
+        status: "aborted",
+        message: "Run a review.",
+        reason: "Stopped by user",
+        recovery: "example-recovery",
+      },
+      { id: "interrupted", status: "interrupted", message: "Check the session." },
+      {
+        id: "rolled_back",
+        status: "rolled_back",
+        message: "Roll back the last changes.",
+        recovery: "example-rollback",
+      },
+      { id: "waiting", status: "waiting_hitl", message: "Request deployment approval." },
+    ];
+    const indexBase = this.listTurns(room.project_id, agentId, session.session_id).length;
+    for (const [index, example] of configurations.entries()) {
+      const waiting = example.status === "waiting_hitl";
+      const turnId = waiting ? waitingTurnId : `${seedId}:${example.id}`;
+      const opened = new Date(start - (configurations.length - index) * 15000).toISOString();
+      const entry: RoomLogEntryPayload = {
+        id: `${turnId}:entry`,
+        room_id: roomId,
+        seq: ++room.seq_watermark,
+        author: index % 2 ? "Ada" : "user",
+        author_type: "human",
+        timestamp: Date.parse(opened) / 1000,
+        data: { message: example.message, targets: [agentId] },
+      };
+      log.push(entry);
+      const delivery: MockDeliveryRecord = {
+        delivery_id: `${turnId}:delivery`,
+        recipient_id: agentId,
+        state: waiting ? "processing" : example.status === "failed" ? "failed" : "completed",
+        error: example.reason ?? null,
+        blocked_reason: null,
+        turn_id: turnId,
+      };
+      this._deliveries.set(entry.id, [delivery]);
+      const node = ActionNodeSchema.parse({
+        id: `${turnId}:node`,
+        agent_name: agentId,
+        turn_id: turnId,
+        timestamp: opened,
+        ability_names: ["read_file"],
+        ...(example.id === "compact"
+          ? {
+              is_snapshot: true,
+              metadata: {
+                node_kind: "compact",
+                trigger_source: "manual",
+                tokens_before: 1400,
+                tokens_after: 300,
+                summarized_range: ["first", "last"],
+                kept_recent_nodes: 1,
+                post_check: "ok",
+              },
+              messages_snapshot: [
+                {
+                  role: "ai",
+                  source: "summary",
+                  content_blocks: [{ type: "text", text: "Compacted context." }],
+                },
+              ],
+            }
+          : example.id === "interrupted"
+            ? {
+                metadata: { node_kind: "incomplete", error: "Connection lost" },
+              }
+            : {}),
+      });
+      const nodes = example.id === "failed" ? [] : [node];
+      const turn: TurnCardView = {
+        turn_id: turnId,
+        agent_name: agentId,
+        session_id: session.session_id,
+        status: example.status,
+        closing_kind: waiting ? null : example.status,
+        base_node_id: null,
+        start_node_id: nodes[0]?.id ?? null,
+        end_node_id: nodes[0]?.id ?? null,
+        branch_id: session.active_branch_id,
+        end_branch_id: null,
+        opener_delivery_id: delivery.delivery_id,
+        opened_at: opened,
+        waiting_since: waiting ? new Date(start).toISOString() : null,
+        closed_at: waiting ? null : new Date(Date.parse(opened) + 5000).toISOString(),
+        abort_reason: example.reason ?? null,
+        incomplete_node_id: example.id === "interrupted" ? node.id : null,
+        recovery_branch_id: example.recovery ?? null,
+        turn_index: indexBase + index + 1,
+        opener_message_id: mockMessageId(entry),
+        opener_entry_id: entry.id,
+        parent_turn_id: null,
+        stats: {
+          steps: example.id === "compact" || example.id === "interrupted" ? 0 : nodes.length,
+          node_count: nodes.length,
+          token_input: 1400,
+          token_output: 200,
+          token_total: 1600,
+          token_cache_read: 700,
+          token_cache_write: 100,
+          cache_hit_rate: 0.5,
+          duration_ms: waiting ? null : 5000,
+          waiting_ms: 0,
+        },
+      };
+      this._roomTurns.set(turnId, { projectId: room.project_id, roomId, turn, nodes });
+    }
+    const tail = log.at(-1);
+    if (tail) this.emit(EventType.ROOM_LOG_APPENDED, { entry: tail });
+  }
+
+  private _closeRoomTurn(turnId: string) {
+    const record = this._roomTurns.get(turnId);
+    if (!record || !isActiveTurn(record.turn)) return;
+    const { turn, projectId, nodes } = record;
+    turn.status = "closed";
+    turn.closing_kind = "completed";
+    turn.closed_at = isoNow();
+    turn.waiting_since = null;
+    turn.stats = {
+      ...turn.stats,
+      steps: nodes.length,
+      node_count: nodes.length,
+      duration_ms: Math.max(0, Date.parse(turn.closed_at) - Date.parse(turn.opened_at)),
+    };
+    this.emit(EventType.TURN_CLOSED, {
+      project_id: projectId,
+      agent_id: turn.agent_name,
+      agent_name: this.agents.get(agentKey(projectId, turn.agent_name))?.name ?? turn.agent_name,
+      turn_id: turn.turn_id,
+      session_id: turn.session_id,
+      status: turn.status,
+      closing_kind: turn.closing_kind,
+      end_node_id: turn.end_node_id,
+    });
   }
 
   /**
@@ -1373,13 +1785,20 @@ export class MockState {
       (candidate) => candidate.agentId === agentId && candidate.projectId === room.project_id,
     );
     if (!agent) return fail(`agent not in room project: ${agentId}`);
+    const active = [...this._roomTurns.values()]
+      .reverse()
+      .find(
+        ({ roomId: scope, turn }) =>
+          scope === roomId && turn.agent_name === agentId && isActiveTurn(turn),
+      );
     const sent = this._roomSend({
       room_id: roomId,
       author: agentId,
       author_type: "agent",
-      data: { message: content },
+      data: { message: content, ...(active ? { turn_id: active.turn.turn_id } : {}) },
     });
     if (!sent.success) return sent;
+    if (active) this._closeRoomTurn(active.turn.turn_id);
     this.emit(EventType.AGENT_RESPONSE, {
       project_id: agent.projectId,
       agent_id: agent.agentId,
@@ -2393,6 +2812,7 @@ export class MockState {
     toolArgs: Record<string, unknown> = {},
     context: Record<string, unknown> = {},
     projectId?: string,
+    shellRemember?: HITLRequestPayload["shell_remember"],
   ): HITLRequestPayload {
     const matches = [...this.agents.values()].filter(
       (agent) =>
@@ -2405,6 +2825,11 @@ export class MockState {
     }
     const agent = matches[0];
     const promiseId = `hitl-${uuid().replace(/-/g, "").slice(0, 12)}`;
+    const sessionId = this.actionStates.get(
+      agentKey(agent.projectId, agent.agentId),
+    )?.activeSessionId;
+    const createdAt = isoNow();
+    const deadlineAt = new Date(Date.now() + this._hitlTimeoutMs).toISOString();
     const payload: HITLRequestPayload = {
       promise_id: promiseId,
       turn_id: `mock-turn-${promiseId}`,
@@ -2415,13 +2840,29 @@ export class MockState {
       tool_args: toolArgs,
       context,
       reason: "Mock HITL request (mock-server development link)",
+      ...(shellRemember === undefined ? {} : { shell_remember: shellRemember }),
     };
-    this.pendingHitl.set(payload.promise_id, { payload, status: "pending", reason: null });
+    this.pendingHitl.set(payload.promise_id, {
+      payload,
+      sessionId,
+      createdAt,
+      deadlineAt,
+      status: "pending",
+      reason: null,
+    });
+    if (this._roomTurnExamples && payload.turn_id) {
+      const room = [...this.rooms.values()].find(
+        (room) =>
+          room.project_id === agent.projectId &&
+          room.name === context.room &&
+          room.members.some((member) => member.subject === agent.agentId),
+      );
+      if (room) this.seedRoomTurnExamples(room.room_id, agent.agentId, payload.turn_id);
+    }
     const timer = setTimeout(() => {
       const pending = this.pendingHitl.get(payload.promise_id);
       if (pending && pending.status === "pending") {
-        pending.status = "rejected";
-        pending.reason = "hitl timeout";
+        this._settleHitl(pending, "timeout", "hitl timeout");
       }
       this._hitlTimers.delete(payload.promise_id);
     }, this._hitlTimeoutMs);
@@ -2435,11 +2876,29 @@ export class MockState {
     if (pending?.status !== "pending") {
       return fail(`unknown hitl request: ${promiseId}`);
     }
-    pending.status = approved ? "approved" : "rejected";
-    pending.reason = reason;
+    this._settleHitl(pending, approved ? "approved" : "rejected", reason);
     const timer = this._hitlTimers.get(promiseId);
     if (timer != null) clearTimeout(timer);
     this._hitlTimers.delete(promiseId);
     return ok({ promise_id: promiseId, status: pending.status, reason });
+  }
+
+  private _settleHitl(
+    pending: PendingHitl,
+    status: "approved" | "rejected" | "timeout",
+    reason: string | null,
+  ) {
+    pending.status = status === "timeout" ? "rejected" : status;
+    pending.reason = reason;
+    const { payload } = pending;
+    this.emit(EventType.HITL_RESOLVED, {
+      project_id: payload.project_id,
+      agent_id: payload.agent_id,
+      promise_id: payload.promise_id,
+      agent_name: payload.agent_name,
+      ability_name: payload.ability_name,
+      turn_id: payload.turn_id ?? null,
+      status,
+    });
   }
 }

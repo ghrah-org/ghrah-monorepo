@@ -11,7 +11,7 @@
 // 基线目录：e2e/visual.spec.ts-snapshots/（Playwright 默认命名，含平台后缀）。
 // 更新基线：pnpm test:visual:update；基线差异必须在改动说明里逐一确认。
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VIEWPORTS = [
   { name: "wide", width: 1600, height: 900 },
@@ -52,11 +52,16 @@ async function openProject(page: Page) {
   await expect(page.locator(".hitl-bar")).toBeVisible();
 }
 
-async function shot(page: Page, name: string) {
+async function shot(page: Page, name: string, extraMask: Locator[] = []) {
   // 截图前把鼠标移到固定位置，避免残留 hover 态造成差异。
   await page.mouse.move(1580, 10);
   await expect(page).toHaveScreenshot(`${name}.png`, {
-    mask: [page.locator(".ac-node-meta")],
+    mask: [
+      page.locator(
+        ".ac-node-meta, .tc-time, .entry-meta time, [data-status=waiting_hitl] .tc-foot",
+      ),
+      ...extraMask,
+    ],
   });
 }
 
@@ -76,14 +81,19 @@ for (const viewport of VIEWPORTS) {
 
       test("chat：room 会话", async ({ page }) => {
         await openProject(page);
-        await page.locator(".room-list-row", { hasText: "architecture" }).click();
-        await expect(page.locator(".workspace-tab", { hasText: "architecture" })).toBeVisible();
+        await page.locator(".room-list-row", { hasText: "backend" }).click();
+        await expect(page.locator('.turn-card[data-status="rolled_back"]')).toBeVisible();
+        await expect(page.locator('.turn-card[data-status="waiting_hitl"] .tc-wait')).toBeVisible();
         await shot(page, `${viewport.name}-${scale}-chat`);
       });
 
       test("action-chain：Agent 的 ActionChain", async ({ page }) => {
         await openProject(page);
+        if (viewport.name === "narrow")
+          await page.setViewportSize({ width: 1600, height: viewport.height });
         await page.locator(".agent-list li", { hasText: "architect" }).click();
+        if (viewport.name === "narrow")
+          await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await expect(page.locator(".workspace-tab", { hasText: "architect" })).toBeVisible();
         // 分支投影在 HITL 之后（约 13.8s）到达，等 retry-2 出现再截图
         await expect(page.locator(".chain-branch-select")).toContainText("retry-2");
@@ -95,7 +105,10 @@ for (const viewport of VIEWPORTS) {
         await openProject(page);
         await page.locator(".project-fixed-nav .sidebar-row", { hasText: "Project 设置" }).click();
         await expect(page.locator(".workspace-tab", { hasText: "设置" })).toBeVisible();
-        await shot(page, `${viewport.name}-${scale}-settings`);
+        // mock 未实现 shell-allow，错误内容的请求路径含随机项目 ID。
+        const shellAllowError = page.locator(".project-settings-section").getByRole("alert");
+        await expect(shellAllowError).toContainText("/shell-allow");
+        await shot(page, `${viewport.name}-${scale}-settings`, [shellAllowError]);
       });
     });
   }

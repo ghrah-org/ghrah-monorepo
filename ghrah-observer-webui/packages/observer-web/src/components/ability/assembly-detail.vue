@@ -7,33 +7,54 @@ SPDX-License-Identifier: Apache-2.0
 <script setup lang="ts">
 import {
   abilityControlClient,
+  agentControlClient,
+  type AgentDesiredState,
+  type AgentTarget,
+  HttpError,
   useAbilityAdminStore,
   useAbilityPackagesStore,
+  useAgentsStore,
+  useConnectionStore,
+  useProjectsStore,
 } from "@ghrah/observer-core";
-import type { AbilityPackageGroupsView } from "@ghrah/protocol";
+import type { AbilityPackageGroupsView, AgentAdminView } from "@ghrah/protocol";
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useObserver } from "@/composables/useObserver";
 import SchemeAbilitiesPanel from "@/components/scheme-abilities-panel.vue";
 import AbilityAdminView from "./ability-admin-view.vue";
 import AbilityChangesView from "./ability-changes-view.vue";
 import AbilityTreeView from "./ability-tree-view.vue";
+import { availabilityKey, desiredStateKey, isAgentOnline, runtimeStatusKey } from "./agent-status";
 import GrantEditor from "./grant-editor.vue";
 import RespawnBanner from "./respawn-banner.vue";
 import { type SurfaceStatus, surfaceStatus } from "./surface-status";
 import ToolSelector from "./tool-selector.vue";
+import ConfirmDialog from "@/components/ui/confirm-dialog.vue";
 import UiButton from "@/components/ui/button.vue";
 
 const props = defineProps<{ projectId: string; agentId: string }>();
+const emit = defineEmits<{ deleted: [] }>();
 const admin = useAbilityAdminStore();
 const packages = useAbilityPackagesStore();
+const agents = useAgentsStore();
+const projects = useProjectsStore();
+const connection = useConnectionStore();
+const { abortTurn, error: observerError } = useObserver();
 const { t } = useI18n();
 const tabs = ["overview", "grants", "tools", "versions", "changes"] as const;
 const tab = ref<(typeof tabs)[number]>("overview");
 const agentGroups = ref<AbilityPackageGroupsView | null>(null);
 const groupsLoading = ref(false);
 const groupsFailed = ref(false);
+const control = ref<AgentAdminView | null>(null);
+const controlError = ref("");
+const pendingAction = ref<"abort" | "start" | "stop" | "delete" | null>(null);
+const pendingConfirm = ref<"stop" | "delete" | null>(null);
+const notice = ref<{ kind: "ok" | "error"; text: string } | null>(null);
 let shown = false;
 let groupRequest = 0;
+let controlRequest = 0;
 
 const record = computed(() => {
   const current = admin.record(props.projectId, props.agentId);
@@ -107,15 +128,259 @@ const canWrite = computed(() => {
   return status.features.grants_write === true;
 });
 
+// ── Agent 生命周期操作条 ──
+
+const project = computed(() => projects.projects.get(props.projectId) ?? null);
+const recordRow = computed(
+  () => project.value?.agents?.find((item) => item.agent_id === props.agentId) ?? null,
+);
+const live = computed(() =>
+  agents.getAgent({ projectId: props.projectId, agentId: props.agentId }),
+);
+const agentName = computed(
+  () =>
+    live.value?.agentName ||
+    recordRow.value?.name ||
+    control.value?.specification.name ||
+    props.agentId,
+);
+const agentTarget = computed<AgentTarget>(() => ({
+  projectId: props.projectId,
+  agentId: props.agentId,
+  agentName: agentName.value,
+}));
+const desired = computed(
+  () => control.value?.specification.desired_state ?? recordRow.value?.desired_state ?? "",
+);
+const availability = computed(() => control.value?.runtime.availability ?? "unknown");
+const liveRuntime = computed(() => live.value?.runtimeStatus ?? "");
+const busy = computed(() => control.value?.runtime.busy === true);
+const online = computed(() => isAgentOnline(availability.value, liveRuntime.value));
+const connected = computed(() => connection.state === "connected");
+const projectVersion = computed(
+  () => control.value?.specification.project_version ?? project.value?.version ?? 0,
+);
+const canStop = computed(() => online.value && pendingAction.value === null);
+const canStart = computed(
+  () => !online.value && availability.value !== "unknown" && pendingAction.value === null,
+);
+const canAbort = computed(() => online.value && connected.value && pendingAction.value === null);
+const canDelete = computed(() => !busy.value && pendingAction.value === null);
+const desiredText = computed(() => t(`assembly.agent.desired.${desiredStateKey(desired.value)}`));
+const runtimeText = computed(() =>
+  t(`assembly.agent.availability.${availabilityKey(availability.value)}`),
+);
+const runtimeStatus = computed(() =>
+  runtimeStatusKey(recordRow.value?.runtime_status ?? liveRuntime.value),
+);
+const showRuntimeStatus = computed(
+  () =>
+    runtimeStatus.value === "pending" ||
+    runtimeStatus.value === "failed" ||
+    runtimeStatus.value === "lost",
+);
+const runtimeStatusText = computed(() => t(`assembly.agent.status.${runtimeStatus.value}`));
+
+/** HTTP 失败 → 可读文案；命令层稳定码优先于通用 message。 */
+function describeError(error: unknown, action: "start" | "stop" | "delete" | null = null): string {
+  if (error instanceof HttpError) {
+    if (error.status === 0) return t("assembly.agent.notConnected");
+    if (error.code === "capability_unavailable") return t("assembly.agent.disabled");
+    if (error.code === "conflict") return t("assembly.agent.conflict");
+    if (error.code === "agent_busy") return t("assembly.agent.busyRejected");
+    if (error.code === "not_found") return t("assembly.agent.notFound");
+    if (action === "start") return t("assembly.agent.startFailed", { reason: error.message });
+    if (action === "stop") return t("assembly.agent.stopFailed", { reason: error.message });
+    if (action === null) return t("assembly.agent.controlFailed", { reason: error.message });
+    return error.message;
+  }
+  const reason = error instanceof Error ? error.message : String(error);
+  if (action === "start") return t("assembly.agent.startFailed", { reason });
+  if (action === "stop") return t("assembly.agent.stopFailed", { reason });
+  if (action === null) return t("assembly.agent.controlFailed", { reason });
+  return reason;
+}
+
+async function refreshControl(): Promise<void> {
+  const current = ++controlRequest;
+  try {
+    const next = await agentControlClient(props.projectId).get(props.agentId);
+    if (current !== controlRequest) return;
+    control.value = next;
+    controlError.value = "";
+  } catch (error) {
+    if (current !== controlRequest) return;
+    control.value = null;
+    controlError.value = describeError(error);
+  }
+}
+
+async function applyDesiredState(state: AgentDesiredState): Promise<void> {
+  if (pendingAction.value !== null) return;
+  const action = state === "running" ? "start" : "stop";
+  pendingAction.value = action;
+  notice.value = null;
+  try {
+    const view = await agentControlClient(props.projectId).setDesiredState(
+      props.agentId,
+      state,
+      projectVersion.value,
+    );
+    control.value = view;
+    controlError.value = "";
+    notice.value = {
+      kind: "ok",
+      text: action === "start" ? t("assembly.agent.startDone") : t("assembly.agent.stopDone"),
+    };
+    void admin.markStale(props.projectId, props.agentId);
+  } catch (error) {
+    notice.value = { kind: "error", text: describeError(error, action) };
+    void refreshControl();
+  } finally {
+    pendingAction.value = null;
+    // 启动要等装配完成、停止要等运行态回收，回执里的运行态还不稳，补读收敛。
+    nudgeControl();
+  }
+}
+
+function start(): void {
+  void applyDesiredState("running");
+}
+
+async function stop(): Promise<void> {
+  pendingConfirm.value = null;
+  await applyDesiredState("stopped");
+}
+
+async function abort(): Promise<void> {
+  if (!canAbort.value) return;
+  pendingAction.value = "abort";
+  notice.value = null;
+  try {
+    const result = await abortTurn(agentTarget.value);
+    if (result === null) {
+      notice.value = {
+        kind: "error",
+        text: observerError.value ?? t("assembly.agent.notConnected"),
+      };
+      return;
+    }
+    if (!result.success) {
+      const code = result.error ?? "";
+      const text =
+        code === "turn_not_found"
+          ? t("assembly.agent.abortNoTurn")
+          : code === "agent_offline"
+            ? t("assembly.agent.offline")
+            : code || t("assembly.agent.abortFailed");
+      notice.value = { kind: "error", text };
+      return;
+    }
+    const data = (result.data ?? {}) as { aborted?: boolean; already_terminal?: boolean };
+    notice.value = {
+      kind: "ok",
+      text:
+        data.aborted === true
+          ? t("assembly.agent.abortDone")
+          : data.already_terminal === true
+            ? t("assembly.agent.abortAlreadyDone")
+            : t("assembly.agent.abortDone"),
+    };
+  } finally {
+    pendingAction.value = null;
+    // 中断只改轮次与运行态、不改项目版本；且 Core 侧 busy 释放略晚于命令回执，
+    // 单次补读常常仍读到 true，因此用一串短延迟补读收敛。
+    nudgeControl();
+  }
+}
+
+function finishDeleted(message: string): void {
+  admin.clearAgent(props.projectId, props.agentId);
+  notice.value = { kind: "ok", text: message };
+  emit("deleted");
+}
+
+async function remove(): Promise<void> {
+  pendingConfirm.value = null;
+  if (pendingAction.value !== null) return;
+  pendingAction.value = "delete";
+  notice.value = null;
+  try {
+    await agentControlClient(props.projectId).delete(props.agentId, projectVersion.value);
+    finishDeleted(t("assembly.agent.deleteDone"));
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "not_found") {
+      finishDeleted(t("assembly.agent.notFound"));
+      return;
+    }
+    notice.value = { kind: "error", text: describeError(error, "delete") };
+    void refreshControl();
+  } finally {
+    pendingAction.value = null;
+  }
+}
+
+function refresh(): void {
+  if (pendingAction.value !== null) return;
+  void admin.load(props.projectId, props.agentId);
+  void refreshControl();
+}
+
+/**
+ * 运行态短轮询。
+ *
+ * ``busy`` 只在 GET /agents/{id} 的运行态里，轮次开始/结束既不推进项目版本、
+ * 也不产生 observer 侧已投影的 turn 事件，所以条上的「处理中」与删除可用性
+ * 必须自己跟上。页面不可见或动作进行中时不发请求。
+ */
+const POLL_INTERVAL_MS = 2000;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+const settleTimers: ReturnType<typeof setTimeout>[] = [];
+
+/** 动作结束后的短延迟补读：命令回执与 Core 侧释放/装配不同步时收敛条上状态。 */
+function nudgeControl(delaysMs: readonly number[] = [0, 400, 1200]) {
+  for (const delay of delaysMs) {
+    settleTimers.push(
+      setTimeout(() => {
+        if (shown) void refreshControl();
+      }, delay),
+    );
+  }
+}
+
+function clearSettleTimers() {
+  while (settleTimers.length) {
+    clearTimeout(settleTimers.pop() as ReturnType<typeof setTimeout>);
+  }
+}
+
+function startPolling() {
+  if (pollTimer !== null) return;
+  pollTimer = setInterval(() => {
+    if (pendingAction.value !== null) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    void refreshControl();
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  clearSettleTimers();
+  if (pollTimer === null) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
 function show() {
   if (shown) return;
   shown = true;
+  startPolling();
   if (treeEnabled.value) void admin.setVisible(props.projectId, props.agentId, true);
 }
 
 function hide() {
   if (!shown) return;
   shown = false;
+  stopPolling();
   void admin.setVisible(props.projectId, props.agentId, false);
 }
 
@@ -143,6 +408,30 @@ watch(
   },
 );
 
+watch(
+  () => [props.projectId, props.agentId] as const,
+  () => {
+    pendingConfirm.value = null;
+    notice.value = null;
+    void refreshControl();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => live.value?.runtimeStatus,
+  (next, previous) => {
+    if (next !== previous) void refreshControl();
+  },
+);
+
+watch(
+  () => project.value?.version,
+  (next, previous) => {
+    if (next !== previous) void refreshControl();
+  },
+);
+
 onMounted(show);
 onActivated(show);
 onDeactivated(hide);
@@ -151,6 +440,91 @@ onUnmounted(hide);
 
 <template>
   <section class="assembly-detail">
+    <header class="assembly-agent-bar">
+      <div class="assembly-agent-identity">
+        <strong>{{ agentName }}</strong>
+        <code>{{ agentId }}</code>
+        <span>{{ desiredText }}</span>
+        <span>{{ runtimeText }}</span>
+        <span v-if="showRuntimeStatus">{{ runtimeStatusText }}</span>
+        <span v-if="busy" class="assembly-agent-busy">{{ t("assembly.agent.busy") }}</span>
+      </div>
+      <div class="assembly-agent-actions">
+        <UiButton
+          v-if="online"
+          class="assembly-agent-stop"
+          type="button"
+          variant="primary"
+          :disabled="!canStop"
+          @click="pendingConfirm = 'stop'"
+        >
+          {{ t("assembly.agent.stop") }}
+        </UiButton>
+        <UiButton
+          v-else
+          class="assembly-agent-start"
+          type="button"
+          variant="primary"
+          :disabled="!canStart"
+          @click="start"
+        >
+          {{ t("assembly.agent.start") }}
+        </UiButton>
+        <UiButton
+          class="assembly-agent-abort"
+          type="button"
+          variant="secondary"
+          :disabled="!canAbort"
+          @click="abort"
+        >
+          {{ t("assembly.agent.abort") }}
+        </UiButton>
+        <UiButton
+          class="assembly-agent-delete"
+          type="button"
+          variant="danger"
+          :disabled="!canDelete"
+          @click="pendingConfirm = 'delete'"
+        >
+          {{ t("assembly.agent.delete") }}
+        </UiButton>
+        <UiButton
+          class="assembly-agent-refresh"
+          type="button"
+          variant="secondary"
+          :disabled="pendingAction !== null"
+          @click="refresh"
+        >
+          {{ t("assembly.agent.refresh") }}
+        </UiButton>
+      </div>
+      <p v-if="controlError" class="assembly-note assembly-agent-note">{{ controlError }}</p>
+      <p
+        v-if="notice"
+        :class="['assembly-agent-notice', `assembly-agent-notice-${notice.kind}`]"
+        role="status"
+      >
+        {{ notice.text }}
+      </p>
+    </header>
+    <ConfirmDialog
+      v-if="pendingConfirm === 'stop'"
+      :title="t('assembly.agent.stopTitle', { name: agentName })"
+      :message="t('assembly.agent.stopMessage')"
+      :confirm-label="t('assembly.agent.stop')"
+      danger
+      @confirm="stop"
+      @cancel="pendingConfirm = null"
+    />
+    <ConfirmDialog
+      v-if="pendingConfirm === 'delete'"
+      :title="t('assembly.agent.deleteTitle', { name: agentName })"
+      :message="t('assembly.agent.deleteMessage')"
+      :confirm-label="t('assembly.agent.delete')"
+      danger
+      @confirm="remove"
+      @cancel="pendingConfirm = null"
+    />
     <p v-if="!treeEnabled" class="assembly-state">
       {{
         packages.status?.legacy_deprecated || packages.status?.ability_source === "legacy"
@@ -460,5 +834,63 @@ onUnmounted(hide);
 
 .assembly-group code {
   font-size: var(--font-ui-code);
+}
+
+.assembly-agent-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.assembly-agent-identity,
+.assembly-agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.assembly-agent-identity strong {
+  color: var(--color-text);
+  font-size: var(--font-ui-body);
+}
+
+.assembly-agent-identity code {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-code);
+}
+
+.assembly-agent-identity span {
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-note);
+}
+
+.assembly-agent-busy {
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.assembly-agent-note {
+  margin: 0;
+}
+
+.assembly-agent-notice {
+  margin: 0;
+  font-size: var(--font-ui-note);
+  line-height: 1.5;
+}
+
+.assembly-agent-notice-ok {
+  color: var(--color-text-muted);
+}
+
+.assembly-agent-notice-error {
+  color: var(--color-danger);
 }
 </style>
