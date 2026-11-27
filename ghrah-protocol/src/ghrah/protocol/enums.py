@@ -194,6 +194,8 @@ class CommandType(StrEnum):
     MATERIAL_STATE_GET = "material_state_get"
     MATERIAL_STATE_SYNC = "material_state_sync"
 
+    PAGE_GET = "page_get"
+
     # ─── 恢复类（Observer → Subject，2 个）───
     RECONCILE_NOW = "reconcile_now"
     RECONCILE_STATUS = "reconcile_status"
@@ -287,6 +289,8 @@ class EventType(StrEnum):
     ROOM_MEMBER_JOINED = "room_member_joined"
     ROOM_MEMBER_LEFT = "room_member_left"
     ROOM_LOG_APPENDED = "room_log_appended"
+
+    PAGE_CHANGED = "page_changed"
 
     # ─── 恢复事件（Subject → Observer，2 个）───
     SUBJECT_RECONCILED = "subject_reconciled"

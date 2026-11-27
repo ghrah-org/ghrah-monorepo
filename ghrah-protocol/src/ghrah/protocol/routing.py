@@ -203,6 +203,12 @@ MATERIAL_STATE_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
+PAGE_COMMANDS: frozenset[str] = frozenset(
+    {
+        CommandType.PAGE_GET.value,
+    }
+)
+
 
 RECONCILE_COMMANDS: frozenset[str] = frozenset(
     {

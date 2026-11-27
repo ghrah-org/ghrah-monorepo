@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ghrah.subject.material.state_store import MaterialStateStore
+from ghrah.subject.page.store import PageStateStore
 from ghrah.subject.project.errors import ProjectArchivedError
 from ghrah.subject.project.paths import ProjectPaths
 from ghrah.subject.room.chat_action_store import ChatActionStore
@@ -43,6 +44,58 @@ class ProjectScopedMaterialStateStore:
             paths.validate_owner(project_id)
             if project_id not in self._stores:
                 store = MaterialStateStore(paths.material_state_db_path, project_id)
+                await store.start()
+                self._stores[project_id] = store
+            return self._stores[project_id]
+
+    async def stop(self) -> None:
+        """关闭所有已打开的项目库。"""
+        async with self._lock:
+            for store in self._stores.values():
+                await store.stop()
+            self._stores.clear()
+
+    async def close_project(self, project_id: str) -> None:
+        """项目归档时关闭连接并冻结后续访问。"""
+        async with self._lock:
+            self._frozen.add(project_id)
+            store = self._stores.pop(project_id, None)
+            if store is not None:
+                await store.stop()
+
+    async def restore_project(self, project_id: str) -> None:
+        """恢复项目后惰性重开连接。"""
+        async with self._lock:
+            self._frozen.discard(project_id)
+
+    async def evict_project(self, project_id: str) -> None:
+        """永久删除后移除连接与缓存。"""
+        await self.close_project(project_id)
+        async with self._lock:
+            self._frozen.discard(project_id)
+
+
+class ProjectScopedPageStore:
+    """工作台动态页面按已认领的 Project Root 懒加载，并参与项目生命周期。"""
+
+    def __init__(self, roots: ProjectRoots) -> None:
+        self._roots = roots
+        self._stores: dict[str, PageStateStore] = {}
+        self._frozen: set[str] = set()
+        self._lock = asyncio.Lock()
+
+    async def store(self, project_id: str) -> PageStateStore:
+        """返回唯一连接；找不到项目时拒绝回落到全局数据库。"""
+        async with self._lock:
+            if project_id in self._frozen:
+                raise ProjectArchivedError(project_id)
+            locator = (await self._roots()).get(project_id)
+            if not locator:
+                raise ValueError(f"project root unavailable: {project_id}")
+            paths = ProjectPaths.from_locator(locator)
+            paths.validate_owner(project_id)
+            if project_id not in self._stores:
+                store = PageStateStore(paths.page_db_path, project_id)
                 await store.start()
                 self._stores[project_id] = store
             return self._stores[project_id]

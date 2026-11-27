@@ -48,6 +48,8 @@ from ghrah.protocol.payloads import (
     MaterialStateGetPayload,
     MaterialStateRegisterPayload,
     MaterialStateSyncPayload,
+    PageChangedPayload,
+    PageGetPayload,
     PluginCrashedPayload,
     PluginLifecyclePayload,
     PluginNegotiatedPayload,
@@ -308,6 +310,7 @@ COMMAND_PAYLOAD_MAP: dict[CommandType, type[BaseModel]] = {
     CommandType.MATERIAL_STATE_REGISTER: MaterialStateRegisterPayload,
     CommandType.MATERIAL_STATE_GET: MaterialStateGetPayload,
     CommandType.MATERIAL_STATE_SYNC: MaterialStateSyncPayload,
+    CommandType.PAGE_GET: PageGetPayload,
     # 恢复（2 个）
     CommandType.RECONCILE_NOW: ReconcileNowPayload,
     CommandType.RECONCILE_STATUS: ReconcileStatusPayload,
@@ -394,6 +397,7 @@ EVENT_PAYLOAD_MAP: dict[EventType, type[BaseModel]] = {
     EventType.PLUGIN_DISABLED: PluginLifecyclePayload,
     EventType.PLUGIN_NEGOTIATED: PluginNegotiatedPayload,
     EventType.PLUGIN_CRASHED: PluginCrashedPayload,
+    EventType.PAGE_CHANGED: PageChangedPayload,
 }
 
 

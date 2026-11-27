@@ -88,6 +88,7 @@ async def mount_builtin_units(
         from ghrah.subject.units.core_cluster import CoreClusterRegistryUnit
         from ghrah.subject.units.material_state import MaterialStateUnit
         from ghrah.subject.units.media_control import MediaControlUnit
+        from ghrah.subject.units.page import PageUnit
         from ghrah.subject.units.project import ProjectUnit
         from ghrah.subject.units.project_control import ProjectControlUnit
         from ghrah.subject.units.recovery import RecoveryUnit
@@ -131,6 +132,7 @@ async def mount_builtin_units(
                 RoomControlUnit(config),
                 TurnControlUnit(config),
                 MaterialStateUnit(config),
+                PageUnit(config),
                 RecoveryUnit(config),
             ]
         )
