@@ -322,6 +322,9 @@ def render_assembly(
             if bindings is not None:
                 control = package == "ghrah.core" and key in AGENT_CONTROL_MEMBER_KEYS
                 bind = control or member.member in bindings
+                # 初始绑定同时收口到授权轴：否则 GrantPlan 仍按 (True, True) 绑定，
+                # 与成员的 available 轴不一致，工具面会把未选成员也绑上。
+                axes[f"operations/{key}"] = (visible, bind)
             members.append(
                 AgentAssemblyMember(
                     member=member.member,
@@ -340,6 +343,8 @@ def render_assembly(
                 not_granted.append(member.member)
                 continue
             skill_bind = True if bindings is None else member.member in bindings
+            if bindings is not None:
+                axes[f"skill/{member.key}"] = (True, skill_bind)
             members.append(
                 AgentAssemblyMember(
                     member=member.member,
