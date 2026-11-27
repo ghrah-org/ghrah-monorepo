@@ -136,3 +136,17 @@ it("rejects an illegal rollback-preview pair locally and malformed responses at 
     detail: expect.any(Array),
   });
 });
+
+it("propagates rollback-preview HTTP errors with their stable codes", async () => {
+  const fetch = vi
+    .fn<HttpFetch>()
+    .mockResolvedValue(response({ error: { code: "turn_active", message: "active" } }, 409));
+  const api = new TurnApiClient(new HttpClient({ baseUrl: "http://localhost", fetchImpl: fetch }));
+
+  await expect(api.rollbackPreview("p", "a", "t")).rejects.toMatchObject({
+    name: "HttpError",
+    code: "turn_active",
+    status: 409,
+    message: "active",
+  });
+});

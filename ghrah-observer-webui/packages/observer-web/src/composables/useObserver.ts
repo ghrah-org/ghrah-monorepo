@@ -39,6 +39,7 @@ import {
   type AgentConfigPayload,
   type ContentBlock,
   RoomLogEntryPayloadSchema,
+  type TurnRollbackPreviewView,
 } from "@ghrah/protocol";
 import { ref, shallowRef, watch } from "vue";
 import { i18n } from "@/i18n";
@@ -269,21 +270,22 @@ export function useObserver() {
     return withClient((c) => c.turnRollback(target, options));
   }
 
-  /** 读回滚预览；未连接时返回 null，组件按未连接处理。 */
+  /**
+   * 读回滚预览；未连接时返回 null（组件按未连接处理）。
+   *
+   * HTTP / 协议错误原样抛出，保留 `HttpError.code` / `status` / `message`，
+   * 供调用方按 `turn_active` / `already_rolled_back` 等稳定码分支；
+   * 不写共享 `error`，避免与全局提示重复。
+   */
   async function loadRollbackPreview(
     projectId: string,
     agentId: string,
     turnId: string,
     options?: RollbackPreviewOptions,
-  ) {
+  ): Promise<TurnRollbackPreviewView | null> {
     const current = observer;
     if (!current) return null;
-    try {
-      return await current.turnApi.rollbackPreview(projectId, agentId, turnId, options);
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
-      return null;
-    }
+    return current.turnApi.rollbackPreview(projectId, agentId, turnId, options);
   }
 
   async function agentCompactContext(target: AgentTarget) {

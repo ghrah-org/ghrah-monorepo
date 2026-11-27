@@ -754,6 +754,20 @@ describe("MockHttpServer turn control reads", () => {
       expect((await fetch(`${previewUrl(ids.closed)}?node_id=node-x`)).status).toBe(400);
       expect((await fetch(previewUrl("missing"))).status).toBe(404);
       expect((await fetch(previewUrl(ids.open))).status).toBe(409);
+
+      // 已回滚轮次：预览回 409 already_rolled_back。
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: ids.closed,
+        }).success,
+      ).toBe(true);
+      const rolledBackPreview = await fetch(previewUrl(ids.closed));
+      expect(rolledBackPreview.status).toBe(409);
+      expect(await rolledBackPreview.json()).toMatchObject({
+        error: { code: "already_rolled_back" },
+      });
     } finally {
       state.dispose();
     }

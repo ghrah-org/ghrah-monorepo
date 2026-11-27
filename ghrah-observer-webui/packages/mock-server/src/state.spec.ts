@@ -613,6 +613,17 @@ describe("MockState turn control commands", () => {
       expect(replay.success).toBe(true);
       expect(replay.data).toMatchObject({ already_applied: true });
 
+      // 重放目标不同：换 target 或换节点都算冲突，不是幂等成功。
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: ids.closed,
+          target: "node",
+          node_id: "node-x",
+        }).error,
+      ).toBe("rollback_conflict");
+
       expect(
         state.handleCommand(CommandType.TURN_ROLLBACK, {
           project_id: projectId,
@@ -628,6 +639,59 @@ describe("MockState turn control commands", () => {
         target_node_id: "node-x",
       });
       expect(state.rollbackPreview(projectId, agentId, "missing", "base", null)).toBeNull();
+    } finally {
+      state.dispose();
+    }
+  });
+
+  it("replays identical node rollbacks and rejects a changed target", () => {
+    const { state, projectId, agentId, ids } = controlFixture();
+    try {
+      const first = state.handleCommand(CommandType.TURN_ROLLBACK, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.closed,
+        target: "node",
+        node_id: "node-a",
+      });
+      expect(first.success).toBe(true);
+      expect(TurnRollbackViewSchema.parse(first.data)).toMatchObject({
+        target: "node",
+        target_node_id: "node-a",
+        already_applied: false,
+      });
+
+      const same = state.handleCommand(CommandType.TURN_ROLLBACK, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.closed,
+        target: "node",
+        node_id: "node-a",
+      });
+      expect(same.success).toBe(true);
+      expect(TurnRollbackViewSchema.parse(same.data)).toMatchObject({
+        target: "node",
+        target_node_id: "node-a",
+        already_applied: true,
+      });
+
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: ids.closed,
+          target: "node",
+          node_id: "node-b",
+        }).error,
+      ).toBe("rollback_conflict");
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: ids.closed,
+          target: "base",
+        }).error,
+      ).toBe("rollback_conflict");
     } finally {
       state.dispose();
     }

@@ -591,6 +591,9 @@ function handleTurnRead(state: MockState | undefined, url: URL, response: Server
     const turnId = decodeURIComponent(previewPath[3]);
     const detail = state.turnDetail(projectId, resourceId, turnId);
     if (!detail) return error(404, "not_found", "轮次不存在");
+    if (detail.turn.status === "rolled_back") {
+      return error(409, "already_rolled_back", "轮次已回滚，不能再次预览");
+    }
     if (detail.turn.status === "open" || detail.turn.status === "waiting_hitl") {
       return error(409, "turn_active", "轮次仍在进行中，不能回滚");
     }

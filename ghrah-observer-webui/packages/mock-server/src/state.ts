@@ -170,6 +170,9 @@ export interface PendingHitl {
 interface MockRoomTurn extends TurnDetailView {
   projectId: string;
   roomId: string;
+  /** 首次回滚的 target 与解析后的目标节点，供重放对齐（对齐 Core 的持久回滚元数据）。 */
+  rollbackTarget?: "base" | "node";
+  rollbackTargetNodeId?: string;
 }
 
 const ok = (data?: unknown): CommandOutcome => ({ success: true, data: data ?? null });
@@ -1464,16 +1467,18 @@ export class MockState {
       );
   }
 
+  private _baseNodeId(record: MockRoomTurn): string {
+    const { turn } = record;
+    return turn.base_node_id ?? turn.start_node_id ?? `${turn.turn_id}:base-node`;
+  }
+
   private _rollbackTargetNodeId(
     record: MockRoomTurn,
     target: "base" | "node",
     nodeId: string | null,
   ): string {
-    const { turn } = record;
     if (target === "node" && nodeId) return nodeId;
-    return (
-      turn.base_node_id ?? turn.start_node_id ?? turn.end_node_id ?? `${turn.turn_id}:base-node`
-    );
+    return this._baseNodeId(record);
   }
 
   /** turn_abort：按 Agent 级寻址中止活动轮次；终态轮次回 already_terminal。 */
@@ -1518,38 +1523,53 @@ export class MockState {
     );
   }
 
-  /** turn_rollback：活动轮拒绝，已回滚幂等，其余关闭轮次并返回回滚结果。 */
+  /**
+   * turn_rollback：活动轮拒绝；已回滚轮按首次持久记录重放，目标不一致回
+   * `rollback_conflict`（对齐真实 Core 的 replay_rollback）；其余关闭轮次执行回滚。
+   */
   private _turnRollback(payload: z.output<typeof TurnRollbackPayloadSchema>): CommandOutcome {
     const agent = this.agents.get(agentKey(payload.project_id, payload.agent_id));
     if (!agent) return fail("agent_not_found");
     const record = this._findTurnRecord(payload.project_id, payload.agent_id, payload.turn_id);
     if (!record) return fail("turn_not_found");
     if (isActiveTurn(record.turn)) return fail("turn_active");
-    const alreadyApplied = record.turn.status === "rolled_back";
-    if (!alreadyApplied) {
-      record.turn.status = "rolled_back";
-      record.turn.closing_kind = "rolled_back";
-      record.turn.waiting_since = null;
-      record.turn.closed_at = isoNow();
-      const targetNodeId = this._rollbackTargetNodeId(record, payload.target, payload.node_id);
-      record.turn.end_node_id = targetNodeId;
-      this._emitTurnClosed(agent, record.turn);
+    const targetNodeId = this._rollbackTargetNodeId(record, payload.target, payload.node_id);
+    if (record.turn.status === "rolled_back") {
+      const replayed =
+        record.rollbackTarget === payload.target && record.rollbackTargetNodeId === targetNodeId;
+      if (!replayed) return fail("rollback_conflict");
+      return ok(this._rollbackView(record, payload.target, targetNodeId, true));
     }
-    return ok(
-      TurnRollbackViewSchema.parse({
-        turn_id: record.turn.turn_id,
-        session_id: record.turn.session_id,
-        status: record.turn.status,
-        closing_kind: record.turn.closing_kind ?? "rolled_back",
-        target: payload.target,
-        target_node_id: this._rollbackTargetNodeId(record, payload.target, payload.node_id),
-        branch_id: record.turn.branch_id ?? `${record.turn.turn_id}:branch`,
-        parent_branch_id: record.turn.end_branch_id,
-        released_delivery_ids: [],
-        already_applied: alreadyApplied,
-        rolled_back_at: record.turn.closed_at ?? isoNow(),
-      }),
-    );
+    record.turn.status = "rolled_back";
+    record.turn.closing_kind = "rolled_back";
+    record.turn.waiting_since = null;
+    record.turn.closed_at = isoNow();
+    record.turn.end_node_id = targetNodeId;
+    record.rollbackTarget = payload.target;
+    record.rollbackTargetNodeId = targetNodeId;
+    this._emitTurnClosed(agent, record.turn);
+    return ok(this._rollbackView(record, payload.target, targetNodeId, false));
+  }
+
+  private _rollbackView(
+    record: MockRoomTurn,
+    target: "base" | "node",
+    targetNodeId: string,
+    alreadyApplied: boolean,
+  ) {
+    return TurnRollbackViewSchema.parse({
+      turn_id: record.turn.turn_id,
+      session_id: record.turn.session_id,
+      status: record.turn.status,
+      closing_kind: record.turn.closing_kind ?? "rolled_back",
+      target,
+      target_node_id: targetNodeId,
+      branch_id: record.turn.branch_id ?? `${record.turn.turn_id}:branch`,
+      parent_branch_id: record.turn.end_branch_id,
+      released_delivery_ids: [],
+      already_applied: alreadyApplied,
+      rolled_back_at: record.turn.closed_at ?? isoNow(),
+    });
   }
 
   private _emitTurnClosed(agent: AgentRecord, turn: TurnCardView): void {
