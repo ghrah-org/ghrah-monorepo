@@ -11,6 +11,7 @@ import {
   RoomTranscriptSchema,
   TurnDetailSchema,
   TurnListSchema,
+  TurnRollbackPreviewViewSchema,
 } from "@ghrah/protocol";
 
 const servers: MockHttpServer[] = [];
@@ -709,5 +710,52 @@ describe("MockHttpServer project REST", () => {
     const base = await start();
     const response = await fetch(`${base}/api/v1/projects`);
     expect(response.status).toBe(503);
+  });
+});
+
+describe("MockHttpServer turn control reads", () => {
+  it("serves rollback preview and validates the target/node_id pairing", async () => {
+    const state = new MockState();
+    const server = createMockHttpServer({ port: 0, host: "127.0.0.1", state });
+    servers.push(server);
+    await server.start();
+    try {
+      const projectId = (
+        state.handleCommand(CommandType.PROJECT_CREATE, { name: "preview-http" }).data as {
+          project: { project_id: string };
+        }
+      ).project.project_id;
+      const agentId = AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: projectId,
+          name: "worker",
+          template_id: "mock.agent",
+          revision: 1,
+          start: true,
+        }).data,
+      ).identity.agent_id;
+      state.handleCommand(CommandType.ROOM_CREATE, { project_id: projectId, name: "Preview" });
+      const room = [...state.rooms.values()][0];
+      const ids = state.seedTurnControlTurns(room.room_id, agentId);
+      if (!ids) throw new Error("failed to seed turn-control turns");
+      const base = `http://127.0.0.1:${server.port}/api/v1/projects/${projectId}/agents/${agentId}/turns`;
+      const previewUrl = (turnId: string) => `${base}/${turnId}/rollback-preview`;
+
+      const defaultPreview = TurnRollbackPreviewViewSchema.parse(
+        await getJson(previewUrl(ids.closed)),
+      );
+      expect(defaultPreview).toMatchObject({ turn_id: ids.closed, target: "base" });
+      const nodePreview = TurnRollbackPreviewViewSchema.parse(
+        await getJson(`${previewUrl(ids.closed)}?target=node&node_id=node-x`),
+      );
+      expect(nodePreview).toMatchObject({ target: "node", target_node_id: "node-x" });
+
+      expect((await fetch(`${previewUrl(ids.closed)}?target=node`)).status).toBe(400);
+      expect((await fetch(`${previewUrl(ids.closed)}?node_id=node-x`)).status).toBe(400);
+      expect((await fetch(previewUrl("missing"))).status).toBe(404);
+      expect((await fetch(previewUrl(ids.open))).status).toBe(409);
+    } finally {
+      state.dispose();
+    }
   });
 });

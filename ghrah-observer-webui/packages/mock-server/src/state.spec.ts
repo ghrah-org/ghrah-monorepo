@@ -5,7 +5,12 @@
 import type { PythonHalfInfo, TaskClaimPayload, TaskInfoPayload } from "@ghrah/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { MockState } from "./state.js";
-import { AgentSnapshotSchema, CommandType } from "@ghrah/protocol";
+import {
+  AgentSnapshotSchema,
+  CommandType,
+  TurnRollbackPreviewViewSchema,
+  TurnRollbackViewSchema,
+} from "@ghrah/protocol";
 
 describe("stable mock entities", () => {
   it("keeps chain iterations increasing across messages and restarts", () => {
@@ -480,4 +485,151 @@ it("serves six Room turn examples and a waiting turn through transcript and deta
     metadata: { node_kind: "compact" },
   });
   state.dispose();
+});
+
+describe("MockState turn control commands", () => {
+  function controlFixture() {
+    const state = new MockState();
+    const projectId = (
+      state.handleCommand(CommandType.PROJECT_CREATE, { name: "control" }).data as {
+        project: { project_id: string };
+      }
+    ).project.project_id;
+    const agent = AgentSnapshotSchema.parse(
+      state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+        project_id: projectId,
+        name: "worker",
+        template_id: "mock.agent",
+        revision: 1,
+        start: true,
+      }).data,
+    );
+    state.handleCommand(CommandType.ROOM_CREATE, { project_id: projectId, name: "Control" });
+    const room = [...state.rooms.values()][0];
+    const ids = state.seedTurnControlTurns(room.room_id, agent.identity.agent_id);
+    if (!ids) throw new Error("failed to seed turn-control turns");
+    return { state, projectId, agentId: agent.identity.agent_id, ids };
+  }
+
+  it("aborts active turns, reports terminal ones, and rejects offline agents", () => {
+    const { state, projectId, agentId, ids } = controlFixture();
+    try {
+      const aborted = state.handleCommand(CommandType.TURN_ABORT, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.open,
+        reason: "stop",
+      });
+      expect(aborted.success).toBe(true);
+      expect(aborted.data).toMatchObject({
+        turn_id: ids.open,
+        status: "aborted",
+        closing_kind: "external_abort",
+        aborted: true,
+        already_terminal: false,
+      });
+      expect(state.turnDetail(projectId, agentId, ids.open)!.turn).toMatchObject({
+        status: "aborted",
+        abort_reason: "stop",
+      });
+
+      const terminal = state.handleCommand(CommandType.TURN_ABORT, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.closed,
+      });
+      expect(terminal.success).toBe(true);
+      expect(terminal.data).toMatchObject({ already_terminal: true, aborted: false });
+
+      // 缺 turn_id 时按 Agent 级寻址取剩余活动轮次（waiting_hitl）。
+      const byAgent = state.handleCommand(CommandType.TURN_ABORT, {
+        project_id: projectId,
+        agent_id: agentId,
+      });
+      expect(byAgent.data).toMatchObject({ turn_id: ids.waiting, aborted: true });
+
+      expect(
+        state.handleCommand(CommandType.TURN_ABORT, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: "missing",
+        }).error,
+      ).toBe("turn_not_found");
+
+      const offline = AgentSnapshotSchema.parse(
+        state.handleCommand(CommandType.AGENT_ENTITY_CREATE, {
+          project_id: projectId,
+          name: "offline-worker",
+          template_id: "mock.agent",
+          revision: 1,
+          start: false,
+        }).data,
+      );
+      expect(
+        state.handleCommand(CommandType.TURN_ABORT, {
+          project_id: projectId,
+          agent_id: offline.identity.agent_id,
+          turn_id: ids.closed,
+        }).error,
+      ).toBe("agent_offline");
+    } finally {
+      state.dispose();
+    }
+  });
+
+  it("rolls back finished turns, rejects active ones, and is idempotent", () => {
+    const { state, projectId, agentId, ids } = controlFixture();
+    try {
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: ids.open,
+        }).error,
+      ).toBe("turn_active");
+
+      const rolledBack = state.handleCommand(CommandType.TURN_ROLLBACK, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.closed,
+        target: "base",
+      });
+      expect(rolledBack.success).toBe(true);
+      expect(TurnRollbackViewSchema.parse(rolledBack.data)).toMatchObject({
+        turn_id: ids.closed,
+        status: "rolled_back",
+        closing_kind: "rolled_back",
+        target: "base",
+        already_applied: false,
+      });
+      expect(state.turnDetail(projectId, agentId, ids.closed)!.turn.status).toBe("rolled_back");
+
+      const replay = state.handleCommand(CommandType.TURN_ROLLBACK, {
+        project_id: projectId,
+        agent_id: agentId,
+        turn_id: ids.closed,
+        target: "base",
+      });
+      expect(replay.success).toBe(true);
+      expect(replay.data).toMatchObject({ already_applied: true });
+
+      expect(
+        state.handleCommand(CommandType.TURN_ROLLBACK, {
+          project_id: projectId,
+          agent_id: agentId,
+          turn_id: "missing",
+        }).error,
+      ).toBe("turn_not_found");
+
+      const preview = state.rollbackPreview(projectId, agentId, ids.closed, "node", "node-x");
+      expect(TurnRollbackPreviewViewSchema.parse(preview)).toMatchObject({
+        turn_id: ids.closed,
+        target: "node",
+        target_node_id: "node-x",
+      });
+      expect(state.rollbackPreview(projectId, agentId, "missing", "base", null)).toBeNull();
+    } finally {
+      state.dispose();
+    }
+  });
 });

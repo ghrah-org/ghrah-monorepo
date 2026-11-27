@@ -29,6 +29,7 @@ import {
   RoomTranscriptSchema,
   TurnDetailSchema,
   TurnListSchema,
+  TurnRollbackPreviewViewSchema,
   type AbilityPackageGroupsView,
   type AbilityTreeView,
   type MemberAxes,
@@ -525,6 +526,8 @@ const AGENT_RESOURCE = /^\/api\/v1\/projects\/([^/]+)\/agents(?:\/([^/]+))?(\/de
 const ROOM_TRANSCRIPT = /^\/api\/v1\/projects\/([^/]+)\/rooms\/([^/]+)\/transcript$/;
 const AGENT_TURN_READ =
   /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/(turns|hitl\/pending)(?:\/([^/]+))?$/;
+const TURN_ROLLBACK_PREVIEW =
+  /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/turns\/([^/]+)\/rollback-preview$/;
 const CONTENT =
   /^\/api\/v1\/projects\/([^/]+)\/agents\/([^/]+)\/ability-tree\/abilities\/([^/]+)\/content\/(.+)$/;
 
@@ -540,7 +543,8 @@ function queryInteger(query: URLSearchParams, field: string, min: number, max: n
 function handleTurnRead(state: MockState | undefined, url: URL, response: ServerResponse): boolean {
   const roomPath = ROOM_TRANSCRIPT.exec(url.pathname);
   const agentPath = AGENT_TURN_READ.exec(url.pathname);
-  const match = roomPath ?? agentPath;
+  const previewPath = TURN_ROLLBACK_PREVIEW.exec(url.pathname);
+  const match = roomPath ?? previewPath ?? agentPath;
   if (!match) return false;
   function error(status: number, code: string, message: string): true {
     json(response, status, { error: { code, message, detail: null } });
@@ -574,6 +578,26 @@ function handleTurnRead(state: MockState | undefined, url: URL, response: Server
   }
   if (!project.agents.some((agent) => agent.agent_id === resourceId)) {
     return error(404, "not_found", "项目内的 Agent 不存在");
+  }
+  if (previewPath) {
+    const target = query.get("target") ?? "base";
+    const nodeId = query.get("node_id");
+    if (target !== "base" && target !== "node") {
+      return error(400, "invalid_request", "target 只能是 base 或 node");
+    }
+    if ((target === "node") !== (nodeId !== null) || nodeId === "") {
+      return error(400, "invalid_request", "node_id 仅在 target=node 时必填");
+    }
+    const turnId = decodeURIComponent(previewPath[3]);
+    const detail = state.turnDetail(projectId, resourceId, turnId);
+    if (!detail) return error(404, "not_found", "轮次不存在");
+    if (detail.turn.status === "open" || detail.turn.status === "waiting_hitl") {
+      return error(409, "turn_active", "轮次仍在进行中，不能回滚");
+    }
+    const view = state.rollbackPreview(projectId, resourceId, turnId, target, nodeId);
+    if (!view) return error(404, "not_found", "轮次不存在");
+    json(response, 200, TurnRollbackPreviewViewSchema.parse(view));
+    return true;
   }
   const [, , , resource, encodedTurnId] = match;
   const sessionId = query.get("session_id") ?? undefined;

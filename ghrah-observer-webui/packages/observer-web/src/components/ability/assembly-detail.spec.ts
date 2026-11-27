@@ -24,10 +24,10 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AssemblyDetail from "./assembly-detail.vue";
 
-const abortTurn = vi.fn();
+const turnAbort = vi.fn();
 
 vi.mock("@/composables/useObserver", () => ({
-  useObserver: () => ({ abortTurn, error: { value: null } }),
+  useObserver: () => ({ turnAbort, error: { value: null } }),
 }));
 
 const PROJECT_ID = "p1";
@@ -165,8 +165,8 @@ describe("AssemblyDetail lifecycle actions", () => {
     useConnectionStore().setConnected();
     setProject();
     setAbilityClient();
-    abortTurn.mockReset();
-    abortTurn.mockResolvedValue({ success: true, data: { aborted: true } });
+    turnAbort.mockReset();
+    turnAbort.mockResolvedValue({ success: true, data: { aborted: true } });
   });
 
   afterEach(() => {
@@ -325,7 +325,7 @@ describe("AssemblyDetail lifecycle actions", () => {
     // nudgeControl 的首个补读是 0ms setTimeout：等一拍宏任务再断言。
     await new Promise((resolve) => setTimeout(resolve, 10));
     await flushPromises();
-    expect(abortTurn).toHaveBeenCalledWith({
+    expect(turnAbort).toHaveBeenCalledWith({
       projectId: PROJECT_ID,
       agentId: AGENT_ID,
       agentName: "Coder",
@@ -334,7 +334,7 @@ describe("AssemblyDetail lifecycle actions", () => {
     expect(client.get.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(wrapper.text()).toContain("Current turn aborted.");
 
-    abortTurn.mockResolvedValue({ success: false, error: "turn_not_found" });
+    turnAbort.mockResolvedValue({ success: false, error: "turn_not_found" });
     await wrapper.get(".assembly-agent-abort").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("No turn is in progress.");

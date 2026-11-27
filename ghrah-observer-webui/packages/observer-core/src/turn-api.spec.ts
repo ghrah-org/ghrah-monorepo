@@ -85,3 +85,54 @@ it("propagates cancellation and the service's archive error", async () => {
   });
   expect(fetch.mock.calls[0][1].signal.aborted).toBe(true);
 });
+
+const ROLLBACK_PREVIEW = {
+  turn_id: "turn-1",
+  session_id: "s1",
+  target: "base",
+  target_node_id: "node-base",
+  target_branch_id: "branch-1",
+  base_node_id: "node-base",
+  start_node_id: "node-start",
+  end_node_id: "node-end",
+  truncated_node_count: 2,
+  crosses_compact: false,
+  target_is_compact: false,
+  head_unchanged: true,
+  released_delivery_ids: ["delivery-1"],
+};
+
+it("builds the rollback-preview path and omits node_id unless target=node", async () => {
+  const fetch = vi
+    .fn<HttpFetch>()
+    .mockResolvedValueOnce(response(ROLLBACK_PREVIEW))
+    .mockResolvedValueOnce(
+      response({ ...ROLLBACK_PREVIEW, target: "node", target_node_id: "node+1" }),
+    );
+  const api = new TurnApiClient(new HttpClient({ baseUrl: "http://localhost", fetchImpl: fetch }));
+
+  await expect(api.rollbackPreview("p/x", "agent+1", "t/1")).resolves.toEqual(ROLLBACK_PREVIEW);
+  await expect(
+    api.rollbackPreview("p/x", "agent+1", "t/1", { target: "node", nodeId: "node+1" }),
+  ).resolves.toMatchObject({ target: "node", target_node_id: "node+1" });
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+    "http://localhost/api/v1/projects/p%2Fx/agents/agent%2B1/turns/t%2F1/rollback-preview?target=base",
+    "http://localhost/api/v1/projects/p%2Fx/agents/agent%2B1/turns/t%2F1/rollback-preview?target=node&node_id=node%2B1",
+  ]);
+});
+
+it("rejects an illegal rollback-preview pair locally and malformed responses at the boundary", async () => {
+  const fetch = vi.fn<HttpFetch>().mockResolvedValue(response({ turn_id: "turn-1" }));
+  const api = new TurnApiClient(new HttpClient({ baseUrl: "http://localhost", fetchImpl: fetch }));
+
+  await expect(api.rollbackPreview("p", "a", "t", { target: "node" })).rejects.toMatchObject({
+    code: "invalid_request",
+    status: 0,
+  });
+  expect(fetch).not.toHaveBeenCalled();
+
+  await expect(api.rollbackPreview("p", "a", "t")).rejects.toMatchObject({
+    code: "internal",
+    detail: expect.any(Array),
+  });
+});

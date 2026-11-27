@@ -7,6 +7,8 @@ import {
   RoomTranscriptSchema,
   TurnDetailSchema,
   TurnListSchema,
+  type TurnRollbackPreviewView,
+  TurnRollbackPreviewViewSchema,
 } from "@ghrah/protocol";
 import {
   type HttpAbortSignal,
@@ -38,6 +40,11 @@ interface SessionReadOptions extends ReadOptions {
 export interface TurnListOptions extends SessionReadOptions {
   status?: string;
   limit?: number;
+}
+
+export interface RollbackPreviewOptions extends ReadOptions {
+  target?: "base" | "node";
+  nodeId?: string | null;
 }
 
 function projectPath(projectId: string) {
@@ -89,6 +96,36 @@ export class TurnApiClient {
       query: { session_id: options.sessionId },
       signal: options.signal,
     });
+  }
+
+  /**
+   * 读取回滚预览（只读）。
+   *
+   * `target` 默认 `base`；`target=node` 缺 `nodeId` 时本地拒绝，不发出非法配对。
+   */
+  async rollbackPreview(
+    projectId: string,
+    agentId: string,
+    turnId: string,
+    options: RollbackPreviewOptions = {},
+  ): Promise<TurnRollbackPreviewView> {
+    const target = options.target ?? "base";
+    const nodeId = options.nodeId ?? null;
+    if (target === "node" && !nodeId) {
+      throw new HttpError({
+        code: "invalid_request",
+        status: 0,
+        message: "target=node 时 node_id 必填",
+      });
+    }
+    return this.get(
+      TurnRollbackPreviewViewSchema,
+      `${agentPath(projectId, agentId)}/turns/${encodeURIComponent(turnId)}/rollback-preview`,
+      {
+        query: { target, ...(target === "node" ? { node_id: nodeId } : {}) },
+        signal: options.signal,
+      },
+    );
   }
 
   private async get<T>(

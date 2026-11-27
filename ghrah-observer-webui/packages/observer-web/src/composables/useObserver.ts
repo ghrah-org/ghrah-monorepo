@@ -19,6 +19,7 @@ import {
   projectControlClient,
   resolveProjectApiMode,
   RestProjectObserverClient,
+  type RollbackPreviewOptions,
   type RoomTarget,
   type SessionTarget,
   type TranscriptReader,
@@ -45,8 +46,12 @@ import { usePlugins } from "@/composables/usePlugins";
 
 const client = shallowRef<ObserverClient | null>(null);
 const error = ref<string | null>(null);
-let observer: { client: ObserverClient; reader: TranscriptReader; unbind: () => void } | null =
-  null;
+let observer: {
+  client: ObserverClient;
+  reader: TranscriptReader;
+  turnApi: TurnApiClient;
+  unbind: () => void;
+} | null = null;
 let connectionAttempt = 0;
 
 // ── 导航状态持久化（active project/room → localStorage） ──
@@ -149,7 +154,7 @@ export function useObserver() {
         turnApi,
         transcriptReader: reader,
       });
-      observer = { client: obsClient, reader, unbind };
+      observer = { client: obsClient, reader, turnApi, unbind };
 
       await obsClient.connect();
       if (attempt !== connectionAttempt) return;
@@ -250,11 +255,35 @@ export function useObserver() {
     return withClient((c) => c.terminateAgent(target));
   }
 
-  async function abortTurn(
+  async function turnAbort(
     target: AgentTarget,
     options?: { turnId?: string; sessionId?: string; reason?: string },
   ) {
-    return withClient((c) => c.abortTurn(target, options));
+    return withClient((c) => c.turnAbort(target, options));
+  }
+
+  async function turnRollback(
+    target: AgentTarget,
+    options: { turnId: string; target?: "base" | "node"; nodeId?: string | null },
+  ) {
+    return withClient((c) => c.turnRollback(target, options));
+  }
+
+  /** 读回滚预览；未连接时返回 null，组件按未连接处理。 */
+  async function loadRollbackPreview(
+    projectId: string,
+    agentId: string,
+    turnId: string,
+    options?: RollbackPreviewOptions,
+  ) {
+    const current = observer;
+    if (!current) return null;
+    try {
+      return await current.turnApi.rollbackPreview(projectId, agentId, turnId, options);
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err);
+      return null;
+    }
   }
 
   async function agentCompactContext(target: AgentTarget) {
@@ -634,7 +663,9 @@ export function useObserver() {
     deleteShellAllow,
     spawnAgent,
     terminateAgent,
-    abortTurn,
+    turnAbort,
+    turnRollback,
+    loadRollbackPreview,
     agentCompactContext,
     agentReset,
     roomSend,

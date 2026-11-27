@@ -75,6 +75,13 @@ import {
   type TranscriptEntryView,
   type TurnCardView,
   type TurnDetailView,
+  TurnAbortPayloadSchema,
+  type TurnAbortView,
+  TurnAbortViewSchema,
+  TurnRollbackPayloadSchema,
+  type TurnRollbackPreviewView,
+  TurnRollbackPreviewViewSchema,
+  TurnRollbackViewSchema,
 } from "@ghrah/protocol";
 import { ZodError, z } from "zod";
 
@@ -546,6 +553,10 @@ export class MockState {
         );
       case CommandType.GET_AGENT_INFO:
         return this._parse(GetAgentInfoPayloadSchema, rawPayload, (p) => this._getAgentInfo(p));
+      case CommandType.TURN_ABORT:
+        return this._parse(TurnAbortPayloadSchema, rawPayload, (p) => this._turnAbort(p));
+      case CommandType.TURN_ROLLBACK:
+        return this._parse(TurnRollbackPayloadSchema, rawPayload, (p) => this._turnRollback(p));
       case CommandType.HEALTH_CHECK:
         return ok({ status: "ok" });
 
@@ -1398,6 +1409,162 @@ export class MockState {
     return { turn: record.turn, nodes: record.nodes };
   }
 
+  /** 读回滚预览：以轮次现有分支 / 节点字段补齐，未知轮次返回 null。 */
+  rollbackPreview(
+    projectId: string,
+    agentId: string,
+    turnId: string,
+    target: "base" | "node",
+    nodeId: string | null,
+  ): TurnRollbackPreviewView | null {
+    const record = this._findTurnRecord(projectId, agentId, turnId);
+    if (!record) return null;
+    const { turn, nodes } = record;
+    const targetNodeId = this._rollbackTargetNodeId(record, target, nodeId);
+    return TurnRollbackPreviewViewSchema.parse({
+      turn_id: turn.turn_id,
+      session_id: turn.session_id,
+      target,
+      target_node_id: targetNodeId,
+      target_branch_id: turn.branch_id ?? `${turn.turn_id}:branch`,
+      base_node_id: turn.base_node_id,
+      start_node_id: turn.start_node_id,
+      end_node_id: turn.end_node_id,
+      truncated_node_count: target === "base" ? nodes.length : 0,
+      crosses_compact: false,
+      target_is_compact: nodes.some((node) => node.is_snapshot === true),
+      head_unchanged: targetNodeId === turn.end_node_id,
+      released_delivery_ids: [],
+    });
+  }
+
+  private _findTurnRecord(
+    projectId: string,
+    agentId: string,
+    turnId: string,
+  ): MockRoomTurn | undefined {
+    const record = this._roomTurns.get(turnId);
+    if (record?.projectId !== projectId || record.turn.agent_name !== agentId) return undefined;
+    return record;
+  }
+
+  private _latestActiveTurn(
+    projectId: string,
+    agentId: string,
+    sessionId: string | null,
+  ): MockRoomTurn | undefined {
+    return [...this._roomTurns.values()]
+      .reverse()
+      .find(
+        (record) =>
+          record.projectId === projectId &&
+          record.turn.agent_name === agentId &&
+          isActiveTurn(record.turn) &&
+          (sessionId === null || record.turn.session_id === sessionId),
+      );
+  }
+
+  private _rollbackTargetNodeId(
+    record: MockRoomTurn,
+    target: "base" | "node",
+    nodeId: string | null,
+  ): string {
+    const { turn } = record;
+    if (target === "node" && nodeId) return nodeId;
+    return (
+      turn.base_node_id ?? turn.start_node_id ?? turn.end_node_id ?? `${turn.turn_id}:base-node`
+    );
+  }
+
+  /** turn_abort：按 Agent 级寻址中止活动轮次；终态轮次回 already_terminal。 */
+  private _turnAbort(payload: z.output<typeof TurnAbortPayloadSchema>): CommandOutcome {
+    const agent = this.agents.get(agentKey(payload.project_id, payload.agent_id));
+    if (!agent) return fail("agent_not_found");
+    if (agent.runtimeState !== "running") return fail("agent_offline");
+    const record = payload.turn_id
+      ? this._findTurnRecord(payload.project_id, payload.agent_id, payload.turn_id)
+      : this._latestActiveTurn(payload.project_id, payload.agent_id, payload.session_id);
+    if (!record) return fail("turn_not_found");
+    const view: TurnAbortView = {
+      turn_id: record.turn.turn_id,
+      status: record.turn.status,
+      closing_kind: record.turn.closing_kind,
+      aborted: false,
+      already_terminal: true,
+      result_pending: false,
+      cancelled_hitl: 0,
+      released_deliveries: 0,
+      incomplete_node_id: record.turn.incomplete_node_id,
+      recovery_branch_id: record.turn.recovery_branch_id,
+      opener_delivery_id: record.turn.opener_delivery_id,
+    };
+    if (!isActiveTurn(record.turn)) {
+      return ok(TurnAbortViewSchema.parse(view));
+    }
+    record.turn.status = "aborted";
+    record.turn.closing_kind = "external_abort";
+    record.turn.waiting_since = null;
+    record.turn.closed_at = isoNow();
+    record.turn.abort_reason = payload.reason || null;
+    this._emitTurnClosed(agent, record.turn);
+    return ok(
+      TurnAbortViewSchema.parse({
+        ...view,
+        status: record.turn.status,
+        closing_kind: record.turn.closing_kind,
+        aborted: true,
+        already_terminal: false,
+      }),
+    );
+  }
+
+  /** turn_rollback：活动轮拒绝，已回滚幂等，其余关闭轮次并返回回滚结果。 */
+  private _turnRollback(payload: z.output<typeof TurnRollbackPayloadSchema>): CommandOutcome {
+    const agent = this.agents.get(agentKey(payload.project_id, payload.agent_id));
+    if (!agent) return fail("agent_not_found");
+    const record = this._findTurnRecord(payload.project_id, payload.agent_id, payload.turn_id);
+    if (!record) return fail("turn_not_found");
+    if (isActiveTurn(record.turn)) return fail("turn_active");
+    const alreadyApplied = record.turn.status === "rolled_back";
+    if (!alreadyApplied) {
+      record.turn.status = "rolled_back";
+      record.turn.closing_kind = "rolled_back";
+      record.turn.waiting_since = null;
+      record.turn.closed_at = isoNow();
+      const targetNodeId = this._rollbackTargetNodeId(record, payload.target, payload.node_id);
+      record.turn.end_node_id = targetNodeId;
+      this._emitTurnClosed(agent, record.turn);
+    }
+    return ok(
+      TurnRollbackViewSchema.parse({
+        turn_id: record.turn.turn_id,
+        session_id: record.turn.session_id,
+        status: record.turn.status,
+        closing_kind: record.turn.closing_kind ?? "rolled_back",
+        target: payload.target,
+        target_node_id: this._rollbackTargetNodeId(record, payload.target, payload.node_id),
+        branch_id: record.turn.branch_id ?? `${record.turn.turn_id}:branch`,
+        parent_branch_id: record.turn.end_branch_id,
+        released_delivery_ids: [],
+        already_applied: alreadyApplied,
+        rolled_back_at: record.turn.closed_at ?? isoNow(),
+      }),
+    );
+  }
+
+  private _emitTurnClosed(agent: AgentRecord, turn: TurnCardView): void {
+    this.emit(EventType.TURN_CLOSED, {
+      project_id: agent.projectId,
+      agent_id: agent.agentId,
+      agent_name: agent.name,
+      turn_id: turn.turn_id,
+      session_id: turn.session_id,
+      status: turn.status,
+      closing_kind: turn.closing_kind,
+      end_node_id: turn.end_node_id,
+    });
+  }
+
   hitlPending(projectId: string, agentId: string, sessionId?: string): HitlRequestListView {
     const items: HitlRequestListView["items"] = [];
     for (const pending of this.pendingHitl.values()) {
@@ -1733,6 +1900,106 @@ export class MockState {
     }
     const tail = log.at(-1);
     if (tail) this.emit(EventType.ROOM_LOG_APPENDED, { entry: tail });
+  }
+
+  /**
+   * 为控制面场景预置三类轮次（open / waiting_hitl / closed）。
+   *
+   * 形状与 `seedRoomTurnExamples` 一致：经 transcript / detail / turns 读面可见，
+   * 供中止与回滚的 e2e 直接消费。返回三个 turn_id；room / session 缺失时返回 null。
+   */
+  seedTurnControlTurns(
+    roomId: string,
+    agentId: string,
+  ): { open: string; waiting: string; closed: string } | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    const action = this.actionStates.get(agentKey(room.project_id, agentId));
+    const session = action?.sessions.get(action.activeSessionId);
+    const log = this.roomLogs.get(roomId);
+    if (!session || !log) return null;
+    const seedId = `control:${roomId}:${agentId}`;
+    const configurations = [
+      { id: "open", status: "open", message: "Apply the control plane changes." },
+      { id: "waiting", status: "waiting_hitl", message: "Approve the deployment." },
+      { id: "closed", status: "closed", message: "Summarize the last turn." },
+    ] as const;
+    const indexBase = this.listTurns(room.project_id, agentId, session.session_id).length;
+    const start = Date.now();
+    const ids = { open: "", waiting: "", closed: "" };
+    for (const [index, example] of configurations.entries()) {
+      const turnId = `${seedId}:${example.id}`;
+      ids[example.id] = turnId;
+      const waiting = example.status === "waiting_hitl";
+      const active = example.status === "open" || waiting;
+      const opened = new Date(start - (configurations.length - index) * 10_000).toISOString();
+      const entry: RoomLogEntryPayload = {
+        id: `${turnId}:entry`,
+        room_id: roomId,
+        seq: ++room.seq_watermark,
+        author: "user",
+        author_type: "human",
+        timestamp: Date.parse(opened) / 1000,
+        data: { message: example.message, targets: [agentId] },
+      };
+      log.push(entry);
+      const delivery: MockDeliveryRecord = {
+        delivery_id: `${turnId}:delivery`,
+        recipient_id: agentId,
+        state: active ? "processing" : "completed",
+        error: null,
+        blocked_reason: null,
+        turn_id: turnId,
+      };
+      this._deliveries.set(entry.id, [delivery]);
+      const node = ActionNodeSchema.parse({
+        id: `${turnId}:node`,
+        agent_name: agentId,
+        turn_id: turnId,
+        timestamp: opened,
+        ability_names: ["read_file"],
+      });
+      const nodes = waiting ? [] : [node];
+      const turn: TurnCardView = {
+        turn_id: turnId,
+        agent_name: agentId,
+        session_id: session.session_id,
+        status: example.status,
+        closing_kind: active ? null : example.status,
+        base_node_id: null,
+        start_node_id: active ? null : node.id,
+        end_node_id: active ? null : node.id,
+        branch_id: session.active_branch_id,
+        end_branch_id: null,
+        opener_delivery_id: delivery.delivery_id,
+        opened_at: opened,
+        waiting_since: waiting ? opened : null,
+        closed_at: active ? null : new Date(Date.parse(opened) + 5000).toISOString(),
+        abort_reason: null,
+        incomplete_node_id: null,
+        recovery_branch_id: null,
+        turn_index: indexBase + index + 1,
+        opener_message_id: mockMessageId(entry),
+        opener_entry_id: entry.id,
+        parent_turn_id: null,
+        stats: {
+          steps: nodes.length,
+          node_count: nodes.length,
+          token_input: 900,
+          token_output: 120,
+          token_total: 1020,
+          token_cache_read: 400,
+          token_cache_write: 60,
+          cache_hit_rate: 0.44,
+          duration_ms: active ? null : 5000,
+          waiting_ms: 0,
+        },
+      };
+      this._roomTurns.set(turnId, { projectId: room.project_id, roomId, turn, nodes });
+    }
+    const tail = log.at(-1);
+    if (tail) this.emit(EventType.ROOM_LOG_APPENDED, { entry: tail });
+    return ids;
   }
 
   private _closeRoomTurn(turnId: string) {
