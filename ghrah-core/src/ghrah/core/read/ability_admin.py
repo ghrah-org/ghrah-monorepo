@@ -32,7 +32,7 @@ from ghrah.protocol.ability_control import (
 from ghrah.protocol.ability_tree import AbilityTreeView, MemberAxes
 from ghrah.protocol.views.core import ContentReadResult
 
-from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity
+from ghrah.ability.access import AbilityAccessStore, AccessError, AccessIdentity, GrantPolicy
 from ghrah.ability.content import ContentReadRequest
 from ghrah.ability.surface.projection import project_grants
 
@@ -128,13 +128,28 @@ def _surface_view(
     )
 
 
+def _policy_view(
+    policy: GrantPolicy | AbilityGrantPolicyView | None,
+) -> AbilityGrantPolicyView | None:
+    """把部署策略转换成协议所需的摘要视图。"""
+    if policy is None or isinstance(policy, AbilityGrantPolicyView):
+        return policy
+    if not isinstance(policy, GrantPolicy):
+        raise TypeError("grant_policy 必须是 GrantPolicy 或 AbilityGrantPolicyView")
+    return AbilityGrantPolicyView(
+        mode=policy.mode,
+        digest=policy.digest,
+        rules=len(policy.rules),
+    )
+
+
 async def build_admin_view(
     store: AbilityAccessStore,
     operator: AccessIdentity,
     agent_id: str,
     *,
     runtime_tools: tuple[str, ...] | None,
-    grant_policy: AbilityGrantPolicyView | None,
+    grant_policy: GrantPolicy | AbilityGrantPolicyView | None,
 ) -> AbilityAdminView:
     """装配一个 Agent 的能力管理总览。
 
@@ -143,13 +158,14 @@ async def build_admin_view(
         operator: 受信操作员身份
         agent_id: 稳定 Agent ID
         runtime_tools: 当前实际装载的工具名；离线为 ``None``
-        grant_policy: 部署的授权策略视图；未配置为 ``None``
+        grant_policy: 部署的授权策略（领域对象或摘要视图），未配置为 ``None``
 
     Returns:
         管理面视图
 
     Raises:
         AccessError: 关系库拒绝（非「未装配」类）
+        TypeError: 授权策略的类型不受支持
     """
     assembled = True
     revision = 0
@@ -228,7 +244,7 @@ async def build_admin_view(
             requires_respawn=requires_respawn,
             pending_reasons=pending_reasons,
         ),
-        grant_policy=grant_policy,
+        grant_policy=_policy_view(grant_policy),
         grants=[_grant_view(record, digests) for record in grants],
         bound_tools=bound_tools,
         surface=surface,

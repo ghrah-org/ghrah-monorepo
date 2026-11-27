@@ -134,7 +134,12 @@ describe("AssemblyPanel", () => {
   afterEach(() => setAbilityControlClientFactory(null));
 
   it("shows a read-only builtin assembly and refreshes the selected agent", async () => {
-    const adminRead = vi.fn(async () => admin);
+    const adminRead = vi.fn(async () =>
+      AbilityAdminViewSchema.parse({
+        ...admin,
+        grant_policy: { mode: "merge", digest: "sha256:policy", rules: 0 },
+      }),
+    );
     setAbilityControlClientFactory(
       () =>
         ({
@@ -152,6 +157,7 @@ describe("AssemblyPanel", () => {
     expect(wrapper.text()).toContain("1 running");
     await wrapper.get("li button").trigger("click");
     await vi.waitFor(() => expect(wrapper.text()).toContain("1 grants"));
+    expect(wrapper.text()).toContain("Grant policy merge, 0 rules");
     expect(adminRead).toHaveBeenCalledWith("a1");
     expect(wrapper.text()).not.toContain("Needs restart");
     expect(wrapper.find("form").exists()).toBe(false);
@@ -425,6 +431,26 @@ describe("AssemblyPanel", () => {
     await wrapper.get(".assembly-agent-retry").trigger("click");
     await flushPromises();
     await vi.waitFor(() => expect(adminRead).toHaveBeenCalledTimes(2));
+    expect(wrapper.find(".assembly-agent-retry").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("shows the admin error for the selected agent even when its tree loads", async () => {
+    const adminRead = vi.fn().mockRejectedValue(new Error("admin down"));
+    const treeRead = vi.fn().mockResolvedValue(tree);
+    setAbilityControlClientFactory(clientFactory({ admin: adminRead, tree: treeRead }));
+    const wrapper = mount(AssemblyPanel, { props: { projectId: "p1" } });
+    await vi.waitFor(() => expect(wrapper.find(".assembly-agent-retry").exists()).toBe(true));
+    expect(wrapper.get(".assembly-agent-select").text()).toContain("—");
+
+    await wrapper.get(".assembly-agent-select").trigger("click");
+    await vi.waitFor(() =>
+      expect(wrapper.get(".assembly-detail .assembly-state-alert").text()).toBe(
+        "Could not load ability assembly.",
+      ),
+    );
+    expect(treeRead).toHaveBeenCalledWith("a1");
+    expect(wrapper.get(".assembly-detail .assembly-note").text()).toBe("admin down");
     expect(wrapper.find(".assembly-agent-retry").exists()).toBe(true);
     wrapper.unmount();
   });

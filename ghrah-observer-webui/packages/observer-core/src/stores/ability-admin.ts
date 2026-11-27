@@ -322,25 +322,19 @@ export const useAbilityAdminStore = defineStore("ghrah-ability-admin", () => {
         client.changes(agentId, { limit: PAGE_LIMIT }),
       ]);
       if (generation.get(key) !== current) return;
-      const adminOk = adminResult.status === "fulfilled";
-      const treeOk = treeResult.status === "fulfilled";
-      if (!adminOk && !treeOk) {
-        entry.failed = true;
-        entry.errorMessage = errorText(
-          adminResult.status === "rejected" ? adminResult.reason : treeResult.reason,
-        );
-        return;
-      }
-      if (adminOk) {
-        entry.admin = adminResult.value;
-        entry.revision = adminResult.value.revision;
-      }
-      if (treeOk) entry.tree = treeResult.value;
+      if (treeResult.status === "fulfilled") entry.tree = treeResult.value;
       if (changesResult.status === "fulfilled") {
         entry.changes = changesResult.value.changes.filter((change) => change.agent === agentId);
         entry.nextAfterSeq = changesResult.value.next_after_seq;
         entry.hasMore = changesResult.value.has_more;
       }
+      if (adminResult.status === "rejected") {
+        entry.failed = true;
+        entry.errorMessage = errorText(adminResult.reason);
+        return;
+      }
+      entry.admin = adminResult.value;
+      entry.revision = adminResult.value.revision;
       entry.stale = false;
       entry.conflict = false;
       entry.partial = false;
